@@ -41,15 +41,18 @@
     ExternalLink,
     Users,
     FilePlus,
-  } from "lucide-svelte";
-  import { projectPath, projectInfo, ideStageRequest } from "../lib/store";
+    MoreHorizontal,
+  } from "@lucide/svelte";
+  import { projectPath, projectInfo, ideStageRequest, pushWorkTrail, requestIdeIssuesRefresh } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
+  import ModInspector from "./ModInspector.svelte";
   import { toasts } from "../lib/toast";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import PromptDialog from "./PromptDialog.svelte";
 import ConfirmDialog from "./ConfirmDialog.svelte";
+import OptimizePackModal from "./OptimizePackModal.svelte";
 import { trapFocus } from "../lib/focusTrap";
 
   type ModRow = {
@@ -93,6 +96,7 @@ import { trapFocus } from "../lib/focusTrap";
     fileName?: string | null;
     side: string;
     dependencies: { type: string; target: string; versionConstraint?: string | null; reason?: string | null }[];
+    installedDependencies?: string[];
     dependents?: { id: string; slug: string; name: string }[];
   };
 
@@ -126,35 +130,36 @@ import { trapFocus } from "../lib/focusTrap";
     batchComplete?: boolean;
   };
 
-  let mods: ModRow[] = [];
-  let loading = false;
-  let mutating = false;
-  let steamBridgeInstalling = false;
-  let filter = "";
-  let sideFilter = "all";
-  let contentFilter = "mod"; // mod, resourcepack, datapack, shader, favorites, list:<name>
-  let error: string | null = null;
-  let lastLoadedPath: string | null = null;
-  let brokenIcons: string[] = [];
-  let savedMods: SearchResult[] = [];
-  let savedModsLoading = false;
-  let renameTarget = "";
-  let showRenamePrompt = false;
-  let deleteTarget = "";
-  let showDeleteConfirm = false;
+  let mods = $state<ModRow[]>([]);
+  let loading = $state(false);
+  let mutating = $state(false);
+  let steamBridgeInstalling = $state(false);
+  let filter = $state("");
+  let sideFilter = $state("all");
+  let actionsMenuOpen = $state(false);
+  let contentFilter = $state("mod"); // mod, resourcepack, datapack, shader, favorites, list:<name>
+  let error = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
+  let brokenIcons = $state<string[]>([]);
+  let savedMods = $state<SearchResult[]>([]);
+  let savedModsLoading = $state(false);
+  let renameTarget = $state("");
+  let showRenamePrompt = $state(false);
+  let deleteTarget = $state("");
+  let showDeleteConfirm = $state(false);
 
   // Download progress overlay
-  let downloadOpen = false;
-  let downloadTitle = "Downloading content";
-  let downloadItems: DownloadItem[] = [];
-  let downloadDone = false;
+  let downloadOpen = $state(false);
+  let downloadTitle = $state("Downloading content");
+  let downloadItems = $state<DownloadItem[]>([]);
+  let downloadDone = $state(false);
   let unlistenProgress: UnlistenFn | null = null;
   let unlistenBatch: UnlistenFn | null = null;
   let unlistenUpdateProgress: UnlistenFn | null = null;
   let downloadScopeModIds: Set<string> | null = null;
-  let downloadStageMessage = "Preparing downloads…";
-  let downloadStagePercent = 0;
-  let downloadError: string | null = null;
+  let downloadStageMessage = $state("Preparing downloads…");
+  let downloadStagePercent = $state(0);
+  let downloadError = $state<string | null>(null);
 
   function formatBytes(n: number): string {
     if (!n || n <= 0) return "0 B";
@@ -163,12 +168,12 @@ import { trapFocus } from "../lib/focusTrap";
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  $: downloadActiveCount = downloadItems.filter((i) => i.status === "downloading" || i.status === "queued").length;
-  $: downloadDoneCount = downloadItems.filter((i) => i.status === "done" || i.status === "skipped").length;
-  $: downloadFailedCount = downloadItems.filter((i) => i.status === "failed").length;
-  $: downloadOverallPercent = downloadItems.length === 0
+  const downloadActiveCount = $derived(downloadItems.filter((i) => i.status === "downloading" || i.status === "queued").length);
+  const downloadDoneCount = $derived(downloadItems.filter((i) => i.status === "done" || i.status === "skipped").length);
+  const downloadFailedCount = $derived(downloadItems.filter((i) => i.status === "failed").length);
+  const downloadOverallPercent = $derived(downloadItems.length === 0
     ? 0
-    : Math.round(downloadItems.reduce((sum, i) => sum + (i.percent || 0), 0) / downloadItems.length);
+    : Math.round(downloadItems.reduce((sum, i) => sum + (i.percent || 0), 0) / downloadItems.length));
 
   function upsertDownloadItem(payload: Partial<DownloadItem> & { id: string }) {
     const idx = downloadItems.findIndex((i) => i.id === payload.id);
@@ -274,6 +279,7 @@ import { trapFocus } from "../lib/focusTrap";
         mods = [];
         lastLoadedPath = null;
         clearSelection();
+        clearFocusedMod();
       }
     });
     return unsub;
@@ -387,32 +393,32 @@ import { trapFocus } from "../lib/focusTrap";
     unlistenUpdateProgress?.();
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
     infiniteObserver?.disconnect();
-    listResizeObserver?.disconnect();
   });
 
-  let addOpen = false;
+  let addOpen = $state(false);
   /** In-launcher catalog page (GDLauncher-style) opened from a search card. */
-  let catalogViewResult: SearchResult | null = null;
-  let catalogProvider: "modrinth" | "curseforge" | "both" = "modrinth";
-  let searchQuery = "";
-  let searchResults: SearchResult[] = [];
-  let searchTotal = 0;
-  let searchLoading = false;
-  let loadingMore = false;
+  let catalogViewResult = $state<SearchResult | null>(null);
+  let catalogProvider = $state<"modrinth" | "curseforge" | "both">("modrinth");
+  let searchQuery = $state("");
+  let searchResults = $state<SearchResult[]>([]);
+  let searchTotal = $state(0);
+  let searchLoading = $state(false);
+  let loadingMore = $state(false);
   let browserResultsEl: HTMLElement | null = null;
   let infiniteSentinel: HTMLElement | null = null;
   let infiniteObserver: IntersectionObserver | null = null;
+  // Plain counter — must not be $state (sync ++ inside search would fight runes).
   let searchRequestId = 0;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  let selectedSide = "auto";
-  let filterGameVersion = "";
-  let filterLoader = "fabric";
-  let filterCategory = "";
-  let filterEnvironment = "";
-  let filterLicense = "";
-  let sortBy = "relevance";
-  let cfSortField = 2;
-  let previewLoadingId = "";
+  let selectedSide = $state("auto");
+  let filterGameVersion = $state("");
+  let filterLoader = $state("fabric");
+  let filterCategory = $state("");
+  let filterEnvironment = $state("");
+  let filterLicense = $state("");
+  let sortBy = $state("relevance");
+  let cfSortField = $state(2);
+  let previewLoadingId = $state("");
 
   // --- Add-mods browser chrome ---
   const ADD_VIEW_KEY = "tuffbox.mods.addView";
@@ -439,21 +445,21 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
   const addViewPref = readAddViewPref();
-  let versionSearch = "";
-  let loaderExpanded = false;
-  let filtersCollapsed = addViewPref.filtersCollapsed;
-  let viewMode: "grid" | "list" | "infinite" = addViewPref.viewMode;
-  let cardSize: CardSize = addViewPref.cardSize;
-  let page = 1;
-  let pageSize = addViewPref.pageSize;
+  let versionSearch = $state("");
+  let loaderExpanded = $state(false);
+  let filtersCollapsed = $state(addViewPref.filtersCollapsed);
+  let viewMode = $state<"grid" | "list" | "infinite">(addViewPref.viewMode);
+  let cardSize = $state<CardSize>(addViewPref.cardSize);
+  let page = $state(1);
+  let pageSize = $state(addViewPref.pageSize);
   let addSearchInput: HTMLInputElement | null = null;
-  let brokenCatalogIcons: string[] = [];
-  let accordionOpen: Record<string, boolean> = {
+  let brokenCatalogIcons = $state<string[]>([]);
+  let accordionOpen = $state<Record<string, boolean>>({
     gameVersion: true,
     loader: true,
     category: true,
     cfSort: true,
-  };
+  });
 
   function persistAddView() {
     try {
@@ -512,7 +518,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   function toggleAccordion(key: string) {
-    accordionOpen[key] = !accordionOpen[key];
+    accordionOpen = { ...accordionOpen, [key]: !accordionOpen[key] };
   }
 
   function formatCount(n: number | null | undefined): string {
@@ -644,20 +650,14 @@ import { trapFocus } from "../lib/focusTrap";
     return badges.slice(0, 3);
   }
 
-  $: filteredVersions = gameVersions.filter((v) =>
-    v.toLowerCase().includes(versionSearch.trim().toLowerCase())
-  );
-
-  $: shownLoaders = loaderExpanded
-    ? loaders
-    : loaders.slice(0, 3);
-
-  $: totalPages = Math.max(1, Math.ceil(searchTotal / pageSize));
+  const totalPages = $derived(Math.max(1, Math.ceil(searchTotal / pageSize)));
   // Catalog search is server-paginated; searchResults is the current page (or
   // accumulated pages in infinite mode). Do not client-slice again.
-  $: pagedResults = searchResults;
-  $: displayedResults = searchResults;
-  $: if (page > totalPages) page = totalPages;
+  const pagedResults = $derived(searchResults);
+  const displayedResults = $derived(searchResults);
+  $effect(() => {
+    if (page > totalPages) page = totalPages;
+  });
 
   function setupInfiniteObserver() {
     infiniteObserver?.disconnect();
@@ -680,12 +680,14 @@ import { trapFocus } from "../lib/focusTrap";
     infiniteObserver.observe(infiniteSentinel);
   }
 
-  $: if (addOpen && viewMode === "infinite" && infiniteSentinel && browserResultsEl) {
-    setupInfiniteObserver();
-  } else if (viewMode !== "infinite") {
-    infiniteObserver?.disconnect();
-    infiniteObserver = null;
-  }
+  $effect(() => {
+    if (addOpen && viewMode === "infinite" && infiniteSentinel && browserResultsEl) {
+        setupInfiniteObserver();
+      } else if (viewMode !== "infinite") {
+        infiniteObserver?.disconnect();
+        infiniteObserver = null;
+      }
+  });
 
   function goToPage(p: number) {
     const target = Math.min(totalPages, Math.max(1, p));
@@ -693,9 +695,9 @@ import { trapFocus } from "../lib/focusTrap";
     searchMods(target);
   }
 
-  let previews: Record<string, InstallPreview | null> = {};
-  let pendingInstall: SearchResult | null = null;
-  let selectedResultIds: Record<string, boolean> = {};
+  let previews = $state<Record<string, InstallPreview | null>>({});
+  let pendingInstall = $state<SearchResult | null>(null);
+  let selectedResultIds = $state<Record<string, boolean>>({});
 
   // --- Version picker (change mod version) ---
   type ModVersion = {
@@ -711,18 +713,18 @@ import { trapFocus } from "../lib/focusTrap";
     compatibleMinecraft?: boolean;
     compatibleLoader?: boolean;
   };
-  let versionPickerMod: ModRow | null = null;
-  let availableVersions: ModVersion[] = [];
-  let versionPickerLoading = false;
-  let versionPickerError: string | null = null;
-  let versionPickerChanging = false;
-  let versionPickerQuery = "";
-  let hideIncompatible = true;
-  let selectedVersion: ModVersion | null = null;
-  let versionPickerMc = "";
-  let versionPickerLoader = "";
+  let versionPickerMod = $state<ModRow | null>(null);
+  let availableVersions = $state<ModVersion[]>([]);
+  let versionPickerLoading = $state(false);
+  let versionPickerError = $state<string | null>(null);
+  let versionPickerChanging = $state(false);
+  let versionPickerQuery = $state("");
+  let hideIncompatible = $state(true);
+  let selectedVersion = $state<ModVersion | null>(null);
+  let versionPickerMc = $state("");
+  let versionPickerLoader = $state("");
 
-  $: versionPickerFiltered = availableVersions.filter((v) => {
+  const versionPickerFiltered = $derived(availableVersions.filter((v) => {
     if (hideIncompatible && v.compatible === false && v.versionNumber !== versionPickerMod?.version) {
       return false;
     }
@@ -735,9 +737,9 @@ import { trapFocus } from "../lib/focusTrap";
       v.loaders.some((l) => l.toLowerCase().includes(q)) ||
       (v.versionType ?? "").toLowerCase().includes(q)
     );
-  });
+  }));
 
-  $: compatibleVersionCount = availableVersions.filter((v) => v.compatible !== false).length;
+  const compatibleVersionCount = $derived(availableVersions.filter((v) => v.compatible !== false).length);
 
   async function openVersionPicker(mod: ModRow) {
     if (!$projectPath) return;
@@ -805,12 +807,12 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   // --- Post-bulk-install dependency resolution ---
-  let dependencyDialogOpen = false;
-  let dependencyMissingCount = 0;
-  let dependencyResolving = false;
+  let dependencyDialogOpen = $state(false);
+  let dependencyMissingCount = $state(0);
+  let dependencyResolving = $state(false);
 
-  let confirmOpen = false;
-  let confirmMod: ModRow | null = null;
+  let confirmOpen = $state(false);
+  let confirmMod = $state<ModRow | null>(null);
 
   function showRemoveConfirm(mod: ModRow) { confirmMod = mod; confirmOpen = true; }
 
@@ -835,12 +837,15 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
-  // Mod recommendations
-  let recommendations: any[] = [];
-  let recsLoading = false;
-  let recsError: string | null = null;
+  // Optimize pack wizard
+  let optimizePackOpen = $state(false);
 
-  $: hasSteamBridge = mods.some((m) => {
+  // Mod recommendations
+  let recommendations = $state<any[]>([]);
+  let recsLoading = $state(false);
+  let recsError = $state<string | null>(null);
+
+  const hasSteamBridge = $derived(mods.some((m) => {
     const id = (m.id ?? "").toLowerCase();
     const file = (m.fileName ?? "").toLowerCase();
     return (
@@ -849,7 +854,7 @@ import { trapFocus } from "../lib/focusTrap";
       id === "steam_bridge" ||
       file.startsWith("steambridge")
     );
-  });
+  }));
 
   async function installSteamBridge() {
     if (!$projectPath || steamBridgeInstalling || hasSteamBridge) return;
@@ -931,16 +936,27 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
-  // Multi-select (right-click enters selection mode; then LMB/RMB toggle)
-  let selectionMode = false;
-  let selectedModIds: Record<string, boolean> = {};
+  // Multi-select (right-click enters selection mode; then LMB/RMB toggle).
+  // Left-click opens the inspector for a single mod.
+  let selectionMode = $state(false);
+  let selectedModIds = $state<Record<string, boolean>>({});
+  let focusedModId = $state<string | null>(null);
 
-  $: selectedMods = filtered.filter((m) => selectedModIds[m.id]);
-  $: selectedCount = selectedMods.length;
+  const focusedMod = $derived(focusedModId ? mods.find((m) => m.id === focusedModId) ?? null : null);
+
+  $effect(() => {
+    if (focusedModId && !mods.some((m) => m.id === focusedModId)) {
+      focusedModId = null;
+    }
+  });
 
   function clearSelection() {
     selectionMode = false;
     selectedModIds = {};
+  }
+
+  function clearFocusedMod() {
+    focusedModId = null;
   }
 
   function toggleModSelected(modId: string) {
@@ -954,6 +970,7 @@ import { trapFocus } from "../lib/focusTrap";
   function onCardContextMenu(e: MouseEvent, mod: ModRow) {
     e.preventDefault();
     e.stopPropagation();
+    clearFocusedMod();
     if (!selectionMode) {
       selectionMode = true;
       selectedModIds = { [mod.id]: true };
@@ -963,12 +980,20 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   function onCardClick(e: MouseEvent, mod: ModRow) {
-    if (!selectionMode) return;
-    // Ignore clicks on action buttons — they use stopPropagation.
     const target = e.target as HTMLElement | null;
-    if (target?.closest("button")) return;
-    e.preventDefault();
-    toggleModSelected(mod.id);
+    if (target?.closest("button, a, input, label")) return;
+
+    if (selectionMode) {
+      e.preventDefault();
+      toggleModSelected(mod.id);
+      return;
+    }
+
+    if (focusedModId === mod.id) {
+      clearFocusedMod();
+    } else {
+      focusedModId = mod.id;
+    }
   }
 
   async function toggleDisabled(mod: ModRow) {
@@ -1086,9 +1111,11 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   // Batch update state (no separate update panel — badges + toolbar only)
-  let updateList: any[] = [];
-  let updateCheckLoading = false;
-  let updateApplying = false;
+  let updateList = $state<any[]>([]);
+  let updateCheckLoading = $state(false);
+  let updateApplying = $state(false);
+  /** Confirm-before-apply modal for Update All (spec: no update-all without a preview). */
+  let updateConfirmOpen = $state(false);
 
   async function checkForUpdates() {
     if (!$projectPath) return;
@@ -1105,14 +1132,26 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
+  /** Ensure a preview exists, then open the confirm-with-diff modal. */
+  async function openUpdateConfirm() {
+    if (!$projectPath) return;
+    if (updateList.length === 0) {
+      await checkForUpdates();
+    }
+    if (updateList.length === 0) {
+      message = "All mods are up to date for this Minecraft version.";
+      return;
+    }
+    updateConfirmOpen = true;
+  }
+
+  /** Apply the confirmed update batch (only reachable after a preview). */
   async function applyAllUpdates() {
+    updateConfirmOpen = false;
     if (!$projectPath) return;
     updateApplying = true;
     error = null;
     message = null;
-    if (updateList.length === 0) {
-      await checkForUpdates();
-    }
     if (updateList.length === 0) {
       message = "All mods are up to date for this Minecraft version.";
       updateApplying = false;
@@ -1158,30 +1197,35 @@ import { trapFocus } from "../lib/focusTrap";
       if (missing.length > 0) {
         dependencyMissingCount = missing.length;
         dependencyDialogOpen = true;
+        pushWorkTrail(`Installed mods · ${missing.length} missing dep${missing.length === 1 ? "" : "s"}`, [
+          { id: "resolve", label: "Fix in Resolve", kind: "stage", stage: "resolve" },
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
+      } else {
+        pushWorkTrail("Mods installed", [
+          { id: "resolve", label: "Check Resolve", kind: "stage", stage: "resolve" },
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
       }
-    }).catch(() => {});
+    }).catch(() => {
+      pushWorkTrail("Mods installed", [
+        { id: "test", label: "Test launch", kind: "play" },
+        { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+      ]);
+    });
   }
 
   // Ideas: after Add-mod install, offer popular co-occurring companions (user can decline).
   const IDEAS_STORAGE_KEY = "tuffbox.mods.ideas";
-  const HERO_STORAGE_KEY = "tuffbox.mods.hero-expanded";
-  let ideasEnabled =
+  let ideasEnabled = $state(
     typeof localStorage === "undefined"
       ? true
-      : localStorage.getItem(IDEAS_STORAGE_KEY) !== "false";
-  let heroExpanded =
-    typeof localStorage === "undefined"
-      ? false
-      : localStorage.getItem(HERO_STORAGE_KEY) === "true";
-
-  function toggleHeroExpanded() {
-    heroExpanded = !heroExpanded;
-    try {
-      localStorage.setItem(HERO_STORAGE_KEY, String(heroExpanded));
-    } catch {
-      /* ignore */
-    }
-  }
+      : localStorage.getItem(IDEAS_STORAGE_KEY) !== "false",
+  );
 
   type IdeaOffer = {
     slug: string;
@@ -1191,11 +1235,11 @@ import { trapFocus } from "../lib/focusTrap";
     iconUrl?: string | null;
     compatibleVersion?: string | null;
   };
-  let ideasOpen = false;
-  let ideasSeedLabel = "";
-  let ideasOffers: IdeaOffer[] = [];
-  let ideasBusy = false;
-  let ideasPendingDepsCheck = false;
+  let ideasOpen = $state(false);
+  let ideasSeedLabel = $state("");
+  let ideasOffers = $state<IdeaOffer[]>([]);
+  let ideasBusy = $state(false);
+  let ideasPendingDepsCheck = $state(false);
   const IDEAS_BLOCKLIST_KEY = "tuffbox.mods.ideas-blocklist";
 
   function loadIdeasBlocklist(): Set<string> {
@@ -1375,6 +1419,14 @@ import { trapFocus } from "../lib/focusTrap";
       dependencyDialogOpen = false;
       message = installed.length ? `Auto-installed ${installed.length} dependencies: ${installed.join(", ")}` : "No missing dependencies to install.";
       await reloadModsSilent();
+      if (installed.length) {
+        pushWorkTrail(`Installed ${installed.length} missing dependencies`, [
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "resolve", label: "Open Resolve", kind: "stage", stage: "resolve" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -1382,15 +1434,15 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
-  let message: string | null = null;
+  let message = $state<string | null>(null);
 
   type DupJarGroup = {
     modId: string;
     keepCandidate: string;
     jars: Array<{ fileName: string; modId: string; mtimeMs: number; size: number; inManifest: boolean }>;
   };
-  let duplicateJarGroups: DupJarGroup[] = [];
-  let duplicateJarFixing: string | null = null;
+  let duplicateJarGroups = $state<DupJarGroup[]>([]);
+  let duplicateJarFixing = $state<string | null>(null);
 
   type WrongLoaderHit = {
     fileName: string;
@@ -1399,45 +1451,19 @@ import { trapFocus } from "../lib/focusTrap";
     recommendation?: string;
     reason?: string;
   };
-  let wrongLoaderHits: WrongLoaderHit[] = [];
-  let wrongLoaderFixing: string | null = null;
-  let importingLocal = false;
+  let wrongLoaderHits = $state<WrongLoaderHit[]>([]);
+  let wrongLoaderFixing = $state<string | null>(null);
+  let importingLocal = $state(false);
 
-  const INSTALLED_ROW_HEIGHT = 86;
-  const VIRTUAL_OVERSCAN = 5;
-  let listScrollEl: HTMLDivElement | null = null;
-  let listScrollTop = 0;
-  let listViewportHeight = 480;
-  let listResizeObserver: ResizeObserver | null = null;
+  let listScrollEl = $state<HTMLDivElement | null>(null);
   let lastListFilterKey = "";
 
-  function onListScroll(e: Event) {
-    listScrollTop = (e.currentTarget as HTMLDivElement).scrollTop;
-  }
-
-  function attachListViewportObserver(node: HTMLDivElement | null) {
-    listResizeObserver?.disconnect();
-    listResizeObserver = null;
-    if (!node) return;
-    listViewportHeight = node.clientHeight || 480;
-    if (typeof ResizeObserver !== "undefined") {
-      listResizeObserver = new ResizeObserver(() => {
-        if (listScrollEl) listViewportHeight = listScrollEl.clientHeight || 480;
-      });
-      listResizeObserver.observe(node);
-    }
-  }
-
-  $: attachListViewportObserver(listScrollEl);
-
-  $: {
+  $effect(() => {
     const key = `${contentFilter}|${sideFilter}|${filter}`;
-    if (key !== lastListFilterKey) {
-      lastListFilterKey = key;
-      listScrollTop = 0;
-      if (listScrollEl) listScrollEl.scrollTop = 0;
-    }
-  }
+    if (key === lastListFilterKey) return;
+    lastListFilterKey = key;
+    if (listScrollEl) listScrollEl.scrollTop = 0;
+  });
 
   let lastSyncSummary: string | null = null;
 
@@ -1556,17 +1582,21 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   // User state for mods (favorites, named build lists, ratings)
-  let userState: { favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> } = {
+  let userState = $state<{
+    favorites: Record<string, boolean>;
+    lists: Record<string, string[]>;
+    ratings: Record<string, number>;
+  }>({
     favorites: {},
     lists: {},
     ratings: {},
-  };
+  });
 
   // Which list the user is currently viewing in the Lists panel
   // Dropdown open state for the save button (per-mod)
-  let saveDropdownFor: string | null = null;
+  let saveDropdownFor = $state<string | null>(null);
   // New list name input
-  let newListName = "";
+  let newListName = $state("");
 
   async function loadUserState() {
     if (!$projectPath) return;
@@ -1808,9 +1838,9 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   // Change plan preview before install
-  let planPreviewOpen = false;
+  let planPreviewOpen = $state(false);
   let planPreviewMod: SearchResult | null = null;
-  let planPreviewLoading = false;
+  let planPreviewLoading = $state(false);
   let planPreviewDeps: InstallPreview | null = null;
 
   async function showPlanPreview(result: SearchResult) {
@@ -1819,8 +1849,8 @@ import { trapFocus } from "../lib/focusTrap";
     planPreviewLoading = true;
     try {
       planPreviewDeps = isCurseForgeResult(result)
-        ? await api.mods.previewCurseforgeInstall(result.id, $projectPath)
-        : await api.mods.previewInstall(result.id, $projectPath);
+        ? await api.mods.previewCurseforgeInstall(result.id, $projectPath ?? undefined)
+        : await api.mods.previewInstall(result.id, $projectPath ?? undefined);
     } catch {
       planPreviewDeps = null;
     } finally {
@@ -1863,8 +1893,16 @@ import { trapFocus } from "../lib/focusTrap";
   // Populated from the real Mojang version manifest via get_minecraft_versions
   // instead of a hand-maintained list, so it never goes stale as new
   // Minecraft versions ship.
-  let gameVersions: string[] = [];
+  let gameVersions = $state<string[]>([]);
   const loaders = ["Fabric", "Forge", "NeoForge", "Quilt"];
+
+  const filteredVersions = $derived(gameVersions.filter((v) =>
+    v.toLowerCase().includes(versionSearch.trim().toLowerCase())
+  ));
+
+  const shownLoaders = $derived(loaderExpanded
+    ? loaders
+    : loaders.slice(0, 3));
   const categories = [
     "Adventure", "Cursed", "Decoration", "Economy", "Equipment", "Food", "Game Mechanics", "Library",
     "Magic", "Management", "Minigame", "Mobs", "Optimization", "Social", "Storage", "Technology",
@@ -2078,6 +2116,7 @@ import { trapFocus } from "../lib/focusTrap";
     contentFilter = next;
     filter = "";
     clearSelection();
+    clearFocusedMod();
     if (addOpen) searchMods(1);
     if (isSavedViewFilter(next)) {
       loadUserState().then(() => loadSavedModsView()).catch(() => {});
@@ -2451,17 +2490,34 @@ import { trapFocus } from "../lib/focusTrap";
     return (preview?.dependencies ?? []).filter((dep) => depKind(dep).includes("optional"));
   }
 
+  function installedDepTargets(preview: InstallPreview | null | undefined): Set<string> {
+    return new Set(preview?.installedDependencies ?? []);
+  }
+
+  function isDepAlreadyInstalled(preview: InstallPreview | null | undefined, target: string): boolean {
+    if (installedDepTargets(preview).has(target)) return true;
+    // Fallback: match against currently loaded mod list (slug / project id).
+    return mods.some((m) => m.id === target || m.projectId === target || m.projectId === String(target));
+  }
+
+  function countInstalledAmong(
+    preview: InstallPreview | null | undefined,
+    deps: { target: string }[],
+  ): number {
+    return deps.filter((dep) => isDepAlreadyInstalled(preview, dep.target)).length;
+  }
+
   function matchesInstalledQuery(m: ModRow, q: string): boolean {
     if (!q) return true;
     const haystacks = [m.name, m.id, m.version, m.fileName, m.projectId];
     return haystacks.some((value) => (value ?? "").toLowerCase().includes(q));
   }
 
-  $: contentScopedMods = isSavedViewFilter(contentFilter)
+  const contentScopedMods = $derived(isSavedViewFilter(contentFilter)
     ? []
-    : mods.filter((m) => (m.contentType ?? "mod") === contentFilter);
+    : mods.filter((m) => (m.contentType ?? "mod") === contentFilter));
 
-  $: filtered = isSavedViewFilter(contentFilter)
+  const filtered = $derived(isSavedViewFilter(contentFilter)
     ? []
     : contentScopedMods.filter((m) => {
         const q = filter.trim().toLowerCase();
@@ -2469,27 +2525,23 @@ import { trapFocus } from "../lib/focusTrap";
         const matchesSide =
           contentFilter !== "mod" || sideFilter === "all" || m.side === sideFilter;
         return matchesText && matchesSide;
-      });
+      }));
 
-  $: virtualStart = Math.max(0, Math.floor(listScrollTop / INSTALLED_ROW_HEIGHT) - VIRTUAL_OVERSCAN);
-  $: virtualEnd = Math.min(
-    filtered.length,
-    Math.ceil((listScrollTop + listViewportHeight) / INSTALLED_ROW_HEIGHT) + VIRTUAL_OVERSCAN
-  );
-  $: visibleMods = filtered.slice(virtualStart, virtualEnd);
-  $: virtualPaddingTop = virtualStart * INSTALLED_ROW_HEIGHT;
-  $: virtualPaddingBottom = Math.max(0, (filtered.length - virtualEnd) * INSTALLED_ROW_HEIGHT);
+  const selectedMods = $derived(filtered.filter((m) => selectedModIds[m.id]));
+  const selectedCount = $derived(selectedMods.length);
 
-  $: listTabNames = Object.keys(userState.lists).sort((a, b) => a.localeCompare(b));
+  const listTabNames = $derived(Object.keys(userState.lists).sort((a, b) => a.localeCompare(b)));
 
-  $: savedViewKey = isSavedViewFilter(contentFilter)
+  const savedViewKey = $derived(isSavedViewFilter(contentFilter)
     ? `${contentFilter}:${Object.keys(userState.favorites).length}:${JSON.stringify(userState.lists)}`
-    : "";
-  $: if (savedViewKey) {
-    void loadSavedModsView();
-  }
+    : "");
+  $effect(() => {
+    if (savedViewKey) {
+        void loadSavedModsView();
+      }
+  });
 
-  $: filteredSavedMods = savedMods.filter((result) => {
+  const filteredSavedMods = $derived(savedMods.filter((result) => {
     const q = filter.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -2498,84 +2550,87 @@ import { trapFocus } from "../lib/focusTrap";
       result.id.toLowerCase().includes(q) ||
       (result.description ?? "").toLowerCase().includes(q)
     );
-  });
+  }));
 
-  $: searchPlaceholder = isSavedViewFilter(contentFilter)
+  const searchPlaceholder = $derived(isSavedViewFilter(contentFilter)
     ? `Filter ${savedViewLabel(contentFilter).toLowerCase()}...`
-    : `Search ${contentFilter}s...`;
+    : `Search ${contentFilter}s...`);
 
-  $: selectedResults = searchResults.filter((result) => selectedResultIds[result.id] && !isInstalled(result));
+  const selectedResults = $derived(searchResults.filter((result) => selectedResultIds[result.id] && !isInstalled(result)));
 
-  $: counts = {
+  const counts = $derived({
     all: contentScopedMods.length,
     client: contentScopedMods.filter((m) => m.side === "client").length,
     server: contentScopedMods.filter((m) => m.side === "server").length,
     both: contentScopedMods.filter((m) => m.side === "both").length,
-  };
+  });
 
-  $: contentNoun =
-    contentFilter === "resourcepack"
+  const contentNoun = $derived(contentFilter === "resourcepack"
       ? "resource packs"
       : contentFilter === "datapack"
         ? "datapacks"
         : contentFilter === "shader"
           ? "shaders"
-          : "mods";
+          : "mods");
 
-  $: tabCounts = {
+  const heroTitle = $derived(
+    contentFilter === "resourcepack"
+      ? "Resource packs"
+      : contentFilter === "datapack"
+        ? "Datapacks"
+        : contentFilter === "shader"
+          ? "Shaders"
+          : contentFilter === "favorites"
+            ? "Favorites"
+            : isSavedViewFilter(contentFilter)
+              ? savedViewLabel(contentFilter)
+              : "Mods",
+  );
+
+  const tabCounts = $derived({
     mod: mods.filter((m) => (m.contentType ?? "mod") === "mod").length,
     resourcepack: mods.filter((m) => m.contentType === "resourcepack").length,
     datapack: mods.filter((m) => m.contentType === "datapack").length,
     shader: mods.filter((m) => m.contentType === "shader").length,
-  };
+  });
 
 </script>
 
-<svelte:window on:keydown={onAddModalKeydown} />
+<svelte:window onkeydown={onAddModalKeydown} />
 
 <div class="mods fade-slide-in">
   <div class="mods-chrome">
-  <header class="content-hero" class:collapsed={!heroExpanded}>
-    <button type="button" class="content-hero-toggle" on:click={toggleHeroExpanded} aria-expanded={heroExpanded}>
-      <div class="content-hero-copy">
-        <div class="content-kicker"><Package size={14} /> Content library</div>
-        <h1>Your pack, sharpened</h1>
-        {#if heroExpanded}
-          <p>Install, update and curate mods with live download feedback — no guessing, no orphan jars.</p>
-        {/if}
+  <header class="content-hero">
+    <div class="content-hero-copy">
+      <div class="content-kicker"><Package size={14} /> Content</div>
+      <h1>{heroTitle}</h1>
+    </div>
+    <div class="content-hero-stats">
+      <div class="stat-pill">
+        <strong>{filtered.length}</strong>
+        <span>shown</span>
       </div>
-      <span class="hero-chevron" class:rotated={heroExpanded} aria-hidden="true">
-        <ChevronDown size={18} />
-      </span>
-    </button>
-    {#if heroExpanded}
-      <div class="content-hero-stats">
-        <div class="stat-pill">
-          <strong>{filtered.length}</strong>
-          <span>shown</span>
-        </div>
-        <div class="stat-pill accent" class:pulse={updateList.length > 0}>
-          <strong>{updateList.length}</strong>
-          <span>updates</span>
-        </div>
-        <div class="stat-pill">
-          <strong>{counts.all}</strong>
-          <span>total</span>
-        </div>
-        {#if wrongLoaderHits.length > 0}
-          <div class="stat-pill warn">
-            <strong>{wrongLoaderHits.length}</strong>
-            <span>wrong loader</span>
-          </div>
-        {/if}
-        {#if duplicateJarGroups.length > 0}
-          <div class="stat-pill warn">
-            <strong>{duplicateJarGroups.length}</strong>
-            <span>dup groups</span>
-          </div>
-        {/if}
+      <div class="stat-pill accent" class:pulse={updateList.length > 0}>
+        <strong>{updateList.length}</strong>
+        <span>updates</span>
       </div>
-    {/if}
+      <div class="stat-pill">
+        <strong>{counts.all}</strong>
+        <span>total</span>
+      </div>
+      {#if wrongLoaderHits.length > 0}
+        <div class="stat-pill warn">
+          <strong>{wrongLoaderHits.length}</strong>
+          <span>wrong loader</span>
+        </div>
+      {/if}
+      {#if duplicateJarGroups.length > 0}
+        <div class="stat-pill warn">
+          <strong>{duplicateJarGroups.length}</strong>
+          <span>dup groups</span>
+        </div>
+      {/if}
+    </div>
   </header>
 
   {#if duplicateJarGroups.length > 0}
@@ -2592,7 +2647,7 @@ import { trapFocus } from "../lib/focusTrap";
             <button
               class="secondary small"
               disabled={duplicateJarFixing !== null}
-              on:click={() => keepOneDuplicateJar(group.modId, group.keepCandidate)}
+              onclick={() => keepOneDuplicateJar(group.modId, group.keepCandidate)}
             >
               Keep newest
             </button>
@@ -2606,7 +2661,7 @@ import { trapFocus } from "../lib/focusTrap";
                 <button
                   class="ghost mini"
                   disabled={duplicateJarFixing !== null}
-                  on:click={() => keepOneDuplicateJar(group.modId, jar.fileName)}
+                  onclick={() => keepOneDuplicateJar(group.modId, jar.fileName)}
                 >
                   {duplicateJarFixing === group.modId + "::" + jar.fileName ? "…" : "Keep this"}
                 </button>
@@ -2635,14 +2690,14 @@ import { trapFocus } from "../lib/focusTrap";
               <button
                 class="secondary small"
                 disabled={wrongLoaderFixing !== null}
-                on:click={() => disableWrongLoaderJar(hit.fileName)}
+                onclick={() => disableWrongLoaderJar(hit.fileName)}
               >
                 {wrongLoaderFixing === hit.fileName ? "…" : "Disable"}
               </button>
               <button
                 class="ghost mini danger"
                 disabled={wrongLoaderFixing !== null}
-                on:click={() => removeWrongLoaderJar(hit.fileName)}
+                onclick={() => removeWrongLoaderJar(hit.fileName)}
               >
                 Remove
               </button>
@@ -2655,147 +2710,162 @@ import { trapFocus } from "../lib/focusTrap";
 
   <div class="toolbar">
     <div class="tabs content-tabs">
-      <button class={contentFilter === "mod" ? "primary" : "secondary"} on:click={() => switchContentFilter("mod")}>Mods <span class="tab-count">{tabCounts.mod}</span></button>
-      <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks <span class="tab-count">{tabCounts.resourcepack}</span></button>
-      <button class={contentFilter === "datapack" ? "primary" : "secondary"} on:click={() => switchContentFilter("datapack")}>Datapacks <span class="tab-count">{tabCounts.datapack}</span></button>
-      <button class={contentFilter === "shader" ? "primary" : "secondary"} on:click={() => switchContentFilter("shader")}>Shaders <span class="tab-count">{tabCounts.shader}</span></button>
-      <button class={contentFilter === "favorites" ? "primary" : "secondary"} on:click={() => switchContentFilter("favorites")} title="Favorite Modrinth projects">
+      <button class={contentFilter === "mod" ? "primary" : "secondary"} onclick={() => switchContentFilter("mod")}>Mods <span class="tab-count">{tabCounts.mod}</span></button>
+      <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} onclick={() => switchContentFilter("resourcepack")}>Resourcepacks <span class="tab-count">{tabCounts.resourcepack}</span></button>
+      <button class={contentFilter === "datapack" ? "primary" : "secondary"} onclick={() => switchContentFilter("datapack")}>Datapacks <span class="tab-count">{tabCounts.datapack}</span></button>
+      <button class={contentFilter === "shader" ? "primary" : "secondary"} onclick={() => switchContentFilter("shader")}>Shaders <span class="tab-count">{tabCounts.shader}</span></button>
+      <button class={contentFilter === "favorites" ? "primary" : "secondary"} onclick={() => switchContentFilter("favorites")} title="Favorite Modrinth projects">
         <Heart size={14} /> Favorites
       </button>
       {#each listTabNames as listName (listName)}
-        <button class={contentFilter === `list:${listName}` ? "primary" : "secondary"} on:click={() => switchContentFilter(`list:${listName}`)} title="Saved build list">
+        <button class={contentFilter === `list:${listName}` ? "primary" : "secondary"} onclick={() => switchContentFilter(`list:${listName}`)} title="Saved build list">
           <Bookmark size={14} /> {listName}
           <span class="tab-count">{userState.lists[listName]?.length ?? 0}</span>
         </button>
       {/each}
     </div>
-    <div class="toolbar-actions-row">
-      <button
-        class="ghost mini quiet-action"
-        on:click={importLocalFiles}
-        disabled={!$projectPath || importingLocal || mutating || isSavedViewFilter(contentFilter)}
-        title="Copy local jars/zips into the pack and register them in the manifest"
-      >
-        <FilePlus size={14} />
-        {importingLocal ? "…" : "Import"}
-      </button>
-      <button
-        class="ghost mini quiet-action"
-        on:click={syncModsFolderFromUi}
-        disabled={!$projectPath || loading}
-        title="Rescan content folders and register new files"
-      >
-        <RotateCw size={14} /> Resync
-      </button>
-      <button
-        class="ghost mini quiet-action"
-        class:has-updates={updateList.length > 0}
-        on:click={applyAllUpdates}
-        disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"}
-        title="Update all mods to the latest build for this Minecraft version"
-      >
-        <Sparkles size={14} />
-        {#if updateApplying}
-          Updating…
-        {:else if updateCheckLoading}
-          Checking…
-        {:else if updateList.length > 0}
-          Update ({updateList.length})
-        {:else}
-          Update all
-        {/if}
-      </button>
-      <button
-        class="ghost mini quiet-action"
-        on:click={loadRecommendations}
-        disabled={!$projectPath || recsLoading || contentFilter !== "mod"}
-        title="Suggest optimization mods for this loader, Minecraft version, and pack"
-      >
-        <Lightbulb size={14} />
-        {recsLoading ? "…" : "Ideas"}
-      </button>
+  </div>
+
+  <div class="control-row">
+    {#if contentFilter === "mod"}
+      <div class="side-segment" role="group" aria-label="Side filters">
+        <button type="button" class:active={sideFilter === "all"} onclick={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
+        <button type="button" class:active={sideFilter === "both"} onclick={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
+        <button type="button" class:active={sideFilter === "client"} onclick={() => (sideFilter = "client")}>Client <span>{counts.client}</span></button>
+        <button type="button" class:active={sideFilter === "server"} onclick={() => (sideFilter = "server")}>Server <span>{counts.server}</span></button>
+      </div>
+    {/if}
+    <div class="toolbar-search-cluster">
+      <div class="search toolbar-search">
+        <span class="search-glyph"><Search size={18} /></span>
+        <input bind:value={filter} placeholder={searchPlaceholder} />
+      </div>
       <label
-        class="ideas-toggle"
+        class="ideas-toggle often-together"
         class:on={ideasEnabled}
-        title="After installing from Add mods, offer popular companion mods from community stats"
+        title="Often together — after installing from Add mods, offer popular companion mods from community stats"
       >
         <input
           type="checkbox"
           checked={ideasEnabled}
-          on:change={(e) => setIdeasEnabled(e.currentTarget.checked)}
+          onchange={(e) => setIdeasEnabled(e.currentTarget.checked)}
         />
-        <Sparkles size={12} />
-        Often together
+        <Sparkles size={14} />
       </label>
-      <button
-        class="ghost mini quiet-action"
-        on:click={installSteamBridge}
-        disabled={!$projectPath || steamBridgeInstalling || mutating || contentFilter !== "mod" || hasSteamBridge}
-        title={hasSteamBridge
-          ? "Steam Bridge is already installed"
-          : "Play LAN worlds with Steam friends — no Radmin/VPN. Downloads the jar for this pack's Minecraft + loader from github.com/Ragalikx/steam-bridge-mc"}
-      >
-        {#if steamBridgeInstalling}
-          <Loader2 size={14} class="spin" />
-          Steam Bridge…
-        {:else if hasSteamBridge}
-          <Check size={14} />
-          Steam Bridge
-        {:else}
-          <Users size={14} />
-          Steam Bridge
-        {/if}
-      </button>
     </div>
-  </div>
-
-  <div class="filters-search-row">
-    <div class="quick-filters" aria-label="Side filters">
-      {#if contentFilter === "mod"}
-      <button class:active={sideFilter === "all"} on:click={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
-      <button class:active={sideFilter === "both"} on:click={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
-      <button class:active={sideFilter === "client"} on:click={() => (sideFilter = "client")}>Client <span>{counts.client}</span></button>
-      <button class:active={sideFilter === "server"} on:click={() => (sideFilter = "server")}>Server <span>{counts.server}</span></button>
+    <button
+      type="button"
+      class="ghost mini glow-btn ideas-accent"
+      onclick={loadRecommendations}
+      disabled={!$projectPath || recsLoading || contentFilter !== "mod"}
+      title="Suggest optimization mods for this loader, Minecraft version, and pack"
+    >
+      <Lightbulb size={14} />
+      {recsLoading ? "…" : "Ideas"}
+    </button>
+    <div class="more-wrap">
+      <button
+        type="button"
+        class="ghost mini more-toggle"
+        aria-expanded={actionsMenuOpen}
+        aria-haspopup="menu"
+        onclick={() => (actionsMenuOpen = !actionsMenuOpen)}
+        title="More actions"
+      >
+        <MoreHorizontal size={16} />
+        Actions
+      </button>
+      {#if actionsMenuOpen}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="more-backdrop" onclick={() => (actionsMenuOpen = false)} onkeydown={() => {}}></div>
+        <div class="more-menu" role="menu">
+          <button
+            type="button"
+            class="more-item"
+            role="menuitem"
+            onclick={() => { actionsMenuOpen = false; void importLocalFiles(); }}
+            disabled={!$projectPath || importingLocal || mutating || isSavedViewFilter(contentFilter)}
+            title="Copy local jars/zips into the pack and register them in the manifest"
+          >
+            <FilePlus size={14} />
+            {importingLocal ? "…" : "Import"}
+          </button>
+          <button
+            type="button"
+            class="more-item"
+            role="menuitem"
+            onclick={() => { actionsMenuOpen = false; void syncModsFolderFromUi(); }}
+            disabled={!$projectPath || loading}
+            title="Rescan content folders and register new files"
+          >
+            <RotateCw size={14} /> Resync
+          </button>
+          <button
+            type="button"
+            class="more-item"
+            class:has-updates={updateList.length > 0}
+            role="menuitem"
+            onclick={() => { actionsMenuOpen = false; void openUpdateConfirm(); }}
+            disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"}
+            title="Preview and update all mods to the latest build for this Minecraft version"
+          >
+            <Sparkles size={14} />
+            {#if updateApplying}
+              Updating…
+            {:else if updateCheckLoading}
+              Checking…
+            {:else if updateList.length > 0}
+              Update ({updateList.length})
+            {:else}
+              Update all
+            {/if}
+          </button>
+          <button
+            type="button"
+            class="more-item"
+            role="menuitem"
+            onclick={() => { actionsMenuOpen = false; optimizePackOpen = true; }}
+            disabled={!$projectPath || contentFilter !== "mod"}
+            title="Install a curated Fabric opt pack or missing performance mods + safe configs"
+          >
+            <Zap size={14} />
+            Optimize
+          </button>
+          <button
+            type="button"
+            class="more-item"
+            role="menuitem"
+            onclick={() => { actionsMenuOpen = false; void installSteamBridge(); }}
+            disabled={!$projectPath || steamBridgeInstalling || mutating || contentFilter !== "mod" || hasSteamBridge}
+            title={hasSteamBridge
+              ? "Steam Bridge is already installed"
+              : "Play LAN worlds with Steam friends — no Radmin/VPN. Downloads the jar for this pack's Minecraft + loader from github.com/Ragalikx/steam-bridge-mc"}
+          >
+            {#if steamBridgeInstalling}
+              <Loader2 size={14} class="spin" />
+              Steam Bridge…
+            {:else if hasSteamBridge}
+              <Check size={14} />
+              Steam Bridge
+            {:else}
+              <Users size={14} />
+              Steam Bridge
+            {/if}
+          </button>
+        </div>
       {/if}
     </div>
-    <div class="toolbar-search-cluster">
-      <div class="search toolbar-search">
-        <span class="search-glyph"><Search size={16} /></span>
-        <input bind:value={filter} placeholder={searchPlaceholder} />
-      </div>
-      <button class="primary-action" on:click={openAddModal} disabled={!$projectPath || mutating}>
-        <Plus size={16} />
-        Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
-      </button>
-    </div>
+    <button class="primary-action" onclick={openAddModal} disabled={!$projectPath || mutating}>
+      <Plus size={16} />
+      Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
+    </button>
   </div>
-
-  {#if selectionMode}
-    <div class="selection-bar">
-      <span class="selection-count">{selectedCount} selected</span>
-      <div class="selection-actions">
-        <button class="secondary mini" on:click={bulkUpdateSelected} disabled={mutating || !selectedMods.some((m) => m.updateAvailable)}>
-          <RotateCw size={14} /> Update
-        </button>
-        <button class="secondary mini" on:click={bulkDisableSelected} disabled={mutating || !selectedMods.some((m) => !m.disabled)}>
-          <PowerOff size={14} /> Disable
-        </button>
-        <button class="secondary mini" on:click={bulkEnableSelected} disabled={mutating || !selectedMods.some((m) => m.disabled)}>
-          <Power size={14} /> Enable
-        </button>
-        <button class="secondary mini danger" on:click={bulkDeleteSelected} disabled={mutating}>
-          <Trash2 size={14} /> Delete
-        </button>
-        <button class="ghost mini" on:click={clearSelection}>Cancel</button>
-      </div>
-    </div>
-  {/if}
 
   {#if recommendations.length > 0}
     <div class="recs-panel">
       <div class="recs-header">
         <h3><Lightbulb size={16} /> Suggestions ({recommendations.length})</h3>
-        <button class="ghost mini" on:click={() => (recommendations = [])}><X size={14} /></button>
+        <button class="ghost mini" onclick={() => (recommendations = [])}><X size={14} /></button>
       </div>
       <div class="recs-list">
         {#each recommendations as rec (rec.slug)}
@@ -2809,7 +2879,7 @@ import { trapFocus } from "../lib/focusTrap";
                 <span class="recs-meta">{[rec.loader, rec.minecraftVersion, rec.compatibleVersion].filter(Boolean).join(" · ")}</span>
               {/if}
             </div>
-            <button class="secondary mini" on:click={() => installRecommendation(rec)} disabled={mutating}>
+            <button class="secondary mini" onclick={() => installRecommendation(rec)} disabled={mutating}>
               <Plus size={12} /> Install
             </button>
           </div>
@@ -2828,11 +2898,12 @@ import { trapFocus } from "../lib/focusTrap";
   {/if}
   </div>
 
-  <div class="mods-list" bind:this={listScrollEl} on:scroll={onListScroll}>
+  <div class="mods-body" class:has-side={selectionMode || !!focusedMod}>
+  <div class="mods-list" bind:this={listScrollEl}>
   {#if loading}
     <div class="loading">Loading {contentNoun}...</div>
   {:else if !$projectPath}
-    <EmptyState icon={Package} title="No project selected" description="Open a project to manage content." actionLabel="Open project" on:action={openProjectFolder} />
+    <EmptyState icon={Package} title="No project selected" description="Open a project to manage content." actionLabel="Open project" onaction={openProjectFolder} />
   {:else if isSavedViewFilter(contentFilter)}
     {#if savedModsLoading}
       <div class="loading">Loading {savedViewLabel(contentFilter).toLowerCase()}...</div>
@@ -2843,7 +2914,7 @@ import { trapFocus } from "../lib/focusTrap";
         {:else}
           List <strong>{savedViewLabel(contentFilter)}</strong> is empty. Bookmark projects from the Add browser.
         {/if}
-        <button class="secondary" style="margin-top: 12px" on:click={openAddModal} disabled={!$projectPath}>
+        <button class="secondary" style="margin-top: 12px" onclick={openAddModal} disabled={!$projectPath}>
           <Plus size={16} /> Browse catalog
         </button>
       </div>
@@ -2854,13 +2925,13 @@ import { trapFocus } from "../lib/focusTrap";
         <span class="saved-count">{filteredSavedMods.length} of {savedMods.length} saved</span>
         {#if contentFilter.startsWith("list:")}
           {@const listName = contentFilter.slice(5)}
-          <button on:click={() => installList(listName)} disabled={!$projectPath || installingFromList === listName || mutating}>
+          <button onclick={() => installList(listName)} disabled={!$projectPath || installingFromList === listName || mutating}>
             <ArrowDown size={16} /> {installingFromList === listName ? "Installing..." : `Install all from "${listName}"`}
           </button>
-          <button class="secondary" on:click={() => { renameTarget = listName; showRenamePrompt = true; }}>Rename</button>
-          <button class="secondary danger" on:click={() => { deleteTarget = listName; showDeleteConfirm = true; }}>Delete list</button>
+          <button class="secondary" onclick={() => { renameTarget = listName; showRenamePrompt = true; }}>Rename</button>
+          <button class="secondary danger" onclick={() => { deleteTarget = listName; showDeleteConfirm = true; }}>Delete list</button>
         {/if}
-        <button class="secondary" on:click={openAddModal} disabled={!$projectPath}><Plus size={16} /> Browse catalog</button>
+        <button class="secondary" onclick={openAddModal} disabled={!$projectPath}><Plus size={16} /> Browse catalog</button>
       </div>
       <div class="results list saved-results tb-stagger">
         {#each filteredSavedMods as result, i (result.id)}
@@ -2871,39 +2942,43 @@ import { trapFocus } from "../lib/focusTrap";
             class:list={true}
             role="button"
             tabindex="0"
-            on:click={() => openCatalogInApp(result)}
-            on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
+            onclick={() => openCatalogInApp(result)}
+            onkeydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
           >
             <div class="result-icon">
               {#if catalogIconOk(result)}
-                <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" on:error={() => markCatalogIconBroken(result.id)} />
+                <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" onerror={() => markCatalogIconBroken(result.id)} />
               {:else}
                 <span class="tb-cover-media">{iconFallback(result.name)}</span>
               {/if}
             </div>
             <div class="result-main">
               <div class="result-title">
-                <button type="button" class="result-name linkish" title="Open in launcher" on:click|stopPropagation={() => openCatalogInApp(result)}>{result.name}</button>
-                {#if result.author}<span class="result-author">by {result.author}</span>{/if}
-                {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
+                <div class="result-title-row">
+                  <button type="button" class="result-name linkish" title="Open in launcher" onclick={(e) => { e.stopPropagation(); openCatalogInApp(result); } }>{result.name}</button>
+                </div>
+                <div class="result-pills">
+                  {#if result.author}<span class="result-author">by {result.author}</span>{/if}
+                  {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
+                </div>
               </div>
               <p class="result-desc">{result.description}</p>
             </div>
             <div class="result-actions">
-              <button class="download-btn" on:click|stopPropagation={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+              <button class="download-btn" onclick={(e) => { e.stopPropagation(); startInstallPlan(result); } } disabled={mutating || isInstalled(result)}>
                 <Download size={16} /> {isInstalled(result) ? "Installed" : "Install"}
               </button>
               <div class="quick-actions">
-                <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}>
+                <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" onclick={(e) => { e.stopPropagation(); toggleFavorite(result.id); } }>
                   <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
                 </button>
                 {#if contentFilter.startsWith("list:")}
-                  <button class="qa danger" title="Remove from list" on:click|stopPropagation={() => removeFromList(contentFilter.slice(5), result.id)}><X size={15} /></button>
+                  <button class="qa danger" title="Remove from list" onclick={(e) => { e.stopPropagation(); removeFromList(contentFilter.slice(5), result.id); } }><X size={15} /></button>
                 {/if}
-                <button class="qa" title="Open on site" on:click|stopPropagation={() => openProjectPage(result)}>
+                <button class="qa" title="Open on site" onclick={(e) => { e.stopPropagation(); openProjectPage(result); } }>
                   <ExternalLink size={15} />
                 </button>
-                <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} onclick={(e) => { e.stopPropagation(); copyProjectLink(result); } }>
                   {#if copiedLinkId === result.id}
                     <Check size={15} />
                   {:else}
@@ -2920,34 +2995,42 @@ import { trapFocus } from "../lib/focusTrap";
         {/each}
       </div>
     {/if}
+  {:else if error && filtered.length === 0}
+    <EmptyState
+      icon={Package}
+      title={`Couldn’t load ${contentNoun}`}
+      description={error}
+      actionLabel="Retry"
+      onaction={() => void load()}
+    />
   {:else if filtered.length === 0}
-    <EmptyState icon={Package} title={`No ${contentNoun} found`} description="Try Sync, adjust filters, or add content from Modrinth." actionLabel={`Add ${contentFilter}`} on:action={openAddModal} />
+    <EmptyState icon={Package} title={`No ${contentNoun} found`} description="Try Sync, adjust filters, or add content from Modrinth." actionLabel={`Add ${contentFilter}`} onaction={openAddModal} />
   {:else}
-    <div
-      class="installed-list-virtual"
-      style="min-height: {filtered.length * INSTALLED_ROW_HEIGHT}px"
-    >
-      <div
-        class="installed-list tb-stagger"
-        class:selecting={selectionMode}
-        style="padding-top: {virtualPaddingTop}px; padding-bottom: {virtualPaddingBottom}px"
-      >
-      {#each visibleMods as mod, i (mod.id)}
+    <div class="installed-list tb-stagger" class:selecting={selectionMode}>
+      {#each filtered as mod, i (mod.id)}
         <article
           class="installed-card tb-card"
           class:has-update={mod.updateAvailable}
           class:disabled={mod.disabled}
           class:selected={!!selectedModIds[mod.id]}
-          style="--i: {virtualStart + i}"
-          role={selectionMode ? "button" : undefined}
-          tabindex={selectionMode ? 0 : undefined}
-          on:contextmenu={(e) => onCardContextMenu(e, mod)}
-          on:click={(e) => onCardClick(e, mod)}
-          on:keydown={(e) => {
-            if (!selectionMode) return;
+          class:focused={focusedModId === mod.id && !selectionMode}
+          style="--i: {i}"
+          role="button"
+          tabindex="0"
+          oncontextmenu={(e) => onCardContextMenu(e, mod)}
+          onclick={(e) => onCardClick(e, mod)}
+          onkeydown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
-              toggleModSelected(mod.id);
+              if (selectionMode) {
+                toggleModSelected(mod.id);
+              } else if (focusedModId === mod.id) {
+                clearFocusedMod();
+              } else {
+                focusedModId = mod.id;
+              }
+            } else if (e.key === "Escape" && focusedModId === mod.id) {
+              clearFocusedMod();
             }
           }}
         >
@@ -2961,7 +3044,7 @@ import { trapFocus } from "../lib/focusTrap";
               <span class="update-dot" title="Update available"></span>
             {/if}
             {#if mod.iconUrl && !brokenIcons.includes(mod.id)}
-              <img class="tb-cover-media" src={mod.iconUrl} alt="" loading="lazy" on:error={() => handleIconError(mod)} />
+              <img class="tb-cover-media" src={mod.iconUrl} alt="" loading="lazy" onerror={() => handleIconError(mod)} />
             {:else}
               <span class="tb-cover-media">{iconFallback(mod.name)}</span>
             {/if}
@@ -2969,18 +3052,21 @@ import { trapFocus } from "../lib/focusTrap";
           <div class="installed-main">
             <div class="installed-title">
               {#if installedModPageUrl(mod)}
-                <button type="button" class="installed-name linkish" title="Open catalog page" on:click|stopPropagation={() => openInstalledModPage(mod)}>{mod.name}</button>
+                <button type="button" class="installed-name linkish" title="Open catalog page" onclick={(e) => { e.stopPropagation(); openInstalledModPage(mod); } }>{mod.name}</button>
               {:else}
                 <strong>{mod.name}</strong>
               {/if}
               {#if mod.disabled}
                 <span class="disabled-badge">Disabled</span>
               {/if}
-              <code>{mod.id}</code>
             </div>
             <div class="installed-meta">
-              <span class="version">{mod.version}</span>
-              {#if mod.fileName}<span class="filename">{mod.fileName}{mod.disabled && !String(mod.fileName).endsWith('.disabled') ? '.disabled' : ''}</span>{/if}
+              <span
+                class="version"
+                title={mod.fileName
+                  ? `${mod.fileName}${mod.disabled && !String(mod.fileName).endsWith(".disabled") ? ".disabled" : ""}`
+                  : undefined}
+              >{mod.version}</span>
             </div>
           </div>
           <div class="installed-tags" aria-label="Mod labels">
@@ -2997,7 +3083,7 @@ import { trapFocus } from "../lib/focusTrap";
             {#if installedModPageUrl(mod)}
               <button
                 class="icon-btn"
-                on:click|stopPropagation={() => openInstalledModPage(mod)}
+                onclick={(e) => { e.stopPropagation(); openInstalledModPage(mod); } }
                 title="Open on {(mod.source || '').toLowerCase() === 'curseforge' ? 'CurseForge' : 'Modrinth'}"
               >
                 <ExternalLink size={16} />
@@ -3008,7 +3094,7 @@ import { trapFocus } from "../lib/focusTrap";
             <button
               class="icon-btn"
               class:warn={mod.disabled}
-              on:click|stopPropagation={() => toggleDisabled(mod)}
+              onclick={(e) => { e.stopPropagation(); toggleDisabled(mod); } }
               disabled={mutating}
               title={mod.disabled ? "Enable (remove .disabled)" : "Disable (rename to *.disabled)"}
             >
@@ -3018,24 +3104,62 @@ import { trapFocus } from "../lib/focusTrap";
                 <PowerOff size={16} />
               {/if}
             </button>
-            <button class="icon-btn" on:click|stopPropagation={() => openVersionPicker(mod)} disabled={mutating || !canChangeVersion(mod) || selectionMode} title="Change version">
+            <button class="icon-btn" onclick={(e) => { e.stopPropagation(); openVersionPicker(mod); } } disabled={mutating || !canChangeVersion(mod) || selectionMode} title="Change version">
               <ArrowUpDown size={16} />
             </button>
             <span class="update-action-slot">
               {#if mod.updateAvailable}
-                <button class="icon-btn update-btn hot" on:click|stopPropagation={() => updateMod(mod)} disabled={mutating || selectionMode} title="Update to latest from Modrinth">
+                <button class="icon-btn update-btn hot" onclick={(e) => { e.stopPropagation(); updateMod(mod); } } disabled={mutating || selectionMode} title="Update to latest from Modrinth">
                   <RotateCw size={16} />
                 </button>
               {/if}
             </span>
-            <button class="icon-btn danger" on:click|stopPropagation={() => showRemoveConfirm(mod)} disabled={mutating || selectionMode} title="Remove with snapshot">
+            <button class="icon-btn danger" onclick={(e) => { e.stopPropagation(); showRemoveConfirm(mod); } } disabled={mutating || selectionMode} title="Remove with snapshot">
               <Trash2 size={16} />
             </button>
           </div>
         </article>
       {/each}
-      </div>
     </div>
+  {/if}
+  </div>
+
+  {#if selectionMode}
+    <aside class="selection-inspector" aria-label="Bulk selection">
+      <header class="selection-inspector-header">
+        <div>
+          <h2>{selectedCount} selected</h2>
+          <p>Right-click cards to toggle. Bulk actions apply to the selection.</p>
+        </div>
+        <button type="button" class="icon-btn" onclick={clearSelection} title="Clear selection" aria-label="Clear selection">
+          <X size={18} />
+        </button>
+      </header>
+      <div class="selection-inspector-actions">
+        <button class="secondary" onclick={bulkUpdateSelected} disabled={mutating || !selectedMods.some((m) => m.updateAvailable)}>
+          <RotateCw size={14} /> Update
+        </button>
+        <button class="secondary" onclick={bulkDisableSelected} disabled={mutating || !selectedMods.some((m) => !m.disabled)}>
+          <PowerOff size={14} /> Disable
+        </button>
+        <button class="secondary" onclick={bulkEnableSelected} disabled={mutating || !selectedMods.some((m) => m.disabled)}>
+          <Power size={14} /> Enable
+        </button>
+        <button class="secondary danger" onclick={bulkDeleteSelected} disabled={mutating}>
+          <Trash2 size={14} /> Delete
+        </button>
+      </div>
+    </aside>
+  {:else if focusedMod}
+    {#key focusedMod.id}
+      <ModInspector
+        mod={focusedMod}
+        onclose={clearFocusedMod}
+        onopenlink={(url) => void openExternalUrl(url)}
+        ontoggleDisabled={(m) => void toggleDisabled(m as ModRow)}
+        onopenversions={(m) => void openVersionPicker(m as ModRow)}
+      />
+    {/key}
   {/if}
   </div>
 </div>
@@ -3046,8 +3170,8 @@ import { trapFocus } from "../lib/focusTrap";
     role="button"
     tabindex="-1"
     aria-label="Confirm remove mod"
-    on:click|self={() => { confirmOpen = false; confirmMod = null; }}
-    on:keydown={() => {}}
+    onclick={(e) => { if (e.target === e.currentTarget) { confirmOpen = false; confirmMod = null; } }}
+    onkeydown={() => {}}
   >
     <div class="modal confirm-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { confirmOpen = false; confirmMod = null; } }}>
       <div class="modal-header">
@@ -3055,11 +3179,11 @@ import { trapFocus } from "../lib/focusTrap";
           <h2>Remove {confirmMod.name}?</h2>
           <p>Deletes the file from disk and removes the manifest entry. A snapshot is taken first.</p>
         </div>
-        <button class="icon-btn" on:click={() => { confirmOpen = false; confirmMod = null; }}><X size={18} /></button>
+        <button class="icon-btn" onclick={() => { confirmOpen = false; confirmMod = null; }}><X size={18} /></button>
       </div>
       <div class="plan-actions">
-        <button class="ghost" on:click={() => { confirmOpen = false; confirmMod = null; }}>Cancel</button>
-        <button class="danger" on:click={doRemove} disabled={mutating}>
+        <button class="ghost" onclick={() => { confirmOpen = false; confirmMod = null; }}>Cancel</button>
+        <button class="danger" onclick={doRemove} disabled={mutating}>
           <Trash2 size={16} /> Remove
         </button>
       </div>
@@ -3077,7 +3201,7 @@ import { trapFocus } from "../lib/focusTrap";
     <div class="download-modal">
       <div class="download-modal-header">
         <div>
-          <div class="content-kicker"><Download size={14} /> Live transfer</div>
+          <div class="content-kicker"><Download size={14} /> Download</div>
           <h2>{downloadTitle}</h2>
           <p>
             {#if downloadDone}
@@ -3090,7 +3214,7 @@ import { trapFocus } from "../lib/focusTrap";
           </p>
         </div>
         {#if downloadDone}
-          <button class="icon-btn" on:click={closeDownloadOverlay} title="Close"><X size={18} /></button>
+          <button class="icon-btn" onclick={closeDownloadOverlay} title="Close"><X size={18} /></button>
         {:else}
           <span class="spin-wrap"><Loader2 size={22} /></span>
         {/if}
@@ -3141,7 +3265,7 @@ import { trapFocus } from "../lib/focusTrap";
                   <span>Waiting…</span>
                 {:else if item.status === "failed"}
                   <span class="download-item-error">{item.error ?? "Download failed"}</span>
-                  <button class="mini ghost retry-one" on:click={() => retrySingleDownload(item.id)} disabled={!downloadDone}>Retry</button>
+                  <button class="mini ghost retry-one" onclick={() => retrySingleDownload(item.id)} disabled={!downloadDone}>Retry</button>
                 {:else}
                   <span>{formatBytes(item.downloaded)}</span>
                 {/if}
@@ -3154,11 +3278,11 @@ import { trapFocus } from "../lib/focusTrap";
       {#if downloadDone}
         <div class="download-modal-actions">
           {#if downloadFailedCount > 0}
-            <button class="secondary" on:click={retryFailedDownloads}>
+            <button class="secondary" onclick={retryFailedDownloads}>
               <RotateCw size={16} /> Retry failed ({downloadFailedCount})
             </button>
           {/if}
-          <button on:click={closeDownloadOverlay}>Done</button>
+          <button onclick={closeDownloadOverlay}>Done</button>
         </div>
       {/if}
     </div>
@@ -3171,24 +3295,11 @@ import { trapFocus } from "../lib/focusTrap";
     role="button"
     tabindex="-1"
     aria-label="Close add mod dialog"
-    on:click|self={() => { catalogViewResult = null; addOpen = false; }}
-    on:keydown={() => {}}
+    onclick={(e) => { if (e.target === e.currentTarget) { catalogViewResult = null; addOpen = false; } }}
+    onkeydown={() => {}}
   >
     <div class="modal add-mods-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { if (catalogViewResult) closeCatalogInApp(); else addOpen = false; } }}>
-      {#if catalogViewResult}
-        <div class="modal-body catalog-body">
-          <CatalogProjectView
-            result={catalogViewResult}
-            minecraftVersion={$projectInfo?.minecraftVersion ?? null}
-            loaderKind={$projectInfo?.loaderKind ?? null}
-            installed={isInstalled(catalogViewResult)}
-            installing={mutating && pendingInstall?.id === catalogViewResult.id}
-            on:back={closeCatalogInApp}
-            on:install={() => { if (catalogViewResult) void startInstallPlan(catalogViewResult); }}
-            on:openExternal={() => { if (catalogViewResult) void openProjectPage(catalogViewResult); }}
-          />
-        </div>
-      {:else}
+      <div class="add-mods-browse" class:behind-catalog={!!catalogViewResult} aria-hidden={!!catalogViewResult}>
       <div class="modal-header">
         <div>
           <h2>Add {catalogProvider === "both" ? "" : (catalogProvider === "curseforge" ? "CurseForge " : "Modrinth ")}{contentFilter}</h2>
@@ -3197,38 +3308,38 @@ import { trapFocus } from "../lib/focusTrap";
               ? "Search is filtered by the current Minecraft version and loader."
               : "Search is filtered by the current Minecraft version."}
           </p>
-          <div class="provider-toggle" role="group" aria-label="Catalog provider">
-            <button
-              type="button"
-              class:active={catalogProvider === "modrinth"}
-              on:click={() => setCatalogProvider("modrinth")}
-            >Modrinth</button>
-            <button
-              type="button"
-              class:active={catalogProvider === "curseforge"}
-              on:click={() => setCatalogProvider("curseforge")}
-            >CurseForge</button>
-            <button
-              type="button"
-              class:active={catalogProvider === "both"}
-              on:click={() => setCatalogProvider("both")}
-              title="Search both catalogs at once"
-            >Both</button>
-          </div>
         </div>
-        <button class="icon-btn" on:click={() => (addOpen = false)}><X size={18} /></button>
+        <button class="icon-btn" onclick={() => (addOpen = false)}><X size={18} /></button>
       </div>
 
       <div class="modal-tabs-row">
         <div class="modal-tabs">
-          <button class:active={contentFilter === "mod"} on:click={() => switchContentFilter("mod")}>Mods</button>
-          <button class:active={contentFilter === "resourcepack"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
-          <button class:active={contentFilter === "datapack"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
-          <button class:active={contentFilter === "shader"} on:click={() => switchContentFilter("shader")}>Shaders</button>
-          <button class:active={contentFilter === "favorites"} on:click={() => switchContentFilter("favorites")}>Favorites</button>
+          <button class:active={contentFilter === "mod"} onclick={() => switchContentFilter("mod")}>Mods</button>
+          <button class:active={contentFilter === "resourcepack"} onclick={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
+          <button class:active={contentFilter === "datapack"} onclick={() => switchContentFilter("datapack")}>Datapacks</button>
+          <button class:active={contentFilter === "shader"} onclick={() => switchContentFilter("shader")}>Shaders</button>
+          <button class:active={contentFilter === "favorites"} onclick={() => switchContentFilter("favorites")}>Favorites</button>
           {#each listTabNames as listName (listName)}
-            <button class:active={contentFilter === `list:${listName}`} on:click={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
+            <button class:active={contentFilter === `list:${listName}`} onclick={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
           {/each}
+        </div>
+        <div class="provider-toggle" role="group" aria-label="Catalog provider">
+          <button
+            type="button"
+            class:active={catalogProvider === "modrinth"}
+            onclick={() => setCatalogProvider("modrinth")}
+          >Modrinth</button>
+          <button
+            type="button"
+            class:active={catalogProvider === "curseforge"}
+            onclick={() => setCatalogProvider("curseforge")}
+          >CurseForge</button>
+          <button
+            type="button"
+            class:active={catalogProvider === "both"}
+            onclick={() => setCatalogProvider("both")}
+            title="Search both catalogs at once"
+          >Both</button>
         </div>
       </div>
       <div class="browser-topbar modal-topbar">
@@ -3238,8 +3349,8 @@ import { trapFocus } from "../lib/focusTrap";
             bind:this={addSearchInput}
             bind:value={searchQuery}
             placeholder={searchPlaceholder}
-            on:input={onSearchQueryInput}
-            on:keydown={(e) => e.key === "Enter" && searchMods(1)}
+            oninput={onSearchQueryInput}
+            onkeydown={(e) => e.key === "Enter" && searchMods(1)}
           />
           {#if searchLoading}
             <span class="search-spinner"><Loader2 size={16} class="spin" /></span>
@@ -3247,12 +3358,12 @@ import { trapFocus } from "../lib/focusTrap";
         </div>
         <div class="topbar-controls">
           <label class="sort-select">Sort by:
-            <select bind:value={sortBy} on:change={() => searchMods(1)}>
+            <select bind:value={sortBy} onchange={() => searchMods(1)}>
               {#each sortOptions as option (option.id)}<option value={option.id}>{option.label}</option>{/each}
             </select>
           </label>
           <label class="sort-select">{viewMode === "infinite" ? "Batch size:" : "Page size:"}
-            <select bind:value={pageSize} on:change={onPageSizeChange}>
+            <select bind:value={pageSize} onchange={onPageSizeChange}>
               <option value={20}>20</option>
               <option value={40}>40</option>
               <option value={60}>60</option>
@@ -3260,13 +3371,13 @@ import { trapFocus } from "../lib/focusTrap";
           </label>
           <span class="size-select" role="group" aria-label="Card size">
             Size:
-            <button type="button" class="size-toggle" class:active={cardSize === "S"} on:click={() => setCardSize("S")} title="Compact cards">S</button>
-            <button type="button" class="size-toggle" class:active={cardSize === "M"} on:click={() => setCardSize("M")} title="Default cards">M</button>
-            <button type="button" class="size-toggle" class:active={cardSize === "L"} on:click={() => setCardSize("L")} title="Large cards">L</button>
+            <button type="button" class="size-toggle" class:active={cardSize === "S"} onclick={() => setCardSize("S")} title="Compact cards">S</button>
+            <button type="button" class="size-toggle" class:active={cardSize === "M"} onclick={() => setCardSize("M")} title="Default cards">M</button>
+            <button type="button" class="size-toggle" class:active={cardSize === "L"} onclick={() => setCardSize("L")} title="Large cards">L</button>
           </span>
-          <button class="view-toggle" class:active={viewMode === "grid"} on:click={() => setViewMode("grid")} title="Grid view"><LayoutGrid size={16} /></button>
-          <button class="view-toggle" class:active={viewMode === "list"} on:click={() => setViewMode("list")} title="List view"><List size={16} /></button>
-          <button class="view-toggle" class:active={viewMode === "infinite"} on:click={() => setViewMode("infinite")} title="Infinite scroll"><InfinityIcon size={16} /></button>
+          <button class="view-toggle" class:active={viewMode === "grid"} onclick={() => setViewMode("grid")} title="Grid view"><LayoutGrid size={16} /></button>
+          <button class="view-toggle" class:active={viewMode === "list"} onclick={() => setViewMode("list")} title="List view"><List size={16} /></button>
+          <button class="view-toggle" class:active={viewMode === "infinite"} onclick={() => setViewMode("infinite")} title="Infinite scroll"><InfinityIcon size={16} /></button>
         </div>
       </div>
 
@@ -3275,7 +3386,7 @@ import { trapFocus } from "../lib/focusTrap";
           <button
             type="button"
             class="filter-collapse-toggle"
-            on:click={toggleFiltersCollapsed}
+            onclick={toggleFiltersCollapsed}
             title={filtersCollapsed ? "Expand filters" : "Collapse filters"}
             aria-label={filtersCollapsed ? "Expand filters" : "Collapse filters"}
           >
@@ -3286,8 +3397,9 @@ import { trapFocus } from "../lib/focusTrap";
             {/if}
           </button>
           {#if !filtersCollapsed}
+          <div class="filter-sidebar-body">
           <section class="filter-block" class:closed={!accordionOpen.gameVersion}>
-            <button class="filter-head" on:click={() => toggleAccordion("gameVersion")}>
+            <button class="filter-head" onclick={() => toggleAccordion("gameVersion")}>
               <span>Game version</span>
               <ChevronDown size={16} class={!accordionOpen.gameVersion ? "rot" : ""} />
             </button>
@@ -3299,18 +3411,18 @@ import { trapFocus } from "../lib/focusTrap";
                 </div>
                 <div class="filter-list">
                   {#each filteredVersions as version (version)}
-                    <button class:active={filterGameVersion === version} on:click={() => { filterGameVersion = version; searchMods(1); }}>{version}</button>
+                    <button class:active={filterGameVersion === version} onclick={() => { filterGameVersion = version; searchMods(1); }}>{version}</button>
                   {/each}
                 </div>
                 <label class="check-row">
-                  <input type="checkbox" checked={filterGameVersion === ""} on:change={() => { filterGameVersion = ""; searchMods(1); }} /> Show all versions
+                  <input type="checkbox" checked={filterGameVersion === ""} onchange={() => { filterGameVersion = ""; searchMods(1); }} /> Show all versions
                 </label>
               </div>
             {/if}
           </section>
 
           <section class="filter-block" class:closed={!accordionOpen.loader} hidden={contentFilter !== "mod"}>
-            <button class="filter-head" on:click={() => toggleAccordion("loader")}>
+            <button class="filter-head" onclick={() => toggleAccordion("loader")}>
               <span>Loader</span>
               <ChevronDown size={16} class={!accordionOpen.loader ? "rot" : ""} />
             </button>
@@ -3318,7 +3430,7 @@ import { trapFocus } from "../lib/focusTrap";
               <div class="filter-body">
                 <div class="filter-list loader-list">
                   {#each shownLoaders as loaderName (loaderName)}
-                    <button class="loader-row" class:active={filterLoader === loaderName.toLowerCase()} on:click={() => { filterLoader = loaderName.toLowerCase(); searchMods(1); }}>
+                    <button class="loader-row" class:active={filterLoader === loaderName.toLowerCase()} onclick={() => { filterLoader = loaderName.toLowerCase(); searchMods(1); }}>
                       <span class="loader-ic">
                         {#if loaderName === "Fabric"}<Scroll size={16} />{:else if loaderName === "Forge"}<Hammer size={16} />{:else}<Anvil size={16} />{/if}
                       </span>
@@ -3327,7 +3439,7 @@ import { trapFocus } from "../lib/focusTrap";
                   {/each}
                 </div>
                 {#if loaders.length > 3}
-                  <button class="show-more" on:click={() => (loaderExpanded = !loaderExpanded)}>
+                  <button class="show-more" onclick={() => (loaderExpanded = !loaderExpanded)}>
                     {loaderExpanded ? "Show less" : "Show more"} <ChevronDown size={14} class={loaderExpanded ? "rot" : ""} />
                   </button>
                 {/if}
@@ -3336,16 +3448,16 @@ import { trapFocus } from "../lib/focusTrap";
           </section>
 
           <section class="filter-block" class:closed={!accordionOpen.category} hidden={catalogProvider === "curseforge"}>
-            <button class="filter-head" on:click={() => toggleAccordion("category")}>
+            <button class="filter-head" onclick={() => toggleAccordion("category")}>
               <span>Category</span>
               <ChevronDown size={16} class={!accordionOpen.category ? "rot" : ""} />
             </button>
             {#if accordionOpen.category}
               <div class="filter-body">
                 <div class="filter-list">
-                  <button class:active={!filterCategory} on:click={() => { filterCategory = ""; searchMods(1); }}>All categories</button>
+                  <button class:active={!filterCategory} onclick={() => { filterCategory = ""; searchMods(1); }}>All categories</button>
                   {#each categories as category (category)}
-                    <button class="cat-row" class:active={filterCategory === category} on:click={() => { filterCategory = category; searchMods(1); }}>
+                    <button class="cat-row" class:active={filterCategory === category} onclick={() => { filterCategory = category; searchMods(1); }}>
                       <Tag size={14} />
                       <span>{humanize(category)}</span>
                     </button>
@@ -3356,7 +3468,7 @@ import { trapFocus } from "../lib/focusTrap";
           </section>
 
           <section class="filter-block" class:closed={!accordionOpen.cfSort} hidden={catalogProvider !== "curseforge"}>
-            <button class="filter-head" on:click={() => toggleAccordion("cfSort")}>
+            <button class="filter-head" onclick={() => toggleAccordion("cfSort")}>
               <span>Sort (CurseForge)</span>
               <ChevronDown size={16} class={!accordionOpen.cfSort ? "rot" : ""} />
             </button>
@@ -3364,24 +3476,25 @@ import { trapFocus } from "../lib/focusTrap";
               <div class="filter-body">
                 <div class="filter-list">
                   {#each [{ id: 1, label: "Featured" }, { id: 2, label: "Popularity" }, { id: 3, label: "Last Updated" }, { id: 4, label: "Name" }, { id: 5, label: "Total Downloads" }, { id: 6, label: "Views" }] as opt (opt.id)}
-                    <button class:active={cfSortField === opt.id} on:click={() => { cfSortField = opt.id; searchMods(1); }}>{opt.label}</button>
+                    <button class:active={cfSortField === opt.id} onclick={() => { cfSortField = opt.id; searchMods(1); }}>{opt.label}</button>
                   {/each}
                 </div>
               </div>
             {/if}
           </section>
+          </div>
           {/if}
         </aside>
 
         <section class="browser-results" bind:this={browserResultsEl}>
           {#if viewMode !== "infinite"}
           <div class="pagination">
-            <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹</button>
+            <button class="page-btn" disabled={page <= 1} onclick={() => goToPage(page - 1)}>‹</button>
             {#each Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1) as p (p)}
-              <button class="page-btn" class:active={p === page} on:click={() => goToPage(p)}>{p}</button>
+              <button class="page-btn" class:active={p === page} onclick={() => goToPage(p)}>{p}</button>
             {/each}
-            {#if totalPages > 5}<span class="page-ellipsis">…</span><button class="page-btn" on:click={() => goToPage(totalPages)}>{totalPages}</button>{/if}
-            <button class="page-btn" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}><ArrowRight size={14} /></button>
+            {#if totalPages > 5}<span class="page-ellipsis">…</span><button class="page-btn" onclick={() => goToPage(totalPages)}>{totalPages}</button>{/if}
+            <button class="page-btn" disabled={page >= totalPages} onclick={() => goToPage(page + 1)}><ArrowRight size={14} /></button>
           </div>
           {/if}
 
@@ -3391,9 +3504,9 @@ import { trapFocus } from "../lib/focusTrap";
               <span>selected for bulk install</span>
             </div>
             <div class="bulk-actions">
-              <button class="ghost" on:click={selectVisibleResults} disabled={displayedResults.length === 0}>Select visible</button>
-              <button class="ghost" on:click={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
-              <button on:click={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating} title="Install selected projects with required dependencies (one provider at a time)">Install selected + dependencies</button>
+              <button class="ghost" onclick={selectVisibleResults} disabled={displayedResults.length === 0}>Select visible</button>
+              <button class="ghost" onclick={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
+              <button onclick={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating} title="Install selected projects with required dependencies (one provider at a time)">Install selected + dependencies</button>
             </div>
           </div>
 
@@ -3418,64 +3531,68 @@ import { trapFocus } from "../lib/focusTrap";
                     class:list={viewMode === "list"}
                     role="button"
                     tabindex="0"
-                    on:click={() => openCatalogInApp(result)}
-                    on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
+                    onclick={() => openCatalogInApp(result)}
+                    onkeydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
                   >
                     <div class="result-icon">
                       {#if catalogIconOk(result)}
-                        <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" on:error={() => markCatalogIconBroken(result.id)} />
+                        <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" onerror={() => markCatalogIconBroken(result.id)} />
                       {:else}
                         <span class="tb-cover-media">{iconFallback(result.name)}</span>
                       {/if}
                     </div>
                     <div class="result-main">
                       <div class="result-title">
-                        <button type="button" class="result-name linkish" title="Open in launcher" on:click|stopPropagation={() => openCatalogInApp(result)}>{result.name}</button>
-                        {#if catalogProvider === "both"}
-                          <span
-                            class="provider-badge"
-                            class:modrinth={(result.provider ?? "modrinth") !== "curseforge"}
-                            class:curseforge={result.provider === "curseforge"}
-                            title={result.provider === "curseforge" ? "CurseForge" : "Modrinth"}
-                          >{result.provider === "curseforge" ? "CF" : "MR"}</span>
-                        {/if}
-                        {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
-                        {#if result.author}<span class="result-author">by {result.author}</span>{/if}
+                        <div class="result-title-row">
+                          <button type="button" class="result-name linkish" title="Open in launcher" onclick={(e) => { e.stopPropagation(); openCatalogInApp(result); } }>{result.name}</button>
+                        </div>
+                        <div class="result-pills">
+                          {#if catalogProvider === "both"}
+                            <span
+                              class="provider-badge"
+                              class:modrinth={(result.provider ?? "modrinth") !== "curseforge"}
+                              class:curseforge={result.provider === "curseforge"}
+                              title={result.provider === "curseforge" ? "CurseForge" : "Modrinth"}
+                            >{result.provider === "curseforge" ? "CF" : "MR"}</span>
+                          {/if}
+                          {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
+                          {#if result.author}<span class="result-author">by {result.author}</span>{/if}
+                        </div>
                       </div>
                       <p class="result-desc">{result.description}</p>
                     </div>
                     <div class="result-actions">
-                      <button class="download-btn" on:click|stopPropagation={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+                      <button class="download-btn" onclick={(e) => { e.stopPropagation(); startInstallPlan(result); } } disabled={mutating || isInstalled(result)}>
                         <Download size={16} /> {isInstalled(result) ? "Installed" : "Download"}
                       </button>
                       <div class="quick-actions">
-                        <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}>
+                        <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" onclick={(e) => { e.stopPropagation(); toggleFavorite(result.id); } }>
                           <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
                         </button>
                         <div class="save-wrapper">
-                          <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" on:click|stopPropagation={() => (saveDropdownFor = saveDropdownFor === result.id ? null : result.id)}>
+                          <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" onclick={(e) => { e.stopPropagation(); (saveDropdownFor = saveDropdownFor === result.id ? null : result.id); } }>
                             <Bookmark size={15} fill={modInAnyList(result.id) ? "currentColor" : "none"} />
                           </button>
                           {#if saveDropdownFor === result.id}
-                            <div class="save-dropdown" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
+                            <div class="save-dropdown" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
                               <div class="save-dropdown-header">Add to list</div>
                               {#each listTabNames as listName (listName)}
-                                <button class="save-dropdown-item" on:click={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
+                                <button class="save-dropdown-item" onclick={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
                                   <span class="save-check">{modInList(result.id, listName) ? '✓' : '+'}</span>
                                   <span>{listName}</span>
                                 </button>
                               {/each}
                               <div class="save-dropdown-new">
-                                <input type="text" placeholder="New list name..." bind:value={newListName} on:keydown={(e) => { if (e.key === 'Enter') { void createListAndAdd(newListName, result.id); }}} />
-                                <button on:click={() => createListAndAdd(newListName, result.id)} disabled={!newListName.trim()}>+ Create & add</button>
+                                <input type="text" placeholder="New list name..." bind:value={newListName} onkeydown={(e) => { if (e.key === 'Enter') { void createListAndAdd(newListName, result.id); }}} />
+                                <button onclick={() => createListAndAdd(newListName, result.id)} disabled={!newListName.trim()}>+ Create & add</button>
                               </div>
                             </div>
                           {/if}
                         </div>
-                        <button class="qa" title="Open on site" on:click|stopPropagation={() => openProjectPage(result)}>
+                        <button class="qa" title="Open on site" onclick={(e) => { e.stopPropagation(); openProjectPage(result); } }>
                           <ExternalLink size={15} />
                         </button>
-                        <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                        <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} onclick={(e) => { e.stopPropagation(); copyProjectLink(result); } }>
                           {#if copiedLinkId === result.id}
                             <Check size={15} />
                           {:else}
@@ -3508,32 +3625,36 @@ import { trapFocus } from "../lib/focusTrap";
               class:list={viewMode === "list"}
               role="button"
               tabindex="0"
-              on:click={() => openCatalogInApp(result)}
-              on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
+              onclick={() => openCatalogInApp(result)}
+              onkeydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
             >
-              <label class="select-result" title="Select for bulk install" on:click|stopPropagation>
-                <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} on:change={() => toggleResultSelection(result)} />
+              <label class="select-result" title="Select for bulk install" onclick={(e) => e.stopPropagation()}>
+                <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} onchange={() => toggleResultSelection(result)} />
               </label>
               <div class="result-icon">
                 {#if catalogIconOk(result)}
-                  <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" on:error={() => markCatalogIconBroken(result.id)} />
+                  <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" onerror={() => markCatalogIconBroken(result.id)} />
                 {:else}
                   <span class="tb-cover-media">{iconFallback(result.name)}</span>
                 {/if}
               </div>
               <div class="result-main">
                 <div class="result-title">
-                  <button type="button" class="result-name linkish" title="Open in launcher" on:click|stopPropagation={() => openCatalogInApp(result)}>{result.name}</button>
-                  {#if catalogProvider === "both"}
-                    <span
-                      class="provider-badge"
-                      class:modrinth={(result.provider ?? "modrinth") !== "curseforge"}
-                      class:curseforge={result.provider === "curseforge"}
-                      title={result.provider === "curseforge" ? "CurseForge" : "Modrinth"}
-                    >{result.provider === "curseforge" ? "CF" : "MR"}</span>
-                  {/if}
-                  {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
-                  {#if result.author}<span class="result-author">by {result.author}</span>{/if}
+                  <div class="result-title-row">
+                    <button type="button" class="result-name linkish" title="Open in launcher" onclick={(e) => { e.stopPropagation(); openCatalogInApp(result); } }>{result.name}</button>
+                  </div>
+                  <div class="result-pills">
+                    {#if catalogProvider === "both"}
+                      <span
+                        class="provider-badge"
+                        class:modrinth={(result.provider ?? "modrinth") !== "curseforge"}
+                        class:curseforge={result.provider === "curseforge"}
+                        title={result.provider === "curseforge" ? "CurseForge" : "Modrinth"}
+                      >{result.provider === "curseforge" ? "CF" : "MR"}</span>
+                    {/if}
+                    {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
+                    {#if result.author}<span class="result-author">by {result.author}</span>{/if}
+                  </div>
                 </div>
                 <p class="result-desc">{result.description}</p>
                 {#if previewLoadingId === result.id}
@@ -3552,37 +3673,37 @@ import { trapFocus } from "../lib/focusTrap";
                 </div>
               </div>
               <div class="result-actions">
-                <button class="download-btn" on:click|stopPropagation={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+                <button class="download-btn" onclick={(e) => { e.stopPropagation(); startInstallPlan(result); } } disabled={mutating || isInstalled(result)}>
                   <Download size={16} /> {isInstalled(result) ? "Installed" : "Download"}
                 </button>
                 <div class="quick-actions">
-                  <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}>
+                  <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" onclick={(e) => { e.stopPropagation(); toggleFavorite(result.id); } }>
                     <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
                   </button>
                   <div class="save-wrapper">
-                    <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" on:click|stopPropagation={() => (saveDropdownFor = saveDropdownFor === result.id ? null : result.id)}>
+                    <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" onclick={(e) => { e.stopPropagation(); (saveDropdownFor = saveDropdownFor === result.id ? null : result.id); } }>
                       <Bookmark size={15} fill={modInAnyList(result.id) ? "currentColor" : "none"} />
                     </button>
                     {#if saveDropdownFor === result.id}
-                      <div class="save-dropdown" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
+                      <div class="save-dropdown" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
                         <div class="save-dropdown-header">Add to list</div>
                         {#each Object.keys(userState.lists) as listName (listName)}
-                          <button class="save-dropdown-item" on:click={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
+                          <button class="save-dropdown-item" onclick={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
                             <span class="save-check">{modInList(result.id, listName) ? '✓' : '+'}</span>
                             <span>{listName}</span>
                           </button>
                         {/each}
                         <div class="save-dropdown-new">
-                          <input type="text" placeholder="New list name..." bind:value={newListName} on:keydown={(e) => { if (e.key === 'Enter') { void createListAndAdd(newListName, result.id); }}} />
-                          <button on:click={() => createListAndAdd(newListName, result.id)} disabled={!newListName.trim()}>+ Create & add</button>
+                          <input type="text" placeholder="New list name..." bind:value={newListName} onkeydown={(e) => { if (e.key === 'Enter') { void createListAndAdd(newListName, result.id); }}} />
+                          <button onclick={() => createListAndAdd(newListName, result.id)} disabled={!newListName.trim()}>+ Create & add</button>
                         </div>
                       </div>
                     {/if}
                   </div>
-                  <button class="qa" title="Open on site" on:click|stopPropagation={() => openProjectPage(result)}>
+                  <button class="qa" title="Open on site" onclick={(e) => { e.stopPropagation(); openProjectPage(result); } }>
                     <ExternalLink size={15} />
                   </button>
-                  <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                  <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} onclick={(e) => { e.stopPropagation(); copyProjectLink(result); } }>
                     {#if copiedLinkId === result.id}
                       <Check size={15} />
                     {:else}
@@ -3610,13 +3731,13 @@ import { trapFocus } from "../lib/focusTrap";
           {/if}
           {#if viewMode !== "infinite" && totalPages > 1 && !isSavedViewFilter(contentFilter)}
             <div class="pagination bottom">
-              <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹ Prev</button>
+              <button class="page-btn" disabled={page <= 1} onclick={() => goToPage(page - 1)}>‹ Prev</button>
               {#each Array.from({ length: Math.min(totalPages, 7) }, (_, i) => i + 1) as p (p)}
-                <button class="page-btn" class:active={p === page} on:click={() => goToPage(p)}>{p}</button>
+                <button class="page-btn" class:active={p === page} onclick={() => goToPage(p)}>{p}</button>
               {/each}
-              {#if totalPages > 7}<span class="page-ellipsis">…</span><button class="page-btn" on:click={() => goToPage(totalPages)}>{totalPages}</button>{/if}
+              {#if totalPages > 7}<span class="page-ellipsis">…</span><button class="page-btn" onclick={() => goToPage(totalPages)}>{totalPages}</button>{/if}
               <span class="page-info">{page} / {totalPages}</span>
-              <button class="page-btn" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}>Next ›</button>
+              <button class="page-btn" disabled={page >= totalPages} onclick={() => goToPage(page + 1)}>Next ›</button>
             </div>
           {/if}
         </section>
@@ -3627,43 +3748,62 @@ import { trapFocus } from "../lib/focusTrap";
           <div>
             <span class="plan-eyebrow">Install plan</span>
             <h3>
-              <button type="button" class="plan-title-link" title="Open catalog page" on:click={() => openProjectPage(pendingInstall)}>
+              <button type="button" class="plan-title-link" title="Open catalog page" onclick={() => pendingInstall && openProjectPage(pendingInstall)}>
                 {pendingInstall.name}
                 <ExternalLink size={14} />
               </button>
               <span class="plan-slug">({previews[pendingInstall.id]?.slug ?? pendingInstall.slug})</span>
             </h3>
             {#if previews[pendingInstall.id]}
+              {@const pendingPreview = previews[pendingInstall.id]}
+              {@const pendingRequired = requiredDeps(pendingPreview)}
+              {@const pendingOptional = optionalDeps(pendingPreview)}
+              {@const pendingRequiredInstalled = countInstalledAmong(pendingPreview, pendingRequired)}
+              {@const pendingOptionalInstalled = countInstalledAmong(pendingPreview, pendingOptional)}
               <div class="dep-list">
-                <h4>Required ({requiredDeps(previews[pendingInstall.id]).length})</h4>
-                {#if requiredDeps(previews[pendingInstall.id]).length === 0}
+                <h4>
+                  Required ({pendingRequired.length})
+                  {#if pendingRequiredInstalled > 0}
+                    <span class="dep-installed-count">{pendingRequiredInstalled} already installed</span>
+                  {/if}
+                </h4>
+                {#if pendingRequired.length === 0}
                   <p class="muted">No hard dependencies.</p>
                 {:else}
-                  {#each requiredDeps(previews[pendingInstall.id]) as dep (`${dep.type}:${dep.target}`)}
-                    <div class="dep-entry required">
+                  {#each pendingRequired as dep (`${dep.type}:${dep.target}`)}
+                    {@const already = isDepAlreadyInstalled(pendingPreview, dep.target)}
+                    <div class="dep-entry required" class:already-installed={already}>
                       <span class="dep-target">{dep.target}</span>
+                      {#if already}<span class="dep-installed-pill">Installed</span>{/if}
                       {#if dep.reason}<small>{dep.reason}</small>{/if}
                     </div>
                   {/each}
                 {/if}
               </div>
               <div class="dep-list">
-                <h4>Optional ({optionalDeps(previews[pendingInstall.id]).length})</h4>
-                {#if optionalDeps(previews[pendingInstall.id]).length === 0}
+                <h4>
+                  Optional ({pendingOptional.length})
+                  {#if pendingOptionalInstalled > 0}
+                    <span class="dep-installed-count">{pendingOptionalInstalled} already installed</span>
+                  {/if}
+                </h4>
+                {#if pendingOptional.length === 0}
                   <p class="muted">No optional dependencies.</p>
                 {:else}
-                  {#each optionalDeps(previews[pendingInstall.id]) as dep (`${dep.type}:${dep.target}`)}
-                    <div class="dep-entry optional">
+                  {#each pendingOptional as dep (`${dep.type}:${dep.target}`)}
+                    {@const already = isDepAlreadyInstalled(pendingPreview, dep.target)}
+                    <div class="dep-entry optional" class:already-installed={already}>
                       <span class="dep-target">{dep.target}</span>
+                      {#if already}<span class="dep-installed-pill">Installed</span>{/if}
                       {#if dep.reason}<small>{dep.reason}</small>{/if}
                     </div>
                   {/each}
                 {/if}
               </div>
-              {#if (previews[pendingInstall.id]?.dependents?.length ?? 0) > 0}
+              {#if (pendingPreview?.dependents?.length ?? 0) > 0}
                 <div class="dep-list">
-                  <h4>Used by on Modrinth ({previews[pendingInstall.id]?.dependents?.length})</h4>
-                  {#each previews[pendingInstall.id]?.dependents ?? [] as dep (dep.id)}
+                  <h4>Used by on Modrinth ({pendingPreview?.dependents?.length})</h4>
+                  {#each pendingPreview?.dependents ?? [] as dep (dep.id)}
                     <div class="dep-entry optional">
                       <span class="dep-target">{dep.name}</span>
                       <small>{dep.slug}</small>
@@ -3671,12 +3811,20 @@ import { trapFocus } from "../lib/focusTrap";
                   {/each}
                 </div>
               {/if}
-              <p class="muted">Required dependencies install automatically. Optional are listed for reference only.</p>
-              {#if conflictDeps(previews[pendingInstall.id]).length}
+              <p class="muted">
+                {#if pendingRequiredInstalled > 0 && pendingRequiredInstalled === pendingRequired.length && pendingRequired.length > 0}
+                  All required dependencies are already installed — only this mod will be downloaded.
+                {:else if pendingRequiredInstalled > 0}
+                  Already installed dependencies will be skipped. Remaining required ones install automatically.
+                {:else}
+                  Required dependencies install automatically. Optional are listed for reference only.
+                {/if}
+              </p>
+              {#if conflictDeps(pendingPreview).length}
                 <div class="conflict-warning">
                   <strong><AlertTriangle size={14} /> Conflict warning</strong>
                   <span>This project declares incompatible dependencies. Review before installing.</span>
-                  {#each conflictDeps(previews[pendingInstall.id]) as dep (`${dep.type}:${dep.target}`)}
+                  {#each conflictDeps(pendingPreview) as dep (`${dep.type}:${dep.target}`)}
                     <code>{dep.type}:{dep.target}</code>
                   {/each}
                 </div>
@@ -3688,9 +3836,9 @@ import { trapFocus } from "../lib/focusTrap";
             {/if}
           </div>
           <div class="plan-actions">
-            <button class="ghost" on:click={() => (pendingInstall = null)}>Cancel</button>
+            <button class="ghost" onclick={() => (pendingInstall = null)}>Cancel</button>
             <button
-              on:click={() => confirmInstall()}
+              onclick={() => confirmInstall()}
               disabled={mutating}
             >
               <Download size={16} />
@@ -3699,6 +3847,20 @@ import { trapFocus } from "../lib/focusTrap";
           </div>
         </div>
       {/if}
+      </div>
+      {#if catalogViewResult}
+        <div class="add-mods-catalog-layer">
+          <CatalogProjectView
+            result={catalogViewResult}
+            minecraftVersion={$projectInfo?.minecraftVersion ?? null}
+            loaderKind={$projectInfo?.loaderKind ?? null}
+            installed={isInstalled(catalogViewResult)}
+            installing={mutating && pendingInstall?.id === catalogViewResult.id}
+            onback={closeCatalogInApp}
+            oninstall={() => { if (catalogViewResult) void startInstallPlan(catalogViewResult); }}
+            onopenexternal={() => { if (catalogViewResult) void openProjectPage(catalogViewResult); }}
+          />
+        </div>
       {/if}
     </div>
   </div>
@@ -3706,7 +3868,7 @@ import { trapFocus } from "../lib/focusTrap";
 
 <!-- Version picker modal — Modrinth-style: search, filter compatible, channel + confirm -->
 {#if versionPickerMod}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (versionPickerMod = null)} on:keydown={() => {}}>
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (versionPickerMod = null)} onkeydown={() => {}}>
     <div class="modal version-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (versionPickerMod = null) }}>
       <div class="modal-header">
         <div>
@@ -3718,7 +3880,7 @@ import { trapFocus } from "../lib/focusTrap";
             · {compatibleVersionCount} compatible
           </p>
         </div>
-        <button class="icon-btn" on:click={() => (versionPickerMod = null)} aria-label="Close"><X size={18} /></button>
+        <button class="icon-btn" onclick={() => (versionPickerMod = null)} aria-label="Close"><X size={18} /></button>
       </div>
       {#if versionPickerError}<div class="error compact">{versionPickerError}</div>{/if}
       {#if versionPickerLoading}
@@ -3734,7 +3896,7 @@ import { trapFocus } from "../lib/focusTrap";
           <button
             class="secondary mini"
             class:active={!hideIncompatible}
-            on:click={() => (hideIncompatible = !hideIncompatible)}
+            onclick={() => (hideIncompatible = !hideIncompatible)}
             title="Show versions for other Minecraft versions / loaders"
           >
             {hideIncompatible ? "Show all" : "Hide incompatible"}
@@ -3750,7 +3912,7 @@ import { trapFocus } from "../lib/focusTrap";
                 class:incompatible={v.compatible === false}
                 role="option"
                 aria-selected={selectedVersion?.id === v.id}
-                on:click={() => (selectedVersion = v)}
+                onclick={() => (selectedVersion = v)}
                 disabled={versionPickerChanging}
               >
                 <div class="version-main">
@@ -3781,7 +3943,7 @@ import { trapFocus } from "../lib/focusTrap";
               <div class="version-switch-footer">
                 <button
                   class="primary block"
-                  on:click={() => selectedVersion && changeVersion(selectedVersion.id)}
+                  onclick={() => selectedVersion && changeVersion(selectedVersion.id)}
                   disabled={versionPickerChanging || selectedVersion.versionNumber === versionPickerMod?.version}
                 >
                   {#if versionPickerChanging}
@@ -3819,7 +3981,7 @@ import { trapFocus } from "../lib/focusTrap";
               </div>
               <div class="version-detail-actions">
                 <button
-                  on:click={() => selectedVersion && changeVersion(selectedVersion.id)}
+                  onclick={() => selectedVersion && changeVersion(selectedVersion.id)}
                   disabled={versionPickerChanging || selectedVersion.versionNumber === versionPickerMod?.version}
                 >
                   {#if versionPickerChanging}
@@ -3841,14 +4003,16 @@ import { trapFocus } from "../lib/focusTrap";
   </div>
 {/if}
 
+<OptimizePackModal bind:open={optimizePackOpen} onApplied={() => void load(true)} />
+
 <!-- Ideas: popular companions after Add-mod install -->
 {#if ideasOpen}
   <div
     class="modal-backdrop"
     role="button"
     tabindex="-1"
-    on:click={(e) => e.target === e.currentTarget && dismissIdeas()}
-    on:keydown={() => {}}
+    onclick={(e) => e.target === e.currentTarget && dismissIdeas()}
+    onkeydown={() => {}}
   >
     <div
       class="modal ideas-dialog"
@@ -3861,7 +4025,7 @@ import { trapFocus } from "../lib/focusTrap";
           <h2><Sparkles size={18} /> Often installed together</h2>
           <p>People who added <strong>{ideasSeedLabel}</strong> often install these too. Uncheck any you do not want.</p>
         </div>
-        <button class="icon-btn" on:click={dismissIdeas} aria-label="Close"><X size={18} /></button>
+        <button class="icon-btn" onclick={dismissIdeas} aria-label="Close"><X size={18} /></button>
       </div>
       <div class="ideas-list">
         {#each ideasOffers as offer (offer.slug)}
@@ -3882,9 +4046,9 @@ import { trapFocus } from "../lib/focusTrap";
         {/each}
       </div>
       <div class="dep-dialog-footer ideas-footer">
-        <button class="ghost" on:click={dismissIdeas} disabled={ideasBusy}>No thanks</button>
+        <button class="ghost" onclick={dismissIdeas} disabled={ideasBusy}>No thanks</button>
         <button
-          on:click={installSelectedIdeas}
+          onclick={installSelectedIdeas}
           disabled={ideasBusy || !ideasOffers.some((o) => o.selected)}
         >
           {ideasBusy
@@ -3898,28 +4062,28 @@ import { trapFocus } from "../lib/focusTrap";
 
 <!-- Post-bulk dependency resolution dialog -->
 {#if dependencyDialogOpen}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (dependencyDialogOpen = false)} on:keydown={() => {}}>
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (dependencyDialogOpen = false)} onkeydown={() => {}}>
     <div class="modal dep-dialog" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (dependencyDialogOpen = false) }}>
       <div class="modal-header">
         <div>
           <h2>Missing dependencies</h2>
           <p>{dependencyMissingCount} required mod(s) are still missing. How would you like to handle this?</p>
         </div>
-        <button class="icon-btn" on:click={() => (dependencyDialogOpen = false)} aria-label="Close"><X size={18} /></button>
+        <button class="icon-btn" onclick={() => (dependencyDialogOpen = false)} aria-label="Close"><X size={18} /></button>
       </div>
       <div class="dep-dialog-actions">
-        <button class="secondary" on:click={resolveDepsViaGraph}>
+        <button class="secondary" onclick={resolveDepsViaGraph}>
           <GitGraph size={18} /> Open in Resolve
           <span>See which mods need which dependencies and install them one by one.</span>
         </button>
-        <button on:click={autoResolveDeps} disabled={dependencyResolving}>
+        <button onclick={autoResolveDeps} disabled={dependencyResolving}>
           <Zap size={18} />
           {dependencyResolving ? "Installing..." : "Auto-download all"}
           <span>Let TuffBox find and install every missing dependency automatically.</span>
         </button>
       </div>
       <div class="dep-dialog-footer">
-        <button class="ghost" on:click={() => (dependencyDialogOpen = false)}>Skip for now</button>
+        <button class="ghost" onclick={() => (dependencyDialogOpen = false)}>Skip for now</button>
       </div>
     </div>
   </div>
@@ -3927,14 +4091,14 @@ import { trapFocus } from "../lib/focusTrap";
 
 <!-- Change plan preview modal -->
 {#if planPreviewOpen && planPreviewMod}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (planPreviewOpen = false)} on:keydown={() => {}}>
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (planPreviewOpen = false)} onkeydown={() => {}}>
     <div class="modal plan-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (planPreviewOpen = false) }}>
       <div class="modal-header">
         <div>
           <h2>Install plan: {planPreviewMod.name}</h2>
           <p>Auto-snapshot will be created before applying changes.</p>
         </div>
-        <button class="icon-btn" on:click={() => (planPreviewOpen = false)} aria-label="Close"><X size={18} /></button>
+        <button class="icon-btn" onclick={() => (planPreviewOpen = false)} aria-label="Close"><X size={18} /></button>
       </div>
 
       {#if planPreviewLoading}
@@ -3961,13 +4125,22 @@ import { trapFocus } from "../lib/focusTrap";
           </div>
 
           {#if planPreviewDeps && requiredDeps(planPreviewDeps).length > 0}
+            {@const planRequired = requiredDeps(planPreviewDeps)}
+            {@const planRequiredInstalled = countInstalledAmong(planPreviewDeps, planRequired)}
             <div class="plan-deps-section">
-              <strong>Required dependencies ({requiredDeps(planPreviewDeps).length})</strong>
+              <strong>
+                Required dependencies ({planRequired.length})
+                {#if planRequiredInstalled > 0}
+                  <span class="dep-installed-count"> · {planRequiredInstalled} already installed</span>
+                {/if}
+              </strong>
               <div class="plan-dep-list">
-                {#each requiredDeps(planPreviewDeps) as dep (`${dep.type}:${dep.target}`)}
-                  <div class="plan-dep-row">
+                {#each planRequired as dep (`${dep.type}:${dep.target}`)}
+                  {@const already = isDepAlreadyInstalled(planPreviewDeps, dep.target)}
+                  <div class="plan-dep-row" class:already-installed={already}>
                     <code>{dep.target}</code>
-                    {#if dep.versionConstraint}<span>{dep.versionConstraint}</span>{/if}
+                    {#if already}<span class="dep-installed-pill">Installed</span>
+                    {:else if dep.versionConstraint}<span>{dep.versionConstraint}</span>{/if}
                   </div>
                 {/each}
               </div>
@@ -3977,12 +4150,21 @@ import { trapFocus } from "../lib/focusTrap";
           {/if}
 
           {#if planPreviewDeps && optionalDeps(planPreviewDeps).length > 0}
+            {@const planOptional = optionalDeps(planPreviewDeps)}
+            {@const planOptionalInstalled = countInstalledAmong(planPreviewDeps, planOptional)}
             <div class="plan-deps-section">
-              <strong>Optional ({optionalDeps(planPreviewDeps).length})</strong>
+              <strong>
+                Optional ({planOptional.length})
+                {#if planOptionalInstalled > 0}
+                  <span class="dep-installed-count"> · {planOptionalInstalled} already installed</span>
+                {/if}
+              </strong>
               <div class="plan-dep-list">
-                {#each optionalDeps(planPreviewDeps) as dep (`${dep.type}:${dep.target}`)}
-                  <div class="plan-dep-row">
+                {#each planOptional as dep (`${dep.type}:${dep.target}`)}
+                  {@const already = isDepAlreadyInstalled(planPreviewDeps, dep.target)}
+                  <div class="plan-dep-row" class:already-installed={already}>
                     <code>{dep.target}</code>
+                    {#if already}<span class="dep-installed-pill">Installed</span>{/if}
                   </div>
                 {/each}
               </div>
@@ -4020,11 +4202,11 @@ import { trapFocus } from "../lib/focusTrap";
       {/if}
 
       <div class="plan-modal-actions">
-        <button class="ghost" on:click={() => { planPreviewOpen = false; if (planPreviewMod) startInstallPlan(planPreviewMod); }}>See raw details</button>
-        <button class="secondary" on:click={() => confirmFromPlan(false)} disabled={mutating}>
+        <button class="ghost" onclick={() => { planPreviewOpen = false; if (planPreviewMod) startInstallPlan(planPreviewMod); }}>See raw details</button>
+        <button class="secondary" onclick={() => confirmFromPlan(false)} disabled={mutating}>
           <Download size={16} /> Install mod only
         </button>
-        <button on:click={() => confirmFromPlan(true)} disabled={mutating}>
+        <button onclick={() => confirmFromPlan(true)} disabled={mutating}>
           <Zap size={16} /> Install with dependencies
         </button>
       </div>
@@ -4039,8 +4221,8 @@ import { trapFocus } from "../lib/focusTrap";
     mode="text"
     defaultValue={renameTarget}
     confirmLabel="Rename"
-    on:confirm={(e) => { if (e.detail.trim() && renameTarget) { renameList(renameTarget, e.detail.trim()); } showRenamePrompt = false; }}
-    on:cancel={() => (showRenamePrompt = false)}
+    onconfirm={(v) => { if (v.trim() && renameTarget) { renameList(renameTarget, v.trim()); } showRenamePrompt = false; }}
+    oncancel={() => (showRenamePrompt = false)}
   />
 {/if}
 
@@ -4050,9 +4232,63 @@ import { trapFocus } from "../lib/focusTrap";
     message={`Delete list "${deleteTarget}"? This cannot be undone.`}
     danger
     confirmLabel="Delete"
-    on:confirm={() => { if (deleteTarget) deleteList(deleteTarget); showDeleteConfirm = false; }}
-    on:cancel={() => (showDeleteConfirm = false)}
+    onconfirm={() => { if (deleteTarget) deleteList(deleteTarget); showDeleteConfirm = false; }}
+    oncancel={() => (showDeleteConfirm = false)}
   />
+{/if}
+
+{#if updateConfirmOpen}
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (updateConfirmOpen = false)} onkeydown={() => {}}>
+    <div class="modal plan-modal update-confirm-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (updateConfirmOpen = false) }}>
+      <div class="modal-header">
+        <div>
+          <h2>Update {updateList.length} mod{#if updateList.length !== 1}s{/if}?</h2>
+          <p>Preview below. A safety snapshot is created before applying.</p>
+        </div>
+        <button class="icon-btn" onclick={() => (updateConfirmOpen = false)} aria-label="Close"><X size={18} /></button>
+      </div>
+
+      <div class="update-confirm-list">
+        {#each updateList as u (`${u.modId}:${u.latestVersion}`)}
+          <div class="update-confirm-row" class:breaking={(u.breakingLoader || u.breakingMinecraft)}>
+            <div class="update-confirm-main">
+              <span class="update-confirm-name">{u.name}</span>
+              <span class="update-confirm-vers">
+                {u.currentVersion || "?"} → <strong>{u.latestVersion}</strong>
+              </span>
+              {#if u.fileNameChanged}
+                <span class="update-confirm-chip rename" title={`${u.currentFileName ?? ""} → ${u.fileName}`}>renamed file</span>
+              {/if}
+              {#if u.breakingLoader}
+                <span class="update-confirm-chip loader">loader changed</span>
+              {/if}
+              {#if u.breakingMinecraft}
+                <span class="update-confirm-chip mc">MC version changed</span>
+              {/if}
+            </div>
+            {#if u.changelog}
+              <div class="update-confirm-changelog">{u.changelog}</div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+
+      {#if updateList.some((u) => u.breakingLoader || u.breakingMinecraft)}
+        <div class="plan-conflicts">
+          <strong>⚠ Some updates change loader / Minecraft version</strong>
+          <span>These may require a different loader or Minecraft version. Verify before applying.</span>
+        </div>
+      {/if}
+
+      <div class="plan-modal-actions">
+        <button class="ghost" onclick={() => (updateConfirmOpen = false)}>Cancel</button>
+        <button class="secondary" onclick={() => void applyAllUpdates()} disabled={updateApplying}>
+          <Download size={16} />
+          {updateApplying ? "Updating…" : `Apply ${updateList.length} update${updateList.length !== 1 ? "s" : ""}`}
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <style>
@@ -4071,90 +4307,62 @@ import { trapFocus } from "../lib/focusTrap";
     flex-shrink: 0;
   }
 
-  .mods-list {
+  .mods-body {
     flex: 1;
     min-height: 0;
-    overflow: auto;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    overflow: hidden;
   }
 
-  .installed-list-virtual {
-    position: relative;
-    width: 100%;
+  .mods-list {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    scrollbar-gutter: stable;
+    /* Gap between installed cards and the vertical scrollbar */
+    padding-right: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-elevated) transparent;
+  }
+
+  .mods-body.has-side .mods-list {
+    padding-right: 8px;
+  }
+
+  .mods-list::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .mods-list::-webkit-scrollbar-thumb {
+    background: var(--bg-elevated);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .mods-list::-webkit-scrollbar-track {
+    background: transparent;
   }
 
   .content-hero {
     display: flex;
     justify-content: space-between;
-    align-items: flex-end;
-    gap: 24px;
-    margin-bottom: 12px;
-    padding: 22px 24px;
-    border-radius: 20px;
-    border: 1px solid rgba(27, 217, 106, 0.18);
-    background:
-      radial-gradient(ellipse 80% 120% at 0% 0%, rgba(27, 217, 106, 0.16), transparent 55%),
-      radial-gradient(ellipse 60% 100% at 100% 0%, rgba(139, 92, 246, 0.12), transparent 50%),
-      linear-gradient(180deg, rgba(255,255,255,0.03), transparent),
-      var(--bg-secondary);
-    overflow: hidden;
-    animation: hero-in 0.45s ease both;
-    transition: padding 0.2s ease;
-  }
-
-  .content-hero.collapsed {
     align-items: center;
-    padding: 12px 16px 12px 20px;
+    gap: 16px;
+    margin-bottom: 12px;
+    padding: 10px 14px 10px 16px;
+    border-radius: var(--border-radius-xl, 16px);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    overflow: hidden;
   }
 
-  .content-hero-toggle {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
+  .content-hero-copy {
     flex: 1;
     min-width: 0;
-    margin: 0;
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .content-hero.collapsed .content-hero-toggle {
-    align-items: center;
-  }
-
-  .content-hero.collapsed .content-kicker {
-    margin-bottom: 2px;
-  }
-
-  .content-hero.collapsed h1 {
-    margin: 0;
-    font-size: 18px;
-  }
-
-  .hero-chevron {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    margin-top: 4px;
-    color: var(--text-muted);
-    transition: transform 0.2s ease;
-  }
-
-  .content-hero.collapsed .hero-chevron {
-    margin-top: 0;
-  }
-
-  .hero-chevron.rotated {
-    transform: rotate(180deg);
-  }
-
-  .hero-chevron :global(svg) {
-    color: var(--text-muted);
   }
 
   .conflicts-jars {
@@ -4255,60 +4463,52 @@ import { trapFocus } from "../lib/focusTrap";
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    margin-bottom: 8px;
+    margin-bottom: 2px;
   }
 
   .content-hero h1 {
-    margin: 0 0 6px;
-    font-size: 28px;
-    font-weight: 800;
-    letter-spacing: -0.03em;
-    background: linear-gradient(120deg, #fff 30%, var(--accent-primary));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-
-  .content-hero-copy p {
     margin: 0;
-    color: var(--text-secondary);
-    font-size: 14px;
-    max-width: 420px;
-    line-height: 1.45;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
   }
 
   .content-hero-stats {
     display: flex;
-    gap: 10px;
+    gap: 8px;
     flex-shrink: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .stat-pill {
-    min-width: 72px;
-    padding: 10px 14px;
-    border-radius: 14px;
-    background: rgba(0,0,0,0.28);
+    min-width: 64px;
+    padding: 6px 12px;
+    border-radius: var(--border-radius-md, 10px);
+    background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     text-align: center;
   }
 
   .stat-pill strong {
     display: block;
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 800;
+    line-height: 1.15;
     color: var(--text-primary);
   }
 
   .stat-pill span {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
 
   .stat-pill.accent {
-    border-color: rgba(27, 217, 106, 0.4);
-    background: rgba(27, 217, 106, 0.1);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
 
   .stat-pill.accent strong { color: var(--accent-primary); }
@@ -4318,8 +4518,8 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   @keyframes pulse-glow {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(27, 217, 106, 0); }
-    50% { box-shadow: 0 0 18px 2px rgba(27, 217, 106, 0.25); }
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 18px 2px color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   }
 
   .toolbar {
@@ -4329,13 +4529,6 @@ import { trapFocus } from "../lib/focusTrap";
     margin-bottom: 8px;
   }
 
-  .toolbar-actions-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    align-items: center;
-  }
-
   .content-tabs {
     display: flex;
     gap: 8px;
@@ -4343,138 +4536,264 @@ import { trapFocus } from "../lib/focusTrap";
     padding-bottom: 2px;
   }
 
-  .toolbar-row {
+  .control-row {
     display: flex;
-    justify-content: flex-start;
-    gap: 4px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .filters-search-row {
-    display: flex;
-    justify-content: space-between;
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
     margin-bottom: 10px;
   }
 
-  .filters-search-row .quick-filters {
-    margin-bottom: 0;
+  .side-segment {
+    display: inline-flex;
+    align-items: stretch;
+    flex-shrink: 0;
+    padding: 2px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+    gap: 0;
+  }
+
+  .side-segment button {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 0;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+
+  .side-segment button:first-child {
+    border-radius: calc(var(--border-radius-md) - 2px) 0 0 calc(var(--border-radius-md) - 2px);
+  }
+
+  .side-segment button:last-child {
+    border-radius: 0 calc(var(--border-radius-md) - 2px) calc(var(--border-radius-md) - 2px) 0;
+  }
+
+  .side-segment button:only-child {
+    border-radius: calc(var(--border-radius-md) - 2px);
+  }
+
+  .side-segment button:hover {
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+  }
+
+  .side-segment button.active {
+    background: var(--accent-primary);
+    color: #04140a;
+  }
+
+  .side-segment button.active span {
+    color: rgba(4, 20, 10, 0.7);
+  }
+
+  .side-segment span {
+    margin-left: 4px;
+    font-weight: 500;
+    opacity: 0.75;
   }
 
   .toolbar-search-cluster {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-left: auto;
-    flex-shrink: 0;
+    gap: 8px;
+    flex: 1 1 280px;
+    min-width: min(100%, 220px);
   }
 
   .toolbar-search {
-    flex: 0 1 320px;
-    min-width: 200px;
-    max-width: 360px;
+    flex: 1 1 auto;
+    min-width: 180px;
+    max-width: none;
     position: relative;
+  }
+
+  .toolbar-search .search-glyph {
+    left: 14px;
   }
 
   .toolbar-search input {
     width: 100%;
-    min-height: 38px;
+    min-height: 40px;
     box-sizing: border-box;
-    padding: 8px 12px 8px 38px;
+    padding: 8px 12px 8px 40px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
     color: var(--text-primary);
     font: inherit;
+    font-size: 14px;
   }
 
   .toolbar-search input::placeholder {
     color: var(--text-muted);
   }
 
-  .toolbar-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    align-items: center;
-  }
-
-  .toolbar-search-cluster .primary-action {
-    padding: 8px 14px;
+  .control-row > .primary-action {
+    padding: 9px 14px;
     font-size: 13px;
+    min-height: 40px;
     white-space: nowrap;
+    flex-shrink: 0;
   }
 
-  .quiet-action {
-    padding: 6px 8px !important;
-    font-size: 12px !important;
-    font-weight: 500 !important;
-    gap: 5px !important;
-    color: var(--text-muted) !important;
-    background: transparent !important;
-    border: 1px solid transparent !important;
-    transform: none !important;
-    min-height: 30px;
+  .more-wrap {
+    position: relative;
+    flex-shrink: 0;
   }
 
-  .quiet-action:hover:not(:disabled) {
-    color: var(--text-secondary) !important;
-    background: var(--bg-hover) !important;
-    border-color: var(--border-color) !important;
-    transform: none !important;
-  }
-
-  .quiet-action.has-updates {
-    color: var(--accent-primary) !important;
-  }
-
-  .toolbar-quiet {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+  .more-toggle {
+    display: inline-flex;
     align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: 8px 12px;
   }
 
-  .glow-btn {
-    border-color: rgba(27, 217, 106, 0.35) !important;
+  .more-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+  }
+
+  .more-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 50;
+    min-width: 200px;
+    background: var(--bg-secondary, #151922);
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: var(--border-radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .more-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary, #e8ecf4);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .more-item:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+
+  .more-item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .more-item.has-updates {
+    color: var(--accent-primary);
+  }
+
+  .glow-btn,
+  .ideas-accent {
+    position: relative;
+    flex-shrink: 0;
+    min-height: 40px;
+    padding: 8px 12px !important;
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent) !important;
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 18%, transparent), rgba(56, 189, 248, 0.1)) !important;
+    color: var(--accent-primary) !important;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 15%, transparent),
+      0 0 14px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    font-weight: 600 !important;
+  }
+
+  .ideas-accent:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent-primary) 65%, transparent) !important;
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 28%, transparent), rgba(56, 189, 248, 0.16)) !important;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 28%, transparent),
+      0 0 18px color-mix(in srgb, var(--accent-primary) 28%, transparent);
+  }
+
+  .ideas-accent:disabled {
+    opacity: 0.45;
+    box-shadow: none;
   }
 
   .ideas-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 4px 8px;
-    border-radius: 6px;
+    justify-content: center;
+    gap: 0;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
     background: transparent;
     color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 500;
     cursor: pointer;
     user-select: none;
+    flex-shrink: 0;
+    position: relative;
+  }
+  .ideas-toggle.often-together input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    margin: 0;
   }
   .ideas-toggle.on {
-    color: var(--text-secondary);
-    border-color: rgba(27, 217, 106, 0.28);
-    background: rgba(27, 217, 106, 0.06);
+    color: var(--accent-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
-  .ideas-toggle input {
-    margin: 0;
-    width: 12px;
-    height: 12px;
+  .ideas-toggle:hover {
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+  }
+  .ideas-toggle.on:hover {
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
   }
   .ideas-dialog {
     max-width: 420px;
+    max-height: min(85vh, 640px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
   .ideas-list {
     display: grid;
     gap: 8px;
     padding: 4px 0 12px;
-    max-height: 280px;
+    min-height: 0;
+    flex: 1;
+    max-height: min(50vh, 360px);
     overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
   }
   .ideas-row {
     display: flex;
@@ -4587,35 +4906,6 @@ import { trapFocus } from "../lib/focusTrap";
     flex-wrap: wrap;
   }
 
-  .quick-filters {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 20px;
-  }
-
-  .quick-filters button {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    padding: 8px 12px;
-    transition: border-color .15s, background .15s, transform .15s;
-  }
-
-  .quick-filters button:hover {
-    transform: translateY(-1px);
-  }
-
-  .quick-filters button.active {
-    border-color: rgba(27, 217, 106, 0.45);
-    background: rgba(27, 217, 106, 0.1);
-    color: var(--accent-primary);
-  }
-
-  .quick-filters span {
-    margin-left: 6px;
-    color: var(--text-muted);
-  }
-
   .tabs .tab-count {
     margin-left: 6px;
     font-size: 11px;
@@ -4650,9 +4940,9 @@ import { trapFocus } from "../lib/focusTrap";
     text-transform: uppercase;
     padding: 1px 7px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
-    color: #1bd96a;
-    border: 1px solid rgba(27, 217, 106, 0.28);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    color: var(--accent-primary);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
     flex-shrink: 0;
   }
 
@@ -4675,6 +4965,7 @@ import { trapFocus } from "../lib/focusTrap";
     background: linear-gradient(135deg, rgba(255,255,255,0.02), transparent 40%), var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
+    cursor: pointer;
   }
 
   .installed-card:hover {
@@ -4693,12 +4984,13 @@ import { trapFocus } from "../lib/focusTrap";
     border-style: dashed;
   }
 
-  .installed-card.selected {
+  .installed-card.selected,
+  .installed-card.focused {
     border-color: var(--accent-primary);
     background:
-      linear-gradient(90deg, rgba(27, 217, 106, 0.12), transparent 40%),
+      linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 16%, transparent), transparent 42%),
       var(--bg-secondary);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.25);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
 
   .select-check {
@@ -4733,26 +5025,54 @@ import { trapFocus } from "../lib/focusTrap";
     border: 1px solid rgba(239, 68, 68, 0.3);
   }
 
-  .selection-bar {
+  .selection-inspector {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-    margin-bottom: 12px;
-    padding: 10px 12px;
-    border-radius: var(--border-radius-md);
-    border: 1px solid rgba(27, 217, 106, 0.35);
-    background: rgba(27, 217, 106, 0.08);
+    flex-direction: column;
+    width: min(340px, 38vw);
+    min-width: 260px;
+    max-width: 380px;
+    height: 100%;
+    min-height: 0;
+    background: var(--bg-elevated, var(--bg-tertiary));
+    border-left: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+    padding: 16px;
+    gap: 16px;
+    flex-shrink: 0;
   }
-  .selection-count { font-weight: 700; font-size: 13px; color: var(--accent-primary); }
-  .selection-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .selection-actions .mini {
+
+  .selection-inspector-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .selection-inspector-header h2 {
+    margin: 0 0 4px;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  .selection-inspector-header p {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--text-muted);
+  }
+
+  .selection-inspector-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .selection-inspector-actions .secondary {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
+    justify-content: flex-start;
+    gap: 8px;
   }
+
   .icon-btn.warn { color: #fbbf24; }
 
   .mod-icon {
@@ -4768,7 +5088,7 @@ import { trapFocus } from "../lib/focusTrap";
     color: #fff;
     font-weight: 900;
     flex-shrink: 0;
-    box-shadow: 0 4px 14px rgba(27, 217, 106, 0.15);
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-primary) 15%, transparent);
   }
 
   .mod-icon img {
@@ -4822,13 +5142,6 @@ import { trapFocus } from "../lib/focusTrap";
     color: var(--text-muted);
     font-size: 12px;
     min-width: 0;
-  }
-
-  .installed-meta .filename {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 280px;
   }
 
   /* Fixed columns so client / source / Update stay aligned across rows. */
@@ -4894,9 +5207,9 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     flex-direction: column;
     background:
-      radial-gradient(ellipse 90% 60% at 50% -10%, rgba(27, 217, 106, 0.18), transparent 55%),
+      radial-gradient(ellipse 90% 60% at 50% -10%, color-mix(in srgb, var(--accent-primary) 18%, transparent), transparent 55%),
       var(--bg-secondary);
-    border: 1px solid rgba(27, 217, 106, 0.28);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
     border-radius: 20px;
     box-shadow: 0 30px 100px rgba(0, 0, 0, 0.55);
     padding: 22px;
@@ -4963,10 +5276,10 @@ import { trapFocus } from "../lib/focusTrap";
   .download-stage {
     margin-bottom: 14px;
     padding: 12px 14px;
-    border: 1px solid rgba(27, 217, 106, 0.24);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 24%, transparent);
     border-radius: 14px;
     background:
-      linear-gradient(135deg, rgba(27, 217, 106, 0.1), rgba(110, 231, 168, 0.025)),
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 10%, transparent), rgba(110, 231, 168, 0.025)),
       rgba(255, 255, 255, 0.02);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
@@ -5005,8 +5318,8 @@ import { trapFocus } from "../lib/focusTrap";
   .download-fill {
     height: 100%;
     border-radius: 999px;
-    background: linear-gradient(90deg, var(--accent-primary), #6ee7a8);
-    box-shadow: 0 0 12px rgba(27, 217, 106, 0.45);
+    background: linear-gradient(90deg, var(--accent-primary), var(--accent-hover));
+    box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 45%, transparent);
     transition: width 0.12s linear;
   }
 
@@ -5033,12 +5346,12 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .download-row.active {
-    border-color: rgba(27, 217, 106, 0.4);
-    background: rgba(27, 217, 106, 0.06);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
 
   .download-row.done {
-    border-color: rgba(27, 217, 106, 0.25);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
     opacity: 0.85;
   }
 
@@ -5125,12 +5438,12 @@ import { trapFocus } from "../lib/focusTrap";
   .ver-old { opacity: 0.7; }
   .ver-new {
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
 
   .update-all-btn {
-    background: linear-gradient(135deg, var(--accent-primary), #14b355) !important;
-    box-shadow: 0 6px 20px rgba(27, 217, 106, 0.3);
+    background: linear-gradient(135deg, var(--accent-primary), var(--accent-hover)) !important;
+    box-shadow: 0 6px 20px color-mix(in srgb, var(--accent-primary) 30%, transparent);
   }
 
   .installed-meta span:last-child {
@@ -5196,12 +5509,12 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .tag.side-both {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
 
   .tag.side-client {
-    background: rgba(139, 92, 246, 0.12);
+    background: color-mix(in srgb, var(--accent-secondary) 12%, transparent);
     color: var(--accent-secondary);
   }
 
@@ -5235,9 +5548,9 @@ import { trapFocus } from "../lib/focusTrap";
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: #1bd96a;
+    color: var(--accent-primary);
   }
-  .update-btn.hot { background: rgba(27, 217, 106, 0.12); border-radius: var(--border-radius-sm); }
+  .update-btn.hot { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); border-radius: var(--border-radius-sm); }
 
   .empty,
   .loading,
@@ -5290,17 +5603,43 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 22px;
   }
 
-  /* Add content browser: near-fullscreen so the dimmed backdrop is a thin frame. */
+  /* Add content browser: ~95% viewport with ~24px blurred/dimmed frame around it. */
   .modal.add-mods-modal {
-    width: calc(100vw - 12px);
-    height: calc(100vh - 12px);
-    max-width: none;
-    max-height: calc(100vh - 12px);
+    position: relative;
+    width: 95vw;
+    height: 95vh;
+    max-width: calc(100vw - 48px);
+    max-height: calc(100vh - 48px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
     padding: 16px 18px 14px;
     border-radius: 14px;
+  }
+
+  .add-mods-browse {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .add-mods-browse.behind-catalog {
+    pointer-events: none;
+  }
+
+  .add-mods-catalog-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    padding: inherit;
+    border-radius: inherit;
+    background: var(--bg-primary);
   }
 
   .modal.add-mods-modal .modal-header {
@@ -5317,6 +5656,7 @@ import { trapFocus } from "../lib/focusTrap";
     flex-shrink: 0;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
     padding: 0 0 10px;
@@ -5328,6 +5668,12 @@ import { trapFocus } from "../lib/focusTrap";
     flex: 1 1 auto;
     min-width: 0;
     padding: 0;
+  }
+
+  .modal.add-mods-modal .modal-tabs-row .provider-toggle {
+    margin-top: 0;
+    margin-left: auto;
+    flex-shrink: 0;
   }
 
   .modal.add-mods-modal .browser-topbar.modal-topbar {
@@ -5372,6 +5718,7 @@ import { trapFocus } from "../lib/focusTrap";
   .modal.add-mods-modal .filter-sidebar {
     max-height: none;
     height: 100%;
+    overflow: hidden;
     transition: width 0.22s ease, min-width 0.22s ease, padding 0.22s ease;
   }
 
@@ -5390,8 +5737,8 @@ import { trapFocus } from "../lib/focusTrap";
     flex-shrink: 0;
     width: 36px;
     height: 36px;
-    margin: 4px auto 6px;
-    padding: 0;
+    margin: 4px 0 6px;
+    padding: 0 !important;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -5400,17 +5747,19 @@ import { trapFocus } from "../lib/focusTrap";
     border: 1px solid var(--border-color);
     color: var(--text-muted);
     cursor: pointer;
-    transform: none;
+    transform: none !important;
   }
 
   .modal.add-mods-modal .filter-collapse-toggle:hover {
     color: var(--text-primary);
     background: var(--bg-elevated);
-    border-color: rgba(27, 217, 106, 0.28);
+    border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
+    transform: none !important;
   }
 
   .modal.add-mods-modal .filter-sidebar.collapsed .filter-collapse-toggle {
     margin: 8px auto;
+    align-self: center;
   }
 
   .modal.add-mods-modal .search,
@@ -5506,7 +5855,7 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 12px;
     /* Keep thin scrollbar from covering card edges */
     scrollbar-gutter: stable;
-    padding-right: 2px;
+    padding-right: 10px;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-elevated) transparent;
   }
@@ -5548,8 +5897,8 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .modal-tabs button.active {
-    border-color: rgba(27, 217, 106, 0.45);
-    background: rgba(27, 217, 106, 0.1);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--text-primary);
   }
 
@@ -5593,7 +5942,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .provider-toggle button.active {
-    background: rgba(27, 217, 106, 0.14);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--text-primary);
   }
 
@@ -5611,8 +5960,8 @@ import { trapFocus } from "../lib/focusTrap";
     flex-shrink: 0;
   }
   .provider-badge.modrinth {
-    background: rgba(27, 217, 106, 0.18);
-    color: #1bd96a;
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--accent-primary);
   }
   .provider-badge.curseforge {
     background: rgba(241, 100, 54, 0.18);
@@ -5667,10 +6016,47 @@ import { trapFocus } from "../lib/focusTrap";
     position: sticky;
     top: 0;
     max-height: calc(100vh - 170px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-right: 2px;
+    min-width: 0;
+  }
+
+  .filter-sidebar-body {
+    flex: 1;
+    min-height: 0;
     overflow: auto;
     display: grid;
     gap: 6px;
     padding-right: 2px;
+  }
+
+  .filter-collapse-toggle {
+    flex-shrink: 0;
+    align-self: flex-start;
+    width: 36px;
+    height: 36px;
+    margin: 0;
+    padding: 0 !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    cursor: pointer;
+    transform: none !important;
+    z-index: 2;
+  }
+
+  .filter-collapse-toggle:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
+    transform: none !important;
   }
 
   .filter-block {
@@ -5736,7 +6122,7 @@ import { trapFocus } from "../lib/focusTrap";
   .loader-row.active,
   .cat-row.active {
     background: var(--bg-tertiary);
-    border-color: rgba(27,217,106,.28);
+    border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
     color: var(--text-primary);
   }
 
@@ -5794,7 +6180,7 @@ import { trapFocus } from "../lib/focusTrap";
     flex-shrink: 0;
   }
   .view-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); }
-  .view-toggle.active { color: var(--accent-primary); border-color: rgba(27,217,106,.4); background: rgba(27,217,106,.08); }
+  .view-toggle.active { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   .view-toggle :global(svg) { width: 16px; height: 16px; flex-shrink: 0; }
 
   .size-select {
@@ -5826,8 +6212,8 @@ import { trapFocus } from "../lib/focusTrap";
   .size-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); }
   .size-toggle.active {
     color: var(--accent-primary);
-    border-color: rgba(27, 217, 106, 0.4);
-    background: rgba(27, 217, 106, 0.08);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
 
   .pagination {
@@ -5919,8 +6305,11 @@ import { trapFocus } from "../lib/focusTrap";
     display: grid;
     grid-template-columns: 48px minmax(0, 1fr);
     grid-template-areas: "icon main" "icon actions" "footer footer";
+    grid-template-rows: auto auto auto;
     gap: 6px 8px;
     align-items: start;
+    align-content: start;
+    height: 100%;
     padding: 8px 10px;
     border-radius: var(--border-radius-sm);
     background: var(--bg-secondary);
@@ -5940,18 +6329,18 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .result-card.installed {
-    border-color: rgba(27, 217, 106, 0.34);
+    border-color: color-mix(in srgb, var(--accent-primary) 34%, transparent);
     background:
-      linear-gradient(145deg, rgba(27, 217, 106, 0.09) 0%, rgba(27, 217, 106, 0.03) 38%, var(--bg-secondary) 72%);
+      linear-gradient(145deg, color-mix(in srgb, var(--accent-primary) 9%, transparent) 0%, color-mix(in srgb, var(--accent-primary) 3%, transparent) 38%, var(--bg-secondary) 72%);
     box-shadow:
-      0 0 0 1px rgba(27, 217, 106, 0.1) inset,
-      0 0 0 1px rgba(27, 217, 106, 0.06);
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 10%, transparent) inset,
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
 
   .result-card.installed:hover {
-    border-color: rgba(27, 217, 106, 0.42);
+    border-color: color-mix(in srgb, var(--accent-primary) 42%, transparent);
     background:
-      linear-gradient(145deg, rgba(27, 217, 106, 0.11) 0%, rgba(27, 217, 106, 0.04) 38%, var(--bg-elevated, var(--bg-tertiary)) 72%);
+      linear-gradient(145deg, color-mix(in srgb, var(--accent-primary) 11%, transparent) 0%, color-mix(in srgb, var(--accent-primary) 4%, transparent) 38%, var(--bg-elevated, var(--bg-tertiary)) 72%);
   }
 
   .results.card-size-s .result-card {
@@ -5985,8 +6374,8 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .result-card.selected {
-    border-color: rgba(139, 92, 246, 0.65);
-    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.18) inset;
+    border-color: color-mix(in srgb, var(--accent-secondary) 65%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-secondary) 18%, transparent) inset;
   }
 
   .select-result {
@@ -6022,15 +6411,45 @@ import { trapFocus } from "../lib/focusTrap";
     height: 100%;
   }
 
-  .result-main { grid-area: main; min-width: 0; }
+  .result-main {
+    grid-area: main;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
 
   .result-title {
     display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: 8px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    min-height: 2.75rem;
   }
-  .result-name { color: var(--text-primary); font-weight: 800; font-size: 14px; }
+  .result-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+  }
+  .result-pills {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    min-height: 1.25rem;
+  }
+  .result-name {
+    color: var(--text-primary);
+    font-weight: 800;
+    font-size: 14px;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   button.result-name.linkish,
   button.installed-name.linkish {
     background: none;
@@ -6043,6 +6462,11 @@ import { trapFocus } from "../lib/focusTrap";
     font-weight: 800;
     font-size: 14px;
     color: var(--text-primary);
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   button.result-name.linkish:hover,
   button.installed-name.linkish:hover {
@@ -6081,7 +6505,15 @@ import { trapFocus } from "../lib/focusTrap";
     -webkit-line-clamp: 2;
     line-clamp: 2;
   }
-  .result-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .result-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 2px;
+    min-height: 1.4rem;
+    max-height: 1.4rem;
+    overflow: hidden;
+  }
   .badge {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 3px 9px;
@@ -6099,6 +6531,7 @@ import { trapFocus } from "../lib/focusTrap";
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
+    min-height: 32px;
   }
   .download-btn {
     display: inline-flex; align-items: center; gap: 6px;
@@ -6137,8 +6570,8 @@ import { trapFocus } from "../lib/focusTrap";
     transform: none;
     flex-shrink: 0;
   }
-  .qa:hover { color: var(--text-primary); border-color: rgba(27,217,106,.35); background: var(--bg-hover); }
-  .qa.active { color: var(--accent-primary); border-color: rgba(27,217,106,.5); background: rgba(27,217,106,.12); }
+  .qa:hover { color: var(--text-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: var(--bg-hover); }
+  .qa.active { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
   .qa :global(svg) { width: 15px; height: 15px; flex-shrink: 0; }
 
   .save-wrapper { position: relative; }
@@ -6155,7 +6588,7 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 8px 10px; border-radius: 6px; background: transparent; border: none;
     color: var(--text-primary); text-align: left; font-size: 13px; cursor: pointer;
   }
-  .save-dropdown-item:hover { background: rgba(27,217,106,0.08); }
+  .save-dropdown-item:hover { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   .save-check { width: 16px; text-align: center; color: var(--accent-primary); font-weight: 700; }
   .save-dropdown-new { display: flex; gap: 4px; padding: 6px 4px 2px; border-top: 1px solid var(--border-color); margin-top: 4px; }
   .save-dropdown-new input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary); font-size: 12px; }
@@ -6202,14 +6635,6 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 4px;
   }
 
-  .result-title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--text-primary);
-    font-weight: 700;
-  }
-
   code {
     color: var(--text-muted);
     background: var(--bg-elevated);
@@ -6227,7 +6652,7 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 16px;
     align-items: center;
     background: linear-gradient(180deg, rgba(24,24,27,.96), rgba(9,9,11,.98));
-    border-top: 1px solid rgba(27,217,106,.28);
+    border-top: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
 
   .plan-eyebrow {
@@ -6246,8 +6671,29 @@ import { trapFocus } from "../lib/focusTrap";
   .install-plan-panel .dep-entry { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; background: var(--bg-tertiary); margin-bottom: 4px; }
   .install-plan-panel .dep-entry.required { border-left: 3px solid var(--accent-primary); }
   .install-plan-panel .dep-entry.optional { border-left: 3px solid rgba(161,161,170,.4); }
+  .install-plan-panel .dep-entry.already-installed { opacity: 0.72; }
   .install-plan-panel .dep-target { font-family: ui-monospace,monospace; font-size: 12px; }
   .install-plan-panel .dep-entry small { color: var(--text-muted); font-size: 11px; }
+  .dep-installed-pill {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--success, #22c55e);
+    background: color-mix(in srgb, var(--success, #22c55e) 16%, transparent);
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .dep-installed-count {
+    margin-left: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: none;
+    letter-spacing: 0;
+  }
   .install-plan-panel .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); cursor: pointer; }
   .install-plan-panel .checkbox-row span { font-size: 13px; color: var(--text-primary); }
   .plan-deps { margin-top: 8px; max-height: 80px; overflow: auto; }
@@ -6255,7 +6701,7 @@ import { trapFocus } from "../lib/focusTrap";
   .conflict-warning strong { color: #fecaca; }
   .conflict-warning span { color: var(--text-muted); font-size: 12px; }
   .dep-node { position: relative; display: flex; gap: 8px; align-items: center; margin-left: 14px; padding-left: 14px; color: var(--text-muted); font-size: 12px; }
-  .dep-node::before { content: ""; position: absolute; left: 0; top: -6px; bottom: 50%; width: 10px; border-left: 1px solid rgba(27,217,106,.35); border-bottom: 1px solid rgba(27,217,106,.35); }
+  .dep-node::before { content: ""; position: absolute; left: 0; top: -6px; bottom: 50%; width: 10px; border-left: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent); }
 
   .plan-modal { max-width: 540px; }
   .plan-details { padding: 12px 0; display: grid; gap: 16px; }
@@ -6272,23 +6718,81 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-dep-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg-secondary); }
   .plan-dep-row code { font-size: 12px; }
   .plan-dep-row span { color: var(--text-muted); font-size: 11px; }
+  .plan-dep-row.already-installed { opacity: 0.72; }
   .plan-dep-row.conflict { border-left: 3px solid rgba(239,68,68,.6); }
   .plan-no-deps { color: var(--text-muted); font-size: 12px; padding: 8px; }
   .plan-modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border-color); margin-top: 8px; }
 
-  .recs-panel { margin-bottom: 16px; padding: 14px; border: 1px solid rgba(139,92,246,.25); border-radius: var(--border-radius-lg); background: rgba(139,92,246,.02); }
-  .recs-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-  .recs-header h3 { display: flex; align-items: center; gap: 8px; color: var(--accent-secondary); margin: 0; font-size: 14px; }
-  .recs-list { display: grid; gap: 6px; }
-  .recs-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .update-confirm-modal { max-width: 600px; }
+  .update-confirm-list { display: grid; gap: 8px; max-height: 50vh; overflow: auto; padding: 4px 2px; }
+  .update-confirm-row { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 6px; }
+  .update-confirm-row.breaking { border-color: rgba(239,68,68,.5); }
+  .update-confirm-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .update-confirm-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+  .update-confirm-vers { color: var(--text-muted); font-size: 12px; }
+  .update-confirm-vers strong { color: var(--accent-primary); }
+  .update-confirm-chip { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 2px 6px; border-radius: 999px; }
+  .update-confirm-chip.rename { background: color-mix(in srgb, var(--accent-secondary) 18%, transparent); color: var(--accent-secondary); }
+  .update-confirm-chip.loader { background: rgba(251,191,36,.14); color: #fbbf24; }
+  .update-confirm-chip.mc { background: rgba(251,191,36,.14); color: #fbbf24; }
+  .update-confirm-changelog { color: var(--text-muted); font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; max-height: 72px; overflow: hidden; }
+  .update-confirm-changelog:empty { display: none; }
+
+  .recs-panel {
+    margin-bottom: 12px;
+    padding: 14px;
+    border: 1px solid color-mix(in srgb, var(--accent-secondary) 25%, transparent);
+    border-radius: var(--border-radius-lg);
+    background: color-mix(in srgb, var(--accent-secondary) 2%, transparent);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    /* Keep Suggestions scrollable so Content chrome does not eat the mod list. */
+    max-height: min(42vh, 380px);
+  }
+  .recs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+  }
+  .recs-header h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--accent-secondary);
+    margin: 0;
+    font-size: 14px;
+  }
+  .recs-list {
+    display: grid;
+    gap: 6px;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding-right: 4px;
+  }
+  .recs-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+  }
   .recs-main { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
   .recs-main strong { color: var(--text-primary); font-size: 13px; }
   .recs-main span { color: var(--text-muted); font-size: 11px; }
   .recs-meta { opacity: 0.8; }
-  .recs-source { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: rgba(139,92,246,.12); color: #c4b5fd; }
+  .recs-source { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
   .recs-prio { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
   .recs-prio.critical { background: rgba(239,68,68,.15); color: #fca5a5; }
-  .recs-prio.high { background: rgba(27,217,106,.12); color: var(--accent-primary); }
+  .recs-prio.high { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-primary); }
   .recs-prio.medium { background: rgba(96,165,250,.12); color: #93c5fd; }
   .recs-prio.low { background: var(--bg-elevated); color: var(--text-muted); }
 
@@ -6317,9 +6821,9 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 12px 14px;
     border-radius: var(--border-radius-lg);
     margin-bottom: 14px;
-    border: 1px solid rgba(27, 217, 106, 0.25);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
 
   .version-modal { max-width: min(920px, 94vw); width: 920px; }
@@ -6331,7 +6835,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .version-toolbar .search { flex: 1; }
   .version-toolbar .secondary.mini.active {
-    border-color: rgba(27,217,106,.4);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
     color: var(--accent-primary);
   }
   .version-picker-body {
@@ -6355,8 +6859,8 @@ import { trapFocus } from "../lib/focusTrap";
     width: 100%; transform: none;
   }
   .version-row:hover, .version-row.current, .version-row.selected {
-    border-color: rgba(27,217,106,.35);
-    background: rgba(27,217,106,.06);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
   .version-row.incompatible { opacity: 0.78; }
   .version-row:disabled { opacity: .5; cursor: wait; }
@@ -6367,7 +6871,7 @@ import { trapFocus } from "../lib/focusTrap";
   .version-loaders { color: var(--text-muted); font-size: 12px; }
   .channel-dot {
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-    background: #22c55e;
+    background: var(--accent-primary);
   }
   .channel-dot.channel-beta { background: #3b82f6; }
   .channel-dot.channel-alpha { background: #f59e0b; }
@@ -6391,8 +6895,8 @@ import { trapFocus } from "../lib/focusTrap";
     line-height: 1.45; color: var(--text-secondary); padding-right: 4px;
   }
   .version-detail-actions { display: flex; justify-content: flex-end; padding-top: 8px; }
-  .current-badge { font-size: 11px; font-weight: 800; color: var(--accent-primary); background: rgba(27,217,106,.15); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
-  .install-badge { font-size: 11px; font-weight: 700; color: var(--accent-secondary); background: rgba(139,92,246,.12); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
+  .current-badge { font-size: 11px; font-weight: 800; color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 15%, transparent); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
+  .install-badge { font-size: 11px; font-weight: 700; color: var(--accent-secondary); background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
 
   @media (max-width: 820px) {
     .version-picker-body { grid-template-columns: 1fr; max-height: none; }
@@ -6406,7 +6910,7 @@ import { trapFocus } from "../lib/focusTrap";
     width: 100%; padding: 16px 18px; border-radius: 14px; text-align: left; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-primary); transform: none;
   }
-  .dep-dialog-actions button:hover { border-color: rgba(27,217,106,.4); }
+  .dep-dialog-actions button:hover { border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
   .dep-dialog-actions button span { grid-column: 2; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
   .dep-dialog-footer { display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--border-color); }
 </style>

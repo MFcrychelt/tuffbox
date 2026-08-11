@@ -1,17 +1,89 @@
 <script lang="ts">
-  import { api, type QuestChapter, type QuestChapterGroup, type QuestData, type QuestValidationIssue, type QuestProgressTeamRef, type QuestProgressSnapshot, type QuestProgressStatus, type QuestPlanMergeResult } from "../lib/api";
-  import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map, Eye, Sparkles, X } from "lucide-svelte";
+  import { api, type QuestChapter, type QuestChapterGroup, type QuestData, type QuestValidationIssue, type QuestProgressTeamRef, type QuestProgressSnapshot, type QuestProgressStatus, type QuestPlanMergeResult, stripLocaleOverlay, chapterToSnbtJson } from "../lib/api";
+  import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map as MapIcon, Sparkles, X, Undo2, Redo2, Keyboard } from "@lucide/svelte";
   import { onDestroy } from "svelte";
   import { projectPath, questDirty, questChatFocusId } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import ChapterRail from "./quests/ChapterRail.svelte";
+  import { SvelteFlowProvider } from "@xyflow/svelte";
   import QuestCanvas from "./quests/QuestCanvas.svelte";
   import QuestInspector from "./quests/QuestInspector.svelte";
   import ChapterSettings from "./quests/ChapterSettings.svelte";
   import RewardTablesPanel from "./quests/RewardTablesPanel.svelte";
   import QuestAiSidebar from "./quests/QuestAiSidebar.svelte";
+  import BatchEditor from "./quests/BatchEditor.svelte";
+  import ColorManager from "./quests/ColorManager.svelte";
+  import RawSnbtView from "./quests/RawSnbtView.svelte";
+  import SnbtDiffModal from "./quests/SnbtDiffModal.svelte";
+  import LocalePanel from "./quests/LocalePanel.svelte";
+  import BookSettingsPanel from "./quests/BookSettingsPanel.svelte";
+  import ChapterGroupsPanel from "./quests/ChapterGroupsPanel.svelte";
+  import ProgressPanel from "./quests/ProgressPanel.svelte";
+  import QuestKubeJsPanel from "./quests/QuestKubeJsPanel.svelte";
+  import ShortcutsModal from "./ui/ShortcutsModal.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
+  import VanillaClientJarPrompt from "./VanillaClientJarPrompt.svelte";
   import { wouldCreateQuestCycle } from "./quests/deps";
   import type { QuestRewardTable } from "../lib/api";
+  import { snbtTextsEqual, type SnbtDiffFile } from "../lib/snbtDiff";
+  import {
+    applyLocaleOverlay,
+    clearLocaleTitles,
+    cloneLocaleMap,
+    harvestLocaleMap,
+    isValidLocaleCode,
+    localeCodes,
+    type LocaleGapEntry,
+    type LocaleMap,
+  } from "../lib/questLocale";
+  import {
+    createHistoryState,
+    pushSnapshot,
+    undo as historyUndo,
+    redo as historyRedo,
+    canUndo,
+    canRedo,
+    clearHistory,
+    materializeChapters,
+    dirtyIdsAgainstBaseline,
+    patchSavedBaseline,
+    chapterJsonMap,
+    serializeBookMeta,
+    parseBookMeta,
+    type HistoryExtras,
+    type HistorySnapshot,
+  } from "../lib/questHistory";
+  import {
+    createSelectionState,
+    selectSingle,
+    toggleSelect,
+    addToSelection,
+    selectAll,
+    clearSelection,
+  } from "../lib/questSelection";
+  import {
+    createSearchState,
+    searchQuests,
+    nextResult,
+    prevResult,
+  } from "../lib/questSearch";
+  import { stripCodes } from "../lib/mcformat";
+  import { validateQuestBook } from "../lib/questValidate";
+  import { applyLayout, positionsForMode, type LayoutMode } from "../lib/questLayout";
+
+  function asLocaleMaps(
+    raw: Record<string, Record<string, string | string[] | unknown>> | undefined,
+  ): Record<string, LocaleMap> {
+    const out: Record<string, LocaleMap> = {};
+    for (const [code, map] of Object.entries(raw ?? {})) {
+      const cleaned: LocaleMap = {};
+      for (const [k, v] of Object.entries(map)) {
+        if (typeof v === "string" || Array.isArray(v)) cleaned[k] = v as string | string[];
+      }
+      out[code] = cleaned;
+    }
+    return out;
+  }
 
   const AI_SIDEBAR_KEY = "tuffbox.quests.aiSidebar";
 
@@ -23,40 +95,231 @@
     }
   }
 
-  let chapters: QuestChapter[] = [];
-  let chapterGroups: QuestChapterGroup[] = [];
-  let bookTitle: string | null = null;
-  let bookSubtitle: string | null = null;
-  let bookSettings: Record<string, unknown> = {};
-  let rewardTables: QuestRewardTable[] = [];
-  let rewardTablesDirty = false;
-  let bookDirty = false;
-  let groupsDirty = false;
-  let loading = false;
-  let saving = false;
-  let error: string | null = null;
-  let message: string | null = null;
-  let selectedChapter = "";
-  let selectedQuest: QuestData | null = null;
-  let validationIssues: QuestValidationIssue[] = [];
-  let dirtyChapters = new Set<string>();
-  let lastLoadedPath: string | null = null;
-  let fitToken = 0;
-  let questSearch = "";
-  let showBookPanel = false;
-  let showGroupsPanel = false;
-  let showTablesPanel = false;
-  let issuesOpen = false;
-  let progressOpen = false;
+  let chapters = $state<QuestChapter[]>([]);
+  let chapterGroups = $state<QuestChapterGroup[]>([]);
+  let bookTitle = $state<string | null>(null);
+  let bookSubtitle = $state<string | null>(null);
+  let bookSettings = $state<Record<string, unknown>>({});
+  let locales = $state<Record<string, LocaleMap>>({});
+  let activeLocale = $state<string | null>(null);
+  let dirtyLocales = $state(new Set<string>());
+  let compareLocale = $state<string | null>(null);
+  let rewardTables = $state<QuestRewardTable[]>([]);
+  let rewardTablesDirty = $state(false);
+  let bookDirty = $state(false);
+  let groupsDirty = $state(false);
+  let loading = $state(false);
+  let saving = $state(false);
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let noticeClearTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Phase C — player progress overlay (read-only)
-  let progressTeams: QuestProgressTeamRef[] = [];
-  let progressKey = ""; // relativePath
-  let progressOverlay = false;
-  let progressSnap: QuestProgressSnapshot | null = null;
-  let progressLoading = false;
+  function clearNotices() {
+    if (noticeClearTimer) {
+      clearTimeout(noticeClearTimer);
+      noticeClearTimer = null;
+    }
+    error = null;
+    message = null;
+  }
 
-  let aiSidebarOpen = readAiSidebarPref();
+  function flashNotice(kind: "success" | "error", text: string) {
+    if (noticeClearTimer) {
+      clearTimeout(noticeClearTimer);
+      noticeClearTimer = null;
+    }
+    if (kind === "error") {
+      message = null;
+      error = text;
+    } else {
+      error = null;
+      message = text;
+      noticeClearTimer = setTimeout(() => {
+        message = null;
+        noticeClearTimer = null;
+      }, 5000);
+    }
+  }
+  let selectedChapter = $state("");
+  let selectedQuest = $state<QuestData | null>(null);
+  let validationIssues = $state<QuestValidationIssue[]>([]);
+  let dirtyChapters = $state(new Set<string>());
+  /** Chapter id → JSON at last successful load/save (disk baseline for dirty + undo). */
+  let savedChapterJson = $state<Record<string, string>>({});
+  let lastLoadedPath = $state<string | null>(null);
+  let fitToken = $state(0);
+  let questSearch = $state("");
+  let questSearchDebounced = $state("");
+  $effect(() => {
+    const q = questSearch;
+    const t = setTimeout(() => {
+      questSearchDebounced = q;
+    }, 150);
+    return () => clearTimeout(t);
+  });
+  let showBookPanel = $state(false);
+  let showGroupsPanel = $state(false);
+  let showTablesPanel = $state(false);
+  let showLocalePanel = $state(false);
+  let showKubeJsPanel = $state(false);
+  let kubeJsFocusId = $state<string | null>(null);
+  let bookMenuOpen = $state(false);
+  let issuesOpen = $state(false);
+  let progressOpen = $state(false);
+
+  // Phase C — player progress overlay (read-only) + G-Playtest simulate
+  let progressTeams = $state<QuestProgressTeamRef[]>([]);
+  let progressKey = $state(""); // relativePath
+  let progressOverlay = $state(false);
+  let progressSnap = $state<QuestProgressSnapshot | null>(null);
+  let progressLoading = $state(false);
+  let progressMode = $state<"save" | "simulate">("save");
+  let simCompleted = $state<string[]>([]);
+  let simBusy = $state(false);
+
+  let aiSidebarOpen = $state(readAiSidebarPref());
+  let history = $state(createHistoryState());
+  let selection = $state(createSelectionState());
+  let search = $state(createSearchState());
+  let searchInputEl = $state<HTMLInputElement | null>(null);
+  let searchWasOpen = $state(false);
+  let batchFocusToken = $state(0);
+  let clipboard = $state<QuestData[]>([]);
+  let showShortcuts = $state(false);
+  let panelTab = $state<"quest" | "info" | "batch" | "colors" | "raw">("info");
+  let railWidth = $state(180);
+  let inspWidth = $state(300);
+  let validateTimer: ReturnType<typeof setTimeout> | null = null;
+  let itemCatalogCache = $state<Set<string> | null>(null);
+  let snbtDiffOpen = $state(false);
+  let snbtDiffTitle = $state("Review SNBT changes");
+  let snbtDiffLeftLabel = $state("Disk");
+  let snbtDiffRightLabel = $state("Editor");
+  let snbtDiffLeft = $state("");
+  let snbtDiffRight = $state("");
+  let snbtDiffFiles = $state<SnbtDiffFile[] | null>(null);
+  let snbtDiffConfirmLabel = $state("Save");
+  let snbtDiffResolver: ((ok: boolean) => void) | null = null;
+
+  let confirmOpen = $state(false);
+  let confirmTitle = $state("Confirm");
+  let confirmMessage = $state("");
+  let confirmDanger = $state(false);
+  let confirmLabel = $state("Confirm");
+  let confirmResolver: ((ok: boolean) => void) | null = null;
+  let reloadGen = 0;
+  let pathSwitchGen = 0;
+
+  const dismissedVanillaPrompt = new Set<string>();
+  let vanillaPromptOpen = $state(false);
+  let vanillaPromptVersion = $state("");
+  let vanillaPromptSize = $state<number | null>(null);
+  let vanillaDownloading = $state(false);
+  let vanillaDownloadError = $state<string | null>(null);
+
+  const PANEL_TABS = ["quest", "info", "batch", "colors", "raw"] as const;
+  type PanelTab = (typeof PANEL_TABS)[number];
+
+  function onPanelTabKeydown(e: KeyboardEvent) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") {
+      return;
+    }
+    const i = PANEL_TABS.indexOf(panelTab as PanelTab);
+    if (i < 0) return;
+    e.preventDefault();
+    let next = i;
+    if (e.key === "ArrowRight") next = (i + 1) % PANEL_TABS.length;
+    else if (e.key === "ArrowLeft") next = (i - 1 + PANEL_TABS.length) % PANEL_TABS.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = PANEL_TABS.length - 1;
+    const tab = PANEL_TABS[next]!;
+    setPanelTab(tab);
+    queueMicrotask(() => {
+      document.getElementById(`quest-panel-tab-${tab}`)?.focus();
+    });
+  }
+
+  function setPanelTab(tab: PanelTab) {
+    panelTab = tab;
+    if (tab === "batch") batchFocusToken += 1;
+  }
+
+  function askConfirm(opts: {
+    title: string;
+    message: string;
+    danger?: boolean;
+    confirmLabel?: string;
+  }): Promise<boolean> {
+    confirmTitle = opts.title;
+    confirmMessage = opts.message;
+    confirmDanger = opts.danger ?? false;
+    confirmLabel = opts.confirmLabel ?? "Confirm";
+    confirmOpen = true;
+    return new Promise<boolean>((resolve) => {
+      confirmResolver = resolve;
+    });
+  }
+
+  function closeConfirm(ok: boolean) {
+    confirmOpen = false;
+    const r = confirmResolver;
+    confirmResolver = null;
+    r?.(ok);
+  }
+
+  async function maybeOfferVanillaJar() {
+    if (!$projectPath) return;
+    if (dismissedVanillaPrompt.has($projectPath)) return;
+    try {
+      const status = await api.minecraft.clientJarStatus($projectPath);
+      if (status.found) return;
+      vanillaPromptVersion = status.resolvedVersion || status.version;
+      vanillaPromptSize = status.downloadSize ?? null;
+      vanillaDownloadError = null;
+      vanillaPromptOpen = true;
+    } catch {
+      // Catalog still works with mod-only items; skip the modal.
+    }
+  }
+
+  async function downloadVanillaJar() {
+    if (!$projectPath) return;
+    vanillaDownloading = true;
+    vanillaDownloadError = null;
+    try {
+      await api.minecraft.downloadClientJar($projectPath);
+      vanillaPromptOpen = false;
+      dismissedVanillaPrompt.delete($projectPath);
+      flashNotice("success", `Downloaded Minecraft ${vanillaPromptVersion} client jar.`);
+      try {
+        const catalog = await api.quests.itemCatalog($projectPath);
+        itemCatalogCache = new Set(catalog ?? []);
+      } catch {
+        itemCatalogCache = null;
+      }
+      scheduleLiveValidate();
+    } catch (e) {
+      vanillaDownloadError = String(e);
+    } finally {
+      vanillaDownloading = false;
+    }
+  }
+
+  function dismissVanillaPrompt() {
+    if ($projectPath) dismissedVanillaPrompt.add($projectPath);
+    vanillaPromptOpen = false;
+  }
+
+  function scheduleLiveValidate() {
+    if (validateTimer) clearTimeout(validateTimer);
+    validateTimer = setTimeout(() => {
+      validateTimer = null;
+      validationIssues = validateQuestBook(
+        { chapters, chapterGroups },
+        { availableItems: itemCatalogCache },
+      );
+    }, 200);
+  }
 
   function setAiSidebar(open: boolean) {
     aiSidebarOpen = open;
@@ -69,42 +332,129 @@
 
   async function load() {
     if (!$projectPath) return;
+    const gen = ++reloadGen;
     loading = true;
     error = null;
     message = null;
     try {
       const book = await api.quests.load($projectPath);
-      chapters = book.chapters ?? [];
-      chapterGroups = book.chapterGroups ?? [];
-      bookTitle = book.title ?? null;
-      bookSubtitle = book.subtitle ?? null;
+      if (gen !== reloadGen) return;
+      locales = asLocaleMaps(book.locales);
+      const overlay = applyLocaleOverlay(
+        {
+          title: book.title ?? null,
+          subtitle: book.subtitle ?? null,
+          activeLocale: book.activeLocale ?? null,
+          locales,
+          chapterGroups: book.chapterGroups ?? [],
+          chapters: book.chapters ?? [],
+        },
+        book.activeLocale,
+      );
+      chapters = overlay.chapters;
+      chapterGroups = overlay.chapterGroups;
+      bookTitle = overlay.title ?? null;
+      bookSubtitle = overlay.subtitle ?? null;
+      activeLocale = overlay.activeLocale ?? null;
       bookSettings = book.bookSettings ?? {};
       bookDirty = false;
       groupsDirty = false;
       rewardTables = (book.rewardTables ?? []).map((t) => ({
         ...t,
-        entries: t.entries ?? [],
+        rewards: t.rewards ?? [],
         emptyWeight: t.emptyWeight ?? 0,
+        extras: t.extras ?? {},
       }));
       rewardTablesDirty = false;
       dirtyChapters = new Set();
+      savedChapterJson = chapterJsonMap(chapters);
+      dirtyLocales = new Set();
+      compareLocale = null;
+      history = clearHistory();
+      selection = clearSelection();
+      search = createSearchState();
+      clipboard = [];
       if (chapters.length > 0 && !chapters.some((c) => c.id === selectedChapter)) {
         selectedChapter = chapters[0].id;
       }
       selectedQuest = null;
+      try {
+        const catalog = await api.quests.itemCatalog($projectPath);
+        if (gen !== reloadGen) return;
+        itemCatalogCache = new Set(catalog ?? []);
+      } catch {
+        if (gen !== reloadGen) return;
+        itemCatalogCache = null;
+      }
+      if (gen === reloadGen) {
+        await maybeOfferVanillaJar();
+        if (gen !== reloadGen) return;
+      }
       validationIssues = await api.quests.validate($projectPath);
+      if (gen !== reloadGen) return;
+      if (book.loadWarnings?.length) {
+        const shown = book.loadWarnings.slice(0, 3).join(" · ");
+        const more =
+          book.loadWarnings.length > 3
+            ? ` (+${book.loadWarnings.length - 3} more)`
+            : "";
+        flashNotice("error", `Load warnings: ${shown}${more}`);
+      }
       lastLoadedPath = $projectPath;
       fitToken += 1;
       await refreshProgressTeams();
     } catch (e) {
-      error = String(e);
+      if (gen !== reloadGen) return;
+      flashNotice("error", String(e));
     } finally {
-      loading = false;
+      if (gen === reloadGen) loading = false;
     }
   }
 
-  function requestReload() {
-    if (hasDirty && !confirm("Reload and discard unsaved quest edits?")) return;
+  function switchLocale(code: string) {
+    if (activeLocale && activeLocale !== code) {
+      const base = locales[activeLocale] ?? {};
+      locales = {
+        ...locales,
+        [activeLocale]: harvestLocaleMap({ chapters, chapterGroups }, base),
+      };
+    }
+    const book = {
+      title: bookTitle,
+      subtitle: bookSubtitle,
+      activeLocale: code,
+      locales,
+      chapterGroups,
+      chapters,
+    };
+    clearLocaleTitles(book);
+    applyLocaleOverlay(book, code);
+    chapters = [...book.chapters];
+    chapterGroups = [...book.chapterGroups];
+    bookTitle = book.title ?? null;
+    bookSubtitle = book.subtitle ?? null;
+    activeLocale = book.activeLocale ?? code;
+    if (compareLocale === activeLocale) compareLocale = null;
+    if (selectedQuest) {
+      const fresh = chapters
+        .flatMap((c) => c.quests)
+        .find((q) => q.id === selectedQuest!.id);
+      selectedQuest = fresh ?? null;
+    }
+  }
+
+  const availableLocales = $derived(localeCodes(locales));
+
+  async function requestReload() {
+    if (hasDirty) {
+      const ok = await askConfirm({
+        title: "Reload quests?",
+        message: "Reload and discard unsaved quest edits?",
+        danger: true,
+        confirmLabel: "Discard & reload",
+      });
+      if (!ok) return;
+    }
     void load();
   }
 
@@ -124,53 +474,424 @@
 
   async function loadProgress() {
     if (!$projectPath || !progressKey) {
-      progressSnap = null;
+      if (progressMode === "save") progressSnap = null;
       return;
     }
     progressLoading = true;
     try {
       progressSnap = await api.quests.loadProgress(progressKey, $projectPath);
       progressOverlay = true;
+      progressMode = "save";
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
       progressSnap = null;
     } finally {
       progressLoading = false;
     }
   }
 
+  function editorBookPayload() {
+    return {
+      chapters,
+      chapterGroups,
+      rewardTables,
+      title: bookTitle,
+      subtitle: bookSubtitle,
+      bookSettings,
+      locales,
+      activeLocale,
+    };
+  }
+
+  async function refreshSimulate() {
+    simBusy = true;
+    try {
+      progressSnap = await api.quests.simulateProgress(
+        editorBookPayload(),
+        simCompleted,
+      );
+      progressOverlay = true;
+    } catch (e) {
+      flashNotice("error", String(e));
+    } finally {
+      simBusy = false;
+    }
+  }
+
+  async function enterSimulateMode() {
+    progressMode = "simulate";
+    await refreshSimulate();
+  }
+
+  async function enterSaveMode() {
+    progressMode = "save";
+    if (progressKey) await loadProgress();
+    else {
+      progressSnap = null;
+      progressOverlay = false;
+    }
+  }
+
+  async function seedSimulateFromTeam() {
+    if (!$projectPath || !progressKey) {
+      flashNotice("error", "Select a save team first, then Seed.");
+      return;
+    }
+    progressLoading = true;
+    try {
+      const snap = await api.quests.loadProgress(progressKey, $projectPath);
+      simCompleted = Object.entries(snap.statuses ?? {})
+        .filter(([, st]) => st === "completed")
+        .map(([id]) => id);
+      progressMode = "simulate";
+      await refreshSimulate();
+      flashNotice("success", `Simulate seeded with ${simCompleted.length} completed quest(s)`);
+    } catch (e) {
+      flashNotice("error", String(e));
+    } finally {
+      progressLoading = false;
+    }
+  }
+
+  async function resetSimulate() {
+    simCompleted = [];
+    await refreshSimulate();
+  }
+
+  async function toggleSimQuest(questId: string) {
+    if (progressMode !== "simulate" || !progressOverlay) return;
+    if (simCompleted.includes(questId)) {
+      simCompleted = simCompleted.filter((id) => id !== questId);
+    } else {
+      simCompleted = [...simCompleted, questId];
+    }
+    await refreshSimulate();
+  }
+
   function inputVal(e: Event): string {
     return (e.currentTarget as HTMLInputElement).value;
   }
 
-  $: progressStatuses = (progressSnap?.statuses ?? {}) as Record<string, QuestProgressStatus>;
-  $: progressTeamLabel = progressTeams.find((t) => t.relativePath === progressKey);
+  const progressStatuses = $derived((progressSnap?.statuses ?? {}) as Record<string, QuestProgressStatus>);
 
-  async function saveChapter(chapterId: string) {
-    if (!$projectPath) return;
+  function markDirty(_chapterId: string) {
+    chapters = [...chapters];
+    syncDirtyFromBaseline();
+    if (activeLocale) {
+      dirtyLocales = new Set([...dirtyLocales, activeLocale]);
+    }
+    scheduleLiveValidate();
+  }
+
+  function markLocaleDirty(code: string) {
+    dirtyLocales = new Set([...dirtyLocales, code]);
+  }
+
+  function openKubeJsForId(id: string) {
+    kubeJsFocusId = id;
+    showKubeJsPanel = true;
+    showBookPanel = false;
+    showGroupsPanel = false;
+    showTablesPanel = false;
+    showLocalePanel = false;
+    bookMenuOpen = true;
+  }
+
+  function createCustomForKubeJs(
+    kind: "task" | "reward",
+    opts?: { title?: string; maxProgress?: number },
+  ): string | null {
+    if (!selectedQuest || !selectedChapter) return null;
+    if (!dirtyChapters.has(selectedChapter)) pushHistory();
+    const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase();
+    if (kind === "task") {
+      selectedQuest.tasks = [
+        ...selectedQuest.tasks,
+        {
+          id,
+          type: "custom",
+          title: opts?.title ?? "Custom task",
+          properties: { max_progress: opts?.maxProgress ?? 1 },
+        },
+      ];
+    } else {
+      selectedQuest.rewards = [
+        ...selectedQuest.rewards,
+        {
+          id,
+          type: "custom",
+          title: opts?.title ?? "Custom reward",
+          properties: {},
+        },
+      ];
+    }
+    selectedQuest = { ...selectedQuest };
+    markDirty(selectedChapter);
+    kubeJsFocusId = id;
+    return id;
+  }
+
+  async function saveLocaleIfNeeded() {
+    if (!$projectPath || dirtyLocales.size === 0) return;
+    // Harvest active overlay into its map only when that locale is dirty.
+    if (activeLocale && dirtyLocales.has(activeLocale)) {
+      const base = locales[activeLocale] ?? {};
+      const harvested = harvestLocaleMap({ chapters, chapterGroups }, base);
+      locales = { ...locales, [activeLocale]: harvested };
+    }
+    for (const code of [...dirtyLocales]) {
+      const map = locales[code];
+      if (!map) continue;
+      await api.quests.saveLocale(code, map, $projectPath);
+    }
+    dirtyLocales = new Set();
+  }
+
+  async function createLocale(code: string, fromCode: string | null) {
+    if (!$projectPath) throw new Error("No project open");
+    const normalized = code.trim().toLowerCase();
+    if (!isValidLocaleCode(normalized)) {
+      throw new Error("Use a code like en_us or ru_ru");
+    }
+    if (locales[normalized]) {
+      throw new Error(`Locale “${normalized}” already exists`);
+    }
+    // Persist active harvest before cloning so copy-from is fresh when from===active.
+    if (activeLocale && dirtyLocales.has(activeLocale)) {
+      const base = locales[activeLocale] ?? {};
+      locales = {
+        ...locales,
+        [activeLocale]: harvestLocaleMap({ chapters, chapterGroups }, base),
+      };
+    }
+    let seed: LocaleMap;
+    if (fromCode && locales[fromCode]) {
+      seed = cloneLocaleMap(locales[fromCode]!);
+    } else {
+      seed = harvestLocaleMap({ chapters, chapterGroups }, {});
+    }
+    locales = { ...locales, [normalized]: seed };
+    await api.quests.saveLocale(normalized, seed, $projectPath);
+    dirtyLocales = new Set([...dirtyLocales].filter((c) => c !== normalized));
+    switchLocale(normalized);
+    flashNotice("success", `Created lang/${normalized}.snbt`);
+  }
+
+  function jumpToLocaleGap(entry: LocaleGapEntry, targetCode: string) {
+    if (targetCode && targetCode !== activeLocale) {
+      compareLocale = targetCode;
+    } else {
+      compareLocale = null;
+    }
+    let questId = entry.questId;
+    if (!questId && entry.key.startsWith("task.")) {
+      const taskId = entry.key.split(".")[1];
+      for (const ch of chapters) {
+        const owner = ch.quests.find((q) => q.tasks?.some((t) => t.id === taskId));
+        if (owner) {
+          questId = owner.id;
+          break;
+        }
+      }
+    }
+    if (questId) {
+      jumpToIssue({ questId, message: entry.key });
+      panelTab = "quest";
+      showLocalePanel = false;
+      bookMenuOpen = false;
+      return;
+    }
+    if (entry.chapterId && chapters.some((c) => c.id === entry.chapterId)) {
+      selectedChapter = entry.chapterId;
+      selectedQuest = null;
+      showLocalePanel = false;
+      bookMenuOpen = false;
+      return;
+    }
+    if (entry.groupId) {
+      showGroupsPanel = true;
+      showLocalePanel = false;
+      return;
+    }
+    showLocalePanel = true;
+    bookMenuOpen = true;
+  }
+
+  async function promptSnbtDiff(opts: {
+    title: string;
+    leftLabel?: string;
+    rightLabel?: string;
+    leftText?: string;
+    rightText?: string;
+    files?: SnbtDiffFile[] | null;
+    confirmLabel?: string;
+  }): Promise<boolean> {
+    snbtDiffTitle = opts.title;
+    snbtDiffLeftLabel = opts.leftLabel ?? "Disk";
+    snbtDiffRightLabel = opts.rightLabel ?? "Editor";
+    snbtDiffLeft = opts.leftText ?? "";
+    snbtDiffRight = opts.rightText ?? "";
+    snbtDiffFiles = opts.files ?? null;
+    snbtDiffConfirmLabel = opts.confirmLabel ?? "Save";
+    snbtDiffOpen = true;
+    return await new Promise<boolean>((resolve) => {
+      snbtDiffResolver = resolve;
+    });
+  }
+
+  function closeSnbtDiff(ok: boolean) {
+    snbtDiffOpen = false;
+    snbtDiffFiles = null;
+    const r = snbtDiffResolver;
+    snbtDiffResolver = null;
+    r?.(ok);
+  }
+
+  function chapterFilePath(ch: QuestChapter, projectDir: string): { relativePath: string; filePath: string } {
+    const relativePath =
+      ch.sourceFile ??
+      `config/ftbquests/quests/chapters/${ch.filename ?? ch.id}.snbt`;
+    const sep = projectDir.includes("\\") ? "\\" : "/";
+    const filePath = `${projectDir.replace(/[/\\]+$/, "")}${sep}${relativePath.replace(/^[/\\]+/, "").replace(/[/\\]/g, sep)}`;
+    return { relativePath: relativePath.replace(/\\/g, "/"), filePath };
+  }
+
+  /** Disk vs editor SNBT for a chapter; null if no disk file or identical. */
+  async function buildChapterSnbtDiff(
+    ch: QuestChapter,
+    projectDir: string,
+  ): Promise<SnbtDiffFile | null> {
+    const { relativePath, filePath } = chapterFilePath(ch, projectDir);
+    let diskText: string;
+    try {
+      diskText = await api.quests.readChapterText(filePath);
+    } catch {
+      return null;
+    }
+    const payload = stripLocaleOverlay(chapterToSnbtJson(ch));
+    const editorText = await api.quests.previewChapterSnbt(JSON.stringify(payload));
+    if (snbtTextsEqual(diskText, editorText)) return null;
+    return {
+      id: ch.id,
+      label: ch.title || relativePath,
+      leftText: diskText,
+      rightText: editorText,
+      leftLabel: relativePath,
+      rightLabel: "Editor (about to write)",
+    };
+  }
+
+  async function saveChapter(
+    chapterId: string,
+    opts?: { skipDiff?: boolean },
+  ): Promise<"saved" | "cancelled" | "error"> {
+    if (!$projectPath) return "error";
     const ch = chapters.find((c) => c.id === chapterId);
-    if (!ch) return;
+    if (!ch) return "error";
     saving = true;
     error = null;
     message = null;
     try {
-      const result = await api.quests.saveChapter(ch, ch.sourceFile, $projectPath);
-      ch.sourceFile = result.relativePath;
-      dirtyChapters.delete(chapterId);
-      dirtyChapters = dirtyChapters;
+      await saveLocaleIfNeeded();
+      const projectDir = await api.project.getDir($projectPath);
+      const { relativePath, filePath } = chapterFilePath(ch, projectDir);
+      const payload = stripLocaleOverlay(chapterToSnbtJson(ch));
+      const jsonPayload = JSON.stringify(payload);
+
+      if (!opts?.skipDiff) {
+        const diff = await buildChapterSnbtDiff(ch, projectDir);
+        if (diff) {
+          saving = false;
+          const ok = await promptSnbtDiff({
+            title: `Save chapter “${ch.title || ch.id}”?`,
+            files: [diff],
+            confirmLabel: "Write SNBT",
+          });
+          if (!ok) {
+            flashNotice("success", "Save cancelled");
+            return "cancelled";
+          }
+          saving = true;
+        }
+      }
+
+      await api.quests.saveChapterRaw(filePath, jsonPayload);
+      ch.sourceFile = relativePath;
       chapters = [...chapters];
-      message = `Saved ${result.questCount} quests → ${result.relativePath}`;
+      rememberSavedChapter(chapterId);
+      syncDirtyFromBaseline();
+      flashNotice("success", `Saved ${ch.quests.length} quests → ${ch.sourceFile}`);
       validationIssues = await api.quests.validate($projectPath);
+      return "saved";
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
+      return "error";
     } finally {
       saving = false;
     }
   }
 
   async function saveAll() {
-    for (const id of [...dirtyChapters]) {
-      await saveChapter(id);
+    try {
+      await saveLocaleIfNeeded();
+    } catch (e) {
+      flashNotice("error", String(e));
+      return;
+    }
+    const dirtyIds = [...dirtyChapters];
+    const parts: string[] = [];
+    if (dirtyIds.length) parts.push(`${dirtyIds.length} chapter(s)`);
+    if (rewardTablesDirty) parts.push("reward tables");
+    if (bookDirty) parts.push("book data");
+    if (groupsDirty) parts.push("chapter groups");
+    if (parts.length === 0) {
+      flashNotice("success", "Nothing to save");
+      return;
+    }
+    const chapterNames = dirtyIds
+      .map((id) => chapters.find((c) => c.id === id)?.title || id)
+      .slice(0, 8);
+    const summary =
+      `Save All: ${parts.join(", ")}` +
+      (chapterNames.length
+        ? `\n\nChapters:\n- ${chapterNames.join("\n- ")}${dirtyIds.length > chapterNames.length ? "\n- …" : ""}`
+        : "");
+    const confirmed = await askConfirm({
+      title: "Save all changes?",
+      message: summary,
+      confirmLabel: "Save all",
+    });
+    if (!confirmed) return;
+
+    if (dirtyIds.length > 0 && $projectPath) {
+      const projectDir = await api.project.getDir($projectPath);
+      const diffs: SnbtDiffFile[] = [];
+      for (const id of dirtyIds) {
+        const ch = chapters.find((c) => c.id === id);
+        if (!ch) continue;
+        try {
+          const d = await buildChapterSnbtDiff(ch, projectDir);
+          if (d) diffs.push(d);
+        } catch (e) {
+          flashNotice("error", String(e));
+          return;
+        }
+      }
+      if (diffs.length > 0) {
+        const ok = await promptSnbtDiff({
+          title: `Save ${diffs.length} chapter file(s)?`,
+          files: diffs,
+          confirmLabel: "Write all SNBT",
+        });
+        if (!ok) {
+          flashNotice("success", "Save cancelled");
+          return;
+        }
+      }
+      for (const id of dirtyIds) {
+        const result = await saveChapter(id, { skipDiff: true });
+        if (result === "error") break;
+      }
     }
     if (rewardTablesDirty) {
       for (const t of rewardTables) {
@@ -181,22 +902,156 @@
     if (groupsDirty) await saveGroups();
   }
 
-  function markDirty(chapterId: string) {
-    dirtyChapters.add(chapterId);
-    dirtyChapters = dirtyChapters;
-    chapters = [...chapters];
+  async function revalidateFromDisk() {
+    if (!$projectPath) return;
+    try {
+      validationIssues = await api.quests.validate($projectPath);
+      flashNotice("success", `Disk validate: ${validationIssues.length} issue(s)`);
+    } catch (e) {
+      flashNotice("error", String(e));
+    }
+  }
+
+  async function showChapterDiffVsDisk(chapterId?: string) {
+    if (!$projectPath) return;
+    const ch = chapters.find((c) => c.id === (chapterId ?? selectedChapter));
+    if (!ch) return;
+    try {
+      const projectDir = await api.project.getDir($projectPath);
+      const { relativePath, filePath } = chapterFilePath(ch, projectDir);
+      let diskText: string;
+      try {
+        diskText = await api.quests.readChapterText(filePath);
+      } catch {
+        flashNotice("success", "No chapter file on disk yet");
+        return;
+      }
+      const payload = stripLocaleOverlay(chapterToSnbtJson(ch));
+      const editorText = await api.quests.previewChapterSnbt(JSON.stringify(payload));
+      if (snbtTextsEqual(diskText, editorText)) {
+        flashNotice("success", "Editor matches disk SNBT");
+        return;
+      }
+      await promptSnbtDiff({
+        title: `Diff vs disk — ${ch.title || ch.id}`,
+        files: [
+          {
+            id: ch.id,
+            label: ch.title || relativePath,
+            leftText: diskText,
+            rightText: editorText,
+            leftLabel: relativePath,
+            rightLabel: "Editor",
+          },
+        ],
+        confirmLabel: "Close",
+      });
+    } catch (e) {
+      flashNotice("error", String(e));
+    }
+  }
+
+  function historyExtras(): HistoryExtras {
+    return {
+      bookMetaJson: serializeBookMeta({
+        title: bookTitle,
+        subtitle: bookSubtitle,
+        bookSettings,
+      }),
+      rewardTablesJson: JSON.stringify(rewardTables),
+    };
+  }
+
+  function syncDirtyFromBaseline() {
+    dirtyChapters = new Set(
+      dirtyIdsAgainstBaseline(chapterJsonMap(chapters), savedChapterJson),
+    );
+  }
+
+  function rememberSavedChapter(chapterId: string) {
+    const ch = chapters.find((c) => c.id === chapterId);
+    if (!ch) return;
+    savedChapterJson = patchSavedBaseline(
+      savedChapterJson,
+      chapterId,
+      JSON.stringify(ch),
+    );
+  }
+
+  function pushHistory() {
+    history = pushSnapshot(
+      history,
+      chapters,
+      chapterGroups,
+      selectedChapter,
+      historyExtras(),
+    );
+  }
+
+  function applyHistorySnapshot(snapshot: HistorySnapshot) {
+    const beforeMeta = historyExtras().bookMetaJson;
+    const beforeTables = historyExtras().rewardTablesJson;
+    const beforeGroups = JSON.stringify(chapterGroups);
+
+    chapters = materializeChapters(snapshot) as QuestChapter[];
+    chapterGroups = JSON.parse(snapshot.chapterGroups);
+    selectedChapter = snapshot.selectedChapter;
+    const meta = parseBookMeta(snapshot.bookMetaJson);
+    bookTitle = meta.title;
+    bookSubtitle = meta.subtitle;
+    bookSettings = meta.bookSettings;
+    try {
+      rewardTables = JSON.parse(snapshot.rewardTablesJson) as QuestRewardTable[];
+    } catch {
+      rewardTables = [];
+    }
+    selectedQuest = null;
+    selection = clearSelection();
+    if (panelTab === "quest") panelTab = "info";
+    if (beforeMeta !== snapshot.bookMetaJson) bookDirty = true;
+    if (beforeTables !== snapshot.rewardTablesJson) rewardTablesDirty = true;
+    if (beforeGroups !== snapshot.chapterGroups) groupsDirty = true;
   }
 
   function selectChapter(id: string) {
     selectedChapter = id;
     selectedQuest = null;
+    selection = clearSelection();
+    if (panelTab === "quest") panelTab = "info";
+    fitToken += 1;
+  }
+
+  function selectQuestOnCanvas(q: QuestData | null, e?: MouseEvent) {
+    if (!q) {
+      selection = clearSelection();
+      selectedQuest = null;
+      if (panelTab === "quest") panelTab = "info";
+      return;
+    }
+    if (e?.shiftKey) selection = toggleSelect(selection, q.id);
+    else if (e?.ctrlKey || e?.metaKey) selection = addToSelection(selection, q.id);
+    else selection = selectSingle(selection, q.id);
+    selectedQuest = q;
+    panelTab = "quest";
+  }
+
+  function applyChapterLayout(mode: LayoutMode) {
+    if (!selectedChapter) return;
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch || ch.quests.length === 0) return;
+    pushHistory();
+    const positions = positionsForMode(ch.quests, mode);
+    ch.quests = applyLayout(ch.quests, positions);
+    markDirty(selectedChapter);
     fitToken += 1;
   }
 
   function createChapter() {
+    pushHistory();
     const n: QuestChapter = {
       id: `chapter_${Date.now().toString(16)}`,
       title: `Chapter ${chapters.length + 1}`,
+      titleFromSnbt: true,
       quests: [],
       extras: {},
       orderIndex: chapters.length,
@@ -207,13 +1062,54 @@
     markDirty(n.id);
   }
 
+  function clampPanel(n: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, Math.round(n)));
+  }
+
+  function startColResize(which: "rail" | "insp", e: PointerEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = which === "rail" ? railWidth : inspWidth;
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      if (which === "rail") {
+        railWidth = clampPanel(startW + dx, 140, 360);
+      } else {
+        // Dragging the left edge of the inspector: move left → wider.
+        inspWidth = clampPanel(startW - dx, 240, 520);
+      }
+    };
+    const onUp = (ev: PointerEvent) => {
+      try {
+        target.releasePointerCapture(ev.pointerId);
+      } catch {
+        /* ignore */
+      }
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      target.removeEventListener("pointercancel", onUp);
+    };
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+    target.addEventListener("pointercancel", onUp);
+  }
+
   function addQuestAt(x: number, y: number) {
     if (!selectedChapter) return;
+    pushHistory();
     const ch = chapters.find((c) => c.id === selectedChapter);
     if (!ch) return;
     const newQ: QuestData = {
       id: crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase(),
       title: "New Quest",
+      titleFromSnbt: true,
       description: [],
       x,
       y,
@@ -227,10 +1123,22 @@
     ch.quests = [...ch.quests, newQ];
     markDirty(selectedChapter);
     selectedQuest = newQ;
+    selection = selectSingle(selection, newQ.id);
+    if (questSearch.trim()) {
+      questSearch = "";
+      flashNotice("success", "Filter cleared so the new quest is visible");
+    }
   }
 
-  function removeQuest(q: QuestData) {
-    if (!confirm(`Delete quest "${q.title}" from this chapter?`)) return;
+  async function removeQuest(q: QuestData) {
+    const ok = await askConfirm({
+      title: "Delete quest?",
+      message: `Delete quest "${q.title}" from this chapter?`,
+      danger: true,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
+    pushHistory();
     const ch = chapters.find((c) => c.id === selectedChapter);
     if (!ch) return;
     ch.quests = ch.quests.filter((x) => x.id !== q.id);
@@ -240,7 +1148,34 @@
       }
     }
     markDirty(selectedChapter);
-    if (selectedQuest?.id === q.id) selectedQuest = null;
+    if (selectedQuest?.id === q.id) {
+      selectedQuest = null;
+      if (panelTab === "quest") panelTab = "info";
+    }
+    selection = clearSelection();
+  }
+
+  async function removeSelectedQuests() {
+    if (selection.selectedIds.size === 0) return;
+    const n = selection.selectedIds.size;
+    const ok = await askConfirm({
+      title: "Delete selected quests?",
+      message: `Delete ${n} selected quest(s)?`,
+      danger: true,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
+    pushHistory();
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+    ch.quests = ch.quests.filter((x) => !selection.selectedIds.has(x.id));
+    for (const other of ch.quests) {
+      other.dependencies = other.dependencies.filter((d) => !selection.selectedIds.has(d));
+    }
+    markDirty(selectedChapter);
+    selectedQuest = null;
+    selection = clearSelection();
+    if (panelTab === "quest") panelTab = "info";
   }
 
   function moveQuest(q: QuestData, x: number, y: number) {
@@ -250,6 +1185,23 @@
     if (selectedQuest?.id === q.id) selectedQuest = q;
   }
 
+  function moveSelectedQuests(dx: number, dy: number) {
+    if (selection.selectedIds.size === 0) return;
+    pushHistory();
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+    for (const q of ch.quests) {
+      if (selection.selectedIds.has(q.id)) {
+        q.x += dx;
+        q.y += dy;
+      }
+    }
+    markDirty(selectedChapter);
+    if (selectedQuest && selection.selectedIds.has(selectedQuest.id)) {
+      selectedQuest = { ...selectedQuest };
+    }
+  }
+
   /** Would adding depId as a dependency of questId create a cycle? */
   function wouldCycle(questId: string, depId: string, list: QuestData[]): boolean {
     return wouldCreateQuestCycle(questId, depId, list);
@@ -257,18 +1209,20 @@
 
   function addDep(q: QuestData, depId: string) {
     if (!depId || q.dependencies.includes(depId) || depId === q.id) return;
-    const list = chapters.find((c) => c.id === selectedChapter)?.quests ?? [];
-    if (wouldCycle(q.id, depId, list)) {
-      error = "That dependency would create a cycle.";
+    const allQuests = chapters.flatMap((c) => c.quests);
+    if (wouldCycle(q.id, depId, allQuests)) {
+      flashNotice("error", "That dependency would create a cycle.");
       return;
     }
     error = null;
+    pushHistory();
     q.dependencies = [...q.dependencies, depId];
     markDirty(selectedChapter);
     selectedQuest = q;
   }
 
   function removeDep(q: QuestData, depId: string) {
+    pushHistory();
     q.dependencies = q.dependencies.filter((d) => d !== depId);
     markDirty(selectedChapter);
     selectedQuest = q;
@@ -283,11 +1237,13 @@
   }
 
   function createRewardTable() {
+    pushHistory();
     const t: QuestRewardTable = {
       id: `table_${Date.now().toString(16)}`,
       title: `Table ${rewardTables.length + 1}`,
-      entries: [],
+      rewards: [],
       emptyWeight: 0,
+      extras: {},
     };
     rewardTables = [...rewardTables, t];
     rewardTablesDirty = true;
@@ -302,29 +1258,324 @@
       table.sourceFile = res.relativePath;
       rewardTables = [...rewardTables];
       rewardTablesDirty = false;
-      message = `Saved reward table → ${res.relativePath}`;
+      flashNotice("success", `Saved reward table → ${res.relativePath}`);
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
     } finally {
       saving = false;
     }
   }
 
-  $: chapterQuests = chapters.find((c) => c.id === selectedChapter)?.quests ?? [];
-  $: selectedChapterObj = chapters.find((c) => c.id === selectedChapter) ?? null;
-  $: rewardTableIds = rewardTables.map((t) => t.id);
-  $: totalQuests = chapters.reduce((n, c) => n + c.quests.length, 0);
+  const chapterQuests = $derived(chapters.find((c) => c.id === selectedChapter)?.quests ?? []);
+  const selectedChapterObj = $derived(chapters.find((c) => c.id === selectedChapter) ?? null);
+  const rewardTableIds = $derived(rewardTables.map((t) => t.id));
+  const totalQuests = $derived(chapters.reduce((n, c) => n + c.quests.length, 0));
 
   /** Strip Minecraft formatting codes for toolbar display. */
   function stripMc(s: string): string {
-    return s.replace(/§[0-9a-fk-or]/gi, "").replace(/&[0-9a-fk-or]/gi, "").trim();
+    return stripCodes(s).trim();
+  }
+
+  function handleQuestUpdate(chapterId: string, updated: QuestData) {
+    pushHistory();
+    const ch = chapters.find((c) => c.id === chapterId);
+    if (!ch) return;
+    ch.quests = ch.quests.map((q) => (q.id === updated.id ? updated : q));
+    markDirty(chapterId);
+    if (selectedQuest?.id === updated.id) selectedQuest = updated;
+  }
+
+  /** One history snapshot, then mutate all matching quests (batch mass-apply). */
+  function handleBatchApply(questIds: Set<string>, mutator: (q: QuestData) => QuestData) {
+    if (questIds.size === 0) return;
+    pushHistory();
+    chapters = chapters.map((ch) => {
+      let touched = false;
+      const quests = ch.quests.map((q) => {
+        if (!questIds.has(q.id)) return q;
+        touched = true;
+        return mutator(q);
+      });
+      return touched ? { ...ch, quests } : ch;
+    });
+    syncDirtyFromBaseline();
+    if (selectedQuest && questIds.has(selectedQuest.id)) {
+      for (const ch of chapters) {
+        const q = ch.quests.find((x) => x.id === selectedQuest!.id);
+        if (q) {
+          selectedQuest = q;
+          break;
+        }
+      }
+    }
+    scheduleLiveValidate();
+  }
+
+  function handleUndo() {
+    const extras = historyExtras();
+    const result = historyUndo(
+      history,
+      chapters,
+      chapterGroups,
+      selectedChapter,
+      extras,
+    );
+    if (!result.snapshot) return;
+    history = result.state;
+    applyHistorySnapshot(result.snapshot);
+    syncDirtyFromBaseline();
+    scheduleLiveValidate();
+    if (progressMode === "simulate") void refreshSimulate();
+  }
+
+  function handleRedo() {
+    const extras = historyExtras();
+    const result = historyRedo(
+      history,
+      chapters,
+      chapterGroups,
+      selectedChapter,
+      extras,
+    );
+    if (!result.snapshot) return;
+    history = result.state;
+    applyHistorySnapshot(result.snapshot);
+    syncDirtyFromBaseline();
+    scheduleLiveValidate();
+    if (progressMode === "simulate") void refreshSimulate();
+  }
+
+  function handleCopy() {
+    if (selection.selectedIds.size === 0) return;
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+    clipboard = ch.quests.filter((q) => selection.selectedIds.has(q.id)).map((q) => structuredClone(q));
+    flashNotice("success", `Copied ${clipboard.length} quest(s)`);
+  }
+
+  function handlePaste() {
+    if (clipboard.length === 0 || !selectedChapter) return;
+    pushHistory();
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+
+    const newIds = new Map<string, string>();
+    const newQuests: QuestData[] = [];
+    for (const q of clipboard) {
+      const newId = crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase();
+      newIds.set(q.id, newId);
+    }
+    for (const q of clipboard) {
+      const newId = newIds.get(q.id)!;
+      newQuests.push({
+        ...structuredClone(q),
+        id: newId,
+        titleFromSnbt: true,
+        x: q.x + 1,
+        y: q.y + 1,
+        dependencies: q.dependencies.map((d) => newIds.get(d) ?? d),
+        tasks: (q.tasks ?? []).map((t) => ({
+          ...t,
+          id: crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase(),
+        })),
+        rewards: (q.rewards ?? []).map((r) => ({
+          ...r,
+          id: crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase(),
+        })),
+      });
+    }
+    ch.quests = [...ch.quests, ...newQuests];
+    markDirty(selectedChapter);
+    selection = selectAll(newQuests.map((q) => q.id));
+    selectedQuest = newQuests[0] ?? null;
+    flashNotice("success", `Pasted ${newQuests.length} quest(s)`);
+  }
+
+  function handleSelectAll() {
+    selection = selectAll(chapterQuests.map((q) => q.id));
+  }
+
+  function updateSearch(query: string) {
+    search = { ...search, query, results: searchQuests(query, chapters), selectedIndex: 0 };
+  }
+
+  function navigateSearchResult() {
+    const result = search.results[search.selectedIndex];
+    if (!result) return;
+    if (result.chapterId !== selectedChapter) {
+      selectChapter(result.chapterId);
+    }
+    selectedQuest = result.quest;
+    selection = selectSingle(selection, result.quest.id);
+    fitToken += 1;
+  }
+
+  function handleSearchKeyDown(e: KeyboardEvent) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      search = nextResult(search);
+      navigateSearchResult();
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      search = prevResult(search);
+      navigateSearchResult();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (e.shiftKey) search = prevResult(search);
+      else search = nextResult(search);
+      navigateSearchResult();
+      return;
+    }
+    if (e.key === "Escape") {
+      search = { ...search, isOpen: false };
+    }
+  }
+
+  function onSearchKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      questSearch = "";
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const first = filteredChapterQuests[0];
+      if (first) {
+        selectedQuest = first;
+        selection = selectSingle(selection, first.id);
+        fitToken += 1;
+      }
+    }
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    const target = e.target as HTMLElement;
+    const isInput = !!target?.closest?.("input,textarea,select,[contenteditable=true]");
+
+    if (e.ctrlKey || e.metaKey) {
+      switch (e.key.toLowerCase()) {
+        case "z":
+          e.preventDefault();
+          if (e.shiftKey) handleRedo();
+          else handleUndo();
+          return;
+        case "y":
+          e.preventDefault();
+          handleRedo();
+          return;
+        case "c":
+          if (!isInput) {
+            e.preventDefault();
+            handleCopy();
+          }
+          return;
+        case "v":
+          if (!isInput) {
+            e.preventDefault();
+            handlePaste();
+          }
+          return;
+        case "a":
+          if (!isInput) {
+            e.preventDefault();
+            handleSelectAll();
+          }
+          return;
+        case "s":
+          e.preventDefault();
+          if (hasDirty && !saving) void saveAll();
+          return;
+        case "f":
+          e.preventDefault();
+          search = { ...search, isOpen: !search.isOpen };
+          return;
+        case "/":
+          e.preventDefault();
+          showShortcuts = !showShortcuts;
+          return;
+        case "0":
+          e.preventDefault();
+          fitToken += 1;
+          return;
+      }
+    }
+
+    if (e.key === "Escape") {
+      if (bookMenuOpen) {
+        bookMenuOpen = false;
+        return;
+      }
+      if (issuesOpen) {
+        issuesOpen = false;
+        return;
+      }
+      if (showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel) {
+        showBookPanel = false;
+        showGroupsPanel = false;
+        showTablesPanel = false;
+        showLocalePanel = false;
+        showKubeJsPanel = false;
+        return;
+      }
+      if (aiSidebarOpen) {
+        setAiSidebar(false);
+        return;
+      }
+      if (search.isOpen) {
+        search = { ...search, isOpen: false };
+      } else if (showShortcuts) {
+        showShortcuts = false;
+      } else {
+        selection = clearSelection();
+        selectedQuest = null;
+      }
+      return;
+    }
+
+    if ((e.key === "Delete" || e.key === "Backspace") && !isInput) {
+      e.preventDefault();
+      removeSelectedQuests();
+      return;
+    }
+
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('[role="application"].viewport, .viewport[role="application"]')) {
+        return;
+      }
+      if (!isInput && selection.selectedIds.size > 0) {
+        e.preventDefault();
+        const step = e.shiftKey ? 5 : 1;
+        switch (e.key) {
+          case "ArrowUp":
+            moveSelectedQuests(0, -step);
+            break;
+          case "ArrowDown":
+            moveSelectedQuests(0, step);
+            break;
+          case "ArrowLeft":
+            moveSelectedQuests(-step, 0);
+            break;
+          case "ArrowRight":
+            moveSelectedQuests(step, 0);
+            break;
+        }
+      }
+    }
   }
 
   function applyMergeResult(result: QuestPlanMergeResult) {
     if (!result.validation?.valid) {
-      error = (result.validation?.errors ?? []).slice(0, 3).join("; ") || "Plan invalid";
+      flashNotice(
+        "error",
+        (result.validation?.errors ?? []).slice(0, 3).join("; ") || "Plan invalid",
+      );
       return;
     }
+    pushHistory();
     const b = result.book;
     chapters = b.chapters ?? [];
     chapterGroups = b.chapterGroups ?? chapterGroups;
@@ -333,26 +1584,37 @@
     if (b.rewardTables?.length) {
       rewardTables = b.rewardTables.map((t) => ({
         ...t,
-        entries: t.entries ?? [],
+        rewards: t.rewards ?? [],
         emptyWeight: t.emptyWeight ?? 0,
+        extras: t.extras ?? {},
       }));
       rewardTablesDirty = true;
     }
     if ((b.chapterGroups?.length ?? 0) > 0) {
       groupsDirty = true;
     }
-    const dirty = new Set(dirtyChapters);
-    for (const id of result.touchedChapterIds ?? []) dirty.add(id);
-    dirtyChapters = dirty;
-    if (chapters.length && !chapters.some((c) => c.id === selectedChapter)) {
+    syncDirtyFromBaseline();
+    if (result.touchedChapterIds?.length) {
+      selectedChapter = result.touchedChapterIds[0];
+    } else if (chapters.length && !chapters.some((c) => c.id === selectedChapter)) {
       selectedChapter = chapters[0].id;
     }
     selectedQuest = null;
+    if (panelTab === "quest") panelTab = "info";
     validationIssues = (result.validation.bookErrors ?? []).map((e) => ({
       questId: e.questId,
       message: e.message,
     }));
-    message = `AI plan applied in editor (${result.touchedChapterIds.length} chapter(s)). Save to write SNBT.`;
+    if (validationIssues.length === 0) {
+      validationIssues = validateQuestBook(
+        { chapters, chapterGroups },
+        { availableItems: itemCatalogCache },
+      );
+    }
+    flashNotice(
+      "success",
+      `AI plan applied in editor (${result.touchedChapterIds.length} chapter(s)). Undo (Ctrl+Z) to revert. Save to write SNBT.`,
+    );
     fitToken += 1;
   }
 
@@ -366,9 +1628,9 @@
         $projectPath,
       );
       bookDirty = false;
-      message = "Book data.snbt saved.";
+      flashNotice("success", "Book data.snbt saved.");
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
     } finally {
       saving = false;
     }
@@ -379,23 +1641,29 @@
     saving = true;
     error = null;
     try {
+      await saveLocaleIfNeeded();
       await api.quests.saveChapterGroups(chapterGroups, $projectPath);
       groupsDirty = false;
-      message = "Chapter groups saved.";
+      flashNotice("success", "Chapter groups saved.");
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
     } finally {
       saving = false;
     }
   }
 
   function addChapterGroup() {
+    pushHistory();
     const id = Math.random().toString(16).slice(2, 10).toUpperCase();
-    chapterGroups = [...chapterGroups, { id, title: `Group ${chapterGroups.length + 1}` }];
+    chapterGroups = [
+      ...chapterGroups,
+      { id, title: `Group ${chapterGroups.length + 1}`, titleFromSnbt: true },
+    ];
     groupsDirty = true;
   }
 
   function removeChapterGroup(id: string) {
+    pushHistory();
     chapterGroups = chapterGroups.filter((g) => g.id !== id);
     for (const ch of chapters) {
       if (ch.group === id) {
@@ -406,20 +1674,36 @@
     groupsDirty = true;
   }
 
-  function deleteChapter(id: string) {
-    if (
-      !confirm(
+  function moveChapterGroup(id: string, dir: -1 | 1) {
+    const idx = chapterGroups.findIndex((g) => g.id === id);
+    if (idx < 0) return;
+    const j = idx + dir;
+    if (j < 0 || j >= chapterGroups.length) return;
+    pushHistory();
+    const next = [...chapterGroups];
+    const tmp = next[idx];
+    next[idx] = next[j];
+    next[j] = tmp;
+    chapterGroups = next;
+    groupsDirty = true;
+  }
+
+  async function deleteChapter(id: string) {
+    const ok = await askConfirm({
+      title: "Remove chapter?",
+      message:
         "Remove this chapter from the editor? The SNBT file may remain on disk — delete or empty it manually if needed.",
-      )
-    ) {
-      return;
-    }
+      danger: true,
+      confirmLabel: "Remove",
+    });
+    if (!ok) return;
+    pushHistory();
     chapters = chapters.filter((c) => c.id !== id);
-    dirtyChapters.delete(id);
-    dirtyChapters = dirtyChapters;
+    syncDirtyFromBaseline();
     if (selectedChapter === id) {
       selectedChapter = chapters[0]?.id ?? "";
       selectedQuest = null;
+      selection = clearSelection();
     }
   }
 
@@ -428,6 +1712,7 @@
     if (idx < 0) return;
     const j = idx + dir;
     if (j < 0 || j >= chapters.length) return;
+    pushHistory();
     const next = [...chapters];
     const tmp = next[idx];
     next[idx] = next[j];
@@ -447,6 +1732,7 @@
       if (q) {
         selectedChapter = ch.id;
         selectedQuest = q;
+        selection = selectSingle(selection, q.id);
         fitToken += 1;
         return;
       }
@@ -458,58 +1744,114 @@
     }
   }
 
-  function onSearchKey(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      questSearch = "";
-      return;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const first = filteredChapterQuests[0];
-      if (first) {
-        selectedQuest = first;
-        fitToken += 1;
-      }
-    }
-  }
-
-  function handleKeydown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-      e.preventDefault();
-      if (hasDirty && !saving) void saveAll();
-    }
-  }
-
-  $: filteredChapterQuests = questSearch.trim()
+  const filteredChapterQuests = $derived(questSearchDebounced.trim()
     ? chapterQuests.filter((q) => {
-        const s = questSearch.toLowerCase();
+        const s = questSearchDebounced.toLowerCase();
         return (
           q.title.toLowerCase().includes(s) ||
           q.id.toLowerCase().includes(s) ||
           (q.subtitle ?? "").toLowerCase().includes(s)
         );
-      })
-    : chapterQuests;
+      }).slice(0, 200)
+    : chapterQuests);
 
-  $: hasDirty = dirtyChapters.size > 0 || rewardTablesDirty || bookDirty || groupsDirty;
-  $: questDirty.set(hasDirty);
-  $: if ($projectPath && $projectPath !== lastLoadedPath) load();
-  $: if (selectedQuest) {
-    const fresh = chapterQuests.find((q) => q.id === selectedQuest!.id);
-    if (fresh && fresh !== selectedQuest) selectedQuest = fresh;
-  }
-  $: if (progressKey || progressOverlay) progressOpen = true;
+  const hasDirty = $derived(
+    dirtyChapters.size > 0 ||
+      rewardTablesDirty ||
+      bookDirty ||
+      groupsDirty ||
+      dirtyLocales.size > 0,
+  );
+  $effect(() => {
+    const justOpened = search.isOpen && !searchWasOpen;
+    searchWasOpen = search.isOpen;
+    if (!justOpened) return;
+    queueMicrotask(() => searchInputEl?.focus({ preventScroll: true }));
+  });
 
-  $: if ($questChatFocusId) {
-    setAiSidebar(true);
+  $effect(() => {
+    questDirty.set(hasDirty);
+  });
+
+  async function handleProjectPathChange(nextPath: string) {
+    const gen = ++pathSwitchGen;
+    if (!nextPath || nextPath === lastLoadedPath) return;
+    if (hasDirty && lastLoadedPath) {
+      const prev = lastLoadedPath;
+      const ok = await askConfirm({
+        title: "Switch project?",
+        message: "Discard unsaved quest edits and switch project?",
+        danger: true,
+        confirmLabel: "Discard & switch",
+      });
+      if (gen !== pathSwitchGen) return;
+      if (!ok) {
+        if ($projectPath === nextPath) projectPath.set(prev);
+        return;
+      }
+    }
+    if (gen !== pathSwitchGen) return;
+    if ($projectPath !== nextPath) return;
+    await load();
   }
+
+  $effect(() => {
+    const path = $projectPath;
+    if (path && path !== lastLoadedPath) {
+      void handleProjectPathChange(path);
+    }
+  });
+
+  $effect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasDirty) e.preventDefault();
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  });
+
+  $effect(() => {
+    if (selectedQuest) {
+        const fresh = chapterQuests.find((q) => q.id === selectedQuest!.id);
+        if (fresh && fresh !== selectedQuest) selectedQuest = fresh;
+      }
+  });
+  $effect(() => {
+    if (progressKey || progressOverlay) progressOpen = true;
+  });
+
+  $effect(() => {
+    if ($questChatFocusId) {
+        setAiSidebar(true);
+      }
+  });
 
   onDestroy(() => {
+    if (validateTimer) clearTimeout(validateTimer);
+    if (noticeClearTimer) clearTimeout(noticeClearTimer);
     questDirty.set(false);
   });
+  function onWindowPointerDown(e: PointerEvent) {
+    const t = e.target as HTMLElement | null;
+    if (!t) return;
+    if (issuesOpen && !t.closest(".issues-wrap")) {
+      issuesOpen = false;
+    }
+    if (
+      (bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel) &&
+      !t.closest(".tb-pop")
+    ) {
+      bookMenuOpen = false;
+      showBookPanel = false;
+      showGroupsPanel = false;
+      showTablesPanel = false;
+      showLocalePanel = false;
+      showKubeJsPanel = false;
+    }
+  }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onpointerdown={onWindowPointerDown} />
 
 <div class="qe ftbq">
   <div class="qe-tb">
@@ -518,114 +1860,192 @@
       {#if bookTitle}<span class="book-name">{stripMc(bookTitle)}</span>{:else}Quest editor{/if}
     </div>
     <div class="qe-actions">
-      <div class="tb-pop">
-        <button
-          type="button"
-          class="ghost"
-          class:active={showBookPanel}
-          class:has-dirty={bookDirty}
-          title="Book settings (data.snbt)"
-          on:click={() => {
-            showBookPanel = !showBookPanel;
-            showGroupsPanel = false;
-            showTablesPanel = false;
+      <div class="locale-controls">
+        <select
+          class="locale-select"
+          value={activeLocale ?? ""}
+          title="Language overlay (lang/*.snbt)"
+          disabled={availableLocales.length === 0}
+          onchange={(e) => {
+            const v = (e.currentTarget as HTMLSelectElement).value;
+            if (v) switchLocale(v);
           }}
         >
-          Book{#if bookDirty}<span class="dot-mini">●</span>{/if}
-        </button>
-        {#if showBookPanel && $projectPath}
-          <div class="drawer">
-            <div class="drawer-h">
-              <strong>Book (data.snbt)</strong>
-              <button type="button" class="ghost ico" on:click={() => (showBookPanel = false)}
-                ><X size={14} /></button
-              >
-            </div>
-            <label
-              >Title<input
-                value={bookTitle ?? ""}
-                on:input={(e) => {
-                  bookTitle = inputVal(e);
-                  bookDirty = true;
-                }}
-              /></label
-            >
-            <label
-              >Subtitle<input
-                value={bookSubtitle ?? ""}
-                on:input={(e) => {
-                  bookSubtitle = inputVal(e);
-                  bookDirty = true;
-                }}
-              /></label
-            >
-            <p class="drawer-hint">Included in Save all · or save here</p>
-            <button type="button" on:click={saveBookData} disabled={saving || !bookDirty}
-              >Save book</button
-            >
-          </div>
-        {/if}
-      </div>
-      <div class="tb-pop">
-        <button
-          type="button"
-          class="ghost"
-          class:active={showGroupsPanel}
-          class:has-dirty={groupsDirty}
-          title="Chapter groups"
-          on:click={() => {
-            showGroupsPanel = !showGroupsPanel;
-            showBookPanel = false;
-            showTablesPanel = false;
-          }}
-        >
-          Groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
-        </button>
-        {#if showGroupsPanel && $projectPath}
-          <div class="drawer drawer-wide">
-            <div class="drawer-h">
-              <strong>Chapter groups</strong>
-              <button type="button" class="ghost" on:click={addChapterGroup}>+ Group</button>
-              <button type="button" class="ghost ico" on:click={() => (showGroupsPanel = false)}
-                ><X size={14} /></button
-              >
-            </div>
-            {#each chapterGroups as g (g.id)}
-              <div class="group-row">
-                <code>{g.id}</code>
-                <input bind:value={g.title} on:input={() => (groupsDirty = true)} />
-                <button type="button" class="ghost" on:click={() => removeChapterGroup(g.id)}
-                  >Remove</button
-                >
-              </div>
+          {#if availableLocales.length === 0}
+            <option value="">No lang files</option>
+          {:else}
+            {#each availableLocales as code (code)}
+              <option value={code}>{code}{#if dirtyLocales.has(code)} ●{/if}</option>
             {/each}
-            <p class="drawer-hint">Included in Save all</p>
-            <button type="button" on:click={saveGroups} disabled={saving || !groupsDirty}
-              >Save groups</button
-            >
-          </div>
-        {/if}
+          {/if}
+        </select>
+        <button
+          type="button"
+          class="ghost ico"
+          title="Locales — create, gaps, compare"
+          aria-label="Locales — create, gaps, compare"
+          onclick={() => {
+            showLocalePanel = true;
+            showBookPanel = false;
+            showGroupsPanel = false;
+            showTablesPanel = false;
+            showKubeJsPanel = false;
+            bookMenuOpen = true;
+          }}
+        >Locales</button>
       </div>
       <div class="tb-pop">
         <button
           type="button"
           class="ghost"
-          class:active={showTablesPanel}
-          class:has-dirty={rewardTablesDirty}
-          title="Reward tables"
-          on:click={() => {
-            showTablesPanel = !showTablesPanel;
-            showBookPanel = false;
-            showGroupsPanel = false;
+          class:active={bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel}
+          class:has-dirty={bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}
+          title="Book, groups, reward tables, locales, KubeJS"
+          aria-haspopup="menu"
+          aria-expanded={bookMenuOpen}
+          aria-controls="quest-book-menu"
+          onclick={() => {
+            bookMenuOpen = !bookMenuOpen;
+            if (!bookMenuOpen) {
+              showBookPanel = false;
+              showGroupsPanel = false;
+              showTablesPanel = false;
+              showLocalePanel = false;
+              showKubeJsPanel = false;
+            }
           }}
         >
-          Tables{#if rewardTablesDirty}<span class="dot-mini">●</span>{/if}
+          Book{#if bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
         </button>
+        {#if bookMenuOpen && $projectPath}
+          <div class="book-menu" id="quest-book-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              class:active={showBookPanel}
+              onclick={() => {
+                showBookPanel = true;
+                showGroupsPanel = false;
+                showTablesPanel = false;
+                showLocalePanel = false;
+                showKubeJsPanel = false;
+              }}
+            >
+              Book settings{#if bookDirty}<span class="dot-mini">●</span>{/if}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class:active={showGroupsPanel}
+              onclick={() => {
+                showGroupsPanel = true;
+                showBookPanel = false;
+                showTablesPanel = false;
+                showLocalePanel = false;
+                showKubeJsPanel = false;
+              }}
+            >
+              Chapter groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class:active={showTablesPanel}
+              onclick={() => {
+                showTablesPanel = true;
+                showBookPanel = false;
+                showGroupsPanel = false;
+                showLocalePanel = false;
+                showKubeJsPanel = false;
+              }}
+            >
+              Reward tables{#if rewardTablesDirty}<span class="dot-mini">●</span>{/if}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class:active={showLocalePanel}
+              onclick={() => {
+                showLocalePanel = true;
+                showBookPanel = false;
+                showGroupsPanel = false;
+                showTablesPanel = false;
+                showKubeJsPanel = false;
+              }}
+            >
+              Locales{#if dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class:active={showKubeJsPanel}
+              onclick={() => {
+                showKubeJsPanel = true;
+                showBookPanel = false;
+                showGroupsPanel = false;
+                showTablesPanel = false;
+                showLocalePanel = false;
+              }}
+            >
+              KubeJS
+            </button>
+          </div>
+        {/if}
+        {#if showBookPanel && $projectPath}
+          <BookSettingsPanel
+            {bookTitle}
+            {bookSubtitle}
+            {bookSettings}
+            {bookDirty}
+            {saving}
+            onclose={() => {
+              showBookPanel = false;
+              bookMenuOpen = false;
+            }}
+            onsave={() => void saveBookData()}
+            onpushhistory={pushHistory}
+            ontitlechange={(v) => {
+              bookTitle = v;
+              bookDirty = true;
+            }}
+            onsubtitlechange={(v) => {
+              bookSubtitle = v;
+              bookDirty = true;
+            }}
+            onsetsettings={(next) => {
+              bookSettings = next;
+              bookDirty = true;
+            }}
+          />
+        {/if}
+        {#if showGroupsPanel && $projectPath}
+          <ChapterGroupsPanel
+            {chapterGroups}
+            {groupsDirty}
+            {saving}
+            onclose={() => {
+              showGroupsPanel = false;
+              bookMenuOpen = false;
+            }}
+            onsave={() => void saveGroups()}
+            onadd={addChapterGroup}
+            onremove={removeChapterGroup}
+            onmove={moveChapterGroup}
+            ontitlechange={(id, title) => {
+              const g = chapterGroups.find((x) => x.id === id);
+              if (!g) return;
+              g.title = title;
+              g.titleFromSnbt = true;
+              groupsDirty = true;
+              chapterGroups = [...chapterGroups];
+            }}
+          />
+        {/if}
         {#if showTablesPanel && $projectPath}
           <div class="drawer drawer-tables">
             <div class="drawer-h">
               <strong>Reward tables</strong>
-              <button type="button" class="ghost ico" on:click={() => (showTablesPanel = false)}
+              <button type="button" class="ghost ico" onclick={() => { showTablesPanel = false; bookMenuOpen = false; }}
                 ><X size={14} /></button
               >
             </div>
@@ -633,14 +2053,83 @@
               tables={rewardTables}
               dirty={rewardTablesDirty}
               {saving}
+              tableIds={rewardTableIds}
               onChange={() => {
+                if (!rewardTablesDirty) pushHistory();
                 rewardTablesDirty = true;
-                rewardTables = rewardTables;
+                rewardTables = [...rewardTables];
               }}
               onSave={saveRewardTable}
               onCreate={createRewardTable}
             />
           </div>
+        {/if}
+        {#if showLocalePanel && $projectPath}
+          <div class="drawer drawer-wide">
+            <div class="drawer-h">
+              <strong>Locales (lang/*.snbt)</strong>
+              <button
+                type="button"
+                class="ghost ico"
+                onclick={() => {
+                  showLocalePanel = false;
+                  bookMenuOpen = false;
+                }}><X size={14} /></button
+              >
+            </div>
+            <LocalePanel
+              {locales}
+              {activeLocale}
+              {compareLocale}
+              {chapterGroups}
+              {chapters}
+              onCreateLocale={createLocale}
+              onJumpGap={jumpToLocaleGap}
+              onCompareLocaleChange={(code) => {
+                compareLocale = code && code !== activeLocale ? code : null;
+              }}
+            />
+          </div>
+        {/if}
+        {#if showKubeJsPanel && $projectPath}
+          <QuestKubeJsPanel
+            {chapters}
+            {selectedQuest}
+            bind:focusId={kubeJsFocusId}
+            onclose={() => {
+              showKubeJsPanel = false;
+              bookMenuOpen = false;
+            }}
+            onjumpquest={(questId, chapterId) => {
+              if (chapterId && chapters.some((c) => c.id === chapterId)) {
+                selectedChapter = chapterId;
+              } else {
+                for (const ch of chapters) {
+                  if (ch.quests.some((q) => q.id === questId)) {
+                    selectedChapter = ch.id;
+                    break;
+                  }
+                }
+              }
+              const q = chapters
+                .flatMap((c) => c.quests.map((quest) => ({ quest, ch: c.id })))
+                .find((x) => x.quest.id === questId);
+              if (q) {
+                selectedChapter = q.ch;
+                selectedQuest = q.quest;
+                selection = selectSingle(selection, q.quest.id);
+                panelTab = "quest";
+              }
+              showKubeJsPanel = false;
+              bookMenuOpen = false;
+            }}
+            oncreatecustom={(kind, opts) => createCustomForKubeJs(kind, opts)}
+            ondirtyquest={() => {
+              if (selectedChapter && !dirtyChapters.has(selectedChapter)) pushHistory();
+              if (selectedChapter) markDirty(selectedChapter);
+              if (selectedQuest) selectedQuest = { ...selectedQuest };
+            }}
+          />
         {/if}
       </div>
       <button
@@ -648,27 +2137,59 @@
         class="ghost"
         class:active={aiSidebarOpen}
         title="Quest AI sidebar"
-        on:click={() => setAiSidebar(!aiSidebarOpen)}
+        aria-label="Quest AI sidebar"
+        onclick={() => setAiSidebar(!aiSidebarOpen)}
       >
         <Sparkles size={16} /> AI
+      </button>
+      <button
+        type="button"
+        class="ghost"
+        disabled={!canUndo(history)}
+        title="Undo (Ctrl+Z)"
+        aria-label="Undo (Ctrl+Z)"
+        onclick={handleUndo}
+      >
+        <Undo2 size={16} />
+      </button>
+      <button
+        type="button"
+        class="ghost"
+        disabled={!canRedo(history)}
+        title="Redo (Ctrl+Y)"
+        aria-label="Redo (Ctrl+Y)"
+        onclick={handleRedo}
+      >
+        <Redo2 size={16} />
+      </button>
+      <button
+        type="button"
+        class="ghost"
+        title="Shortcuts (Ctrl+/)"
+        aria-label="Shortcuts (Ctrl+/)"
+        onclick={() => (showShortcuts = !showShortcuts)}
+      >
+        <Keyboard size={16} />
       </button>
       {#if hasDirty}
         <span class="dirty-badge"
           >{dirtyChapters.size +
             (rewardTablesDirty ? 1 : 0) +
             (bookDirty ? 1 : 0) +
-            (groupsDirty ? 1 : 0)} unsaved</span
+            (groupsDirty ? 1 : 0) +
+            dirtyLocales.size} unsaved</span
         >
-        <button type="button" class="primary" on:click={saveAll} disabled={!$projectPath || saving} title="Ctrl+S">
+        <button type="button" class="primary" onclick={saveAll} disabled={!$projectPath || saving} title="Ctrl+S">
           <Save size={16} /> {saving ? "Saving…" : "Save all"}
         </button>
       {/if}
       <button
         type="button"
         class="ghost"
-        on:click={requestReload}
+        onclick={requestReload}
         disabled={!$projectPath || loading}
         title="Reload from disk"
+        aria-label="Reload from disk"
       >
         <RefreshCw size={16} class={loading ? "spin" : ""} />
       </button>
@@ -685,14 +2206,25 @@
           class="issues-btn"
           class:warn={validationIssues.length > 0}
           disabled={validationIssues.length === 0}
-          on:click={() => (issuesOpen = !issuesOpen)}
+          aria-haspopup="true"
+          aria-expanded={issuesOpen}
+          aria-controls="quest-issues-pop"
+          onclick={() => (issuesOpen = !issuesOpen)}
         >
           {validationIssues.length === 0 ? "✓ valid" : `${validationIssues.length} issues`}
         </button>
+        <button
+          type="button"
+          class="issues-btn"
+          title="Re-run Rust validate_quest_book on disk"
+          onclick={() => void revalidateFromDisk()}
+        >
+          Revalidate
+        </button>
         {#if issuesOpen && validationIssues.length > 0}
-          <div class="issues-pop">
-            {#each validationIssues.slice(0, 40) as iss, i (`${iss.questId}-${i}`)}
-              <button type="button" class="issue-row" on:click={() => jumpToIssue(iss)}>
+          <div class="issues-pop" id="quest-issues-pop" role="listbox" aria-label="Validation issues">
+            {#each validationIssues as iss, i (`${iss.questId}-${i}`)}
+              <button type="button" class="issue-row" onclick={() => jumpToIssue(iss)}>
                 <code>{iss.questId.slice(0, 8)}</code>
                 <span>{iss.message}</span>
               </button>
@@ -706,64 +2238,126 @@
         >
       {/if}
     </div>
-    <details class="prog-details" bind:open={progressOpen}>
-      <summary><Eye size={14} /> Progress</summary>
-      <div class="prog-bar">
-        <label class="prog-toggle">
-          <input
-            type="checkbox"
-            bind:checked={progressOverlay}
-            disabled={!progressSnap}
-            title="Show player progress on canvas"
-          />
-          Overlay
-        </label>
-        <select
-          bind:value={progressKey}
-          on:change={loadProgress}
-          disabled={progressLoading || progressTeams.length === 0}
-        >
-          <option value="">
-            {progressTeams.length === 0 ? "No saves/*/ftbquests progress" : "Select team / player…"}
-          </option>
-          {#each progressTeams as t (t.relativePath)}
-            <option value={t.relativePath}>{t.world} — {t.name}</option>
-          {/each}
-        </select>
-        <button
-          type="button"
-          class="ghost"
-          disabled={progressLoading || !progressKey}
-          on:click={loadProgress}
-          title="Reload progress"
-        >
-          <RefreshCw size={14} class={progressLoading ? "spin" : ""} />
-        </button>
-        {#if progressTeamLabel}
-          <code class="prog-path">{progressTeamLabel.relativePath}</code>
-        {/if}
-      </div>
-    </details>
+    <ProgressPanel
+      bind:open={progressOpen}
+      {progressMode}
+      bind:progressOverlay
+      {progressSnap}
+      {progressTeams}
+      bind:progressKey
+      {progressLoading}
+      {simCompleted}
+      {simBusy}
+      onentersave={() => void enterSaveMode()}
+      onentersimulate={() => void enterSimulateMode()}
+      onloadprogress={() => void loadProgress()}
+      onseed={() => void seedSimulateFromTeam()}
+      onreset={() => void resetSimulate()}
+      onrefreshsim={() => void refreshSimulate()}
+    />
   {/if}
 
-  {#if error}<div class="notice error"><AlertTriangle size={14} /> {error}</div>{/if}
-  {#if message}<div class="notice success"><CheckCircle2 size={14} /> {message}</div>{/if}
+  {#if error}
+    <div class="notice error" role="alert" aria-live="assertive">
+      <AlertTriangle size={14} />
+      <span class="notice-text">{error}</span>
+      <button type="button" class="ghost ico notice-dismiss" title="Dismiss" aria-label="Dismiss error" onclick={() => (error = null)}>
+        <X size={14} />
+      </button>
+    </div>
+  {/if}
+  {#if message}
+    <div class="notice success" role="status" aria-live="polite">
+      <CheckCircle2 size={14} />
+      <span class="notice-text">{message}</span>
+      <button type="button" class="ghost ico notice-dismiss" title="Dismiss" aria-label="Dismiss message" onclick={() => (message = null)}>
+        <X size={14} />
+      </button>
+    </div>
+  {/if}
+
+  {#if search.isOpen}
+    <div class="search-panel">
+      <div class="search-bar">
+        <input
+          type="search"
+          id="quest-global-search"
+          placeholder="Search… words, /regex/, or re:pattern (Enter next)"
+          value={search.query}
+          bind:this={searchInputEl}
+          aria-controls="quest-search-results"
+          aria-activedescendant={search.results.length
+            ? `quest-search-hit-${search.selectedIndex}`
+            : undefined}
+          oninput={(e) => updateSearch(inputVal(e))}
+          onkeydown={handleSearchKeyDown}
+        />
+        <span class="filt-count"
+          >{search.results.length
+            ? `${search.selectedIndex + 1}/${search.results.length}`
+            : "0"}</span
+        >
+        <button
+          type="button"
+          class="ghost ico"
+          title="Close"
+          aria-label="Close search"
+          onclick={() => (search = { ...search, isOpen: false })}
+          ><X size={14} /></button
+        >
+      </div>
+      {#if search.query.trim() && search.results.length === 0}
+        <p class="search-empty" role="status">
+          No matches. Try words, <code>/regex/</code>, or <code>re:pattern</code>.
+        </p>
+      {:else if search.results.length > 0}
+        <ul class="search-results" id="quest-search-results" role="listbox" aria-label="Search results">
+          {#each search.results.slice(0, 50) as r, i (`${r.chapterId}-${r.quest.id}-${r.matchField}-${i}`)}
+            <li>
+              <button
+                type="button"
+                class="search-hit"
+                class:active={i === search.selectedIndex}
+                id={`quest-search-hit-${i}`}
+                role="option"
+                aria-selected={i === search.selectedIndex}
+                onclick={() => {
+                  search = { ...search, selectedIndex: i };
+                  navigateSearchResult();
+                }}
+              >
+                <span class="hit-ch">{r.chapterTitle}</span>
+                <span class="hit-field">{r.matchField}</span>
+                <span class="hit-text">{r.matchText}</span>
+              </button>
+            </li>
+          {/each}
+          {#if search.results.length > 50}
+            <li class="search-more">+{search.results.length - 50} more — use Enter to cycle</li>
+          {/if}
+        </ul>
+      {/if}
+    </div>
+  {/if}
 
   {#if !$projectPath}
-    <EmptyState icon={Map} title="No project selected" description="Open a project to edit FTB Quests chapters." />
+    <EmptyState icon={MapIcon} title="No project selected" description="Open a project to edit FTB Quests chapters." />
   {:else if loading && chapters.length === 0}
     <div class="empty"><RefreshCw size={32} class="spin" /><p>Loading quest book…</p></div>
   {:else if chapters.length === 0}
     <div class="empty">
       <ScrollText size={40} />
-      <h3>No FTB Quests chapters found</h3>
-      <p>Place <code>.snbt</code> files in <code>config/ftbquests/quests/chapters/</code></p>
-      <p class="hint">TuffBox parses SNBT on disk — no Minecraft needed.</p>
-      <button type="button" on:click={createChapter}><span>+</span> Create first chapter</button>
+      <h3>Start a quest line</h3>
+      <p>Create a chapter, add quests on the canvas, then Save all to write SNBT.</p>
+      <button type="button" class="empty-cta" onclick={createChapter}><span>+</span> Create first chapter</button>
     </div>
   {:else}
     <div class="qe-body-row">
-    <div class="qe-lay" class:with-insp={!!selectedQuest || !!selectedChapterObj}>
+    <div
+      class="qe-lay"
+      class:with-insp={!!selectedChapterObj}
+      style="--qe-rail: {railWidth}px; --qe-insp: {inspWidth}px;"
+    >
       <ChapterRail
         {chapters}
         {chapterGroups}
@@ -777,94 +2371,288 @@
         onDelete={deleteChapter}
         onMove={moveChapter}
       />
+      <div
+        class="col-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize chapters panel"
+        onpointerdown={(e) => startColResize("rail", e)}
+      ></div>
       <div class="canvas-wrap">
         <div class="canvas-tools">
           <input
             type="search"
             placeholder="Filter quests… (Enter = jump, Esc = clear)"
             bind:value={questSearch}
-            on:keydown={onSearchKey}
+            onkeydown={onSearchKey}
           />
           {#if questSearch}
             <span class="filt-count">{filteredChapterQuests.length}/{chapterQuests.length}</span>
+            <button
+              type="button"
+              class="ghost clear-filter"
+              title="Clear filter"
+              onclick={() => (questSearch = "")}
+            >
+              Clear filter
+            </button>
           {/if}
+          <div class="layout-btns" title="Auto-layout current chapter">
+            <button type="button" class="layout-btn" onclick={() => applyChapterLayout("tree")}>Tree</button>
+            <button type="button" class="layout-btn" onclick={() => applyChapterLayout("grid")}>Grid</button>
+            <button type="button" class="layout-btn" onclick={() => applyChapterLayout("circle")}>Circle</button>
+          </div>
         </div>
-        <QuestCanvas
-          quests={filteredChapterQuests}
-          selectedId={selectedQuest?.id ?? null}
-          issues={validationIssues}
-          {fitToken}
-          {progressOverlay}
-          {progressStatuses}
-          emptyHint={questSearch.trim()
-            ? `No quests match “${questSearch.trim()}”`
-            : "Double-click to add a quest"}
-          onSelect={(q) => (selectedQuest = q)}
-          onMove={moveQuest}
-          onAddAt={addQuestAt}
-          onLink={linkQuests}
-        />
+        <SvelteFlowProvider>
+          <QuestCanvas
+            quests={filteredChapterQuests}
+            {chapters}
+            selectedId={selectedQuest?.id ?? null}
+            selectedIds={selection.selectedIds}
+            issues={validationIssues}
+            {fitToken}
+            {progressOverlay}
+            {progressStatuses}
+            emptyHint={questSearch.trim()
+              ? `No quests match “${questSearch.trim()}”`
+              : "Double-click to add a quest"}
+            showEmptyAddCta={!questSearch.trim()}
+            onSelect={(q, e) => {
+              if (
+                progressMode === "simulate" &&
+                progressOverlay &&
+                q &&
+                e?.altKey &&
+                !e?.shiftKey &&
+                !e?.ctrlKey &&
+                !e?.metaKey
+              ) {
+                void toggleSimQuest(q.id);
+              }
+              selectQuestOnCanvas(q, e);
+            }}
+            onMove={moveQuest}
+            onAddAt={addQuestAt}
+            onLink={linkQuests}
+            onSelectMultiple={(ids) => {
+              selection = selectAll(ids);
+              if (ids.length === 1) {
+                selectedQuest = chapterQuests.find((q) => q.id === ids[0]) ?? null;
+                if (selectedQuest) panelTab = "quest";
+              }
+            }}
+          />
+        </SvelteFlowProvider>
       </div>
-      {#if selectedQuest}
-        <QuestInspector
-          quest={selectedQuest}
-          {chapterQuests}
-          issues={validationIssues}
-          {rewardTableIds}
-          onDirty={() => markDirty(selectedChapter)}
-          onRemove={() => {
-            if (selectedQuest) removeQuest(selectedQuest);
-          }}
-          onAddDep={(id) => {
-            if (selectedQuest) addDep(selectedQuest, id);
-          }}
-          onRemoveDep={(id) => {
-            if (selectedQuest) removeDep(selectedQuest, id);
-          }}
-        />
-      {:else if selectedChapterObj}
-        <ChapterSettings
-          chapter={selectedChapterObj}
-          {chapterGroups}
-          onDirty={() => markDirty(selectedChapter)}
-        />
+      {#if selectedChapterObj}
+        <div
+          class="col-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize quest inspector"
+          onpointerdown={(e) => startColResize("insp", e)}
+        ></div>
+        <div class="side-panel">
+          <div
+            class="panel-tabs"
+            role="tablist"
+            aria-label="Quest side panel"
+            tabindex="-1"
+            onkeydown={onPanelTabKeydown}
+          >
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              class:active={panelTab === "quest"}
+              aria-selected={panelTab === "quest"}
+              id="quest-panel-tab-quest"
+              tabindex={panelTab === "quest" ? 0 : -1}
+              onclick={() => setPanelTab("quest")}
+              >Quest</button
+            >
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              class:active={panelTab === "info"}
+              aria-selected={panelTab === "info"}
+              id="quest-panel-tab-info"
+              tabindex={panelTab === "info" ? 0 : -1}
+              onclick={() => setPanelTab("info")}
+              >Info</button
+            >
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              class:active={panelTab === "batch"}
+              aria-selected={panelTab === "batch"}
+              id="quest-panel-tab-batch"
+              tabindex={panelTab === "batch" ? 0 : -1}
+              onclick={() => setPanelTab("batch")}
+              >Batch</button
+            >
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              class:active={panelTab === "colors"}
+              aria-selected={panelTab === "colors"}
+              id="quest-panel-tab-colors"
+              tabindex={panelTab === "colors" ? 0 : -1}
+              onclick={() => setPanelTab("colors")}
+              >Colors</button
+            >
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              class:active={panelTab === "raw"}
+              aria-selected={panelTab === "raw"}
+              id="quest-panel-tab-raw"
+              tabindex={panelTab === "raw" ? 0 : -1}
+              onclick={() => setPanelTab("raw")}
+              >Raw</button
+            >
+          </div>
+          <div class="panel-content">
+            {#if panelTab === "quest"}
+              {#if selectedQuest}
+                <QuestInspector
+                  quest={selectedQuest}
+                  {chapterQuests}
+                  {chapters}
+                  issues={validationIssues}
+                  {rewardTableIds}
+                  {activeLocale}
+                  {compareLocale}
+                  compareMap={compareLocale ? locales[compareLocale] ?? null : null}
+                  availableLocales={availableLocales}
+                  onDirty={() => {
+                    if (!dirtyChapters.has(selectedChapter)) pushHistory();
+                    markDirty(selectedChapter);
+                  }}
+                  onCompareDirty={(code) => markLocaleDirty(code)}
+                  onCompareLocaleChange={(code) => {
+                    compareLocale = code && code !== activeLocale ? code : null;
+                  }}
+                  onCompareMapChange={(code, map) => {
+                    locales = { ...locales, [code]: map };
+                    markLocaleDirty(code);
+                  }}
+                  onRemove={() => {
+                    if (selectedQuest) removeQuest(selectedQuest);
+                  }}
+                  onAddDep={(id) => {
+                    if (selectedQuest) addDep(selectedQuest, id);
+                  }}
+                  onRemoveDep={(id) => {
+                    if (selectedQuest) removeDep(selectedQuest, id);
+                  }}
+                  onOpenKubeJs={(id) => openKubeJsForId(id)}
+                />
+              {:else}
+                <div class="sel-empty">
+                  <p class="sel-hint">Select a quest on the canvas</p>
+                  <button
+                    type="button"
+                    class="ghost"
+                    onclick={() => addQuestAt(0, 0)}
+                    disabled={!selectedChapter}
+                  >Add quest</button>
+                </div>
+              {/if}
+            {:else if panelTab === "info"}
+              <ChapterSettings
+                chapter={selectedChapterObj}
+                {chapterGroups}
+                onDirty={() => {
+                  if (!dirtyChapters.has(selectedChapter)) pushHistory();
+                  markDirty(selectedChapter);
+                }}
+              />
+              {#if selection.selectedIds.size > 0}
+                <p class="sel-hint">{selection.selectedIds.size} quest(s) selected · Del to remove · Ctrl+C copy</p>
+              {/if}
+            {:else if panelTab === "batch"}
+              <BatchEditor
+                {chapters}
+                selectedIds={selection.selectedIds}
+                focusToken={batchFocusToken}
+                onQuestUpdate={handleQuestUpdate}
+                onBatchApply={handleBatchApply}
+                onSaveChapter={(id) => void saveChapter(id)}
+              />
+            {:else if panelTab === "colors"}
+              <ColorManager {chapters} onQuestUpdate={handleQuestUpdate} />
+            {:else if panelTab === "raw"}
+              <RawSnbtView
+                chapter={selectedChapterObj}
+                selectedQuestId={selectedQuest?.id ?? null}
+                onDiffVsDisk={() => void showChapterDiffVsDisk()}
+              />
+            {/if}
+          </div>
+        </div>
       {/if}
     </div>
     {#if aiSidebarOpen}
       <QuestAiSidebar
         open={aiSidebarOpen}
-        on:close={() => setAiSidebar(false)}
-        on:apply={(e) => applyMergeResult(e.detail)}
+        onclose={() => setAiSidebar(false)}
+        onapply={applyMergeResult}
+        anchorQuest={selectedQuest}
+        anchorChapterTitle={selectedChapterObj?.title ?? null}
+        targetChapterId={selectedChapter}
       />
     {/if}
     </div>
     <div class="qe-footer">
       <p class="hint">
-        Edits save as SNBT to <code>config/ftbquests/quests/chapters/</code>. Auto-snapshot on save. AI merge is memory-only until Save.
+        Ctrl+S save · Ctrl+Z undo · Ctrl+F search · Ctrl+/ shortcuts · Shift/Ctrl multi-select. SNBT →
+        <code>config/ftbquests/quests/chapters/</code>.
       </p>
     </div>
   {/if}
 </div>
 
+<ShortcutsModal isOpen={showShortcuts} onClose={() => (showShortcuts = false)} />
+<SnbtDiffModal
+  open={snbtDiffOpen}
+  title={snbtDiffTitle}
+  leftLabel={snbtDiffLeftLabel}
+  rightLabel={snbtDiffRightLabel}
+  leftText={snbtDiffLeft}
+  rightText={snbtDiffRight}
+  files={snbtDiffFiles}
+  confirmLabel={snbtDiffConfirmLabel}
+  onConfirm={() => closeSnbtDiff(true)}
+  onCancel={() => closeSnbtDiff(false)}
+/>
+
+{#if confirmOpen}
+  <ConfirmDialog
+    title={confirmTitle}
+    message={confirmMessage}
+    danger={confirmDanger}
+    confirmLabel={confirmLabel}
+    onconfirm={() => closeConfirm(true)}
+    oncancel={() => closeConfirm(false)}
+  />
+{/if}
+
+<VanillaClientJarPrompt
+  open={vanillaPromptOpen}
+  version={vanillaPromptVersion || "?"}
+  downloadSize={vanillaPromptSize}
+  downloading={vanillaDownloading}
+  error={vanillaDownloadError}
+  ondownload={downloadVanillaJar}
+  ondismiss={dismissVanillaPrompt}
+/>
+
 <style>
-  .qe.ftbq {
-    --ftbq-bg: #1a1a1e;
-    --ftbq-bg-panel: #212126;
-    --ftbq-bg-canvas: #2b2b30;
-    --ftbq-border: #3a3a42;
-    --ftbq-text: #e8e8e8;
-    --ftbq-text-muted: #9a9aa0;
-    --ftbq-quest-default: #ffffff;
-    --ftbq-quest-locked: #6b6b6b;
-    --ftbq-quest-started: #f2c94c;
-    --ftbq-quest-completed: #55c95a;
-    --ftbq-line: #5c8a9e;
-    --ftbq-line-done: #55c95a;
-    --ftbq-accent-teal: #3db8a8;
-    --ftbq-accent-green: #55c95a;
-    --ftbq-title-gold: #f2c94c;
-    --ftbq-node-fill: #18181c;
-  }
   .qe {
     max-width: none;
     width: 100%;
@@ -872,38 +2660,65 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    background: var(--ftbq-bg, #1a1a1e);
+    background: var(--ftbq-bg);
     color: var(--ftbq-text, #e8e8e8);
   }
-  /* Isolate from global TuffBox green primary buttons */
+  /* Isolate from global TuffBox green primary buttons — flat chrome */
   .qe.ftbq :global(button) {
-    border-radius: 2px;
+    border-radius: 6px;
     font-weight: 600;
     box-shadow: none;
+    text-shadow: none;
+  }
+  .qe.ftbq :global(.fmt-bar button) {
+    border-radius: 0;
+    border: none;
+    border-right: 1px solid var(--ftbq-frame);
+    background: transparent;
+    box-shadow: none;
+    text-shadow: none;
+    padding: 4px 8px;
+  }
+  .qe.ftbq :global(.fmt-bar button:last-child) {
+    border-right: none;
+  }
+  .qe.ftbq :global(.fmt-bar button:hover:not(:disabled)) {
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--ftbq-accent-green);
   }
   .qe.ftbq :global(button.ghost),
   .qe.ftbq :global(button.ico) {
     padding: 4px 10px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--ftbq-frame);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    box-shadow: none;
     color: var(--ftbq-text, #e8e8e8);
+    text-shadow: none;
   }
   .qe.ftbq :global(button.ghost:hover:not(:disabled)),
   .qe.ftbq :global(button.ico:hover:not(:disabled)) {
-    border-color: var(--ftbq-accent-green, #55c95a);
-    background: rgba(85, 201, 90, 0.1);
+    border-color: var(--ftbq-frame);
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
     color: var(--ftbq-text, #e8e8e8);
+  }
+  .qe.ftbq :global(button.ghost:active:not(:disabled)),
+  .qe.ftbq :global(button.ico:active:not(:disabled)) {
+    background: var(--bg-active, var(--ftbq-btn-hover-bottom));
+    box-shadow: none;
   }
   .qe.ftbq :global(button.primary),
   .qe.ftbq :global(.qe-actions > button:not(.ghost)) {
     padding: 6px 12px;
-    border: 1px solid var(--ftbq-accent-green, #55c95a);
-    background: rgba(85, 201, 90, 0.18);
-    color: var(--ftbq-quest-completed, #55c95a);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
+    background: var(--accent-primary);
+    box-shadow: none;
+    color: #fff;
+    text-shadow: none;
   }
   .qe.ftbq :global(button.primary:hover:not(:disabled)),
   .qe.ftbq :global(.qe-actions > button:not(.ghost):hover:not(:disabled)) {
-    background: rgba(85, 201, 90, 0.28);
+    filter: none;
+    background: var(--accent-hover, var(--accent-primary));
   }
   .qe.ftbq :global(button:disabled) {
     opacity: 0.5;
@@ -911,11 +2726,24 @@
   .qe.ftbq :global(input),
   .qe.ftbq :global(select),
   .qe.ftbq :global(textarea) {
-    border-radius: 2px;
-    border-color: var(--ftbq-border, #3a3a42);
-    background: var(--ftbq-bg, #1a1a1e);
+    border-radius: 6px;
+    border: 1px solid var(--ftbq-frame);
+    background: var(--ftbq-input-bg);
+    box-shadow: none;
     color: var(--ftbq-text, #e8e8e8);
     min-width: 0;
+    outline: none;
+    color-scheme: inherit;
+    transition:
+      border-color 0.12s ease,
+      box-shadow 0.12s ease;
+  }
+  .qe.ftbq :global(input:focus),
+  .qe.ftbq :global(select:focus),
+  .qe.ftbq :global(textarea:focus) {
+    outline: none;
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .qe-tb,
   .qe-title,
@@ -928,6 +2756,52 @@
   }
   .tb-pop {
     position: relative;
+  }
+  .locale-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .locale-select {
+    max-width: 110px;
+    font-size: 11px;
+    padding: 4px 6px;
+  }
+  .book-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 45;
+    min-width: 180px;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 6px;
+    box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.12));
+  }
+  .book-menu button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ftbq-text, #e8e8ea);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .book-menu button:hover,
+  .book-menu button.active {
+    background: var(--bg-hover, color-mix(in srgb, var(--ftbq-accent-teal) 12%, transparent));
+    color: var(--text-primary, var(--ftbq-text));
   }
   .dot-mini {
     color: var(--ftbq-quest-started, #f2c94c);
@@ -944,13 +2818,17 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    border-radius: 2px;
-    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 3px;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 12px 28px rgba(0, 0, 0, 0.55);
   }
   .drawer-wide {
     width: 360px;
+    max-height: min(70vh, 560px);
+    overflow: auto;
   }
   .drawer-tables {
     width: min(520px, 90vw);
@@ -965,44 +2843,19 @@
   .drawer-h strong {
     flex: 1;
   }
-  .drawer label {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-  }
-  .drawer input {
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    color: inherit;
-    border-radius: 2px;
-    padding: 6px 8px;
-  }
-  .drawer-hint {
-    margin: 0;
-    font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-  }
-  .group-row {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  .group-row input {
-    flex: 1;
-  }
   .issues-wrap {
     position: relative;
   }
   .issues-btn {
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: transparent;
+    border: 1px solid var(--ftbq-frame);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    box-shadow: none;
     color: var(--ftbq-quest-completed, #55c95a);
-    border-radius: 2px;
+    border-radius: 6px;
     padding: 2px 8px;
     font-size: 12px;
     cursor: pointer;
+    text-shadow: none;
   }
   .issues-btn.warn {
     color: #fbbf24;
@@ -1016,12 +2869,14 @@
     left: 0;
     z-index: 30;
     min-width: 320px;
-    max-height: 240px;
+    max-height: min(80vh, 480px);
     overflow: auto;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    border-radius: 2px;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 3px;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 10px 24px rgba(0, 0, 0, 0.5);
   }
   .issue-row {
     display: flex;
@@ -1030,7 +2885,7 @@
     text-align: left;
     padding: 8px 10px;
     border: none;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
     background: transparent;
     color: var(--ftbq-text, #e8e8e8);
     font-size: 11px;
@@ -1039,46 +2894,28 @@
   .issue-row:hover {
     background: rgba(61, 184, 168, 0.1);
   }
-  .prog-details {
-    flex-shrink: 0;
-    margin: 0 12px 8px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    border-radius: 2px;
-    background: var(--ftbq-bg-panel, #212126);
-    padding: 0 8px;
-  }
-  .prog-details summary {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-    padding: 6px 4px;
-    font-size: 12px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    list-style: none;
-  }
-  .prog-details summary::-webkit-details-marker {
-    display: none;
-  }
   .qe-tb {
     justify-content: space-between;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
     flex-shrink: 0;
-    padding: 8px 12px;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    border-radius: 2px;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    padding: 6px 10px;
+    min-height: 40px;
+    max-height: 48px;
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 6px;
+    box-shadow: none;
   }
   .qe-title {
-    color: var(--ftbq-text-muted, #9a9aa0);
-    font-weight: 700;
+    color: var(--text-muted, var(--ftbq-text-muted, #868e96));
+    font-weight: 600;
     font-size: 13px;
     letter-spacing: 0.02em;
   }
   .qe-title .book-name {
-    color: var(--ftbq-title-gold, #f2c94c);
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    color: var(--text-primary, #1e293b);
+    font-weight: 600;
+    text-shadow: none;
   }
   .qe-stats {
     display: flex;
@@ -1088,7 +2925,8 @@
     color: var(--ftbq-text-muted, #9a9aa0);
     flex-shrink: 0;
     flex-wrap: wrap;
-    padding: 0 2px;
+    padding: 2px 6px;
+    text-shadow: none;
   }
   .qe-stats .warn {
     color: var(--ftbq-quest-started, #f2c94c);
@@ -1096,58 +2934,53 @@
   .prog-stat {
     color: var(--ftbq-quest-completed, #55c95a);
   }
-  .prog-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-bottom: 8px;
-    padding: 6px 10px;
-    border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: var(--ftbq-bg-panel, #212126);
-    color: var(--ftbq-text-muted, #9a9aa0);
-    font-size: 11px;
-    flex-shrink: 0;
-  }
-  .prog-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    cursor: pointer;
-  }
-  .prog-bar select {
-    min-width: 200px;
-    max-width: 360px;
-    font-size: 12px;
-  }
-  .prog-path {
-    font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 280px;
-  }
   .dirty-badge {
     font-size: 10px;
-    color: var(--ftbq-quest-started, #f2c94c);
+    color: var(--accent-warning, #d97706);
     padding: 3px 8px;
-    border-radius: 2px;
-    background: rgba(242, 201, 76, 0.12);
-    border: 1px solid rgba(242, 201, 76, 0.25);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent-warning) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent);
+    text-shadow: none;
+    animation: none;
+  }
+  @keyframes badge-glow {
+    0%,
+    100% {
+      box-shadow: 0 0 3px rgba(242, 201, 76, 0.15);
+    }
+    50% {
+      box-shadow: 0 0 9px rgba(242, 201, 76, 0.4);
+    }
   }
   .notice {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    border-radius: 2px;
+    border-radius: 6px;
     margin-bottom: 8px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     flex-shrink: 0;
     font-size: 12px;
+    text-shadow: none;
+  }
+  .notice-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .notice-dismiss {
+    flex-shrink: 0;
+    opacity: 0.8;
+  }
+  .notice-dismiss:hover {
+    opacity: 1;
+  }
+  .clear-filter {
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    padding: 2px 8px;
   }
   .notice.error {
     color: #fecaca;
@@ -1161,15 +2994,49 @@
   }
   .empty {
     color: var(--ftbq-text-muted, #9a9aa0);
-    padding: 80px;
+    padding: 48px 32px;
     text-align: center;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    border-radius: 2px;
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 3px;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+      inset 0 0 48px rgba(0, 0, 0, 0.25);
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 12px;
+  }
+  .empty h3 {
+    margin: 0;
+    color: var(--text-primary, var(--ftbq-text));
+    font-size: 16px;
+    font-weight: 600;
+    text-shadow: none;
+  }
+  .empty p {
+    margin: 0;
+    max-width: 360px;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .empty-cta {
+    margin-top: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 16px;
+    border: 1px solid color-mix(in srgb, var(--accent-secondary) 45%, var(--ftbq-frame));
+    border-radius: 6px;
+    background: var(--accent-secondary);
+    box-shadow: none;
+    color: #fff;
+    text-shadow: none;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .empty-cta:hover {
+    filter: brightness(1.12);
   }
   .hint {
     font-size: 11px;
@@ -1178,13 +3045,39 @@
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 200px 1fr;
+    grid-template-columns: var(--qe-rail, 180px) 4px 1fr;
     gap: 0;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    border-radius: 2px;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 3px;
     overflow: hidden;
-    background: var(--ftbq-bg-canvas, #2b2b30);
+    background: var(--ftbq-bg-canvas);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+      0 2px 8px rgba(0, 0, 0, 0.4);
     min-width: 0;
+  }
+  .qe-lay.with-insp {
+    grid-template-columns: var(--qe-rail, 180px) 4px 1fr 4px var(--qe-insp, 300px);
+  }
+  .col-resizer {
+    width: 4px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    cursor: col-resize;
+    background: var(--ftbq-frame);
+    position: relative;
+    z-index: 2;
+    touch-action: none;
+  }
+  .col-resizer::after {
+    content: "";
+    position: absolute;
+    inset: 0 -3px;
+  }
+  .col-resizer:hover,
+  .col-resizer:active {
+    background: var(--ftbq-accent-teal, #3db8a8);
   }
   .qe-body-row {
     display: flex;
@@ -1210,15 +3103,17 @@
     align-items: center;
     gap: 8px;
     padding: 6px 8px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
-    background: var(--ftbq-bg-panel, #212126);
+    border-bottom: 1px solid var(--ftbq-frame);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.2)),
+      var(--ftbq-bg-panel);
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
   }
   .canvas-tools input {
     flex: 1;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     color: inherit;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 4px 8px;
     font-size: 12px;
   }
@@ -1226,8 +3121,176 @@
     font-size: 11px;
     color: var(--ftbq-text-muted, #9a9aa0);
   }
-  .qe-lay.with-insp {
-    grid-template-columns: 200px 1fr 280px;
+  .layout-btns {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .layout-btn {
+    padding: 3px 8px;
+    font-size: 11px;
+    border: 1px solid var(--ftbq-border);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--ftbq-text-muted, #9a9aa0);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .layout-btn:hover {
+    color: var(--ftbq-text, #e8e8e8);
+    border-color: var(--ftbq-accent-teal, #3db8a8);
+  }
+  .search-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--ftbq-frame);
+    background: linear-gradient(90deg, rgba(61, 184, 168, 0.12), rgba(0, 0, 0, 0.2));
+    flex-shrink: 0;
+  }
+  .search-bar input {
+    flex: 1;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+  .search-panel {
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--ftbq-frame);
+    background: var(--ftbq-bg-panel);
+  }
+  .search-panel .search-bar {
+    border-bottom: none;
+  }
+  .search-empty {
+    margin: 0;
+    padding: 8px 12px 10px;
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .search-empty code {
+    font-size: 10px;
+  }
+  .search-results {
+    list-style: none;
+    margin: 0;
+    padding: 0 8px 8px;
+    max-height: 180px;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .search-hit {
+    display: grid;
+    grid-template-columns: minmax(72px, 1fr) auto minmax(0, 2fr);
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 5px 8px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .search-hit:hover,
+  .search-hit.active {
+    border-color: var(--ftbq-accent-teal, #3db8a8);
+    background: rgba(61, 184, 168, 0.12);
+  }
+  .hit-ch {
+    color: var(--ftbq-title-gold, #f2c94c);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hit-field {
+    color: var(--ftbq-text-muted, #9a9aa0);
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.04em;
+  }
+  .hit-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .search-more {
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+    padding: 4px 8px;
+  }
+  .side-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--ftbq-bg-panel);
+    border-left: 1px solid var(--ftbq-frame);
+  }
+  .panel-tabs {
+    display: flex;
+    flex-shrink: 0;
+    gap: 2px;
+    padding: 4px 4px 0;
+    border-bottom: 1px solid var(--ftbq-frame);
+    background: var(--bg-tertiary, var(--ftbq-bg));
+  }
+  .panel-tabs .tab {
+    flex: 1;
+    padding: 8px 4px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    background: color-mix(in srgb, var(--bg-elevated, var(--ftbq-bg-canvas)) 85%, transparent);
+    color: var(--text-muted, var(--ftbq-text-muted, #868e96));
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+  .panel-tabs .tab:last-child {
+    border-right: none;
+  }
+  .panel-tabs .tab:hover {
+    color: var(--text-secondary, var(--ftbq-text, #495057));
+    background: color-mix(in srgb, var(--bg-hover, #dee2e6) 70%, transparent);
+  }
+  .panel-tabs .tab.active {
+    color: var(--text-primary, var(--ftbq-text, #212529));
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    border-color: var(--ftbq-frame);
+    border-bottom-color: var(--bg-secondary, var(--ftbq-bg-panel));
+    margin-bottom: -1px;
+    box-shadow: none;
+  }
+  .panel-content {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+  }
+  .sel-hint {
+    margin: 0;
+    padding: 8px 12px 12px;
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+    border-top: 1px solid var(--ftbq-frame);
+  }
+  .sel-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px 12px;
+    border-top: 1px solid var(--ftbq-frame);
+  }
+  .sel-empty .sel-hint {
+    border-top: none;
+    padding: 0;
   }
   .qe-footer {
     margin-top: 8px;
@@ -1238,8 +3301,9 @@
     color: var(--ftbq-text-muted, #9a9aa0);
   }
   .qe-actions .active {
-    color: var(--ftbq-title-gold, #f2c94c);
-    border-color: var(--ftbq-accent-green, #55c95a);
+    color: var(--text-primary, var(--ftbq-text));
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
   }
   :global(.spin) {
     animation: spin 0.8s linear infinite;
@@ -1250,12 +3314,11 @@
     }
   }
   @media (max-width: 900px) {
-    .qe-lay,
-    .qe-lay.with-insp {
-      grid-template-columns: 160px 1fr;
+    .qe-lay {
+      grid-template-columns: minmax(140px, 160px) 4px 1fr;
     }
     .qe-lay.with-insp {
-      grid-template-columns: 160px 1fr minmax(220px, 260px);
+      grid-template-columns: minmax(140px, 160px) 4px 1fr 4px minmax(220px, 260px);
     }
   }
 </style>

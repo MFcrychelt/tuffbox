@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { PackageOpen, RefreshCw, UploadCloud, CheckCircle2, AlertTriangle } from "lucide-svelte";
-  import { projectPath, projectInfo } from "../lib/store";
+  import { PackageOpen, RefreshCw, UploadCloud, CheckCircle2, AlertTriangle } from "@lucide/svelte";
+  import { projectPath, projectInfo, pushWorkTrail } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
 
   type ExportResult = {
@@ -10,18 +10,18 @@
     overrideCount: number;
   };
 
-  let targetPath = "";
-  let serverTargetPath = "";
-  let prismTargetPath = "";
-  let curseforgeTargetPath = "";
-  let projectDir = "";
-  let exporting = false;
-  let result: ExportResult | null = null;
-  let error: string | null = null;
-  let issues: { severity: "error" | "warning"; code: string; message: string; target?: string | null }[] = [];
-  let exportMode: "mrpack" | "server" | "prism" | "curseforge" = "mrpack";
+  let targetPath = $state("");
+  let serverTargetPath = $state("");
+  let prismTargetPath = $state("");
+  let curseforgeTargetPath = $state("");
+  let projectDir = $state("");
+  let exporting = $state(false);
+  let result = $state<ExportResult | null>(null);
+  let error = $state<string | null>(null);
+  let issues = $state<{ severity: "error" | "warning"; code: string; message: string; target?: string | null }[]>([]);
+  let exportMode = $state<"mrpack" | "server" | "prism" | "curseforge">("mrpack");
 
-  let lastPathForDefaults = "";
+  let lastPathForDefaults = $state("");
 
   async function loadDefaultPaths(path: string) {
     projectDir = await invoke("get_project_dir", { path });
@@ -71,6 +71,12 @@
         path: $projectPath,
         targetPath: pathValue,
       });
+      if (result) {
+        pushWorkTrail(`Export ready · ${result.path}`, [
+          { id: "release", label: "Open Release", kind: "stage", stage: "release" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -78,13 +84,15 @@
     }
   }
 
-  $: onProjectPathChange($projectPath);
+  $effect(() => {
+    onProjectPathChange($projectPath);
+  });
 </script>
 
 <div class="export-builder">
   <div class="toolbar">
     <div class="title"><UploadCloud size={18} /> Export builder</div>
-    <button class="ghost" on:click={refreshDefaultPath} disabled={!$projectPath}>
+    <button class="ghost" onclick={refreshDefaultPath} disabled={!$projectPath}>
       <RefreshCw size={16} />
       Default path
     </button>
@@ -100,28 +108,28 @@
   {:else}
     <section class="panel">
       <div class="format-grid">
-        <button class="format-card" class:active={exportMode === "mrpack"} on:click={() => (exportMode = "mrpack")}>
+        <button class="format-card" class:active={exportMode === "mrpack"} onclick={() => (exportMode = "mrpack")}>
           <PackageOpen size={28} />
           <div>
             <h2>Modrinth .mrpack</h2>
             <p>modrinth.index.json + remote downloads + overrides.</p>
           </div>
         </button>
-        <button class="format-card" class:active={exportMode === "server"} on:click={() => (exportMode = "server")}>
+        <button class="format-card" class:active={exportMode === "server"} onclick={() => (exportMode = "server")}>
           <PackageOpen size={28} />
           <div>
             <h2>Server pack</h2>
             <p>Server-safe mods, configs, manifest and start scripts.</p>
           </div>
         </button>
-        <button class="format-card" class:active={exportMode === "prism"} on:click={() => (exportMode = "prism")}>
+        <button class="format-card" class:active={exportMode === "prism"} onclick={() => (exportMode = "prism")}>
           <PackageOpen size={28} />
           <div>
             <h2>Prism instance</h2>
             <p>instance.cfg + mmc-pack.json + mods/configs.</p>
           </div>
         </button>
-        <button class="format-card" class:active={exportMode === "curseforge"} on:click={() => (exportMode = "curseforge")}>
+        <button class="format-card" class:active={exportMode === "curseforge"} onclick={() => (exportMode = "curseforge")}>
           <PackageOpen size={28} />
           <div>
             <h2>CurseForge zip</h2>
@@ -178,22 +186,22 @@
 
       <div class="export-actions">
         {#if exportMode === "mrpack"}
-          <button class="export" on:click={exportMrpack} disabled={exporting || issues.some((i) => i.severity === "error")}>
+          <button class="export" onclick={exportMrpack} disabled={exporting || issues.some((i) => i.severity === "error")}>
             <UploadCloud size={16} />
             {exporting ? "Exporting..." : "Export .mrpack"}
           </button>
         {:else if exportMode === "server"}
-          <button class="export" on:click={exportServerPack} disabled={exporting}>
+          <button class="export" onclick={exportServerPack} disabled={exporting}>
             <PackageOpen size={16} />
             {exporting ? "Exporting..." : "Export server pack"}
           </button>
         {:else if exportMode === "prism"}
-          <button class="export" on:click={exportPrismInstance} disabled={exporting}>
+          <button class="export" onclick={exportPrismInstance} disabled={exporting}>
             <PackageOpen size={16} />
             {exporting ? "Exporting..." : "Export Prism instance"}
           </button>
         {:else if exportMode === "curseforge"}
-          <button class="export" on:click={exportCurseForgePack} disabled={exporting}>
+          <button class="export" onclick={exportCurseForgePack} disabled={exporting}>
             <PackageOpen size={16} />
             {exporting ? "Exporting..." : "Export CurseForge zip"}
           </button>
@@ -210,12 +218,12 @@
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .notice { gap: 10px; padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .panel, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .panel { padding: 22px; display: grid; gap: 18px; }
   .format-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
   .format-card { gap: 14px; padding: 18px; text-align: left; justify-content: flex-start; color: var(--text-secondary); border-radius: var(--border-radius-lg); background: var(--bg-tertiary); border: 1px solid var(--border-color); transform: none; }
-  .format-card.active { background: radial-gradient(circle at top left, rgba(27, 217, 106, 0.12), transparent 45%), var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.45); color: var(--text-primary); }
+  .format-card.active { background: radial-gradient(circle at top left, color-mix(in srgb, var(--accent-primary) 12%, transparent), transparent 45%), var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); color: var(--text-primary); }
   .format-card.planned { opacity: .76; }
   .format-card h2 { margin: 0 0 4px; }
   .format-card p, .checks span { color: var(--text-muted); }
@@ -230,7 +238,7 @@
   .issue.error { border-color: rgba(239, 68, 68, 0.3); }
   .issue span { color: var(--text-muted); }
   code { color: var(--text-secondary); font-family: ui-monospace, monospace; }
-  .publish-section { padding: 16px; border: 1px solid rgba(27,217,106,.25); border-radius: var(--border-radius-lg); background: rgba(27,217,106,.03); }
+  .publish-section { padding: 16px; border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent); border-radius: var(--border-radius-lg); background: color-mix(in srgb, var(--accent-primary) 3%, transparent); }
   .publish-section h3 { color: var(--text-primary); font-size: 14px; margin: 0 0 4px; }
   .publish-section p { color: var(--text-muted); font-size: 12px; margin: 0; line-height: 1.45; }
 

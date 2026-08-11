@@ -1,14 +1,20 @@
 <script lang="ts">
-  import { ArrowLeft, Save, Cpu, Container, Coffee, Terminal, Search, Database, RefreshCw, AlertTriangle } from "lucide-svelte";
+  import { ArrowLeft, Save, Cpu, Container, Coffee, Terminal, Search, Database, RefreshCw, AlertTriangle } from "@lucide/svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { projectInfo, projectPath, recentProjects } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import JavaPickerModal from "./JavaPickerModal.svelte";
 
-  export let onBack: () => void = () => {};
-  export let showBack = true;
-  export let stayAfterSave = false;
+  let {
+    onBack = () => {},
+    showBack = true,
+    stayAfterSave = false,
+  }: {
+    onBack?: () => void;
+    showBack?: boolean;
+    stayAfterSave?: boolean;
+  } = $props();
 
   const memoryMarks = [1024, 2048, 4096, 6144, 8192, 12288, 16384];
   const loaders = [
@@ -19,27 +25,27 @@
     { id: "quilt", label: "Quilt" },
   ];
 
-  let memory = $projectInfo?.memoryMb ?? 4096;
-  let jvmArgs = ($projectInfo?.jvmArgs ?? ["-XX:+UseG1GC"]).join(" ");
-  let javaPath = $projectInfo?.javaPath ?? "Auto-detect";
-  let javaVersion = "";
-  let playerName = $projectInfo?.playerName ?? "Player";
+  let memory = $state($projectInfo?.memoryMb ?? 4096);
+  let jvmArgs = $state(($projectInfo?.jvmArgs ?? ["-XX:+UseG1GC"]).join(" "));
+  let javaPath = $state($projectInfo?.javaPath ?? "Auto-detect");
+  let javaVersion = $state("");
+  let playerName = $state($projectInfo?.playerName ?? "Player");
 
-  let mcVersion = $projectInfo?.minecraftVersion ?? "";
-  let loader = $projectInfo?.loaderKind ?? "vanilla";
-  let loaderVersion = $projectInfo?.loaderVersion ?? "";
+  let mcVersion = $state($projectInfo?.minecraftVersion ?? "");
+  let loader = $state($projectInfo?.loaderKind ?? "vanilla");
+  let loaderVersion = $state($projectInfo?.loaderVersion ?? "");
 
-  let mcVersions: { id: string; popular: boolean }[] = [];
-  let loaderVersions: { id: string; stable: boolean }[] = [];
-  let showJavaPicker = false;
-  let saving = false;
-  let loading = false;
-  let error = "";
+  let mcVersions = $state<{ id: string; popular: boolean }[]>([]);
+  let loaderVersions = $state<{ id: string; stable: boolean }[]>([]);
+  let showJavaPicker = $state(false);
+  let saving = $state(false);
+  let loading = $state(false);
+  let error = $state("");
 
   // Schema status
-  let schemaVersion = "";
-  let schemaNeedsMigration = false;
-  let schemaLoading = false;
+  let schemaVersion = $state("");
+  let schemaNeedsMigration = $state(false);
+  let schemaLoading = $state(false);
 
   async function loadSchemaStatus() {
     if (!$projectPath) return;
@@ -88,7 +94,7 @@
     }
   });
 
-  let loadingLoader = false;
+  let loadingLoader = $state(false);
   async function loadLoaderVersions() {
     if (loadingLoader) return;
     if (loader === "vanilla") {
@@ -147,8 +153,8 @@
     }
   }
 
-  async function onJavaSelected(event: CustomEvent<string>) {
-    javaPath = event.detail;
+  async function onJavaSelected(path: string) {
+    javaPath = path;
     await detectJavaPreview();
   }
 
@@ -157,9 +163,11 @@
     return `${mb} MB`;
   }
 
-  $: if (mcVersions.length > 0 && loader !== "vanilla" && loaderVersions.length === 0) {
-    loadLoaderVersions();
-  }
+  $effect(() => {
+    if (mcVersions.length > 0 && loader !== "vanilla" && loaderVersions.length === 0) {
+      loadLoaderVersions();
+    }
+  });
 
   function onLoaderChange() {
     loaderVersions = [];
@@ -177,7 +185,7 @@
 <div class="settings-page">
   <header class="page-header">
     {#if showBack}
-      <button class="ghost back" on:click={onBack}>
+      <button class="ghost back" onclick={onBack}>
         <ArrowLeft size={18} />
         Back
       </button>
@@ -203,7 +211,7 @@
         </div>
         <div class="field">
           <label for="mc-version">Minecraft version</label>
-          <select id="mc-version" bind:value={mcVersion} on:change={onMcVersionChange}>
+          <select id="mc-version" bind:value={mcVersion} onchange={onMcVersionChange}>
             {#each mcVersions as v}
               <option value={v.id}>
                 {v.id}{#if v.popular} ★{/if}
@@ -214,7 +222,7 @@
         <div class="field-row">
           <div class="field">
             <label for="loader-kind">Loader</label>
-            <select id="loader-kind" bind:value={loader} on:change={onLoaderChange}>
+            <select id="loader-kind" bind:value={loader} onchange={onLoaderChange}>
               {#each loaders as l}
                 <option value={l.id}>{l.label}</option>
               {/each}
@@ -244,7 +252,7 @@
           <label for="java-path">Java executable</label>
           <div class="input-row">
             <input id="java-path" bind:value={javaPath} readonly />
-            <button class="icon-btn" on:click={() => (showJavaPicker = true)} aria-label="Search Java">
+            <button class="icon-btn" onclick={() => (showJavaPicker = true)} aria-label="Search Java">
               <Search size={18} />
             </button>
           </div>
@@ -274,7 +282,7 @@
               <button
                 class="mark"
                 class:active={memory === mark}
-                on:click={() => (memory = mark)}
+                onclick={() => (memory = mark)}
               >
                 {formatMemory(mark)}
               </button>
@@ -329,7 +337,7 @@
               <AlertTriangle size={16} />
               <span>Schema migration available. This will normalize your manifest to the current format.</span>
             </div>
-            <button class="secondary" on:click={migrateSchema} disabled={saving}>
+            <button class="secondary" onclick={migrateSchema} disabled={saving}>
               <RefreshCw size={16} />
               {saving ? "Migrating..." : "Migrate schema"}
             </button>
@@ -348,9 +356,9 @@
 
     <div class="actions">
       {#if showBack}
-        <button class="secondary" on:click={onBack}>Cancel</button>
+        <button class="secondary" onclick={onBack}>Cancel</button>
       {/if}
-      <button on:click={save} disabled={saving}>
+      <button onclick={save} disabled={saving}>
         <Save size={16} />
         {saving ? "Saving..." : "Save changes"}
       </button>
@@ -363,8 +371,8 @@
 {#if showJavaPicker}
   <JavaPickerModal
     current={javaPath === "Auto-detect" ? "" : javaPath}
-    on:close={() => (showJavaPicker = false)}
-    on:selected={onJavaSelected}
+    onclose={() => (showJavaPicker = false)}
+    onselected={onJavaSelected}
   />
 {/if}
 
@@ -602,7 +610,7 @@
     background: var(--accent-primary);
     border-radius: 50%;
     cursor: pointer;
-    box-shadow: 0 0 12px rgba(27, 217, 106, 0.4);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 40%, transparent);
   }
 
   .memory-slider::-moz-range-thumb {
@@ -657,5 +665,5 @@
   .schema-row span { color: var(--text-muted); font-size: 13px; }
   .schema-row code { font-family: ui-monospace, monospace; font-size: 14px; color: var(--accent-primary); }
   .schema-warning { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); color: #fcd34d; font-size: 13px; }
-  .schema-ok { color: var(--accent-primary); font-size: 13px; padding: 10px 14px; background: rgba(27,217,106,0.06); border-radius: 10px; border: 1px solid rgba(27,217,106,0.20); }
+  .schema-ok { color: var(--accent-primary); font-size: 13px; padding: 10px 14px; background: color-mix(in srgb, var(--accent-primary) 6%, transparent); border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent-primary) 20%, transparent); }
 </style>

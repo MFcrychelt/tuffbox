@@ -95,18 +95,93 @@ pub fn category_for_path(path: &str) -> &'static str {
 
 pub fn actor_for_operation(operation: &str) -> &'static str {
     let op = operation.to_lowercase();
-    if op.contains("crash") || op.contains("action-plan") || op.contains("action_plan") || op.contains("swarm")
+    if op.contains("crash_detected") {
+        "launcher"
+    } else if op.contains("crash_fix")
+        || op.contains("crash-fix")
+        || op.contains("action-plan")
+        || op.contains("action_plan")
+        || op.contains("swarm")
     {
-        "ai"
+        // Prefer plan_source via actor_for_plan_source when known; this is a
+        // coarse fallback for snapshot names that still say "crash_fix".
+        "launcher"
     } else if op.contains("track-history") || op.contains("scan") {
         "scan"
+    } else if op.contains("add-mod")
+        || op.contains("remove-mod")
+        || op.contains("disable-mod")
+        || op.contains("enable-mod")
+        || op.contains("update-mod")
+        || op.contains("edit-config")
+        || op.contains("save-quest")
+    {
+        "user"
     } else {
         "launcher"
     }
 }
 
+/// Map ActionPlan / snapshot `planSource` to History fixMethod + actor.
+pub fn normalize_fix_method(plan_source: Option<&str>) -> &'static str {
+    let raw = plan_source.unwrap_or("").trim().to_ascii_lowercase();
+    match raw.as_str() {
+        "ai" | "ai_action_plan" | "llm" | "local" | "server" => "ai",
+        "heuristic" | "crash_assistant" | "assistant" => "heuristic",
+        "kb" | "kb_only" | "distill" => "kb",
+        "swarm" => "swarm",
+        "manual" | "user" => "manual",
+        "" => "unknown",
+        _ => "unknown",
+    }
+}
+
+pub fn actor_for_plan_source(plan_source: Option<&str>) -> &'static str {
+    match normalize_fix_method(plan_source) {
+        "ai" | "kb" | "swarm" => "ai",
+        "heuristic" => "launcher",
+        "manual" => "user",
+        _ => "launcher",
+    }
+}
+
+pub fn episode_id_for_fingerprint(fingerprint_key: &str) -> String {
+    let key = fingerprint_key.trim();
+    if key.is_empty() || key == "unknown" {
+        format!("ep-{}", now_id_suffix())
+    } else {
+        let compact: String = key
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .take(48)
+            .collect();
+        if compact.is_empty() {
+            format!("ep-{}", now_id_suffix())
+        } else {
+            format!("ep-{compact}")
+        }
+    }
+}
+
+pub fn meta_str(meta: &Option<serde_json::Value>, key: &str) -> Option<String> {
+    meta.as_ref()
+        .and_then(|m| m.get(key))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty())
+}
+
 pub fn op_for_operation(operation: &str, paths: &[String]) -> String {
     let op = operation.to_lowercase();
+    if op.contains("crash_detected") || op == "crash-detected" {
+        return "crash_detected".into();
+    }
+    if op.contains("crash_fix_rejected") || op.contains("crash-fix-rejected") {
+        return "crash_fix_rejected".into();
+    }
+    if op.contains("crash_fix_rollback") || op.contains("crash-fix-rollback") {
+        return "crash_fix_rollback".into();
+    }
     if op.contains("crash_fix") || op.contains("crash-fix") {
         return "crash_fix".into();
     }
@@ -149,6 +224,7 @@ pub fn append_pack_event(project_dir: &Path, mut event: PackEvent) -> Result<(),
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn append_from_snapshot(
     project_dir: &Path,
     operation: &str,
@@ -156,16 +232,78 @@ pub fn append_from_snapshot(
     changed_files: &[PathBuf],
     reason: &str,
 ) -> Result<(), String> {
+    append_from_snapshot_with_summary(project_dir, operation, snapshot_id, changed_files, reason, &[])
+}
+
+/// Like [`append_from_snapshot`], but prefers human `actions_summary` lines when
+/// no changed files were copied into the snapshot (typical for add-mod).
+pub fn append_from_snapshot_with_summary(
+    project_dir: &Path,
+    operation: &str,
+    snapshot_id: &str,
+    changed_files: &[PathBuf],
+    reason: &str,
+    actions_summary: &[String],
+) -> Result<(), String> {
+    append_from_snapshot_with_episode(
+        project_dir,
+        operation,
+        snapshot_id,
+        changed_files,
+        reason,
+        actions_summary,
+        None,
+        None,
+        None,
+    )
+}
+
+/// Snapshot journal write with optional crash-episode linkage.
+pub fn append_from_snapshot_with_episode(
+    project_dir: &Path,
+    operation: &str,
+    snapshot_id: &str,
+    changed_files: &[PathBuf],
+    reason: &str,
+    actions_summary: &[String],
+    episode_id: Option<&str>,
+    fingerprint_key: Option<&str>,
+    plan_source: Option<&str>,
+) -> Result<(), String> {
     let paths: Vec<String> = changed_files
         .iter()
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .collect();
-    let category = paths
-        .first()
-        .map(|p| category_for_path(p).to_string())
-        .unwrap_or_else(|| "Other".into());
-    let summary = if paths.is_empty() {
-        format!("{operation}: {reason}")
+    let category = if paths.iter().any(|p| category_for_path(p) == "Mods")
+        || operation.to_lowercase().contains("mod")
+        || operation.to_lowercase().contains("crash")
+    {
+        if operation.to_lowercase().contains("crash") {
+            "Resolutions".into()
+        } else {
+            "Mods".into()
+        }
+    } else {
+        paths
+            .first()
+            .map(|p| category_for_path(p).to_string())
+            .unwrap_or_else(|| "Other".into())
+    };
+    let summary = if !actions_summary.is_empty() {
+        let head: Vec<&str> = actions_summary.iter().take(8).map(|s| s.as_str()).collect();
+        let more = actions_summary.len().saturating_sub(head.len());
+        if more > 0 {
+            format!("{} (+{} more)", head.join("; "), more)
+        } else {
+            head.join("; ")
+        }
+    } else if paths.is_empty() {
+        // Avoid "add-mod: Auto snapshot before add-mod" noise.
+        if reason.starts_with("Auto snapshot before ") {
+            format!("Safety point before {operation}")
+        } else {
+            format!("{operation}: {reason}")
+        }
     } else if paths.len() == 1 {
         format!("{operation}: {}", paths[0])
     } else {
@@ -173,27 +311,401 @@ pub fn append_from_snapshot(
     };
     let mut tags = Vec::new();
     let op_l = operation.to_lowercase();
-    if op_l.contains("crash_fix") {
+    if op_l.contains("crash_fix") && !op_l.contains("rejected") && !op_l.contains("rollback") {
         tags.push("crash_fix".into());
     }
     if op_l.contains("crash_resolved") {
         tags.push("crash_resolved".into());
+    }
+    if op_l.contains("crash_detected") {
+        tags.push("crash".into());
+    }
+    let actor = if plan_source.is_some() {
+        actor_for_plan_source(plan_source).to_string()
+    } else {
+        actor_for_operation(operation).to_string()
+    };
+    let ep = episode_id
+        .map(|s| s.to_string())
+        .or_else(|| fingerprint_key.map(episode_id_for_fingerprint));
+    let mut meta = serde_json::json!({
+        "reason": reason,
+        "operation": operation,
+        "actionsSummary": actions_summary,
+    });
+    if let Some(obj) = meta.as_object_mut() {
+        if let Some(ep) = &ep {
+            obj.insert("episodeId".into(), serde_json::json!(ep));
+        }
+        if let Some(fp) = fingerprint_key.filter(|s| !s.trim().is_empty()) {
+            obj.insert("fingerprintKey".into(), serde_json::json!(fp));
+        }
+        if let Some(ps) = plan_source.filter(|s| !s.trim().is_empty()) {
+            obj.insert("planSource".into(), serde_json::json!(ps));
+            obj.insert(
+                "fixMethod".into(),
+                serde_json::json!(normalize_fix_method(Some(ps))),
+            );
+        }
     }
     append_pack_event(
         project_dir,
         PackEvent {
             id: format!("evt-{}-{}", snapshot_id, now_id_suffix() % 10_000),
             ts: now_rfc3339(),
-            actor: actor_for_operation(operation).into(),
+            actor,
             op: op_for_operation(operation, &paths),
             paths,
             category,
             summary,
             snapshot_id: Some(snapshot_id.to_string()),
             tags,
-            meta: Some(serde_json::json!({ "reason": reason, "operation": operation })),
+            meta: Some(meta),
         },
     )
+}
+
+/// Record that a launch ended in a crash — starts / continues a History episode.
+pub fn append_crash_detected(
+    project_dir: &Path,
+    fingerprint_key: &str,
+    exit_code: Option<i32>,
+    log_path: Option<&str>,
+    message: &str,
+) -> Result<String, String> {
+    let episode_id = episode_id_for_fingerprint(fingerprint_key);
+    let summary = if message.trim().is_empty() {
+        format!("Launch crashed · fingerprint {}", &fingerprint_key.chars().take(24).collect::<String>())
+    } else {
+        let short: String = message.chars().take(160).collect();
+        format!("Launch crashed: {short}")
+    };
+    let mut meta = serde_json::json!({
+        "episodeId": episode_id,
+        "fingerprintKey": fingerprint_key,
+        "exitCode": exit_code,
+    });
+    if let Some(lp) = log_path.filter(|s| !s.is_empty()) {
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("logPath".into(), serde_json::json!(lp));
+        }
+    }
+    let id = format!("evt-crash-{}-{}", now_id_suffix() % 100_000, now_id_suffix() % 997);
+    append_pack_event(
+        project_dir,
+        PackEvent {
+            id,
+            ts: now_rfc3339(),
+            actor: "launcher".into(),
+            op: "crash_detected".into(),
+            paths: Vec::new(),
+            category: "Resolutions".into(),
+            summary,
+            snapshot_id: None,
+            tags: vec!["crash".into(), "crash_detected".into()],
+            meta: Some(meta),
+        },
+    )?;
+    Ok(episode_id)
+}
+
+/// Soft-verify / rollback outcomes as journal events (same episode).
+pub fn append_crash_outcome_event(
+    project_dir: &Path,
+    op: &str,
+    episode_id: &str,
+    fingerprint_key: &str,
+    plan_source: Option<&str>,
+    snapshot_id: Option<&str>,
+    summary: &str,
+) -> Result<(), String> {
+    let mut tags = vec!["crash".into()];
+    let op_l = op.to_ascii_lowercase();
+    if op_l.contains("resolved") {
+        tags.push("crash_resolved".into());
+        tags.push("crash_fix".into());
+    } else if op_l.contains("reject") {
+        tags.push("crash_fix".into());
+        tags.push("crash_fix_rejected".into());
+    } else if op_l.contains("rollback") {
+        tags.push("crash_fix".into());
+        tags.push("crash_fix_rollback".into());
+    }
+    let mut meta = serde_json::json!({
+        "episodeId": episode_id,
+        "fingerprintKey": fingerprint_key,
+        "fixMethod": normalize_fix_method(plan_source),
+    });
+    if let Some(ps) = plan_source.filter(|s| !s.is_empty()) {
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("planSource".into(), serde_json::json!(ps));
+        }
+    }
+    append_pack_event(
+        project_dir,
+        PackEvent {
+            id: format!("evt-{}-{}", op, now_id_suffix() % 100_000),
+            ts: now_rfc3339(),
+            actor: actor_for_plan_source(plan_source).into(),
+            op: op_for_operation(op, &[]),
+            paths: Vec::new(),
+            category: "Resolutions".into(),
+            summary: summary.to_string(),
+            snapshot_id: snapshot_id.map(|s| s.to_string()),
+            tags,
+            meta: Some(meta),
+        },
+    )
+}
+
+/// Record a launcher mod operation with concrete mod names / jar paths.
+pub fn record_mod_change_event(
+    project_dir: &Path,
+    operation: &str,
+    snapshot_id: Option<&str>,
+    summaries: &[String],
+    paths: &[String],
+) -> Result<(), String> {
+    if summaries.is_empty() && paths.is_empty() {
+        return Ok(());
+    }
+    let summary = if !summaries.is_empty() {
+        let head: Vec<&str> = summaries.iter().take(12).map(|s| s.as_str()).collect();
+        let more = summaries.len().saturating_sub(head.len());
+        if more > 0 {
+            format!("{} (+{} more)", head.join("; "), more)
+        } else {
+            head.join("; ")
+        }
+    } else {
+        format!("{operation}: {} file(s)", paths.len())
+    };
+    let id = format!(
+        "evt-mod-{}-{}",
+        snapshot_id.unwrap_or("nosnap"),
+        now_id_suffix() % 100_000
+    );
+    append_pack_event(
+        project_dir,
+        PackEvent {
+            id,
+            ts: now_rfc3339(),
+            actor: "launcher".into(),
+            op: "mod_change".into(),
+            paths: paths.to_vec(),
+            category: "Mods".into(),
+            summary,
+            snapshot_id: snapshot_id.map(|s| s.to_string()),
+            tags: vec!["launcher".into()],
+            meta: Some(serde_json::json!({
+                "operation": operation,
+                "actionsSummary": summaries,
+            })),
+        },
+    )?;
+    sync_baseline_paths(project_dir, paths)?;
+    Ok(())
+}
+
+/// Update history baseline entries for the given relative paths (so launcher
+/// installs are not later reported as external_add).
+pub fn sync_baseline_paths(project_dir: &Path, relative_paths: &[String]) -> Result<(), String> {
+    if relative_paths.is_empty() {
+        return Ok(());
+    }
+    let mut baseline = load_baseline(project_dir);
+    for rel in relative_paths {
+        let abs = project_dir.join(rel);
+        if abs.is_file() {
+            if let Ok(meta) = abs.metadata() {
+                baseline.files.insert(
+                    rel.replace('\\', "/"),
+                    BaselineEntry {
+                        mtime: file_mtime_secs(&abs),
+                        size: meta.len(),
+                    },
+                );
+            }
+            cache_config_content(project_dir, rel);
+        } else {
+            baseline.files.remove(rel);
+            remove_cached_config_content(project_dir, rel);
+        }
+    }
+    baseline.updated_at = now_rfc3339();
+    save_baseline(project_dir, &baseline)
+}
+
+fn content_cache_root(project_dir: &Path) -> PathBuf {
+    project_dir.join(".tuffbox").join("history-content")
+}
+
+fn content_cache_path(project_dir: &Path, rel: &str) -> PathBuf {
+    let safe = rel.replace('\\', "/").replace("..", "_");
+    content_cache_root(project_dir).join(safe)
+}
+
+fn is_textish_config(rel: &str) -> bool {
+    let path = Path::new(rel);
+    crate::helpers::is_editable_config_path(path)
+}
+
+fn read_cached_config_content(project_dir: &Path, rel: &str) -> Option<String> {
+    let path = content_cache_path(project_dir, rel);
+    std::fs::read_to_string(path).ok()
+}
+
+fn cache_config_content(project_dir: &Path, rel: &str) {
+    if !is_textish_config(rel) {
+        return;
+    }
+    let abs = project_dir.join(rel);
+    if !abs.is_file() {
+        return;
+    }
+    let Ok(meta) = abs.metadata() else {
+        return;
+    };
+    if meta.len() > 512 * 1024 {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(&abs) else {
+        return;
+    };
+    let cache = content_cache_path(project_dir, rel);
+    if let Some(parent) = cache.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(cache, text);
+}
+
+fn remove_cached_config_content(project_dir: &Path, rel: &str) {
+    let _ = std::fs::remove_file(content_cache_path(project_dir, rel));
+}
+
+/// Pull changed keys / assignment lines from a unified diff for a short preview.
+fn config_change_preview(diff: &str) -> String {
+    let mut keys = Vec::new();
+    for line in diff.lines() {
+        let trimmed = if let Some(rest) = line.strip_prefix("+ ").or_else(|| line.strip_prefix("- "))
+        {
+            rest.trim()
+        } else {
+            continue;
+        };
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            continue;
+        }
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            // TOML section
+            let section = trimmed.trim_matches(|c| c == '[' || c == ']');
+            if !section.is_empty() && !keys.iter().any(|k| k == section) {
+                keys.push(section.to_string());
+            }
+            continue;
+        }
+        let key = trimmed
+            .split_once('=')
+            .or_else(|| trimmed.split_once(':'))
+            .map(|(k, _)| k.trim().trim_matches('"').trim_matches('\''))
+            .filter(|k| !k.is_empty() && k.len() < 80);
+        if let Some(k) = key {
+            if !keys.iter().any(|existing| existing == k) {
+                keys.push(k.to_string());
+            }
+        }
+        if keys.len() >= 6 {
+            break;
+        }
+    }
+    if keys.is_empty() {
+        // Fall back to first changed lines.
+        diff.lines()
+            .filter(|l| l.starts_with("+ ") || l.starts_with("- "))
+            .take(4)
+            .collect::<Vec<_>>()
+            .join(" · ")
+    } else {
+        format!("changed {}", keys.join(", "))
+    }
+}
+
+fn enrich_external_file_event(
+    project_dir: &Path,
+    rel: &str,
+    op: &str,
+) -> (String, Option<serde_json::Value>) {
+    if !is_textish_config(rel) {
+        let summary = match op {
+            "external_add" => format!("Added on disk: {rel}"),
+            "external_remove" => format!("Removed from disk: {rel}"),
+            _ => format!("Changed on disk: {rel}"),
+        };
+        return (summary, None);
+    }
+
+    let abs = project_dir.join(rel);
+    let after = if abs.is_file() {
+        crate::helpers::read_small_text_file(&abs).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let before = read_cached_config_content(project_dir, rel).unwrap_or_default();
+
+    let (summary, meta) = if op == "external_add" {
+        let preview = if after.is_empty() {
+            format!("Added on disk: {rel}")
+        } else {
+            let diff = crate::helpers::unified_text_diff("", &after);
+            let place = config_change_preview(&diff);
+            format!("{rel}: added ({place})")
+        };
+        let diff = crate::helpers::unified_text_diff("", &after);
+        (
+            preview.clone(),
+            Some(serde_json::json!({
+                "diff": diff,
+                "preview": preview,
+            })),
+        )
+    } else if op == "external_remove" {
+        let diff = crate::helpers::unified_text_diff(&before, "");
+        let place = if before.is_empty() {
+            format!("Removed from disk: {rel}")
+        } else {
+            format!("{rel}: removed ({})", config_change_preview(&diff))
+        };
+        (
+            place.clone(),
+            Some(serde_json::json!({
+                "diff": diff,
+                "preview": place,
+            })),
+        )
+    } else {
+        let diff = crate::helpers::unified_text_diff(&before, &after);
+        let place = config_change_preview(&diff);
+        let summary = if place.is_empty() {
+            format!("Changed on disk: {rel}")
+        } else {
+            format!("{rel}: {place}")
+        };
+        (
+            summary.clone(),
+            Some(serde_json::json!({
+                "diff": diff,
+                "preview": summary,
+            })),
+        )
+    };
+
+    if op == "external_remove" {
+        remove_cached_config_content(project_dir, rel);
+    } else {
+        cache_config_content(project_dir, rel);
+    }
+
+    (summary, meta)
 }
 
 fn trim_events_file(path: &Path) -> Result<(), String> {
@@ -444,6 +956,8 @@ pub fn scan_project_changes(
             match baseline.files.get(rel) {
                 None => {
                     added += 1;
+                    let (summary, meta) =
+                        enrich_external_file_event(project_dir, rel, "external_add");
                     let ev = PackEvent {
                         id: format!("evt-add-{}", now_id_suffix()),
                         ts: now_rfc3339(),
@@ -451,16 +965,18 @@ pub fn scan_project_changes(
                         op: "external_add".into(),
                         paths: vec![rel.clone()],
                         category: category_for_path(rel).into(),
-                        summary: format!("Added on disk: {rel}"),
+                        summary,
                         snapshot_id: None,
                         tags: vec!["external".into()],
-                        meta: None,
+                        meta,
                     };
                     let _ = append_pack_event(project_dir, ev.clone());
                     new_events.push(ev);
                 }
                 Some(prev) if prev.mtime != cur.mtime || prev.size != cur.size => {
                     modified += 1;
+                    let (summary, meta) =
+                        enrich_external_file_event(project_dir, rel, "external_edit");
                     let ev = PackEvent {
                         id: format!("evt-edit-{}", now_id_suffix()),
                         ts: now_rfc3339(),
@@ -468,10 +984,10 @@ pub fn scan_project_changes(
                         op: "external_edit".into(),
                         paths: vec![rel.clone()],
                         category: category_for_path(rel).into(),
-                        summary: format!("Changed on disk: {rel}"),
+                        summary,
                         snapshot_id: None,
                         tags: vec!["external".into()],
-                        meta: None,
+                        meta,
                     };
                     let _ = append_pack_event(project_dir, ev.clone());
                     new_events.push(ev);
@@ -482,6 +998,8 @@ pub fn scan_project_changes(
         for rel in baseline.files.keys() {
             if !current.contains_key(rel) {
                 removed += 1;
+                let (summary, meta) =
+                    enrich_external_file_event(project_dir, rel, "external_remove");
                 let ev = PackEvent {
                     id: format!("evt-rm-{}", now_id_suffix()),
                     ts: now_rfc3339(),
@@ -489,51 +1007,71 @@ pub fn scan_project_changes(
                     op: "external_remove".into(),
                     paths: vec![rel.clone()],
                     category: category_for_path(rel).into(),
-                    summary: format!("Removed from disk: {rel}"),
+                    summary,
                     snapshot_id: None,
                     tags: vec!["external".into()],
-                    meta: None,
+                    meta,
                 };
                 let _ = append_pack_event(project_dir, ev.clone());
                 new_events.push(ev);
             }
         }
+    } else {
+        // Seed content cache for editable configs so the next edit yields a real diff.
+        for rel in current.keys() {
+            cache_config_content(project_dir, rel);
+        }
     }
 
-    // jar_drift: mods/*.jar not listed in manifest
+    // jar_drift: mods/*.jar not listed in manifest (only after baseline exists —
+    // never spam every orphan jar on first seed scan).
     let manifest_jars = manifest_mod_file_names(project_dir);
-    for rel in current.keys() {
-        if !rel.starts_with("mods/") {
-            continue;
+    if had_baseline {
+        for rel in current.keys() {
+            if !rel.starts_with("mods/") {
+                continue;
+            }
+            let name = rel.rsplit('/').next().unwrap_or(rel);
+            if !name.to_lowercase().ends_with(".jar") {
+                continue;
+            }
+            if name.to_lowercase().ends_with(".disabled") {
+                continue;
+            }
+            if !manifest_jars.contains(name) {
+                jar_drift += 1;
+                let is_new = new_events.iter().any(|e| e.paths.iter().any(|p| p == rel));
+                if is_new {
+                    let ev = PackEvent {
+                        id: format!("evt-drift-{}", now_id_suffix()),
+                        ts: now_rfc3339(),
+                        actor: "scan".into(),
+                        op: "jar_drift".into(),
+                        paths: vec![rel.clone()],
+                        category: "Mods".into(),
+                        summary: format!("Jar on disk not in manifest: {name}"),
+                        snapshot_id: None,
+                        tags: vec!["jar_drift".into(), "external".into()],
+                        meta: Some(
+                            serde_json::json!({ "hint": "Import to manifest or remove orphan jar" }),
+                        ),
+                    };
+                    let _ = append_pack_event(project_dir, ev.clone());
+                    new_events.push(ev);
+                }
+            }
         }
-        let name = rel.rsplit('/').next().unwrap_or(rel);
-        if !name.to_lowercase().ends_with(".jar") {
-            continue;
-        }
-        if name.to_lowercase().ends_with(".disabled") {
-            continue;
-        }
-        if !manifest_jars.contains(name) {
-            jar_drift += 1;
-            // Only emit if newly detected vs previous baseline absence of jar_drift tag noise:
-            // emit when file was added/modified this scan OR first baseline.
-            let is_new = !had_baseline
-                || new_events.iter().any(|e| e.paths.iter().any(|p| p == rel));
-            if is_new || !had_baseline {
-                let ev = PackEvent {
-                    id: format!("evt-drift-{}", now_id_suffix()),
-                    ts: now_rfc3339(),
-                    actor: "scan".into(),
-                    op: "jar_drift".into(),
-                    paths: vec![rel.clone()],
-                    category: "Mods".into(),
-                    summary: format!("Jar on disk not in manifest: {name}"),
-                    snapshot_id: None,
-                    tags: vec!["jar_drift".into(), "external".into()],
-                    meta: Some(serde_json::json!({ "hint": "Import to manifest or remove orphan jar" })),
-                };
-                let _ = append_pack_event(project_dir, ev.clone());
-                new_events.push(ev);
+    } else {
+        for rel in current.keys() {
+            if !rel.starts_with("mods/") {
+                continue;
+            }
+            let name = rel.rsplit('/').next().unwrap_or(rel);
+            if name.to_lowercase().ends_with(".jar")
+                && !name.to_lowercase().ends_with(".disabled")
+                && !manifest_jars.contains(name)
+            {
+                jar_drift += 1;
             }
         }
     }
@@ -550,4 +1088,138 @@ pub fn scan_project_changes(
         removed,
         jar_drift,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_project() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("tuffbox-hist-{nanos}"));
+        fs::create_dir_all(dir.join("config")).unwrap();
+        fs::create_dir_all(dir.join("mods")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn snapshot_summary_prefers_actions_over_auto_reason() {
+        let dir = temp_project();
+        append_from_snapshot_with_summary(
+            &dir,
+            "add-mod-with-dependencies",
+            "snap-1",
+            &[],
+            "Auto snapshot before add-mod-with-dependencies",
+            &[
+                "Install Cloth Config API 15.0.140".into(),
+                "Install Mod Menu 11.0.3".into(),
+            ],
+        )
+        .unwrap();
+        let events = list_pack_events(&dir, Some(10));
+        assert_eq!(events.len(), 1);
+        assert!(events[0].summary.contains("Cloth Config"));
+        assert!(!events[0].summary.contains("Auto snapshot"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn external_config_edit_includes_diff_and_keys() {
+        let dir = temp_project();
+        let rel = "config/demo.toml";
+        fs::write(dir.join(rel), "enabled = false\nmax = 1\n").unwrap();
+        cache_config_content(&dir, rel);
+
+        fs::write(dir.join(rel), "enabled = true\nmax = 1\n").unwrap();
+        let (summary, meta) = enrich_external_file_event(&dir, rel, "external_edit");
+        assert!(summary.contains("enabled"), "{summary}");
+        let meta = meta.expect("meta");
+        let diff = meta.get("diff").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(diff.contains("- enabled = false") || diff.contains("- enabled = false\n"));
+        assert!(diff.contains("+ enabled = true") || diff.contains("+ enabled = true\n"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_baseline_avoids_false_external_add() {
+        let dir = temp_project();
+        let mut tracked = HashMap::new();
+        tracked.insert("Mods".into(), true);
+        tracked.insert("Configs".into(), true);
+
+        // Seed baseline empty → first scan should not emit adds.
+        let seed = scan_project_changes(&dir, &tracked).unwrap();
+        assert_eq!(seed.added, 0);
+        assert!(seed.events.is_empty());
+
+        let jar_rel = "mods/cloth-config.jar".to_string();
+        fs::write(dir.join(&jar_rel), b"fake-jar").unwrap();
+        // Launcher syncs baseline after install.
+        sync_baseline_paths(&dir, &[jar_rel.clone()]).unwrap();
+
+        let after = scan_project_changes(&dir, &tracked).unwrap();
+        assert_eq!(after.added, 0, "launcher jar must not appear as external_add");
+        assert!(
+            after
+                .events
+                .iter()
+                .all(|e| e.op != "external_add" || !e.paths.contains(&jar_rel))
+        );
+
+        // Truly external add still detected.
+        let orphan = "mods/orphan.jar".to_string();
+        fs::write(dir.join(&orphan), b"orphan").unwrap();
+        let external = scan_project_changes(&dir, &tracked).unwrap();
+        assert_eq!(external.added, 1);
+        assert!(external.events.iter().any(|e| e.op == "external_add"));
+
+        // External remove.
+        fs::remove_file(dir.join(&orphan)).unwrap();
+        let removed = scan_project_changes(&dir, &tracked).unwrap();
+        assert_eq!(removed.removed, 1);
+        assert!(removed.events.iter().any(|e| e.op == "external_remove"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_preview_extracts_assignment_keys() {
+        let preview = config_change_preview(
+            "  keep = 1\n- enabled = false\n+ enabled = true\n- [section]\n+ [section]\n",
+        );
+        assert!(preview.contains("enabled"), "{preview}");
+    }
+
+    #[test]
+    fn normalize_fix_method_mapping() {
+        assert_eq!(normalize_fix_method(Some("ai_action_plan")), "ai");
+        assert_eq!(normalize_fix_method(Some("heuristic")), "heuristic");
+        assert_eq!(normalize_fix_method(Some("kb_only")), "kb");
+        assert_eq!(normalize_fix_method(Some("swarm")), "swarm");
+        assert_eq!(normalize_fix_method(Some("manual")), "manual");
+        assert_eq!(normalize_fix_method(None), "unknown");
+        assert_eq!(actor_for_plan_source(Some("heuristic")), "launcher");
+        assert_eq!(actor_for_plan_source(Some("ai")), "ai");
+        assert_eq!(actor_for_plan_source(Some("manual")), "user");
+    }
+
+    #[test]
+    fn crash_detected_writes_episode_meta() {
+        let dir = temp_project();
+        let ep = append_crash_detected(&dir, "fp-test-key", Some(1), Some("logs/latest.log"), "boom")
+            .unwrap();
+        assert!(ep.starts_with("ep-"));
+        let events = list_pack_events(&dir, Some(10));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].op, "crash_detected");
+        assert_eq!(meta_str(&events[0].meta, "fingerprintKey").as_deref(), Some("fp-test-key"));
+        assert_eq!(meta_str(&events[0].meta, "episodeId").as_deref(), Some(ep.as_str()));
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

@@ -19,7 +19,7 @@
     LogIn,
     LogOut,
     UserPlus,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import { toasts } from "../lib/toast";
   import {
@@ -30,6 +30,7 @@
     supabase,
   } from "../lib/supabaseAuth";
   import EmptyState from "./EmptyState.svelte";
+  import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
 
   type StatusFilter = "all" | "open" | "saved";
 
@@ -61,6 +62,9 @@
     failCount: number;
     createdAt?: string | null;
     updatedAt?: string | null;
+    signerPublicKey?: string | null;
+    authorTotalKudos?: number | null;
+    authorRac?: number | null;
   };
 
   type VoteResponse = {
@@ -71,30 +75,44 @@
     rejectCount?: number;
     successCount?: number;
     failCount?: number;
+    kudos?: {
+      ok?: boolean;
+      awarded?: boolean;
+      amount?: number;
+      totalKudos?: number;
+      rac?: number;
+    } | null;
   };
 
-  let swarmEnabled = false;
-  let loading = false;
-  let votingHash: string | null = null;
-  let proposingHash: string | null = null;
-  let error = "";
-  let capsules: CommunityCapsule[] = [];
-  let statusFilter: StatusFilter = "all";
-  let expandedId: string | null = null;
+  type KudosBalance = {
+    beneficiaryKey?: string;
+    totalKudos?: number;
+    rac?: number;
+  };
 
-  let authUser: User | null = null;
-  let accessToken = "";
-  let authMode: "signin" | "signup" = "signin";
-  let authEmail = "";
-  let authPassword = "";
-  let authBusy = false;
-  let authError = "";
-  let authNote = "";
+  let swarmEnabled = $state(false);
+  let loading = $state(false);
+  let votingHash = $state<string | null>(null);
+  let proposingHash = $state<string | null>(null);
+  let error = $state("");
+  let capsules = $state<CommunityCapsule[]>([]);
+  let statusFilter = $state<StatusFilter>("all");
+  let expandedId = $state<string | null>(null);
+  let kudosBalance = $state<KudosBalance | null>(null);
+
+  let authUser = $state<User | null>(null);
+  let accessToken = $state("");
+  let authMode = $state<"signin" | "signup">("signin");
+  let authEmail = $state("");
+  let authPassword = $state("");
+  let authBusy = $state(false);
+  let authError = $state("");
+  let authNote = $state("");
 
   let unsubAuth: (() => void) | null = null;
 
-  $: expanded = capsules.find((c) => c.id === expandedId || c.contentHash === expandedId) ?? null;
-  $: canVote = swarmEnabled && !!accessToken && !!authUser;
+  const expanded = $derived(capsules.find((c) => c.id === expandedId || c.contentHash === expandedId) ?? null);
+  const canVote = $derived(swarmEnabled && !!accessToken && !!authUser);
 
   onMount(() => {
     void init();
@@ -112,7 +130,22 @@
   async function init() {
     await loadSwarm();
     await loadAuth();
-    if (swarmEnabled) await refresh();
+    if (swarmEnabled) {
+      await refresh();
+      await loadKudos();
+    }
+  }
+
+  async function loadKudos() {
+    if (!swarmEnabled) {
+      kudosBalance = null;
+      return;
+    }
+    try {
+      kudosBalance = await invoke<KudosBalance>("get_local_kudos_balance");
+    } catch {
+      kudosBalance = null;
+    }
   }
 
   async function loadAuth() {
@@ -150,6 +183,7 @@
       ) {
         expandedId = null;
       }
+      await loadKudos();
     } catch (e) {
       error = String(e);
       capsules = [];
@@ -274,7 +308,24 @@
       });
       const patched = patchFromVote(c.contentHash, res);
       if (!patched) await refresh();
-      toasts.success(voteKind === "confirm" ? "Voted Keep" : "Voted Discard");
+      if (voteKind === "confirm" && res.kudos?.awarded) {
+        toasts.success(
+          `Voted Keep — author +${res.kudos.amount ?? 10} Kudos (RAC ${Number(res.kudos.rac ?? 0).toFixed(1)})`,
+        );
+        void loadKudos();
+        // Refresh author totals on the voted card without a full list round-trip.
+        capsules = capsules.map((cap) =>
+          cap.contentHash === c.contentHash
+            ? {
+                ...cap,
+                authorTotalKudos: Number(res.kudos?.totalKudos ?? cap.authorTotalKudos ?? 0),
+                authorRac: Number(res.kudos?.rac ?? cap.authorRac ?? 0),
+              }
+            : cap,
+        );
+      } else {
+        toasts.success(voteKind === "confirm" ? "Voted Keep" : "Voted Discard");
+      }
     } catch (e) {
       error = String(e);
       toasts.error(String(e));
@@ -316,19 +367,18 @@
 </script>
 
 <div class="crash-votes fade-slide-in">
-  <header class="page-head">
-    <div class="title-block">
-      <div class="title-row">
-        <Vote size={22} />
-        <h1>Crash Votes</h1>
-      </div>
-      <p class="subtitle">
-        Community crash fix capsules — vote Keep/Discard; an admin promotes open → saved / rejected.
-      </p>
-      <p class="privacy">
-        <Shield size={13} />
-        Raw crash logs are not shared. Signatures and fix plans only. Voting requires a TuffSwarm account.
-      </p>
+  <header class="page-head slim">
+    <div class="title-row">
+      <Vote size={20} />
+      <h1>Crash Votes</h1>
+      <button
+        type="button"
+        class="privacy-tip"
+        title="Raw crash logs are not shared — only signatures and fix plans. Voting requires a TuffSwarm account."
+        aria-label="Privacy: signatures and fix plans only, not raw logs"
+      >
+        <Shield size={15} />
+      </button>
     </div>
 
     <div class="toolbar">
@@ -337,7 +387,7 @@
         <button
           class="chip"
           class:active={statusFilter === "all"}
-          on:click={() => setFilter("all")}
+          onclick={() => setFilter("all")}
           disabled={!swarmEnabled || loading}
         >
           All
@@ -345,7 +395,7 @@
         <button
           class="chip"
           class:active={statusFilter === "open"}
-          on:click={() => setFilter("open")}
+          onclick={() => setFilter("open")}
           disabled={!swarmEnabled || loading}
         >
           Open
@@ -353,7 +403,7 @@
         <button
           class="chip"
           class:active={statusFilter === "saved"}
-          on:click={() => setFilter("saved")}
+          onclick={() => setFilter("saved")}
           disabled={!swarmEnabled || loading}
         >
           Saved
@@ -362,7 +412,7 @@
       <button
         class="ghost refresh-btn"
         disabled={!swarmEnabled || loading}
-        on:click={() => refresh()}
+        onclick={() => refresh()}
         title="Refresh capsules"
       >
         <span class:spin={loading} style="display:inline-flex">
@@ -373,28 +423,28 @@
     </div>
   </header>
 
+  {#if swarmEnabled && kudosBalance}
+    <KudosBalanceStrip
+      title="Your author Kudos"
+      total={Number(kudosBalance.totalKudos ?? 0)}
+      rac={Number(kudosBalance.rac ?? 0)}
+      hint="Manual Keep awards author Kudos · Soft-verify playtime also votes Keep when signed in"
+    />
+  {/if}
+
   {#if swarmEnabled}
-    <section class="auth-panel tb-card" aria-label="Account">
+    <section class="auth-panel compact tb-card" aria-label="Account">
       {#if authUser}
-        <div class="auth-signed">
-          <div>
-            <strong>Signed in</strong>
-            <p class="auth-email">{authUser.email}</p>
-          </div>
-          <button class="secondary" disabled={authBusy} on:click={() => handleSignOut()}>
-            <LogOut size={14} /> Sign out
-          </button>
-        </div>
+        <span class="auth-email-inline">{authUser.email}</span>
+        <button class="secondary mini" disabled={authBusy} onclick={() => handleSignOut()}>
+          <LogOut size={13} /> Sign out
+        </button>
       {:else}
-        <div class="auth-head">
-          <strong>Sign in to vote</strong>
-          <p>Registration is required. Anonymous votes are blocked.</p>
-        </div>
         <div class="auth-tabs" role="tablist">
           <button
             class="chip"
             class:active={authMode === "signin"}
-            on:click={() => (authMode = "signin")}
+            onclick={() => (authMode = "signin")}
             disabled={authBusy}
           >
             <LogIn size={13} /> Sign in
@@ -402,29 +452,24 @@
           <button
             class="chip"
             class:active={authMode === "signup"}
-            on:click={() => (authMode = "signup")}
+            onclick={() => (authMode = "signup")}
             disabled={authBusy}
           >
             <UserPlus size={13} /> Register
           </button>
         </div>
-        <form class="auth-form" on:submit|preventDefault={submitAuth}>
-          <label>
-            Email
-            <input type="email" bind:value={authEmail} autocomplete="username" required disabled={authBusy} />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              bind:value={authPassword}
-              autocomplete={authMode === "signup" ? "new-password" : "current-password"}
-              minlength="6"
-              required
-              disabled={authBusy}
-            />
-          </label>
-          <button type="submit" disabled={authBusy || !authEmail.trim() || authPassword.length < 6}>
+        <form class="auth-form compact" onsubmit={(e) => { e.preventDefault(); void submitAuth(); }}>
+          <input type="email" bind:value={authEmail} placeholder="Email" autocomplete="username" required disabled={authBusy} />
+          <input
+            type="password"
+            bind:value={authPassword}
+            placeholder="Password"
+            autocomplete={authMode === "signup" ? "new-password" : "current-password"}
+            minlength="6"
+            required
+            disabled={authBusy}
+          />
+          <button type="submit" class="mini" disabled={authBusy || !authEmail.trim() || authPassword.length < 6}>
             {#if authBusy}
               <Loader2 size={14} class="spin" />
             {:else if authMode === "signup"}
@@ -432,7 +477,7 @@
             {:else}
               <LogIn size={14} />
             {/if}
-            {authMode === "signup" ? "Create account" : "Sign in"}
+            {authMode === "signup" ? "Register" : "Sign in"}
           </button>
         </form>
         {#if authError}
@@ -465,7 +510,7 @@
     <div class="state error-state tb-card">
       <AlertTriangle size={20} />
       <p>{error}</p>
-      <button class="secondary" on:click={() => refresh()}>Retry</button>
+      <button class="secondary" onclick={() => refresh()}>Retry</button>
     </div>
   {:else if capsules.length === 0}
     <EmptyState
@@ -473,7 +518,7 @@
       title="No capsules yet"
       description="When the community shares crash fix plans, they appear here for voting."
       actionLabel="Refresh"
-      on:action={() => refresh()}
+      onaction={() => refresh()}
     />
   {:else}
     {#if error}
@@ -487,7 +532,7 @@
           <button
             type="button"
             class="tile-hit"
-            on:click={() => toggleExpand(c)}
+            onclick={() => toggleExpand(c)}
             aria-expanded={isOpen}
           >
             <div class="tile-top">
@@ -513,6 +558,13 @@
             </div>
 
             <span class="solution-preview">{truncate(c.solution, 140)}</span>
+
+            {#if c.signerPublicKey}
+              <div class="author-kudos" title="Author Kudos / RAC (soft-verify Keep)">
+                Author Kudos <strong>{Number(c.authorTotalKudos ?? 0).toFixed(0)}</strong>
+                · RAC <strong>{Number(c.authorRac ?? 0).toFixed(1)}</strong>
+              </div>
+            {/if}
 
             <div class="trust-block">
               <div class="trust-head">
@@ -542,7 +594,7 @@
             <button
               class="vote keep"
               disabled={!!votingHash || !canVote}
-              on:click={() => vote(c, "confirm")}
+              onclick={() => vote(c, "confirm")}
               title={canVote ? "Keep — this fix helped" : "Sign in to vote"}
             >
               <ThumbsUp size={14} />
@@ -551,7 +603,7 @@
             <button
               class="vote discard secondary"
               disabled={!!votingHash || !canVote}
-              on:click={() => vote(c, "reject")}
+              onclick={() => vote(c, "reject")}
               title={canVote ? "Discard — this fix is wrong or harmful" : "Sign in to vote"}
             >
               <ThumbsDown size={14} />
@@ -572,7 +624,7 @@
             <h2>{expanded.exception || "Crash signature"}</h2>
             <p class="fp-key" title={expanded.fingerprintKey}>{expanded.fingerprintKey}</p>
           </div>
-          <button class="ghost" on:click={() => (expandedId = null)}>Close</button>
+          <button class="ghost" onclick={() => (expandedId = null)}>Close</button>
         </div>
 
         <div class="drawer-grid">
@@ -670,14 +722,14 @@
             <button
               class="vote keep"
               disabled={!!votingHash || !canVote}
-              on:click={() => expanded && vote(expanded, "confirm")}
+              onclick={() => expanded && vote(expanded, "confirm")}
             >
               <ThumbsUp size={14} /> Keep
             </button>
             <button
               class="vote discard secondary"
               disabled={!!votingHash || !canVote}
-              on:click={() => expanded && vote(expanded, "reject")}
+              onclick={() => expanded && vote(expanded, "reject")}
             >
               <ThumbsDown size={14} /> Discard
             </button>
@@ -688,7 +740,7 @@
                 : !swarmEnabled
                   ? "Enable TuffSwarm in Settings"
                   : "Write pending plan for Diagnostics"}
-              on:click={() => expanded && tryFix(expanded)}
+              onclick={() => expanded && tryFix(expanded)}
             >
               <Wrench size={14} />
               {proposingHash === expanded.contentHash ? "Proposing…" : "Try fix on this project"}
@@ -704,47 +756,62 @@
   .crash-votes {
     display: flex;
     flex-direction: column;
-    gap: 18px;
-    padding: 4px 2px 32px;
+    gap: 10px;
+    padding: 0 2px 32px;
     max-width: 1400px;
   }
 
   .page-head {
     display: flex;
     flex-wrap: wrap;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
-    gap: 16px;
+    gap: 12px;
+  }
+
+  .page-head.slim {
+    padding-bottom: 4px;
+  }
+
+  .author-kudos {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .author-kudos strong {
+    color: var(--text-secondary);
   }
 
   .title-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     color: var(--accent-primary);
   }
 
   .title-row h1 {
     margin: 0;
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 800;
     color: var(--text-primary);
     letter-spacing: -0.02em;
   }
 
-  .subtitle {
-    margin: 6px 0 0;
-    color: var(--text-secondary);
-    font-size: 13px;
-  }
-
-  .privacy {
-    margin: 8px 0 0;
+  .privacy-tip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    font-size: 12px;
+    justify-content: center;
+    padding: 4px;
+    border: none;
+    background: transparent;
     color: var(--text-muted);
+    border-radius: 6px;
+    cursor: help;
+  }
+
+  .privacy-tip:hover {
+    color: var(--accent-primary);
+    background: var(--bg-hover);
   }
 
   .toolbar {
@@ -910,7 +977,7 @@
   }
 
   .status-chip.saved {
-    background: rgba(27, 217, 106, 0.14);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--accent-primary);
   }
 
@@ -931,28 +998,27 @@
     padding: 14px 16px;
   }
 
-  .auth-signed {
-    display: flex;
+  .auth-panel.compact {
+    flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    gap: 8px;
+    padding: 8px 12px;
   }
 
-  .auth-email {
-    margin: 2px 0 0;
-    color: var(--text-muted);
+  .auth-email-inline {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 13px;
-  }
-
-  .auth-head p {
-    margin: 4px 0 0;
-    color: var(--text-muted);
-    font-size: 13px;
+    color: var(--text-secondary);
   }
 
   .auth-tabs {
     display: flex;
-    gap: 8px;
+    gap: 6px;
   }
 
   .auth-form {
@@ -962,16 +1028,18 @@
     align-items: end;
   }
 
-  .auth-form label {
+  .auth-form.compact {
+    flex: 1;
+    min-width: min(100%, 420px);
     display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-    color: var(--text-muted);
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
   }
 
-  .auth-form input {
-    min-width: 0;
+  .auth-form.compact input {
+    flex: 1;
+    min-width: 120px;
   }
 
   .auth-msg {
@@ -985,8 +1053,12 @@
   }
 
   @media (max-width: 820px) {
-    .auth-form {
+    .auth-form,
+    .auth-form.compact {
       grid-template-columns: 1fr;
+      flex-direction: column;
+      align-items: stretch;
+      width: 100%;
     }
   }
 
@@ -1111,9 +1183,9 @@
   }
 
   .vote.keep {
-    background: rgba(27, 217, 106, 0.16);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
     color: var(--accent-primary);
-    border: 1px solid rgba(27, 217, 106, 0.35);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
 
   .vote.keep:hover:not(:disabled) {

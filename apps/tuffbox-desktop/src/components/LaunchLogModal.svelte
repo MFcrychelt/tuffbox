@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { X, Loader2, RotateCcw, FileText, Folder, Radio, Share2 } from "lucide-svelte";
-  import { createEventDispatcher, onMount, onDestroy, tick } from "svelte";
+  import { X, Loader2, RotateCcw, FileText, Folder, Radio, Share2 } from "@lucide/svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { fade, fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
   import { invoke } from "@tauri-apps/api/core";
@@ -8,29 +8,34 @@
   import CopyButton from "./CopyButton.svelte";
   import { shareCrashLogWithFeedback } from "../lib/mclogs";
 
-  const dispatch = createEventDispatcher<{ close: void }>();
+  let {
+    projectPath,
+    title = null,
+    onclose,
+  }: {
+    projectPath: string;
+    title?: string | null;
+    onclose?: () => void;
+  } = $props();
 
-  export let projectPath: string;
-  export let title: string | null = null;
-
-  let log = "";
-  let loading = true;
+  let log = $state("");
+  let loading = $state(true);
   let interval: ReturnType<typeof setInterval> | null = null;
-  let logFiles: { name: string; size: number; modified?: number | null }[] = [];
+  let logFiles = $state<{ name: string; size: number; modified?: number | null }[]>([]);
   /** `__live__` = auto-pick console/latest for the running session */
-  let selectedLog = "__live__";
-  let logListOpen = false;
-  let followTail = true;
-  let logPreEl: HTMLPreElement | null = null;
-  let userScrolledUp = false;
-  let lastFetchedLen = -1;
+  let selectedLog = $state("__live__");
+  let logListOpen = $state(false);
+  let followTail = $state(true);
+  let logPreEl = $state<HTMLPreElement | null>(null);
+  let userScrolledUp = $state(false);
+  let lastFetchedLen = $state(-1);
   let loadGen = 0;
   let analyzeTimer: ReturnType<typeof setTimeout> | null = null;
-  let sharing = false;
+  let sharing = $state(false);
 
   type SuspectSummary = { id: string; name: string; confidence: number };
-  let suspects: SuspectSummary[] = [];
-  let suspectCount = 0;
+  let suspects = $state<SuspectSummary[]>([]);
+  let suspectCount = $state(0);
 
   function isLiveTab() {
     return selectedLog === "__live__";
@@ -179,17 +184,17 @@
 
 <div
   class="modal-backdrop"
-  on:click={(e) => e.target === e.currentTarget && dispatch("close")}
+  onclick={(e) => e.target === e.currentTarget && onclose?.()}
   role="button"
   tabindex="-1"
   aria-label="Close"
-  on:keydown={() => {}}
+  onkeydown={() => {}}
 >
   <div
     class="modal"
     role="dialog"
     aria-modal="true"
-    use:trapFocus={{ onEscape: () => dispatch("close") }}
+    use:trapFocus={{ onEscape: () => onclose?.() }}
   >
     <div class="modal-header">
       <div class="modal-header-left">
@@ -201,7 +206,7 @@
           <button
             class="log-select-btn"
             class:active={selectedLog === "__live__"}
-            on:click={() => switchLog("__live__")}
+            onclick={() => switchLog("__live__")}
             title="Auto: latest.log when ready, else console"
           >
             <Radio size={13} /> Live
@@ -209,21 +214,21 @@
           <button
             class="log-select-btn"
             class:active={selectedLog === "latest.log"}
-            on:click={() => switchLog("latest.log")}
+            onclick={() => switchLog("latest.log")}
           >
             <FileText size={13} /> latest.log
           </button>
           <button
             class="log-select-btn"
             class:active={selectedLog === "tuffbox-console.log"}
-            on:click={() => switchLog("tuffbox-console.log")}
+            onclick={() => switchLog("tuffbox-console.log")}
           >
             <FileText size={13} /> console
           </button>
           {#if logFiles.length > 0}
             <button
               class="log-select-btn toggle"
-              on:click={() => {
+              onclick={() => {
                 logListOpen = !logListOpen;
                 if (logListOpen) loadLogList();
               }}
@@ -238,7 +243,7 @@
               <button
                 class="log-file-row"
                 class:selected={selectedLog === f.name}
-                on:click={() => {
+                onclick={() => {
                   switchLog(f.name);
                   logListOpen = false;
                 }}
@@ -261,7 +266,7 @@
           <input
             type="checkbox"
             bind:checked={followTail}
-            on:change={() => {
+            onchange={() => {
               if (followTail) {
                 userScrolledUp = false;
                 void scrollToBottomIfFollowing();
@@ -273,7 +278,7 @@
         {#if log}
           <CopyButton text={log} label="Copy log" />
         {/if}
-        <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close">
+        <button class="icon-btn" onclick={() => onclose?.()} aria-label="Close">
           <X size={18} />
         </button>
       </div>
@@ -298,7 +303,7 @@
         <div class="log-pane" in:fly={{ x: 16, duration: 280, opacity: 0, easing: quintOut }}>
           {#if log}
             <!-- Single text node: per-line Svelte each-blocks made latest.log lag hard. -->
-            <pre class="log" bind:this={logPreEl} on:scroll={onLogScroll}>{log}</pre>
+            <pre class="log" bind:this={logPreEl} onscroll={onLogScroll}>{log}</pre>
           {:else}
             <pre class="log">Waiting for process output…</pre>
           {/if}
@@ -312,15 +317,15 @@
           ? "Live tail · refreshes ~1s · XML console auto-formatted"
           : `Showing ${selectedLog} (loaded once)`}</span
       >
-      <button class="ghost" on:click={shareCurrent} disabled={!log || sharing} title={selectedLog === "__live__" ? "Upload the Live log (latest.log when available)" : `Upload ${selectedLog} to mclo.gs`}>
+      <button class="ghost" onclick={shareCurrent} disabled={!log || sharing} title={selectedLog === "__live__" ? "Upload the Live log (latest.log when available)" : `Upload ${selectedLog} to mclo.gs`}>
         <Share2 size={16} />
         {sharing ? "Sharing…" : "Share"}
       </button>
-      <button class="ghost" on:click={() => loadLog({ forceAnalyze: true })}>
+      <button class="ghost" onclick={() => loadLog({ forceAnalyze: true })}>
         <RotateCcw size={16} />
         Refresh
       </button>
-      <button class="ghost" on:click={() => dispatch("close")}>Close</button>
+      <button class="ghost" onclick={() => onclose?.()}>Close</button>
     </div>
   </div>
 </div>
@@ -373,7 +378,7 @@
   }
 
   :global(.live-icon) {
-    color: #1bd96a;
+    color: var(--accent-primary);
   }
 
   .modal-header-right {
@@ -483,8 +488,8 @@
   }
 
   .log-select-btn.active {
-    background: rgba(27, 217, 106, 0.12);
-    border-color: rgba(27, 217, 106, 0.35);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: #fff;
     transform: scale(1.03);
   }

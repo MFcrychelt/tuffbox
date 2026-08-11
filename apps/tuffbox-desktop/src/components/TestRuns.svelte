@@ -6,7 +6,7 @@
     PlayCircle, RefreshCw, Terminal, TimerReset, XCircle,
     Shield, Server, Square, Cpu, HardDrive, Activity, Stethoscope, Zap,
     Camera, FolderOpen,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { onDestroy, onMount, tick } from "svelte";
   import { ideStageRequest, openLaunchLog, projectPath, projectInfo } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
@@ -69,83 +69,83 @@
   const DEFAULT_TIMEOUT_S = 180;
   const LOG_TAIL_LINES = 500;
 
-  let documentVisible = true;
+  let documentVisible = $state(true);
 
   let profiles: Profile[] = [];
   let selectedProfile = "client";
   let log = "";
-  let running = false;
-  let watching = false;
-  let loading = false;
+  let running = $state(false);
+  let watching = $state(false);
+  let loading = $state(false);
   let error: string | null = null;
   let message: string | null = null;
   let startedAt: number | null = null;
   let lastLoadedPath: string | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
-  let now = Date.now();
+  let now = $state(Date.now())
   let validationReport: any = null;
-  let validationLoading = false;
+  let validationLoading = $state(false);
   let validationError: string | null = null;
-  let autoScroll = true;
+  let autoScroll = $state(true);
   let logEl: HTMLPreElement | null = null;
-  let live: LiveDebugStats | null = null;
-  let killing = false;
+  let live = $state<LiveDebugStats | null>(null);
+  let killing = $state(false);
   let launchStats: any = null;
-  let forceRun = false;
-  let autoSnapshot = false;
+  let forceRun = $state(false);
+  let autoSnapshot = $state(false);
   let levelSeed = "";
-  let onlineModeOff = true;
-  let timeoutSeconds = DEFAULT_TIMEOUT_S;
-  let livePhase: LivePhase = "idle";
+  let onlineModeOff = $state(true);
+  let timeoutSeconds = $state(DEFAULT_TIMEOUT_S);
+  let livePhase = $state<LivePhase>("idle");
   let verdictReason: string | null = null;
   let startupSeconds: number | null = null;
   let activeRunId: string | null = null;
-  let finalizeInFlight = false;
-  let sawProcess = false;
+  let finalizeInFlight = $state(false);
+  let sawProcess = $state(false);
   let historyFilter: "all" | "pass" | "fail" | "crashed" = "all";
   let worlds: { name: string }[] = [];
   let quickPlayWorld = "";
-  let matrixDetailsOpen = false;
+  let matrixDetailsOpen = $state(false);
   let matrixIds: Record<string, boolean> = {};
-  let matrixRunning = false;
-  let matrixStopOnFail = true;
+  let matrixRunning = $state(false);
+  let matrixStopOnFail = $state(true);
   let matrixSummary: MatrixRow[] = [];
-  let matrixAbort = false;
+  let matrixAbort = $state(false);
   let serverDir = "";
   let activeLogRoot: string | null = null;
 
   let runs: TestRunRecord[] = [];
   let capturedRunIds: Record<string, boolean> = {};
 
-  $: selected = profiles.find((p) => p.id === selectedProfile);
-  $: elapsed = startedAt ? Math.floor((now - startedAt) / 1000) : 0;
-  $: hostRamPct = live && live.hostMemoryTotalMb > 0
+  const selected = $derived(profiles.find((p) => p.id === selectedProfile));
+  const elapsed = $derived(startedAt ? Math.floor((now - startedAt) / 1000) : 0);
+  const hostRamPct = $derived(live && live.hostMemoryTotalMb > 0
     ? pct(live.hostMemoryUsedMb, live.hostMemoryTotalMb)
-    : 0;
-  $: procRamCap = selected?.memoryMb ?? 4096;
-  $: procRamPct = live?.instance ? pct(live.instance.memoryMb, procRamCap) : 0;
-  $: validationCritical = !!validationReport && (
+    : 0);
+  const procRamCap = $derived(selected?.memoryMb ?? 4096);
+  const procRamPct = $derived(live?.instance ? pct(live.instance.memoryMb, procRamCap) : 0);
+  const validationCritical = $derived(!!validationReport && (
     !validationReport.passed
     || (validationReport.graphErrors ?? 0) > 0
     || (validationReport.jsonErrors?.length ?? 0) > 0
-  );
-  $: validationBadge = !validationReport
+  ));
+  const validationBadge = $derived(!validationReport
     ? null
     : validationReport.passed
       ? { ok: true, label: "OK" }
       : {
           ok: false,
           label: `${(validationReport.graphErrors ?? 0) + (validationReport.jsonErrors?.length ?? 0)} errors`,
-        };
-  $: filteredRuns = runs.filter((r) => {
+        });
+  const filteredRuns = $derived(runs.filter((r) => {
     if (historyFilter === "all") return true;
     const s = normalizeStatus(r.status);
     if (historyFilter === "pass") return s === "pass" || s === "finished";
     if (historyFilter === "fail") return s === "fail" || s === "failed" || s === "timedOut";
     if (historyFilter === "crashed") return s === "crashed";
     return true;
-  });
-  $: statusLabel = (() => {
+  }));
+  const statusLabel = $derived((() => {
     switch (livePhase) {
       case "launching": return "Launching…";
       case "bootstrapping": return `Bootstrapping… ${elapsed}s`;
@@ -155,11 +155,13 @@
       case "crashed": return "Crashed";
       default: return live?.instance || running ? `${elapsed}s` : "idle";
     }
-  })();
-  $: if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
-  $: displayLog = tailLogLines(log, LOG_TAIL_LINES);
-  $: logLineCount = log ? log.split("\n").length : 0;
-  $: logTruncated = logLineCount > LOG_TAIL_LINES;
+  })());
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
+  });
+  const displayLog = $derived(tailLogLines(log, LOG_TAIL_LINES));
+  const logLineCount = $derived(log ? log.split("\n").length : 0);
+  const logTruncated = $derived(logLineCount > LOG_TAIL_LINES);
 
   function tailLogLines(text: string, maxLines: number): string {
     if (!text) return "";
@@ -833,14 +835,14 @@
   <div class="toolbar">
     <div class="title"><PlayCircle size={18} /> Test · launch lab</div>
     <div class="actions">
-      <button class="ghost" on:click={() => loadProfiles(true)} disabled={!$projectPath || loading}>
+      <button class="ghost" onclick={() => loadProfiles(true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
         Refresh
       </button>
-      <button class="secondary" on:click={refreshLog} disabled={!$projectPath}>
+      <button class="secondary" onclick={refreshLog} disabled={!$projectPath}>
         <Terminal size={16} /> Tail log
       </button>
-      <button class="secondary" on:click={runValidation} disabled={!$projectPath || validationLoading}>
+      <button class="secondary" onclick={runValidation} disabled={!$projectPath || validationLoading}>
         <Shield size={16} />
         {validationLoading ? "Checking…" : "Validate"}
       </button>
@@ -849,7 +851,7 @@
           {validationBadge.label}
         </span>
       {/if}
-      <button class="danger" on:click={killInstance} disabled={!$projectPath || !live?.instance || killing} title="Kill game/server process">
+      <button class="danger" onclick={killInstance} disabled={!$projectPath || !live?.instance || killing} title="Kill game/server process">
         <Square size={16} />
         {killing ? "Stopping…" : "Kill"}
       </button>
@@ -874,13 +876,13 @@
           </select>
         </label>
         <div class="launch-actions">
-          <button class="preset primary" on:click={smokeClient} disabled={running || matrixRunning || !selectedProfile}>
+          <button class="preset primary" onclick={smokeClient} disabled={running || matrixRunning || !selectedProfile}>
             <PlayCircle size={16} /> Smoke client
           </button>
-          <button class="preset" on:click={runServer} disabled={running || matrixRunning} title="Stage both+server mods into a folder and open Server console">
+          <button class="preset" onclick={runServer} disabled={running || matrixRunning} title="Stage both+server mods into a folder and open Server console">
             <Server size={16} /> Run server
           </button>
-          <button class="preset" on:click={runClient4Ram} disabled={running || matrixRunning} title={`Launch client with ${CLIENT_4G_MEMORY_MB} MB RAM`}>
+          <button class="preset" onclick={runClient4Ram} disabled={running || matrixRunning} title={`Launch client with ${CLIENT_4G_MEMORY_MB} MB RAM`}>
             <Zap size={16} /> Run client 4 RAM
           </button>
         </div>
@@ -898,7 +900,7 @@
           <div class="log-tools-right">
             {#if activeLogRoot && activeLogRoot !== $projectPath}
               <span class="log-trunc-hint">Server console</span>
-              <button class="ghost mini" on:click={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}>
+              <button class="ghost mini" onclick={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}>
                 <Terminal size={12} /> Open server console
               </button>
             {/if}
@@ -908,23 +910,23 @@
             {#if !documentVisible && watching}
               <span class="log-paused-hint">Poll paused (tab hidden)</span>
             {/if}
-            <button class="ghost mini" on:click={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
+            <button class="ghost mini" onclick={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
             {#if watching}
-              <button class="ghost mini" on:click={stopWatching}>Stop watching</button>
+              <button class="ghost mini" onclick={stopWatching}>Stop watching</button>
             {:else if running || live?.instance}
-              <button class="ghost mini" on:click={startPolling}>Watch log</button>
+              <button class="ghost mini" onclick={startPolling}>Watch log</button>
             {/if}
           </div>
         </div>
         <pre class="log" bind:this={logEl}>{displayLog || "latest.log will appear here after the first run."}</pre>
         {#if live?.instance}
-          <button class="secondary stop danger-outline" on:click={killInstance} disabled={killing}>
+          <button class="secondary stop danger-outline" onclick={killInstance} disabled={killing}>
             <Square size={16} /> {killing ? "Stopping…" : "Kill process"}
           </button>
         {/if}
       </div>
 
-      <details class="secondary-panel" on:toggle={onSecondaryToggle}>
+      <details class="secondary-panel" ontoggle={onSecondaryToggle}>
         <summary>Preflight &amp; options</summary>
         <div class="secondary-body">
           <div class="preflight">
@@ -961,7 +963,7 @@
                 {/if}
               </select>
             </label>
-            <button class="secondary" on:click={quickPlay} disabled={running || matrixRunning || !quickPlayWorld}>
+            <button class="secondary" onclick={quickPlay} disabled={running || matrixRunning || !quickPlayWorld}>
               Launch Quick Play
             </button>
           </div>
@@ -970,10 +972,10 @@
               Server folder
               <input type="text" placeholder="Where the server instance will be staged" bind:value={serverDir} />
             </label>
-            <button class="secondary" on:click={async () => { await ensureServerDir(); }} disabled={!$projectPath}>
+            <button class="secondary" onclick={async () => { await ensureServerDir(); }} disabled={!$projectPath}>
               <FolderOpen size={14} /> Browse…
             </button>
-            <button class="ghost" on:click={() => (serverDir = defaultServerDir())} disabled={!$projectPath}>
+            <button class="ghost" onclick={() => (serverDir = defaultServerDir())} disabled={!$projectPath}>
               Default
             </button>
           </div>
@@ -985,7 +987,7 @@
             <label class="chk">
               <input type="checkbox" bind:checked={onlineModeOff} /> online-mode=false
             </label>
-            <button class="ghost" on:click={async () => {
+            <button class="ghost" onclick={async () => {
               try {
                 const dir = serverDir.trim() || defaultServerDir();
                 await invoke("generate_server_properties", {
@@ -1015,13 +1017,13 @@
                   <strong>{validationReport.circularDeps?.length ?? 0}</strong><span>cycles</span>
                 </div>
               </div>
-              <button class="ghost" on:click={() => (validationReport = null)}>Hide</button>
+              <button class="ghost" onclick={() => (validationReport = null)}>Hide</button>
             </div>
           {/if}
         </div>
       </details>
 
-      <details class="secondary-panel" on:toggle={onSecondaryToggle}>
+      <details class="secondary-panel" ontoggle={onSecondaryToggle}>
         <summary>Live stats</summary>
         <div class="secondary-body">
           <div class="meters">
@@ -1048,22 +1050,22 @@
               <span>Virt {fmtMb(live.instance.virtualMemoryMb)}</span>
               <span>cap {fmtMb(procRamCap)}</span>
               {#if !watching}
-                <button class="ghost mini" on:click={startPolling}>Resume poll</button>
+                <button class="ghost mini" onclick={startPolling}>Resume poll</button>
               {/if}
             </div>
           {/if}
         </div>
       </details>
 
-      <details class="secondary-panel" bind:open={matrixDetailsOpen} on:toggle={onSecondaryToggle}>
+      <details class="secondary-panel" bind:open={matrixDetailsOpen} ontoggle={onSecondaryToggle}>
         <summary>Profile matrix</summary>
         <div class="secondary-body">
           <div class="matrix-panel">
             <div class="matrix-head">
               <label class="chk"><input type="checkbox" bind:checked={matrixStopOnFail} /> Stop on fail</label>
-              <button class="secondary" on:click={runMatrix} disabled={running || matrixRunning}>Run matrix</button>
+              <button class="secondary" onclick={runMatrix} disabled={running || matrixRunning}>Run matrix</button>
               {#if matrixRunning}
-                <button class="danger" on:click={stopMatrix}>Stop queue</button>
+                <button class="danger" onclick={stopMatrix}>Stop queue</button>
               {/if}
             </div>
             <div class="matrix-checks">
@@ -1093,7 +1095,7 @@
         </div>
       </details>
 
-      <details class="secondary-panel" on:toggle={onSecondaryToggle}>
+      <details class="secondary-panel" ontoggle={onSecondaryToggle}>
         <summary>Profiles &amp; run history</summary>
         <div class="secondary-body profiles-panel">
           {#if profiles.length === 0}
@@ -1104,7 +1106,7 @@
                 <button
                   class="profile-card"
                   class:selected={selectedProfile === profile.id}
-                  on:click={() => (selectedProfile = profile.id)}
+                  onclick={() => (selectedProfile = profile.id)}
                 >
                   <strong>{profile.name}</strong>
                   <span>{profile.id} · {profile.side}</span>
@@ -1126,10 +1128,10 @@
           <div class="history-head">
             <h2>Run history</h2>
             <div class="filters">
-              <button class="ghost mini" class:active={historyFilter === "all"} on:click={() => (historyFilter = "all")}>All</button>
-              <button class="ghost mini" class:active={historyFilter === "pass"} on:click={() => (historyFilter = "pass")}>Pass</button>
-              <button class="ghost mini" class:active={historyFilter === "fail"} on:click={() => (historyFilter = "fail")}>Fail</button>
-              <button class="ghost mini" class:active={historyFilter === "crashed"} on:click={() => (historyFilter = "crashed")}>Crashed</button>
+              <button class="ghost mini" class:active={historyFilter === "all"} onclick={() => (historyFilter = "all")}>All</button>
+              <button class="ghost mini" class:active={historyFilter === "pass"} onclick={() => (historyFilter = "pass")}>Pass</button>
+              <button class="ghost mini" class:active={historyFilter === "fail"} onclick={() => (historyFilter = "fail")}>Fail</button>
+              <button class="ghost mini" class:active={historyFilter === "crashed"} onclick={() => (historyFilter = "crashed")}>Crashed</button>
             </div>
           </div>
           {#if filteredRuns.length === 0}
@@ -1148,14 +1150,14 @@
                     {#if run.verdictReason} · {run.verdictReason}{/if}
                   </small>
                   <div class="run-actions">
-                    <button class="ghost mini" on:click={() => openRunLogs(run)}>Open logs</button>
+                    <button class="ghost mini" onclick={() => openRunLogs(run)}>Open logs</button>
                     {#if !capturedRunIds[run.id]}
-                      <button class="ghost mini" on:click={() => captureRunLogs(run)}>Capture</button>
+                      <button class="ghost mini" onclick={() => captureRunLogs(run)}>Capture</button>
                     {/if}
-                    <button class="ghost mini" on:click={openDiagnose} title="Open Diagnose stage">
+                    <button class="ghost mini" onclick={openDiagnose} title="Open Diagnose stage">
                       <Stethoscope size={12} /> Diagnose
                     </button>
-                    <button class="ghost mini" on:click={() => reRun(run)} disabled={running || matrixRunning}>Re-run</button>
+                    <button class="ghost mini" onclick={() => reRun(run)} disabled={running || matrixRunning}>Re-run</button>
                   </div>
                 </div>
               {/each}
@@ -1209,11 +1211,11 @@
   .profile-select select { min-width: 180px; }
   .launch-actions { gap: 8px; flex-wrap: wrap; flex: 1; }
   .preset { display: inline-flex; align-items: center; gap: 8px; }
-  .preset.primary { background: rgba(27, 217, 106, 0.18); border-color: rgba(27, 217, 106, 0.45); color: var(--accent-primary); font-weight: 700; }
+  .preset.primary { background: color-mix(in srgb, var(--accent-primary) 18%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); color: var(--accent-primary); font-weight: 700; }
   .log-panel {
-    /* Fill free space when collapsibles are closed; never shrink when they open below. */
-    flex: 1 0 min(70vh, 640px);
-    min-height: min(70vh, 640px);
+    /* Fill free space; allow shrink so the stage scroll chain never clips the log. */
+    flex: 1 1 auto;
+    min-height: min(240px, 40vh);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1255,7 +1257,7 @@
   .hint { color: var(--text-secondary); }
   .metric { color: var(--accent-primary); font-weight: 700; }
   .val-badge { font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border-color); }
-  .val-badge.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.08); }
+  .val-badge.ok { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   .val-badge.bad { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
   .opts-row { gap: 12px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .opts-row label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-muted); }
@@ -1267,15 +1269,15 @@
   .matrix-table th, .matrix-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border-color); }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 8px; border: 1px solid var(--border-color); flex-shrink: 0; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .profile-card { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-color); padding: 12px; text-align: left; }
-  .profile-card:hover, .profile-card.selected { transform: none; border-color: rgba(27, 217, 106, 0.4); background: rgba(27, 217, 106, 0.08); }
+  .profile-card:hover, .profile-card.selected { transform: none; border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   .profile-card strong { color: var(--text-primary); }
   .profile-card span, .profile-card small, .muted { color: var(--text-muted); }
   .history-head { margin-top: 12px; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
   .history-head h2 { margin: 0; font-size: 15px; }
   .filters { gap: 4px; flex-wrap: wrap; }
-  .filters .active { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.35); }
+  .filters .active { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
   .run-history { display: grid; gap: 8px; margin-top: 10px; }
   .run-row { display: grid; gap: 3px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .run-row strong { color: var(--text-primary); }
@@ -1283,12 +1285,12 @@
   .run-top { justify-content: space-between; gap: 8px; }
   .run-actions { gap: 4px; flex-wrap: wrap; margin-top: 4px; }
   .run-row.fail, .run-row.failed { border-color: rgba(239, 68, 68, .35); }
-  .run-row.pass, .run-row.finished { border-color: rgba(27, 217, 106, .28); }
+  .run-row.pass, .run-row.finished { border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent); }
   .run-row.crashed { border-color: rgba(248, 113, 113, .55); }
   .run-row.timedOut { border-color: rgba(245, 158, 11, .45); }
   .run-row.started { border-color: rgba(245, 158, 11, .28); }
   .vbadge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border-color); }
-  .vbadge.pass, .vbadge.finished { color: var(--accent-primary); border-color: rgba(27, 217, 106, .4); }
+  .vbadge.pass, .vbadge.finished { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
   .vbadge.fail, .vbadge.failed { color: #fca5a5; border-color: rgba(239, 68, 68, .4); }
   .vbadge.crashed { color: #fecaca; background: rgba(239, 68, 68, .12); }
   .vbadge.timedOut { color: #fbbf24; border-color: rgba(245, 158, 11, .4); }
@@ -1306,7 +1308,7 @@
   .meter-head :global(svg) { flex-shrink: 0; }
   .meter-head strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
   .bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
-  .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #34d399, #1bd96a); transition: width 280ms ease; }
+  .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent-primary), var(--accent-hover)); transition: width 280ms ease; }
   .bar.proc i { background: linear-gradient(90deg, #60a5fa, #a78bfa); }
   .live-meta { gap: 12px; margin-top: 10px; color: var(--text-muted); font-size: 11px; flex-wrap: wrap; }
   .log-tools { justify-content: space-between; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }

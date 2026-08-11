@@ -1,26 +1,37 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
   import { api } from "../lib/api";
 
-  export let skinUrl: string | null = null;
-  export let capeUrl: string | null = null;
-  /** Forces a full reload when the active account changes. */
-  export let accountKey: string = "";
-  export let playerName: string = "";
-  /** When false, hide the Minecraft nick under the canvas (parent shows it). */
-  export let showName: boolean = true;
-  export let width: number = 300;
-  export let height: number = 400;
+  let {
+    skinUrl = null,
+    capeUrl = null,
+    accountKey = "",
+    playerName = "",
+    showName = true,
+    width = 300,
+    height = 400,
+  }: {
+    skinUrl?: string | null;
+    capeUrl?: string | null;
+    accountKey?: string;
+    playerName?: string;
+    showName?: boolean;
+    width?: number;
+    height?: number;
+  } = $props();
 
-  let canvas: HTMLCanvasElement;
+  let canvas = $state<HTMLCanvasElement | undefined>(undefined);
+  // Plain fields — must not be $state. Reading+writing them inside $effect
+  // (Svelte 5 tracks sync reads in callees) causes effect_update_depth_exceeded.
   let viewer: any = null;
-  let loading = false;
+  let loading = $state(false);
+  let loadError = $state("");
   let lastSkin = "";
   let lastCape = "";
   let lastAccount = "";
   let capeFrames: HTMLCanvasElement[] = [];
   let capeFrameIdx = 0;
   let capeAnimTimer: ReturnType<typeof setInterval> | null = null;
+  let initGen = 0;
 
   function stopCapeAnim() {
     if (capeAnimTimer) {
@@ -50,9 +61,12 @@
 
   async function initViewer() {
     if (!canvas) return;
+    const myGen = ++initGen;
+    loadError = "";
 
     try {
       const { SkinViewer, WalkingAnimation } = await import("skinview3d");
+      if (myGen !== initGen || !canvas) return;
 
       if (viewer) {
         stopCapeAnim();
@@ -66,8 +80,8 @@
         height,
         // Use skinview3d zoom (drives adjustCameraDistance). Manual
         // camera.position fights OrbitControls and breaks wheel zoom.
-        zoom: 0.55,
-        fov: 55,
+        zoom: 0.72,
+        fov: 50,
       });
 
       // Transparent WebGL clear — CSS .skin-bg paints the backdrop.
@@ -84,8 +98,8 @@
       viewer.controls.minDistance = 10;
       viewer.controls.maxDistance = 256;
       viewer.controls.autoRotate = false;
-      // Aim at torso so head + feet fit in frame.
-      viewer.controls.target.set(0, -6, 0);
+      // Aim at mid-torso so the model fills the frame.
+      viewer.controls.target.set(0, -4, 0);
       viewer.controls.update();
 
       const walk = new WalkingAnimation();
@@ -98,6 +112,7 @@
       await applyTextures();
     } catch (e) {
       console.error("[SkinPreview3D] init failed:", e);
+      loadError = String(e);
     }
   }
 
@@ -139,8 +154,8 @@
     return copyImageToCanvas(img, 64, 32, sx, sy, sw, sh);
   }
 
-  /** Draw source into dest with aspect-preserving contain (letterbox). */
-  function drawContained(
+  /** Draw source into dest stretched to fill (Minecraft cape faces are filled panels). */
+  function drawFilled(
     ctx: CanvasRenderingContext2D,
     img: CanvasImageSource,
     sx: number,
@@ -153,20 +168,7 @@
     dh: number,
   ) {
     if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
-    const srcAspect = sw / sh;
-    const dstAspect = dw / dh;
-    let ddx = dx;
-    let ddy = dy;
-    let ddw = dw;
-    let ddh = dh;
-    if (srcAspect > dstAspect) {
-      ddh = dw / srcAspect;
-      ddy = dy + (dh - ddh) / 2;
-    } else {
-      ddw = dh * srcAspect;
-      ddx = dx + (dw - ddw) / 2;
-    }
-    ctx.drawImage(img, sx, sy, sw, sh, ddx, ddy, ddw, ddh);
+    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
   }
 
   /** Classic Minecraft cape UV: front (1,1) 10×16, back (12,1) 10×16. */
@@ -211,10 +213,9 @@
       return scaleSliceTo64x32(img, sx, sy, sw, sh);
     }
 
-    // Full-bleed / portrait cape art — pack into classic UV slots with contain
-    // (letterbox) so 10:16 panels aren't stretched.
+    // Full-bleed / portrait cape art — pack into classic UV face slots.
     return paintCapeUv((ctx, dx, dy, dw, dh) => {
-      drawContained(ctx, img, sx, sy, sw, sh, dx, dy, dw, dh);
+      drawFilled(ctx, img, sx, sy, sw, sh, dx, dy, dw, dh);
     });
   }
 
@@ -266,10 +267,29 @@
           return;
         }
 
-        // Tall animated strip of native atlas frames.
+        // OptiFine-style animated strip: exactly 64×(32·N), N≥2.
+        // Checked before portrait — 64×320 has aspect 0.2 but is a frame strip.
+        if (w === 64 && h >= 64 && h % 32 === 0) {
+          const frames: HTMLCanvasElement[] = [];
+          const n = Math.min(h / 32, 48);
+          for (let i = 0; i < n; i++) {
+            frames.push(frameToClassicAtlas(img, 0, i * 32, 64, 32));
+          }
+          resolve(frames.length ? frames : []);
+          return;
+        }
+
+        // Single cape-face art (~10:16). Must beat strip heuristics like
+        // "128×256 = 4× (128×64) 2:1 frames" which shift the artwork.
+        if (aspect >= 0.5 && aspect <= 0.9) {
+          resolve([frameToClassicAtlas(img, 0, 0, w, h)]);
+          return;
+        }
+
+        // Tall animated strip of native atlas frames (HD OptiFine cloaks).
         if (h > w) {
           const nativeFh = detectNativeStripFrameHeight(w, h);
-          if (nativeFh !== null) {
+          if (nativeFh !== null && h / nativeFh >= 2) {
             const frames: HTMLCanvasElement[] = [];
             const n = Math.min(Math.floor(h / nativeFh), 48);
             for (let i = 0; i < n; i++) {
@@ -278,21 +298,10 @@
             resolve(frames.length ? frames : []);
             return;
           }
-
-          // Classic 64×N strip of 32px frames.
-          if (w === 64 && h % 32 === 0) {
-            const frames: HTMLCanvasElement[] = [];
-            const n = Math.min(h / 32, 48);
-            for (let i = 0; i < n; i++) {
-              frames.push(frameToClassicAtlas(img, 0, i * 32, 64, 32));
-            }
-            resolve(frames.length ? frames : []);
-            return;
-          }
         }
 
-        // Portrait / full-bleed single cape art → UV slots with contain.
-        if (aspect < 1.2) {
+        // Remaining tall/odd images → UV face pack (safer than false atlas strips).
+        if (aspect < 1.25) {
           resolve([frameToClassicAtlas(img, 0, 0, w, h)]);
           return;
         }
@@ -311,24 +320,41 @@
 
   async function applyTextures() {
     if (!viewer) return;
-    loading = true;
+    const skin = skinUrl;
+    const nextCape = capeKey(capeUrl);
+    const skinChanged = !!(skin && skin !== lastSkin);
+    const capeChanged = nextCape !== lastCape;
+    const hadSkin = !!lastSkin && lastSkin !== "";
+
+    // Quiet cape-only updates: keep the visible skin, no skeleton overlay.
+    const showOverlay = skinChanged || !hadSkin;
+    if (showOverlay) {
+      loading = true;
+    }
+    loadError = "";
     try {
-      if (skinUrl && skinUrl !== lastSkin) {
-        const dataUrl = await toDataUrl(skinUrl);
-        await viewer.loadSkin(dataUrl, { model: "auto-detect" });
-        lastSkin = skinUrl;
+      const skinPromise =
+        skinChanged && skin
+          ? toDataUrl(skin)
+          : Promise.resolve(null as string | null);
+      const capePromise =
+        nextCape && capeChanged
+          ? toDataUrl(nextCape).then((raw) => extractCapeFrames(raw))
+          : Promise.resolve(null as HTMLCanvasElement[] | null);
+
+      const [skinData, capeFramesResult] = await Promise.all([skinPromise, capePromise]);
+
+      if (skinData) {
+        await viewer.loadSkin(skinData, { model: "auto-detect" });
+        lastSkin = skin!;
       }
 
-      const nextCape = capeKey(capeUrl);
-      if (nextCape && nextCape !== lastCape) {
+      if (nextCape && capeChanged) {
         stopCapeAnim();
-        const raw = await toDataUrl(nextCape);
-        const frames = await extractCapeFrames(raw);
-        if (frames.length) {
-          startCapeAnim(frames);
+        if (capeFramesResult && capeFramesResult.length) {
+          startCapeAnim(capeFramesResult);
           lastCape = nextCape;
         } else {
-          stopCapeAnim();
           viewer.loadCape(null);
           lastCape = "";
         }
@@ -339,19 +365,30 @@
       }
     } catch (e) {
       console.error("[SkinPreview3D] load textures failed:", e);
+      loadError = String(e);
     } finally {
       loading = false;
     }
   }
 
-  $: if (
-    viewer &&
-    (skinUrl !== lastSkin || capeKey(capeUrl) !== lastCape || accountKey !== lastAccount)
-  ) {
-    if (accountKey !== lastAccount) {
-      lastAccount = accountKey;
+  function retry() {
+    lastSkin = "";
+    lastCape = "";
+    lastAccount = "";
+    loadError = "";
+    void initViewer();
+  }
+
+  // Track texture props; apply when viewer already exists (init also applies).
+  $effect(() => {
+    const skin = skinUrl;
+    const cape = capeUrl;
+    const acct = accountKey;
+    if (!viewer) return;
+    if (skin === lastSkin && capeKey(cape) === lastCape && acct === lastAccount) return;
+    if (acct !== lastAccount) {
+      lastAccount = acct;
       lastSkin = "";
-      // Force cape clear branch even when previous account also had no cape.
       lastCape = lastCape || "__pending_clear__";
       stopCapeAnim();
       try {
@@ -361,18 +398,32 @@
       }
     }
     void applyTextures();
-  }
-
-  onMount(() => {
-    initViewer();
   });
 
-  onDestroy(() => {
-    stopCapeAnim();
-    if (viewer) {
-      viewer.dispose();
-      viewer = null;
+  // Keep WebGL viewport in sync when width/height props change.
+  $effect(() => {
+    const w = width;
+    const h = height;
+    if (!viewer) return;
+    try {
+      viewer.setSize(w, h);
+    } catch {
+      /* ignore */
     }
+  });
+
+  // Init when canvas binds (Svelte 5: onMount can race bind:this on $state).
+  $effect(() => {
+    if (!canvas) return;
+    void initViewer();
+    return () => {
+      initGen++;
+      stopCapeAnim();
+      if (viewer) {
+        viewer.dispose();
+        viewer = null;
+      }
+    };
   });
 </script>
 
@@ -380,16 +431,32 @@
   <!-- stopPropagation keeps the page from stealing wheel; OrbitControls still gets the event on canvas -->
   <div
     class="skin-3d-container"
+    class:is-loading={loading}
     style="width: {width}px; height: {height}px;"
-    on:wheel|stopPropagation
+    onwheel={(e) => e.stopPropagation()}
   >
     <div class="skin-bg" aria-hidden="true"></div>
     <canvas bind:this={canvas} width={width} height={height}></canvas>
     {#if loading}
       <div class="loading-overlay" aria-hidden="true">
-        <div class="loading-shimmer">
-          <div class="loading-figure skeleton skeleton-block"></div>
+        <div class="loading-figure" aria-hidden="true">
+          <div class="lf-head"></div>
+          <div class="lf-torso-row">
+            <div class="lf-arm"></div>
+            <div class="lf-body"></div>
+            <div class="lf-arm"></div>
+          </div>
+          <div class="lf-legs">
+            <div class="lf-leg"></div>
+            <div class="lf-leg"></div>
+          </div>
         </div>
+      </div>
+    {/if}
+    {#if loadError && !loading}
+      <div class="error-overlay">
+        <p>Skin failed to load</p>
+        <button type="button" class="retry-btn" onclick={retry}>Retry</button>
       </div>
     {/if}
   </div>
@@ -416,6 +483,7 @@
       0 12px 28px rgba(0, 0, 0, 0.35);
     touch-action: none;
     overscroll-behavior: contain;
+    width: 100%;
   }
 
   .skin-bg {
@@ -439,6 +507,10 @@
     touch-action: none;
   }
 
+  .skin-3d-container.is-loading canvas {
+    opacity: 0;
+  }
+
   canvas:active {
     cursor: grabbing;
   }
@@ -449,35 +521,161 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(18, 20, 22, 0.18);
+    background: rgba(18, 20, 22, 0.72);
     pointer-events: none;
+    z-index: 2;
   }
 
-  .loading-shimmer {
+  .error-overlay {
+    position: absolute;
+    inset: 0;
     display: flex;
-    align-items: flex-end;
+    flex-direction: column;
+    align-items: center;
     justify-content: center;
-    height: 55%;
+    gap: 10px;
+    background: rgba(12, 14, 16, 0.72);
+    padding: 16px;
+    text-align: center;
   }
 
+  .error-overlay p {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .retry-btn {
+    padding: 6px 12px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated, var(--bg-secondary));
+    color: var(--accent-primary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .retry-btn:hover {
+    border-color: var(--accent-primary);
+  }
+
+  /* Blocky Minecraft-style player silhouette (no rounded sausage / skeleton shimmer). */
   .loading-figure {
-    width: 72px;
-    height: 160px;
-    border-radius: 36px 36px 12px 12px;
-    opacity: 0.55;
+    --lf-unit: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    animation: lf-pulse 1.35s ease-in-out infinite;
+  }
+
+  .lf-head {
+    width: calc(var(--lf-unit) * 4);
+    height: calc(var(--lf-unit) * 4);
+    background: rgba(180, 188, 198, 0.42);
+    border-radius: 0;
+  }
+
+  .lf-torso-row {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+  }
+
+  .lf-body {
+    width: calc(var(--lf-unit) * 4);
+    height: calc(var(--lf-unit) * 6);
+    background: rgba(160, 170, 182, 0.38);
+    border-radius: 0;
+  }
+
+  .lf-arm {
+    width: calc(var(--lf-unit) * 2);
+    height: calc(var(--lf-unit) * 6);
+    background: rgba(170, 178, 188, 0.34);
+    border-radius: 0;
+  }
+
+  .lf-legs {
+    display: flex;
+    flex-direction: row;
+  }
+
+  .lf-leg {
+    width: calc(var(--lf-unit) * 2);
+    height: calc(var(--lf-unit) * 6);
+    background: rgba(150, 158, 170, 0.36);
+    border-radius: 0;
+  }
+
+  @keyframes lf-pulse {
+    0%,
+    100% {
+      opacity: 0.55;
+    }
+    50% {
+      opacity: 0.9;
+    }
+  }
+
+  /* Light themes: soft studio backdrop + matching chrome / overlays. */
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"]))
+    .skin-3d-container {
+    border-color: color-mix(in srgb, var(--text-primary) 12%, transparent);
+    box-shadow:
+      inset 0 -36px 52px color-mix(in srgb, var(--accent-primary) 6%, transparent),
+      0 10px 24px color-mix(in srgb, var(--text-primary) 8%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .skin-bg {
+    background:
+      radial-gradient(ellipse 50% 40% at 50% 36%, rgba(255, 255, 255, 0.8), transparent 58%),
+      radial-gradient(ellipse 70% 45% at 50% 100%, color-mix(in srgb, var(--accent-primary) 10%, transparent), transparent 60%),
+      radial-gradient(ellipse 100% 80% at 50% 50%, transparent 42%, color-mix(in srgb, var(--bg-tertiary) 55%, transparent) 100%),
+      linear-gradient(180deg, #eef2ec 0%, #e0e7de 48%, #d4ddd2 100%);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"]))
+    .loading-overlay {
+    background: color-mix(in srgb, #eef2ec 78%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"]))
+    .error-overlay {
+    background: color-mix(in srgb, #e0e7de 82%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .lf-head {
+    background: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .lf-body {
+    background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .lf-arm {
+    background: color-mix(in srgb, var(--text-secondary) 16%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .lf-leg {
+    background: color-mix(in srgb, var(--text-secondary) 18%, transparent);
   }
 
   .mc-nick {
     font-family: var(--font-minecraft);
     font-size: 12px;
     line-height: 1.4;
-    color: #fff;
-    text-shadow:
+    color: var(--mc-nick-color, #fff);
+    text-shadow: var(
+      --mc-nick-shadow,
       2px 2px 0 #3f3f3f,
       -1px 0 0 #000,
       1px 0 0 #000,
       0 -1px 0 #000,
-      0 1px 0 #000;
+      0 1px 0 #000
+    );
     letter-spacing: 0.5px;
     max-width: 100%;
     overflow: hidden;

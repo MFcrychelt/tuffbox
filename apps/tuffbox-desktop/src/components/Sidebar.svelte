@@ -1,68 +1,112 @@
 <script lang="ts">
-  import {
-    LayoutDashboard,
-    Package,
-    GitGraph,
-    Globe,
-    Stethoscope,
-    History,
-    Vote,
-    Workflow,
-    Settings,
-    Plus,
-    Library,
-    User,
-    MessagesSquare,
-    PanelLeftClose,
-    PanelLeftOpen,
-    FolderCog,
-    CookingPot,
-    ScrollText,
-  } from "lucide-svelte";
-  import { afterUpdate, onDestroy, tick } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
+  import { Home, Workflow, Plus, Settings, User, Play, Terminal } from "@lucide/svelte";
   import {
     newProjectOpen,
-    sidebarMode,
-    sidebarIconsCollapsed,
     projectPath,
+    projectInfo,
+    recentProjects,
+    runningInstances,
+    isProjectRunning,
+    ideStageRequest,
+    ideSuggestedStage,
+    openLaunchLog,
+    isLaunching,
+    brandIcon,
+    BRAND_ICON_CREEPER_SRC_SM,
   } from "../lib/store";
+  import { api } from "../lib/api";
+  import { homeIcons } from "../lib/homeBootstrap";
+  import { launchWithFeedback } from "../lib/launch";
 
-  type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "chats";
-  export let currentView: View;
+  import type { View } from "../lib/types";
+  let { currentView = $bindable() }: { currentView: View } = $props();
 
-  const items: { id: View; label: string; icon: any; featured?: boolean; shortcut?: string; needsProject?: boolean }[] = [
-    { id: "dashboard", label: "Launcher", icon: LayoutDashboard, shortcut: "Ctrl+1" },
-    { id: "me", label: "Me", icon: User },
-    { id: "ide", label: "Open IDE", icon: Workflow, featured: true, shortcut: "Ctrl+2" },
-    { id: "mods", label: "Mods", icon: Package, shortcut: "Ctrl+3" },
-    { id: "graph", label: "Graph", icon: GitGraph, shortcut: "Ctrl+4" },
-    { id: "configs", label: "Configs", icon: FolderCog, shortcut: "Ctrl+5", needsProject: true },
-    { id: "recipes", label: "Recipes", icon: CookingPot, needsProject: true },
-    { id: "quests", label: "Quests", icon: ScrollText, needsProject: true },
-    { id: "world", label: "World map", icon: Globe, shortcut: "Ctrl+8" },
-    { id: "library", label: "Library", icon: Library },
-    { id: "chats", label: "Chats", icon: MessagesSquare },
-    { id: "diagnostics", label: "Diagnostics", icon: Stethoscope, shortcut: "Ctrl+6" },
-    { id: "crash-votes", label: "Crash Votes", icon: Vote },
-    { id: "snapshots", label: "Snapshots", icon: History, shortcut: "Ctrl+7" },
-  ];
+  /** Real pack icon (data URL from the instance listing) keyed by project path. */
+  const instanceIcons = $derived($homeIcons);
+  const iconRequested = new SvelteSet<string>();
 
-  $: hasProject = !!$projectPath;
-  let navEl: HTMLElement | null = null;
-  let bottomEl: HTMLElement | null = null;
-  let indicatorY = 0;
-  let indicatorH = 42;
-  let indicatorReady = false;
-  let indicatorInBottom = false;
+  async function loadInstanceIcon(path: string) {
+    try {
+      const listing = await api.project.getListing(path);
+      const rel = listing.iconPath;
+      if (!rel) {
+        homeIcons.update((m) => ({ ...m, [path]: null }));
+        return;
+      }
+      const data = await api.project.readListingAsset(rel, path);
+      homeIcons.update((m) => ({ ...m, [path]: data }));
+    } catch {
+      homeIcons.update((m) => ({ ...m, [path]: null }));
+    }
+  }
 
-  let railRevealed = false;
-  let railHideTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Grace before hide — enough to move from hotzone onto the panel. */
-  const RAIL_HIDE_MS = 280;
+  $effect(() => {
+    const missing = $recentProjects
+      .map((p) => p.path)
+      .filter((path) => !iconRequested.has(path) && instanceIcons[path] === undefined);
+    if (!missing.length) return;
+    // Prefer one batch invoke when several icons are cold.
+    for (const path of missing) iconRequested.add(path);
+    void api.home
+      .projectBriefs(missing)
+      .then((briefs) => {
+        const icons: Record<string, string | null> = {};
+        for (const b of briefs) {
+          icons[b.path] = b.iconDataUrl ?? null;
+        }
+        homeIcons.update((prev) => ({ ...prev, ...icons }));
+        // Fill any paths the batch skipped.
+        for (const path of missing) {
+          if (icons[path] === undefined) void loadInstanceIcon(path);
+        }
+      })
+      .catch(() => {
+        for (const path of missing) void loadInstanceIcon(path);
+      });
+  });
 
-  $: autoHide = $sidebarMode === "autoHide";
-  $: iconsMode = $sidebarMode === "icons";
-  $: iconsCollapsed = iconsMode && $sidebarIconsCollapsed;
+  /**
+   * Fallback identity when a pack has no icon: theme-token gradients
+   * (accent + surfaces), hashed by name so each instance stays stable and
+   * follows the active data-theme without a JS subscription.
+   */
+  function themeGradient(name: string): [string, string] {
+    const pairs: [string, string][] = [
+      [
+        "color-mix(in srgb, var(--accent-primary) 32%, var(--bg-primary))",
+        "color-mix(in srgb, var(--accent-primary) 82%, var(--bg-secondary))",
+      ],
+      [
+        "color-mix(in srgb, var(--accent-secondary) 28%, var(--bg-primary))",
+        "color-mix(in srgb, var(--accent-primary) 72%, var(--bg-tertiary))",
+      ],
+      [
+        "color-mix(in srgb, var(--accent-primary) 18%, var(--bg-secondary))",
+        "color-mix(in srgb, var(--accent-hover) 78%, var(--bg-primary))",
+      ],
+      [
+        "color-mix(in srgb, var(--bg-tertiary) 45%, var(--accent-primary))",
+        "color-mix(in srgb, var(--accent-primary) 88%, var(--accent-secondary))",
+      ],
+      [
+        "color-mix(in srgb, var(--accent-secondary) 22%, var(--bg-primary))",
+        "color-mix(in srgb, var(--accent-secondary) 65%, var(--accent-primary))",
+      ],
+    ];
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    return pairs[Math.abs(hash) % pairs.length];
+  }
+
+  function openHome() {
+    currentView = "dashboard";
+  }
+
+  function openIde() {
+    ideStageRequest.set($ideSuggestedStage || "content");
+    currentView = "ide";
+  }
 
   function openNewProject() {
     // Dashboard owns the modal, so make sure we're on that view before
@@ -71,501 +115,420 @@
     newProjectOpen.set(true);
   }
 
-  function clearRailHideTimer() {
-    if (railHideTimer) {
-      clearTimeout(railHideTimer);
-      railHideTimer = null;
-    }
+  async function playClient() {
+    if (!$projectPath || $isLaunching) return;
+    await launchWithFeedback({ path: $projectPath, profile: "client" });
   }
 
-  function revealRail() {
-    if (!autoHide) return;
-    clearRailHideTimer();
-    railRevealed = true;
+  function openLogs() {
+    if ($projectPath) openLaunchLog($projectPath);
   }
 
-  function scheduleHideRail(delay = RAIL_HIDE_MS) {
-    if (!autoHide) return;
-    clearRailHideTimer();
-    railHideTimer = setTimeout(() => {
-      railRevealed = false;
-      railHideTimer = null;
-    }, delay);
-  }
-
-  function onRailFocusOut(e: FocusEvent) {
-    if (!autoHide) return;
-    const next = e.relatedTarget;
-    if (next instanceof Node && e.currentTarget instanceof Node && e.currentTarget.contains(next)) {
+  async function selectInstance(path: string) {
+    if ($projectPath === path) {
+      currentView = "dashboard";
       return;
     }
-    scheduleHideRail();
-  }
-
-  function selectNav(view: View, el?: EventTarget | null) {
-    currentView = view;
-    if (el instanceof HTMLElement) el.blur();
-    scheduleHideRail(320);
-  }
-
-  $: if (!autoHide) {
-    railRevealed = false;
-    clearRailHideTimer();
-  }
-
-  onDestroy(() => clearRailHideTimer());
-
-  async function syncIndicator() {
-    await tick();
-    const inBottom = currentView === "settings";
-    indicatorInBottom = inBottom;
-    const host = inBottom ? bottomEl : navEl;
-    const btn = host?.querySelector(".nav-item.active") as HTMLElement | null;
-    if (!host || !btn) {
-      indicatorReady = false;
-      return;
+    try {
+      const info = await api.project.validate(path);
+      const manifestPath = info.manifestPath || path;
+      // reorder:false — rail icons must not jump around on every click.
+      recentProjects.add({ path: manifestPath, info: info as any }, { reorder: false });
+      projectPath.set(manifestPath);
+      projectInfo.set(info as any);
+      void api.session.setLastOpened(manifestPath).catch(() => {});
+    } catch {
+      const cached = $recentProjects.find((p) => p.path === path);
+      if (!cached) return;
+      projectPath.set(cached.path);
+      projectInfo.set(cached.info);
     }
-    // offsetTop is stable vs getBoundingClientRect (ignores global button hover transforms).
-    indicatorY = btn.offsetTop;
-    indicatorH = btn.offsetHeight;
-    indicatorReady = true;
+    currentView = "dashboard";
   }
-
-  $: currentView, iconsCollapsed, railRevealed, $sidebarMode, void syncIndicator();
-  afterUpdate(() => {
-    void syncIndicator();
-  });
 </script>
 
-<div
-  class="sidebar-slot"
-  class:auto-hide={autoHide}
-  class:icons-collapsed={iconsCollapsed}
-  class:revealed={railRevealed || !autoHide}
->
-  {#if autoHide}
-    <div
-      class="sidebar-hotzone"
-      aria-hidden="true"
-      on:mouseenter={revealRail}
-      on:mouseleave={() => scheduleHideRail()}
-    ></div>
-  {/if}
+<aside class="rail">
+  <!-- Brand mark — constant identity, not a nav button. -->
+  <div class="rail-brand" title="TuffBox">
+    {#if $brandIcon === "creeper"}
+      <img
+        class="brand-logo brand-logo-img"
+        src={BRAND_ICON_CREEPER_SRC_SM}
+        alt=""
+        draggable="false"
+        aria-hidden="true"
+      />
+    {:else}
+      <span class="brand-logo" aria-hidden="true">T</span>
+    {/if}
+  </div>
 
-  <aside
-    class="sidebar"
-    class:compact={iconsCollapsed}
-    class:auto-hide-panel={autoHide}
-    class:revealed={railRevealed || !autoHide}
-    on:mouseenter={revealRail}
-    on:mouseleave={() => scheduleHideRail()}
-    on:focusin={revealRail}
-    on:focusout={onRailFocusOut}
-  >
-    <div class="brand">
-      <div class="logo">T</div>
-      {#if !iconsCollapsed}
-        <span class="brand-name">TuffBox</span>
-      {/if}
-      {#if iconsMode}
+  <nav class="rail-zone" aria-label="App">
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn ghost"
+        class:active={currentView === "dashboard"}
+        title="Home — Launcher"
+        aria-label="Home — Launcher"
+        onclick={openHome}
+      >
+        <Home size={21} />
+      </button>
+    </div>
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn ghost"
+        class:active={currentView === "ide"}
+        title="IDE"
+        aria-label="IDE"
+        onclick={openIde}
+      >
+        <Workflow size={21} />
+      </button>
+    </div>
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn add"
+        title="Add instance"
+        aria-label="Add instance"
+        onclick={openNewProject}
+      >
+        <Plus size={22} />
+      </button>
+    </div>
+  </nav>
+
+  <div class="rail-divider" aria-hidden="true"></div>
+
+  <nav class="rail-zone rail-instances" aria-label="Instances">
+    {#each $recentProjects as instance (instance.path)}
+      {@const icon = instanceIcons[instance.path]}
+      {@const running = isProjectRunning(instance.path, $runningInstances)}
+      {@const [g0, g1] = themeGradient(instance.info.name)}
+      <div class="rail-item">
         <button
           type="button"
-          class="collapse-btn tb-icon-hover"
-          title={iconsCollapsed ? "Expand sidebar" : "Collapse to icons"}
-          aria-expanded={!iconsCollapsed}
-          on:click={() => sidebarIconsCollapsed.toggle()}
+          class="rail-btn instance"
+          class:active={$projectPath === instance.path}
+          class:has-icon={!!icon}
+          title={instance.info.name}
+          aria-label={instance.info.name}
+          style={icon ? undefined : `background: linear-gradient(135deg, ${g0}, ${g1})`}
+          onclick={() => selectInstance(instance.path)}
         >
-          {#if iconsCollapsed}
-            <PanelLeftOpen size={16} />
+          {#if icon}
+            <img class="instance-img" src={icon} alt="" draggable="false" />
           {:else}
-            <PanelLeftClose size={16} />
+            <span class="instance-letter">{instance.info.name[0]}</span>
+          {/if}
+          {#if running}
+            <span class="running-dot" title="Running"></span>
           {/if}
         </button>
-      {/if}
-    </div>
+      </div>
+    {/each}
+  </nav>
 
-    <nav class="nav" bind:this={navEl}>
-      <div
-        class="nav-indicator"
-        class:ready={indicatorReady && !indicatorInBottom}
-        style={`transform: translateY(${indicatorY}px); height: ${indicatorH}px`}
-        aria-hidden="true"
-      ></div>
-      {#each items as item (item.id)}
-        <button
-          class="nav-item tb-icon-hover"
-          class:active={currentView === item.id}
-          class:featured={item.featured}
-          disabled={item.needsProject && !hasProject}
-          on:click={(e) => {
-            if (item.needsProject && !hasProject) return;
-            selectNav(item.id, e.currentTarget);
-          }}
-          title={item.needsProject && !hasProject
-            ? `${item.label} (open an instance first)`
-            : item.shortcut
-              ? `${item.label} (${item.shortcut})`
-              : item.label}
-        >
-          <svelte:component this={item.icon} size={20} />
-          {#if !iconsCollapsed}
-            <span class="nav-label">{item.label}</span>
-            {#if item.shortcut}
-              <span class="shortcut">{item.shortcut}</span>
-            {/if}
-          {/if}
-        </button>
-      {/each}
-
+  <nav class="rail-zone rail-bottom" aria-label="Launcher">
+    <div class="rail-item">
       <button
-        class="nav-item add tb-icon-hover"
-        title="New instance"
-        on:click={(e) => {
-          openNewProject();
-          if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
-          scheduleHideRail(320);
-        }}
+        type="button"
+        class="rail-btn ghost"
+        title="Play"
+        aria-label="Play"
+        disabled={!$projectPath || $isLaunching}
+        onclick={playClient}
       >
-        <Plus size={20} />
-        {#if !iconsCollapsed}
-          <span class="nav-label">New</span>
-        {/if}
+        <Play size={21} />
       </button>
-    </nav>
-
-    <div class="bottom" bind:this={bottomEl}>
-      <div
-        class="nav-indicator"
-        class:ready={indicatorReady && indicatorInBottom}
-        style={`transform: translateY(${indicatorY}px); height: ${indicatorH}px`}
-        aria-hidden="true"
-      ></div>
+    </div>
+    <div class="rail-item">
       <button
-        class="nav-item tb-icon-hover"
+        type="button"
+        class="rail-btn ghost"
+        title="Logs"
+        aria-label="Logs"
+        disabled={!$projectPath}
+        onclick={openLogs}
+      >
+        <Terminal size={21} />
+      </button>
+    </div>
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn ghost"
         class:active={currentView === "settings"}
-        on:click={(e) => selectNav("settings", e.currentTarget)}
         title="Settings"
+        aria-label="Settings"
+        onclick={() => (currentView = "settings")}
       >
-        <Settings size={20} />
-        {#if !iconsCollapsed}
-          <span class="nav-label">Settings</span>
-        {/if}
+        <Settings size={21} />
       </button>
     </div>
-  </aside>
-</div>
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn ghost"
+        class:active={currentView === "me"}
+        title="Profile"
+        aria-label="Profile"
+        onclick={() => (currentView = "me")}
+      >
+        <User size={21} />
+      </button>
+    </div>
+  </nav>
+</aside>
 
 <style>
-  .sidebar-slot {
+  .rail {
+    width: 72px;
     flex-shrink: 0;
-    width: 212px;
     height: 100%;
     min-height: 0;
+    box-sizing: border-box;
+    /* Themes (esp. Minimal) override via --rail-* tokens. */
+    background: var(--rail-bg, color-mix(in srgb, var(--bg-secondary) 92%, var(--bg-tertiary)));
+    border-right: 1px solid var(--rail-border, var(--border-color));
+    -webkit-backdrop-filter: var(--rail-backdrop, none);
+    backdrop-filter: var(--rail-backdrop, none);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 0;
     position: relative;
     z-index: 30;
-    transition: width 0.2s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .sidebar-slot.icons-collapsed {
-    width: 68px;
-  }
-
-  .sidebar-slot.auto-hide {
-    width: 0;
-    overflow: visible;
-  }
-
-  .sidebar-hotzone {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 20px;
-    z-index: 32;
-  }
-
-  .sidebar-slot.auto-hide:has(.sidebar.revealed) .sidebar-hotzone {
-    pointer-events: none;
-  }
-
-  .sidebar {
-    width: 212px;
-    height: 100%;
-    min-height: 0;
-    overflow: hidden;
-    background: var(--bg-secondary);
-    border-right: 1px solid var(--border-color);
-    display: flex;
-    flex-direction: column;
-    padding: 16px 12px;
-    box-sizing: border-box;
-  }
-
-  .sidebar.compact {
-    width: 68px;
-    padding: 16px 8px;
-  }
-
-  .sidebar.auto-hide-panel {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    transform: translateX(calc(-100% - 2px));
-    opacity: 0;
-    visibility: hidden;
-    transition:
-      transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
-      opacity 0.16s ease,
-      visibility 0s linear 0.2s;
-    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.32);
-    pointer-events: none;
-    will-change: transform, opacity;
-  }
-
-  .sidebar.auto-hide-panel.revealed {
-    transform: translateX(0);
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto;
-    transition:
-      transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
-      opacity 0.14s ease,
-      visibility 0s linear 0s;
-  }
-
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 8px 18px;
-    min-height: 48px;
+  /* Brand mark — constant amber identity, not a nav button. */
+  .rail-brand {
+    padding: 2px 0 12px;
     flex-shrink: 0;
+    user-select: none;
   }
 
-  .sidebar.compact .brand {
-    flex-direction: column;
-    gap: 8px;
-    padding: 4px 0 14px;
-  }
-
-  .logo {
-    width: 36px;
-    height: 36px;
-    background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-    border-radius: var(--border-radius-md);
+  .brand-logo {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--border-radius-lg);
+    background: var(--brand-mark-gradient, linear-gradient(135deg, #ffc500, #ff9500));
+    color: var(--brand-mark-fg, #241703);
+    font-weight: 900;
+    font-size: 19px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: 900;
-    font-size: 18px;
-    color: #000;
-    box-shadow: 0 4px 14px rgba(27, 217, 106, 0.35);
-    flex-shrink: 0;
+    box-shadow: var(--brand-mark-shadow, 0 4px 14px rgba(255, 197, 0, 0.28));
     animation: tb-logo-reveal 1.15s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
-  .brand-name {
-    font-weight: 700;
-    font-size: 15px;
-    color: var(--text-primary);
-    letter-spacing: 0.2px;
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .brand-logo-img {
+    display: block;
+    object-fit: cover;
+    background: transparent;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    color: transparent;
+    font-size: 0;
   }
 
-  .collapse-btn {
-    margin-left: auto;
-    flex-shrink: 0;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    display: grid;
-    place-items: center;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-sm);
-    background: var(--bg-primary);
-    color: var(--text-muted);
-    cursor: pointer;
-  }
-
-  .sidebar.compact .collapse-btn {
-    margin-left: 0;
-  }
-
-  .collapse-btn:hover {
-    color: var(--accent-primary);
-    border-color: rgba(27, 217, 106, 0.4);
-  }
-
-  .nav,
-  .bottom {
-    position: relative;
+  .rail-zone {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    align-items: center;
+    gap: 10px;
     width: 100%;
+    flex-shrink: 0;
   }
 
-  .nav {
+  .rail-divider {
+    width: 32px;
+    height: 2px;
+    border-radius: 1px;
+    background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+    margin: 10px 0;
+    flex-shrink: 0;
+  }
+
+  /* Middle zone owns the scroll; scrollbar hidden like server rails. */
+  .rail-instances {
     flex: 1;
     min-height: 0;
-    overflow-x: hidden;
     overflow-y: auto;
-    scrollbar-width: thin;
-    scrollbar-color: var(--bg-elevated) transparent;
-    padding-right: 2px;
+    overflow-x: hidden;
+    scrollbar-width: none;
+    padding: 2px 0;
+    flex-shrink: 1;
   }
 
-  .nav::-webkit-scrollbar {
-    width: 6px;
+  .rail-instances::-webkit-scrollbar {
+    display: none;
   }
 
-  .nav::-webkit-scrollbar-thumb {
-    background: var(--bg-elevated);
-    border-radius: 3px;
+  .rail-bottom {
+    padding-top: 10px;
   }
 
-  .nav-indicator {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    border-radius: var(--border-radius-md);
-    background: rgba(27, 217, 106, 0.12);
-    border: 1px solid rgba(27, 217, 106, 0.22);
-    pointer-events: none;
-    opacity: 0;
-    transition:
-      transform var(--motion-page, 400ms) var(--ease-spring, ease),
-      height var(--motion-med, 240ms) var(--ease-out, ease),
-      opacity var(--motion-fast, 160ms) var(--ease-out, ease);
-    z-index: 0;
+  .rail-item {
+    position: relative;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    flex-shrink: 0;
   }
 
-  .nav-indicator.ready {
-    opacity: 1;
-  }
-
-  .nav-indicator::before {
+  /* Active/hover pill on the rail's left edge (height animates, Discord-style). */
+  .rail-item::before {
     content: "";
     position: absolute;
     left: 0;
     top: 50%;
     transform: translateY(-50%);
-    width: 3px;
-    height: 56%;
-    border-radius: 0 3px 3px 0;
+    width: 4px;
+    height: 0;
+    border-radius: var(--rail-indicator-radius, 0 4px 4px 0);
     background: var(--accent-primary);
-    box-shadow: 0 0 12px rgba(27, 217, 106, 0.45);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    opacity: 0;
+    transition:
+      height var(--motion-fast, 160ms) var(--ease-hover-in, ease),
+      opacity var(--motion-fast, 160ms) var(--ease-hover-in, ease);
+    pointer-events: none;
   }
 
-  .nav-item {
+  .rail-item:hover::before {
+    height: 20px;
+    opacity: 1;
+  }
+
+  .rail-item:has(.rail-btn.active)::before {
+    height: 36px;
+    opacity: 1;
+  }
+
+  /* `.rail` prefix lifts specificity above the global themed button radius
+     (html[data-rounded-corners] :where(button)) so the shape holds.
+     Default: circle at rest → squircle on hover/active.
+     Sharp themes override via --rail-btn-radius* → hard squares. */
+  .rail .rail-btn {
     position: relative;
-    z-index: 1;
-    width: 100%;
-    height: 42px;
-    padding: 0 12px;
-    background: transparent;
-    color: var(--text-muted);
-    border: 1px solid transparent;
-    border-radius: var(--border-radius-md);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 14px;
-    font-weight: 500;
-    /* Kill global button hover translate — it desyncs the sliding indicator. */
-    transform: none !important;
-    transition: background var(--motion-fast, 160ms) var(--ease-out, ease),
-      color var(--motion-fast, 160ms) var(--ease-out, ease),
-      border-color var(--motion-fast, 160ms) var(--ease-out, ease);
-  }
-
-  .sidebar.compact .nav-item {
-    justify-content: center;
+    width: 48px;
+    height: 48px;
     padding: 0;
     gap: 0;
-  }
-
-  .nav-item:hover {
-    background: var(--bg-hover);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: var(--rail-btn-radius, 50%);
+    background: var(--bg-tertiary);
     color: var(--text-secondary);
+    font-size: 14px;
+    cursor: pointer;
+    overflow: hidden;
+    /* Kill the global button hover translate — it would desync the edge pill. */
+    transform: none !important;
+    transition:
+      border-radius var(--motion-med, 240ms) var(--ease-hover-in, ease),
+      background-color var(--motion-fast, 160ms) var(--ease-hover-in, ease),
+      color var(--motion-fast, 160ms) var(--ease-hover-in, ease);
   }
 
-  .nav-item:disabled {
-    opacity: 0.4;
+  .rail .rail-btn:hover,
+  .rail .rail-btn.active {
+    border-radius: var(--rail-btn-radius-active, var(--border-radius-lg));
+  }
+
+  /* Ghost nav (Home / IDE / Settings / Profile): quiet until touched. */
+  .rail .rail-btn.ghost {
+    background: transparent;
+    color: var(--text-muted);
+  }
+
+  .rail .rail-btn.ghost:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .rail .rail-btn.ghost.active {
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    color: var(--accent-primary);
+  }
+
+  .rail .rail-btn:disabled {
+    opacity: 0.35;
     cursor: not-allowed;
   }
 
-  .nav-item:disabled:hover {
+  .rail .rail-btn:disabled:hover {
     background: transparent;
     color: var(--text-muted);
+    border-radius: var(--rail-btn-radius, 50%);
   }
 
-  .nav-item.active {
+  /* Add instance: quiet amber plus. */
+  .rail .rail-btn.add {
+    background: transparent;
     color: var(--accent-primary);
+  }
+
+  .rail .rail-btn.add:hover {
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    color: var(--accent-primary);
+  }
+
+  /* Instance avatars: theme-token gradient (inline) or the real pack icon.
+     `position: relative` on `.rail-btn` makes the abspos icon/running-dot
+     clip to the same circle → squircle mask as the letter fallback. */
+  .rail .rail-btn.instance {
+    color: var(--text-primary);
+  }
+
+  .rail .rail-btn.instance.has-icon {
     background: transparent;
   }
 
-  .nav-item.active:hover {
-    background: transparent;
+  .rail .rail-btn.instance:hover,
+  .rail .rail-btn.instance.active {
+    background-color: transparent;
+    color: var(--text-primary);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 45%, transparent);
   }
 
-  .nav-label {
-    flex: 1;
-    text-align: left;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .instance-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+    pointer-events: none;
   }
 
-  .shortcut {
-    font-size: 11px;
-    color: var(--text-faint, #6b7280);
-    background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
-    border-radius: 4px;
-    padding: 1px 6px;
-    font-weight: 600;
-    flex-shrink: 0;
+  .instance-letter {
+    font-weight: 900;
+    font-size: 18px;
+    line-height: 1;
+    text-transform: uppercase;
+    color: color-mix(in srgb, var(--accent-primary) 18%, var(--text-primary));
+    text-shadow: 0 1px 2px color-mix(in srgb, var(--bg-primary) 55%, transparent);
+    pointer-events: none;
   }
 
-  .nav-item.featured {
-    margin-top: 8px;
-    border-color: rgba(27, 217, 106, 0.18);
-    background: transparent;
-    color: var(--text-secondary);
-  }
-
-  .nav-item.featured:hover {
-    color: var(--accent-primary);
-    background: var(--bg-hover);
-  }
-
-  .nav-item.featured.active {
-    color: var(--accent-primary);
-    border-color: transparent;
-    box-shadow: none;
-  }
-
-  .nav-item.add {
-    margin-top: 8px;
-    color: var(--accent-primary);
-    border: 1px dashed rgba(27, 217, 106, 0.4);
-  }
-
-  .nav-item.add:hover {
-    background: rgba(27, 217, 106, 0.1);
-    border-color: var(--accent-primary);
-  }
-
-  .bottom {
-    margin-top: 12px;
-    flex-shrink: 0;
-    padding-top: 4px;
-    border-top: 1px solid var(--border-color);
+  /* Running indicator — green dot pinned to the avatar's lower right. */
+  .running-dot {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 13px;
+    height: 13px;
+    border-radius: var(--rail-btn-radius, 50%);
+    background: var(--accent-primary);
+    border: 3px solid var(--bg-primary);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 60%, transparent);
+    pointer-events: none;
   }
 </style>

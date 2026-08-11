@@ -2,7 +2,7 @@
   import {
     History, Plus, RefreshCw, RotateCcw, Calendar, GitCompare, FileText, Archive, Trash2,
     Search, ChevronDown, ChevronRight, ExternalLink, AlertTriangle,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import EmptyState from "./EmptyState.svelte";
   import {
@@ -16,33 +16,33 @@
   } from "../lib/api";
   import { historyFocusSnapshotId, ideStageRequest, projectPath } from "../lib/store";
 
-  let snapshots: Snapshot[] = [];
-  let loading = false;
-  let newName = "";
-  let error: string | null = null;
-  let message: string | null = null;
-  let projectDir: string | null = null;
-  let lastLoadedPath: string | null = null;
-  let fromId = "";
-  let toId = "";
-  let diff: SnapshotDiff | null = null;
-  let selectedDiffPath = "";
-  let fileDiff: SnapshotFileDiff | null = null;
-  let diffLoading = false;
+  let snapshots = $state<Snapshot[]>([]);
+  let loading = $state(false);
+  let newName = $state("");
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let projectDir = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
+  let fromId = $state("");
+  let toId = $state("");
+  let diff = $state<SnapshotDiff | null>(null);
+  let selectedDiffPath = $state("");
+  let fileDiff = $state<SnapshotFileDiff | null>(null);
+  let diffLoading = $state(false);
 
-  let selectedId = "";
-  let detail: SnapshotDetail | null = null;
-  let detailLoading = false;
-  let search = "";
-  let filterKind: "all" | "auto" | "manual" | "crash" = "all";
-  let backupsOpen = false;
-  let compareOpen = false;
+  let selectedId = $state("");
+  let detail = $state<SnapshotDetail | null>(null);
+  let detailLoading = $state(false);
+  let search = $state("");
+  let filterKind = $state<"all" | "auto" | "manual" | "crash">("all");
+  let backupsOpen = $state(false);
+  let compareOpen = $state(false);
 
-  let confirmOpen = false;
-  let confirmTitle = "";
-  let confirmMessage = "";
-  let confirmDanger = false;
-  let confirmAction: (() => void) | null = null;
+  let confirmOpen = $state(false);
+  let confirmTitle = $state("");
+  let confirmMessage = $state("");
+  let confirmDanger = $state(false);
+  let confirmAction = $state<(() => void) | null>(null);
 
   function showConfirm(title: string, message: string, action: () => void, danger = false) {
     confirmTitle = title;
@@ -58,12 +58,12 @@
     confirmAction = null;
   }
 
-  let manifestDiff: ManifestSnapshotDiff | null = null;
-  let manifestDiffLoading = false;
+  let manifestDiff = $state<ManifestSnapshotDiff | null>(null);
+  let manifestDiffLoading = $state(false);
 
-  let backups: BackupEntry[] = [];
-  let backupLoading = false;
-  let backupName = "";
+  let backups = $state<BackupEntry[]>([]);
+  let backupLoading = $state(false);
+  let backupName = $state("");
 
   async function ensureProjectDir() {
     if (!$projectPath) return null;
@@ -168,7 +168,7 @@
     return s.reason || "No action details";
   }
 
-  $: filtered = (() => {
+  const filtered = $derived((() => {
     const q = search.trim().toLowerCase();
     let list = [...snapshots].reverse();
     if (filterKind === "auto") list = list.filter(isAuto);
@@ -190,7 +190,7 @@
       });
     }
     return list;
-  })();
+  })());
 
   async function load(force = false) {
     if (!$projectPath) return;
@@ -210,7 +210,11 @@
         selectedId = "";
         detail = null;
       }
-      if (!selectedId && snapshots.length) {
+      const focusSnap = $historyFocusSnapshotId;
+      if (focusSnap && snapshots.some((s) => s.id === focusSnap)) {
+        historyFocusSnapshotId.set(null);
+        await selectSnapshot(focusSnap);
+      } else if (!selectedId && snapshots.length) {
         await selectSnapshot(snapshots[snapshots.length - 1].id);
       } else if (selectedId) {
         await selectSnapshot(selectedId);
@@ -385,10 +389,19 @@
     return "context";
   }
 
-  $: allDiffFiles = diff
+  const allDiffFiles = $derived(diff
     ? Array.from(new Set([...diff.addedFiles, ...diff.removedFiles, ...diff.modifiedFiles])).sort()
-    : [];
-  $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+    : []);
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+  });
+  $effect(() => {
+    const focusSnap = $historyFocusSnapshotId;
+    if (!focusSnap || !snapshots.length) return;
+    if (!snapshots.some((s) => s.id === focusSnap)) return;
+    historyFocusSnapshotId.set(null);
+    void selectSnapshot(focusSnap);
+  });
 </script>
 
 <div class="snapshots">
@@ -399,11 +412,11 @@
     </div>
     <div class="actions">
       <input bind:value={newName} placeholder="Snapshot name" />
-      <button on:click={create} disabled={!$projectPath || loading}>
+      <button onclick={create} disabled={!$projectPath || loading}>
         <Plus size={16} />
         Create
       </button>
-      <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
+      <button class="ghost" onclick={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
       </button>
     </div>
@@ -425,10 +438,10 @@
         <input bind:value={search} placeholder="Search name, actions, tags…" />
       </div>
       <div class="chips">
-        <button class:active={filterKind === "all"} on:click={() => (filterKind = "all")}>All</button>
-        <button class:active={filterKind === "auto"} on:click={() => (filterKind = "auto")}>Auto</button>
-        <button class:active={filterKind === "manual"} on:click={() => (filterKind = "manual")}>Manual</button>
-        <button class:active={filterKind === "crash"} on:click={() => (filterKind = "crash")}>Crash fix</button>
+        <button class:active={filterKind === "all"} onclick={() => (filterKind = "all")}>All</button>
+        <button class:active={filterKind === "auto"} onclick={() => (filterKind = "auto")}>Auto</button>
+        <button class:active={filterKind === "manual"} onclick={() => (filterKind = "manual")}>Manual</button>
+        <button class:active={filterKind === "crash"} onclick={() => (filterKind = "crash")}>Crash fix</button>
       </div>
     </div>
 
@@ -439,7 +452,7 @@
             type="button"
             class="row"
             class:selected={selectedId === s.id}
-            on:click={() => selectSnapshot(s.id)}
+            onclick={() => selectSnapshot(s.id)}
           >
             <div class="row-top">
               <strong>{s.name}</strong>
@@ -476,16 +489,16 @@
               </div>
             </div>
             <div class="detail-actions">
-              <button class="secondary" on:click={() => compareWithPrevious(s.id)} title="Compare with previous">
+              <button class="secondary" onclick={() => compareWithPrevious(s.id)} title="Compare with previous">
                 <GitCompare size={14} /> Compare prev
               </button>
-              <button class="secondary" on:click={() => openInHistory(s.id)}>
+              <button class="secondary" onclick={() => openInHistory(s.id)}>
                 <ExternalLink size={14} /> History
               </button>
-              <button class="ghost rollback" on:click={() => rollback(s.id)}>
+              <button class="ghost rollback" onclick={() => rollback(s.id)}>
                 <RotateCcw size={14} /> Rollback
               </button>
-              <button class="ghost danger" on:click={() => removeSnapshot(s.id)}>
+              <button class="ghost danger" onclick={() => removeSnapshot(s.id)}>
                 <Trash2 size={14} /> Delete
               </button>
             </div>
@@ -567,7 +580,7 @@
     </div>
 
     <div class="collapsible">
-      <button type="button" class="collapse-toggle" on:click={() => (compareOpen = !compareOpen)}>
+      <button type="button" class="collapse-toggle" onclick={() => (compareOpen = !compareOpen)}>
         {#if compareOpen}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}
         <GitCompare size={16} /> Compare snapshots
       </button>
@@ -579,8 +592,8 @@
           <select bind:value={toId}>
             {#each snapshots as s}<option value={s.id}>{s.name} · {s.id}</option>{/each}
           </select>
-          <button class="secondary" on:click={compare} disabled={fromId === toId}>Diff files</button>
-          <button class="secondary" on:click={loadManifestDiff} disabled={fromId === toId || manifestDiffLoading}>
+          <button class="secondary" onclick={compare} disabled={fromId === toId}>Diff files</button>
+          <button class="secondary" onclick={loadManifestDiff} disabled={fromId === toId || manifestDiffLoading}>
             {manifestDiffLoading ? "Loading..." : "Diff manifest"}
           </button>
         </div>
@@ -615,7 +628,7 @@
               <aside class="diff-files">
                 <h3><FileText size={14} /> Changed files</h3>
                 {#each allDiffFiles as path}
-                  <button class:selected={selectedDiffPath === path} on:click={() => openFileDiff(path)}>
+                  <button class:selected={selectedDiffPath === path} onclick={() => openFileDiff(path)}>
                     <span>{path}</span>
                     {#if diff.addedFiles.includes(path)}<small class="added-label">added</small>{/if}
                     {#if diff.removedFiles.includes(path)}<small class="removed-label">removed</small>{/if}
@@ -647,7 +660,7 @@
     </div>
 
     <div class="collapsible">
-      <button type="button" class="collapse-toggle" on:click={() => (backupsOpen = !backupsOpen)}>
+      <button type="button" class="collapse-toggle" onclick={() => (backupsOpen = !backupsOpen)}>
         {#if backupsOpen}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}
         <Archive size={16} /> Project backups ({backups.length})
       </button>
@@ -655,10 +668,10 @@
         <div class="backup-section">
           <div class="backup-create">
             <input bind:value={backupName} placeholder="Backup name" />
-            <button on:click={createBackup} disabled={!$projectPath || loading}>
+            <button onclick={createBackup} disabled={!$projectPath || loading}>
               <Archive size={16} /> Backup
             </button>
-            <button class="ghost" on:click={loadBackups} disabled={backupLoading}>
+            <button class="ghost" onclick={loadBackups} disabled={backupLoading}>
               <RefreshCw size={14} class={backupLoading ? "spin" : ""} />
             </button>
           </div>
@@ -670,10 +683,10 @@
                     <strong>{b.name}</strong>
                     <span>{formatDate(b.createdAt)} · {formatBytes(b.sizeBytes)}</span>
                   </div>
-                  <button class="ghost mini" on:click={() => restoreBackup(b.id)} title="Restore">
+                  <button class="ghost mini" onclick={() => restoreBackup(b.id)} title="Restore">
                     <RotateCcw size={14} />
                   </button>
-                  <button class="ghost mini danger" on:click={() => deleteBackup(b.id)}>
+                  <button class="ghost mini danger" onclick={() => deleteBackup(b.id)}>
                     <Trash2 size={14} />
                   </button>
                 </div>
@@ -692,15 +705,24 @@
       title={confirmTitle}
       message={confirmMessage}
       danger={confirmDanger}
-      on:confirm={handleConfirm}
-      on:cancel={() => ((confirmOpen = false), (confirmAction = null))}
+      onconfirm={handleConfirm}
+      oncancel={() => ((confirmOpen = false), (confirmAction = null))}
     />
   {/if}
 </div>
 
 <style>
-  .snapshots { max-width: none; width: 100%; display: flex; flex-direction: column; gap: 14px; }
-  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .snapshots {
+    max-width: none;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+    height: 100%;
+    box-sizing: border-box;
+  }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; flex-shrink: 0; }
   .title, .actions, .row-meta, .detail-sub, .detail-actions, .backup-create, .search, .collapse-toggle {
     display: flex; align-items: center; gap: 10px;
   }
@@ -708,7 +730,7 @@
   .actions input, .backup-create input, .search input { min-width: 180px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); border: 1px solid var(--border-color); display: flex; align-items: flex-start; gap: 8px; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .notice.warn { color: #fcd34d; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); font-size: 13px; }
 
   .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
@@ -716,15 +738,21 @@
   .search input { flex: 1; border: 0; background: transparent; color: var(--text-primary); padding: 10px 0; outline: none; min-width: 0; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .chips button { background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-muted); padding: 6px 12px; font-size: 12px; transform: none; }
-  .chips button.active { color: var(--text-primary); border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.08); }
+  .chips button.active { color: var(--text-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
 
-  .master-detail { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 14px; min-height: 420px; }
+  .master-detail {
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    gap: 14px;
+    flex: 1;
+    min-height: 0;
+  }
   .list-pane, .detail-pane, .compare-panel, .diff-panel, .inline-diff-shell, .backup-section, .collapsible {
     background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg);
   }
-  .list-pane { overflow: auto; max-height: 70vh; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .list-pane { overflow: auto; min-height: 0; max-height: none; padding: 8px; display: flex; flex-direction: column; gap: 6px; scrollbar-gutter: stable; }
   .row { width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); display: grid; gap: 6px; transform: none; }
-  .row:hover, .row.selected { background: var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.28); color: var(--text-primary); }
+  .row:hover, .row.selected { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent); color: var(--text-primary); }
   .row-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
   .row-top strong { font-size: 13px; color: var(--text-primary); }
   .op-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); font-family: ui-monospace, monospace; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -732,13 +760,13 @@
   .row-meta { font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
   .tags { display: flex; gap: 4px; flex-wrap: wrap; }
 
-  .detail-pane { padding: 18px; overflow: auto; max-height: 70vh; display: flex; flex-direction: column; gap: 14px; }
+  .detail-pane { padding: 18px; overflow: auto; min-height: 0; max-height: none; display: flex; flex-direction: column; gap: 14px; scrollbar-gutter: stable; }
   .detail-header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
   .detail-header h2 { margin: 0 0 6px; font-size: 18px; }
   .detail-actions { flex-wrap: wrap; }
   .badge { font-size: 11px; color: var(--text-muted); background: var(--bg-elevated); padding: 3px 8px; border-radius: 4px; font-family: ui-monospace, monospace; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
   .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg-elevated); color: var(--text-muted); }
-  .tag.crash-fix { color: var(--accent-primary); background: rgba(27, 217, 106, 0.12); }
+  .tag.crash-fix { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
   .tag.mono { font-family: ui-monospace, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
   .tag-row { display: flex; flex-wrap: wrap; gap: 6px; }
   .reason { color: var(--text-secondary); font-size: 13px; margin: 0; }
@@ -760,7 +788,7 @@
   .diff-files { border-right: 1px solid var(--border-color); padding-right: 14px; }
   .diff-files h3 { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
   .diff-files button { width: 100%; justify-content: space-between; text-align: left; background: transparent; color: var(--text-secondary); border: 1px solid transparent; padding: 9px 10px; margin-bottom: 5px; transform: none; }
-  .diff-files button:hover, .diff-files button.selected { background: var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.28); color: var(--text-primary); }
+  .diff-files button:hover, .diff-files button.selected { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent); color: var(--text-primary); }
   .diff-files small { color: var(--text-muted); }
   .added-label { color: var(--accent-primary) !important; }
   .removed-label { color: #fca5a5 !important; }
@@ -771,7 +799,7 @@
   .diff-stat strong { color: var(--text-primary); }
   .diff-stat span { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .diff-stat.changed { border-color: rgba(245,158,11,.30); }
-  .diff-stat.added { border-color: rgba(27,217,106,.30); }
+  .diff-stat.added { border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
   .diff-stat.removed { border-color: rgba(239,68,68,.30); }
   .manifest-diff-text { margin: 0; padding: 12px; border-radius: 10px; background: #0d0d10; color: #a1a1aa; font-family: ui-monospace,monospace; font-size: 11px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; }
   .inline-diff { min-width: 0; }
@@ -779,7 +807,7 @@
   .inline-diff-header span { color: var(--text-muted); font-size: 12px; }
   pre { overflow: auto; max-height: 420px; background: #0d0d10; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin: 0; }
   pre span { display: block; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-  pre span.added { color: #86efac; background: rgba(27, 217, 106, 0.08); }
+  pre span.added { color: #86efac; background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   pre span.removed { color: #fca5a5; background: rgba(239, 68, 68, 0.08); }
   pre span.context { color: #a1a1aa; }
 

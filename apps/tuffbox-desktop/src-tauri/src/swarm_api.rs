@@ -17,11 +17,18 @@ use tuffbox_core::swarm::{
 use tuffbox_core::{ContentProvider, ProjectManifest, Snapshot, SnapshotMeta, SnapshotStore};
 use tauri::Emitter;
 
+fn resolve_manifest(path: &str) -> Result<PathBuf, String> {
+    crate::resolve_manifest_path(path)
+}
+
 fn manifest_parent(path: &str) -> Result<PathBuf, String> {
-    PathBuf::from(path)
-        .parent()
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| "manifest path has no parent".into())
+    crate::manifest_parent(path)
+}
+
+fn load_project_manifest(path: &str) -> Result<(PathBuf, ProjectManifest), String> {
+    let manifest_path = resolve_manifest(path)?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    Ok((manifest_path, manifest))
 }
 
 fn last_crash_fix_path(project_dir: &Path) -> PathBuf {
@@ -70,6 +77,9 @@ pub struct LastCrashFixMarker {
     /// Whether UI already received a soft-verify outcome event for this marker.
     #[serde(default)]
     pub vote_emitted: bool,
+    /// History episode id linking crash_detected → fix → outcome.
+    #[serde(default)]
+    pub episode_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -392,10 +402,12 @@ pub fn maybe_confirm_crash_resolution(
         matched_case_ids: rec.matched_case_ids.clone(),
         operation: "crash_resolved".into(),
         actions_summary: rec.actions_summary.clone(),
-        actor: Some("ai".into()),
+        actor: Some(
+            crate::pack_events::actor_for_plan_source(rec.plan_source.as_deref()).to_string(),
+        ),
     };
     let store = SnapshotStore::new(project_dir);
-    let _ = store.create_with_meta(
+    let resolved_snap = store.create_with_meta(
         format!("crash-resolved-{fp_prefix}"),
         format!(
             "Resolved crash ({verified_by}): {}",
@@ -406,9 +418,36 @@ pub fn maybe_confirm_crash_resolution(
         &[] as &[std::path::PathBuf],
         meta,
     );
+    let episode_id = marker
+        .episode_id
+        .clone()
+        .unwrap_or_else(|| crate::pack_events::episode_id_for_fingerprint(&rec.fingerprint_key));
+    if let Ok(ref snap) = resolved_snap {
+        let _ = crate::pack_events::append_from_snapshot_with_episode(
+            project_dir,
+            "crash_resolved",
+            &snap.id,
+            &[] as &[std::path::PathBuf],
+            &format!("Crash resolved ({verified_by})"),
+            &rec.actions_summary,
+            Some(&episode_id),
+            Some(&rec.fingerprint_key),
+            rec.plan_source.as_deref(),
+        );
+    }
+    let _ = crate::pack_events::append_crash_outcome_event(
+        project_dir,
+        "crash_resolved",
+        &episode_id,
+        &rec.fingerprint_key,
+        rec.plan_source.as_deref(),
+        resolved_snap.as_ref().ok().map(|s| s.id.as_str()),
+        &format!("Crash resolved ({verified_by}): {}", tuffbox_core::crash_kb::truncate_at_char_boundary(&how, 120)),
+    );
 
     marker.resolved = true;
     marker.resolved_at = Some(now_rfc);
+    marker.episode_id = Some(episode_id);
     save_crash_fix_marker(project_dir, &marker)?;
 
     Ok(Some(rec))
@@ -436,6 +475,29 @@ pub fn fail_soft_verify(
     } else {
         marker.soft_verify_failed = true;
     }
+    let episode_id = marker
+        .episode_id
+        .clone()
+        .unwrap_or_else(|| crate::pack_events::episode_id_for_fingerprint(&marker.fingerprint_key));
+    marker.episode_id = Some(episode_id.clone());
+    let outcome_op = if reason == "rollback" {
+        "crash_fix_rollback"
+    } else {
+        "crash_fix_rejected"
+    };
+    let _ = crate::pack_events::append_crash_outcome_event(
+        project_dir,
+        outcome_op,
+        &episode_id,
+        &marker.fingerprint_key,
+        marker.plan_source.as_deref(),
+        Some(&marker.snapshot_id),
+        &format!(
+            "Crash fix {} ({})",
+            if reason == "rollback" { "rolled back" } else { "rejected" },
+            reason
+        ),
+    );
     if !marker.vote_emitted {
         marker.vote_emitted = true;
         save_crash_fix_marker(project_dir, &marker)?;
@@ -574,18 +636,17 @@ pub fn confirm_crash_resolution_after_launch(
     app: tauri::AppHandle,
     path: String,
 ) -> Result<Option<CrashResolutionRecord>, String> {
-    let manifest_path = PathBuf::from(&path);
-    let project_dir = manifest_path
-        .parent()
-        .ok_or_else(|| "manifest path has no parent".to_string())?;
+    let manifest_path = resolve_manifest(&path)?;
+    let path_str = manifest_path.to_string_lossy().to_string();
+    let project_dir = manifest_parent(&path_str)?;
     // Immediate attempt (game already healthy / relaunch into existing session).
     if let Some(rec) = maybe_confirm_crash_resolution(&manifest_path, "successful_launch")? {
-        emit_success_soft_verify(&app, &path, project_dir, &rec);
-        emit_distill_resolution(&app, &path, &rec);
+        emit_success_soft_verify(&app, &path_str, &project_dir, &rec);
+        emit_distill_resolution(&app, &path_str, &rec);
         return Ok(Some(rec));
     }
     // Otherwise watch until soft-verify playtime + healthy post-fix session.
-    if pending_fix_marker_exists(project_dir) {
+    if pending_fix_marker_exists(&project_dir) {
         spawn_crash_resolution_watcher(app, manifest_path);
     }
     Ok(None)
@@ -596,14 +657,13 @@ pub fn confirm_crash_resolution_from_diagnose(
     app: tauri::AppHandle,
     path: String,
 ) -> Result<Option<CrashResolutionRecord>, String> {
-    let manifest_path = PathBuf::from(&path);
-    let project_dir = manifest_path
-        .parent()
-        .ok_or_else(|| "manifest path has no parent".to_string())?;
+    let manifest_path = resolve_manifest(&path)?;
+    let path_str = manifest_path.to_string_lossy().to_string();
+    let project_dir = manifest_parent(&path_str)?;
     let rec = maybe_confirm_crash_resolution(&manifest_path, "diagnose_healthy")?;
     if let Some(ref r) = rec {
-        emit_success_soft_verify(&app, &path, project_dir, r);
-        emit_distill_resolution(&app, &path, r);
+        emit_success_soft_verify(&app, &path_str, &project_dir, r);
+        emit_distill_resolution(&app, &path_str, r);
     }
     Ok(rec)
 }
@@ -643,7 +703,7 @@ pub fn report_soft_verify_failure(
     path: String,
     reason: Option<String>,
 ) -> Result<Option<LastCrashFixMarker>, String> {
-    let manifest_path = PathBuf::from(&path);
+    let manifest_path = resolve_manifest(&path)?;
     let why = reason.unwrap_or_else(|| "launch_crash".into());
     fail_soft_verify(&app, &manifest_path, &why)
 }
@@ -664,7 +724,7 @@ pub fn rollback_last_crash_fix(
     let snapshot = store
         .rollback(marker.snapshot_id.clone())
         .map_err(|e| e.to_string())?;
-    let manifest_path = PathBuf::from(&path);
+    let manifest_path = resolve_manifest(&path)?;
     let _ = fail_soft_verify(&app, &manifest_path, "rollback");
     Ok(json!({
         "ok": true,
@@ -776,6 +836,8 @@ pub fn record_user_fix_attempt(
         actions,
         additional_context: None,
     };
+    let actor = crate::pack_events::actor_for_plan_source(Some(source)).to_string();
+    let episode_id = crate::pack_events::episode_id_for_fingerprint(&fp);
     let snapshot = Snapshot {
         id: existing_snapshot_id
             .unwrap_or_else(|| format!("user-fix-{}", tuffbox_core::time_util::compact_now())),
@@ -796,9 +858,15 @@ pub fn record_user_fix_attempt(
             .iter()
             .map(format_launcher_action_summary)
             .collect(),
-        actor: Some("ai".into()),
+        actor: Some(actor),
     };
-    write_last_crash_fix_marker(project_dir, &snapshot, &plan, &fp)
+    write_last_crash_fix_marker(project_dir, &snapshot, &plan, &fp)?;
+    // Ensure marker carries episode id for History grouping.
+    if let Ok(Some(mut marker)) = load_crash_fix_marker(project_dir) {
+        marker.episode_id = Some(episode_id);
+        let _ = save_crash_fix_marker(project_dir, &marker);
+    }
+    Ok(())
 }
 
 pub fn write_last_crash_fix_marker(
@@ -830,6 +898,7 @@ pub fn write_last_crash_fix_marker(
         rolled_back: false,
         soft_verify_failed: false,
         vote_emitted: false,
+        episode_id: Some(crate::pack_events::episode_id_for_fingerprint(fingerprint_key)),
     };
     save_crash_fix_marker(project_dir, &marker)
 }
@@ -864,15 +933,18 @@ pub fn auto_snapshot_crash_fix(
     if actions_summary.is_empty() && !plan.human_explanation.trim().is_empty() {
         actions_summary.push(plan.human_explanation.clone());
     }
+    let plan_source = plan.source.clone().or_else(|| Some("manual".into()));
+    let actor = crate::pack_events::actor_for_plan_source(plan_source.as_deref()).to_string();
+    let episode_id = crate::pack_events::episode_id_for_fingerprint(fp);
     let meta = SnapshotMeta {
         tags: vec!["crash_fix".into()],
         crash_fingerprint_key: fingerprint_key.map(|s| s.to_string()),
         report_id: None,
-        plan_source: plan.source.clone().or_else(|| Some("manual".into())),
+        plan_source: plan_source.clone(),
         matched_case_ids: plan.matched_case_ids.clone(),
         operation: "crash_fix".into(),
         actions_summary: actions_summary.clone(),
-        actor: Some("ai".into()),
+        actor: Some(actor),
     };
     let store = SnapshotStore::new(project_dir);
     let snapshot = store
@@ -886,14 +958,22 @@ pub fn auto_snapshot_crash_fix(
         )
         .map_err(|e| e.to_string())?;
     write_snapshot_plan_json(&store, &snapshot.id, plan)?;
-    let _ = crate::pack_events::append_from_snapshot(
+    let _ = crate::pack_events::append_from_snapshot_with_episode(
         project_dir,
         "crash_fix",
         &snapshot.id,
         &[] as &[std::path::PathBuf],
         &reason,
+        &actions_summary,
+        Some(&episode_id),
+        Some(fp),
+        plan_source.as_deref(),
     );
     let _ = write_last_crash_fix_marker(project_dir, &snapshot, plan, fp);
+    if let Ok(Some(mut marker)) = load_crash_fix_marker(project_dir) {
+        marker.episode_id = Some(episode_id);
+        let _ = save_crash_fix_marker(project_dir, &marker);
+    }
     Ok(snapshot)
 }
 
@@ -917,7 +997,7 @@ pub fn auto_snapshot_crash_fix_heuristic(
     let fp = fingerprint_key.unwrap_or("unknown");
     let fp_prefix: String = fp.chars().take(24).collect();
     let name = format!("auto-before-crash-fix-{fp_prefix}");
-    let reason = format!("Auto snapshot before crash fix (manual): {summary}");
+    let reason = format!("Auto snapshot before crash fix (heuristic): {summary}");
     let actions_summary: Vec<String> = actions
         .iter()
         .map(format_launcher_action_summary)
@@ -930,13 +1010,16 @@ pub fn auto_snapshot_crash_fix_heuristic(
         tags: vec!["crash_fix".into()],
         crash_fingerprint_key: fingerprint_key.map(|s| s.to_string()),
         report_id: report_id.map(|s| s.to_string()),
-        plan_source: Some("manual".into()),
+        plan_source: Some("heuristic".into()),
         matched_case_ids: Vec::new(),
         operation: "crash_fix".into(),
         actions_summary: actions_summary.clone(),
-        actor: Some("ai".into()),
+        actor: Some(
+            crate::pack_events::actor_for_plan_source(Some("heuristic")).to_string(),
+        ),
     };
     let store = SnapshotStore::new(project_dir);
+    let episode_id = crate::pack_events::episode_id_for_fingerprint(fp);
     let snapshot = store
         .create_with_meta(
             &name,
@@ -953,20 +1036,29 @@ pub fn auto_snapshot_crash_fix_heuristic(
         confidence: 0.6,
         suspected_mods: Vec::new(),
         needs_user_review: true,
-        source: Some("manual".into()),
+        source: Some("heuristic".into()),
         matched_case_ids: Vec::new(),
         actions,
         additional_context: None,
     };
     write_snapshot_plan_json(&store, &snapshot.id, &plan)?;
-    let _ = crate::pack_events::append_from_snapshot(
+    let _ = crate::pack_events::append_from_snapshot_with_episode(
         project_dir,
         "crash_fix",
         &snapshot.id,
         &[] as &[std::path::PathBuf],
         &reason,
+        &actions_summary,
+        Some(&episode_id),
+        Some(fp),
+        Some("heuristic"),
     );
     let _ = write_last_crash_fix_marker(project_dir, &snapshot, &plan, fp);
+    if let Ok(Some(mut marker)) = load_crash_fix_marker(project_dir) {
+        marker.episode_id = Some(episode_id);
+        marker.plan_source = Some("heuristic".into());
+        let _ = save_crash_fix_marker(project_dir, &marker);
+    }
     Ok(snapshot)
 }
 
@@ -1005,7 +1097,8 @@ pub fn change_actions_to_launcher(
                 version,
             } => tuffbox_core::action_plan::LauncherAction {
                 op: "install_mod".into(),
-                mod_id: None,
+                // Prefer slug-like project_id as modId so grounding/validation agree.
+                mod_id: Some(project_id.clone()),
                 provider: Some("modrinth".into()),
                 project_id: Some(project_id.clone()),
                 version: version.clone(),
@@ -1132,13 +1225,58 @@ pub async fn vote_community_crash_capsule(
         return Err("login required — register and sign in to vote".into());
     }
     let url = integrations::swarm_supabase_url().unwrap();
-    let anon = integrations::swarm_supabase_anon_key().unwrap();
+    let edge = integrations::swarm_supabase_edge_anon_key().unwrap();
     tuffbox_core::swarm_supabase::vote_capsule_supabase(
         &url,
-        &anon,
+        &edge,
         &content_hash,
         &vote,
         &access_token,
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_local_kudos_balance() -> Result<serde_json::Value, String> {
+    integrations::require_swarm_enabled()?;
+    if !integrations::swarm_supabase_configured() {
+        return Err("Community Supabase backend is not available".into());
+    }
+    let pk = tuffbox_core::swarm::device_signer_public_key_b64()?;
+    let url = integrations::swarm_supabase_url().unwrap();
+    let anon = integrations::swarm_supabase_anon_key().unwrap();
+    tuffbox_core::swarm_supabase::fetch_kudos_balance_supabase(&url, &anon, &pk).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn accept_creation_result(
+    job_id: String,
+    worker_signer_public_key: String,
+    access_token: String,
+    amount: Option<u32>,
+) -> Result<serde_json::Value, String> {
+    integrations::require_swarm_enabled()?;
+    if !integrations::swarm_supabase_configured() {
+        return Err("Community Supabase backend is not available".into());
+    }
+    if access_token.trim().is_empty() {
+        return Err("login required — register and sign in to accept".into());
+    }
+    if job_id.trim().is_empty() {
+        return Err("jobId required".into());
+    }
+    if worker_signer_public_key.trim().is_empty() {
+        return Err("workerSignerPublicKey required — worker did not report a device key".into());
+    }
+    let url = integrations::swarm_supabase_url().unwrap();
+    let edge = integrations::swarm_supabase_edge_anon_key().unwrap();
+    tuffbox_core::swarm_supabase::accept_creation_supabase(
+        &url,
+        &edge,
+        &job_id,
+        &worker_signer_public_key,
+        &access_token,
+        amount,
     )
     .await
 }
@@ -1248,17 +1386,49 @@ pub async fn publish_experience_capsule(
     let fp_key = fingerprint_key
         .or_else(|| marker.as_ref().map(|m| m.fingerprint_key.clone()))
         .unwrap_or_else(|| "unknown".into());
-    let solution = human_explanation
+    let mut solution = human_explanation
         .or_else(|| marker.as_ref().map(|m| m.human_explanation.clone()))
         .unwrap_or_else(|| "Shared crash fix".into());
-    let launcher_actions = actions.unwrap_or_else(|| {
+    let mut launcher_actions = actions.unwrap_or_else(|| {
         marker
             .as_ref()
             .map(|m| m.actions.clone())
             .unwrap_or_default()
     });
 
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(&path)?;
+    let inventory_ids = pack_mod_ids(&manifest);
+    let mut share_plan = ActionPlan {
+        schema_version: tuffbox_core::action_plan::ACTION_PLAN_SCHEMA_VERSION,
+        human_explanation: solution.clone(),
+        confidence: 0.8,
+        suspected_mods: Vec::new(),
+        needs_user_review: true,
+        source: Some("distill".into()),
+        matched_case_ids: marker
+            .as_ref()
+            .map(|m| m.matched_case_ids.clone())
+            .unwrap_or_default(),
+        actions: launcher_actions,
+        additional_context: None,
+    };
+    let grounded =
+        tuffbox_core::action_plan::ground_action_plan(share_plan, &inventory_ids, &[]);
+    share_plan = grounded.plan;
+    let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory(
+        &share_plan,
+        &inventory_ids,
+        &[],
+    );
+    if !validation.ok {
+        return Err(format!(
+            "Cannot publish invalid plan: {}",
+            validation.errors.join("; ")
+        ));
+    }
+    launcher_actions = share_plan.actions.clone();
+    solution = share_plan.human_explanation.clone();
+
     let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
     let crash = std::fs::read_to_string(project_dir.join("logs").join("latest.log")).unwrap_or_default();
     // Prefer a real fingerprint from logs when available; never publish the log itself.
@@ -1297,15 +1467,18 @@ pub async fn publish_experience_capsule(
         fail_count: 0,
     };
     let mut capsule = ExperienceCapsule::from_crash_case(&case).sanitized_for_network();
-    // Soft-sign with persistent device key (required for Supabase; also helps hub/P2P).
-    let device_id = match tuffbox_core::swarm::sign_capsule_with_device_key(&mut capsule) {
-        Ok(id) => Some(id),
-        Err(e) => {
-            // Still allow local-only share if signing fails, but remote Supabase will reject.
-            eprintln!("tuffswarm: device sign failed: {e}");
-            None
-        }
-    };
+    // Soft-sign with persistent device key — required for Supabase Kudos beneficiary + Edge verify.
+    let device_id = tuffbox_core::swarm::sign_capsule_with_device_key(&mut capsule)
+        .map_err(|e| format!("Cannot publish unsigned capsule: {e}"))?;
+    if capsule
+        .signer_public_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
+        return Err("signer_public_key missing after device sign".into());
+    }
     let public = capsule.to_public_json();
 
     // Project-local authored export (pack author).
@@ -1330,14 +1503,18 @@ pub async fn publish_experience_capsule(
     let mut published_remote = false;
     let mut remote_results = Vec::new();
     let mut remote_error: Option<String> = None;
+    let mut supabase_ok = false;
+    let mut p2p_gossip_ok: Option<bool> = None;
+    let mut p2p_gossip_error: Option<String> = None;
 
     // Preferred transport: Supabase Edge Function (signed capsules only).
     if integrations::swarm_supabase_configured() {
         let url = integrations::swarm_supabase_url().unwrap();
-        let anon = integrations::swarm_supabase_anon_key().unwrap();
-        match tuffbox_core::swarm_supabase::publish_capsule_supabase(&url, &anon, &capsule).await {
+        let edge = integrations::swarm_supabase_edge_anon_key().unwrap();
+        match tuffbox_core::swarm_supabase::publish_capsule_supabase(&url, &edge, &capsule).await {
             Ok(body) => {
                 published_remote = true;
+                supabase_ok = true;
                 remote_results.push(json!({
                     "transport": "supabase",
                     "ok": true,
@@ -1364,8 +1541,26 @@ pub async fn publish_experience_capsule(
             .await
         {
             Ok(body) => {
+                let gossip_ok = body
+                    .pointer("/gossip/ok")
+                    .and_then(|v| v.as_bool());
+                if let Some(ok) = gossip_ok {
+                    p2p_gossip_ok = Some(ok);
+                    if !ok {
+                        p2p_gossip_error = body
+                            .pointer("/gossip/error")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                    }
+                }
+                // HTTP stored on node/hub counts as remote even if gossip mesh failed.
                 published_remote = true;
-                remote_results.push(json!({ "base": base, "ok": true, "body": body }));
+                remote_results.push(json!({
+                    "base": base,
+                    "ok": true,
+                    "gossipOk": gossip_ok,
+                    "body": body,
+                }));
             }
             Err(e) => {
                 remote_results.push(json!({ "base": base, "ok": false, "error": e.clone() }));
@@ -1390,6 +1585,9 @@ pub async fn publish_experience_capsule(
         "signed": stored_global.signature.is_some(),
         "remote": remote_results,
         "error": remote_error,
+        "supabaseOk": supabase_ok,
+        "p2pGossipOk": p2p_gossip_ok,
+        "p2pGossipError": p2p_gossip_error,
         "privacy": { "rawLogs": false, "notesIncluded": false },
         "capsule": public,
         "supabaseConfigured": integrations::swarm_supabase_configured(),
@@ -1402,7 +1600,7 @@ pub async fn publish_experience_capsule(
 #[tauri::command(rename_all = "camelCase")]
 pub fn record_project_cooccurrence(path: String) -> Result<(), String> {
     let project_dir = manifest_parent(&path)?;
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(&path)?;
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let ids = pack_mod_ids(&manifest);
     let plan = plan_pack_observation(
@@ -1441,7 +1639,7 @@ pub async fn record_and_upload_cooccurrence_opts(
     record_local: bool,
 ) -> Result<serde_json::Value, String> {
     let project_dir = manifest_parent(path)?;
-    let manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(path)?;
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let mc = manifest.minecraft.version.clone();
     let ids = if mod_ids.is_empty() {
@@ -1551,7 +1749,7 @@ pub async fn get_creation_trends(
 
     let mut network_pairs: Vec<ModPairStat> = Vec::new();
     let mut network: Option<serde_json::Value> = None;
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(&path)?;
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let mc = manifest.minecraft.version.clone();
 
@@ -1661,7 +1859,7 @@ pub async fn suggest_partners_for_mod(
 ) -> Result<Vec<serde_json::Value>, String> {
     let limit = limit.unwrap_or(8).clamp(1, 20) as usize;
     let project_dir = manifest_parent(&path)?;
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(&path)?;
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let mc = manifest.minecraft.version.clone();
     let installed: std::collections::HashSet<String> = pack_mod_ids(&manifest).into_iter().collect();
@@ -1849,7 +2047,7 @@ pub async fn distill_resolved_crash_plan(
 ) -> Result<serde_json::Value, String> {
     integrations::require_swarm_enabled()?;
     let project_dir = manifest_parent(&path)?;
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(&path)?;
     let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
 
     let resolutions = list_crash_resolutions(&project_dir)?;
@@ -1928,7 +2126,7 @@ pub async fn distill_resolved_crash_plan(
     let prompt = tuffbox_core::ai_explanation::build_distill_prompt(&distill_ctx);
     let settings = integrations::get_integration_status().settings;
 
-    let (plan, distill_source) =
+    let (mut plan, distill_source) =
         match integrations::call_ai_crash_explain(&settings.ai, &prompt).await {
             Ok(value) => {
                 let raw = serde_json::to_string(&value).unwrap_or_default();
@@ -1955,7 +2153,19 @@ pub async fn distill_resolved_crash_plan(
             ),
         };
 
-    let validation = tuffbox_core::action_plan::validate_action_plan(&plan);
+    let inventory_ids = pack_mod_ids(&manifest);
+    let missing_ids: Vec<String> = Vec::new();
+    if plan.source.as_deref().is_none_or(|s| !s.starts_with("distill")) {
+        plan.source = Some("distill".into());
+    }
+    let grounded =
+        tuffbox_core::action_plan::ground_action_plan(plan, &inventory_ids, &missing_ids);
+    let plan = grounded.plan;
+    let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory(
+        &plan,
+        &inventory_ids,
+        &missing_ids,
+    );
     Ok(json!({
         "schemaVersion": plan.schema_version,
         "humanExplanation": plan.human_explanation,
@@ -1967,6 +2177,7 @@ pub async fn distill_resolved_crash_plan(
         "actions": plan.actions,
         "additionalContext": plan.additional_context,
         "validation": validation,
+        "groundingNotes": grounded.notes,
         "distilledFrom": "user_history",
         "distillSource": distill_source,
         "resolutionId": rec.id,

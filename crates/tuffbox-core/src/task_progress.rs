@@ -12,6 +12,7 @@ static TASKS: LazyLock<Mutex<HashMap<String, BackgroundTask>>> =
 #[serde(rename_all = "camelCase")]
 pub enum TaskStatus {
     Running,
+    Paused,
     Succeeded,
     Failed,
     Dismissed,
@@ -79,6 +80,19 @@ pub fn succeed(id: &str, detail: Option<String>) {
     }
 }
 
+pub fn pause(id: &str, detail: Option<String>) {
+    if let Ok(mut g) = TASKS.lock() {
+        if let Some(t) = g.get_mut(id) {
+            t.status = TaskStatus::Paused;
+            t.error = None;
+            if let Some(d) = detail {
+                t.detail = Some(d);
+            }
+            t.updated_at_ms = now_ms();
+        }
+    }
+}
+
 pub fn fail(id: &str, error: impl Into<String>) {
     if let Ok(mut g) = TASKS.lock() {
         if let Some(t) = g.get_mut(id) {
@@ -95,9 +109,10 @@ pub fn dismiss(id: &str) {
             t.status = TaskStatus::Dismissed;
             t.updated_at_ms = now_ms();
         }
-        // Drop dismissed + old succeeded after mark.
+        // Drop dismissed + old succeeded/paused after mark.
         g.retain(|_, t| {
             t.status == TaskStatus::Running
+                || t.status == TaskStatus::Paused
                 || t.status == TaskStatus::Failed
                 || (t.status == TaskStatus::Succeeded
                     && now_ms().saturating_sub(t.updated_at_ms) < 60_000)

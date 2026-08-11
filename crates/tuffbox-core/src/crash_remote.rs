@@ -9,10 +9,9 @@
 use crate::action_plan::{parse_action_plan_value, ActionPlan, LauncherAction};
 use crate::ai_explanation::AiAction;
 use crate::crash_kb::{CrashFingerprint, SimilarCaseHit};
+use crate::http::{http, http_async};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-
-const APP_USER_AGENT: &str = "TuffBox-IDE/0.1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,11 +124,7 @@ pub fn lookup_remote(
         return Err("crash KB endpoint is not configured".into());
     }
     let url = join_url(base_url, "/v1/crash/lookup");
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http();
     let mut req = client.post(&url).json(request);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
@@ -158,11 +153,7 @@ pub fn diagnose_remote(
         return Err("crash KB endpoint is not configured".into());
     }
     let url = join_url(base_url, "/v1/crash/diagnose");
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http();
     let mut req = client.post(&url).json(request);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
@@ -172,6 +163,7 @@ pub fn diagnose_remote(
         .map_err(|e| format!("crash KB diagnose failed: {e}"))?;
     let status = response.status();
     let body: Value = response.json().map_err(|e| e.to_string())?;
+    let body = unwrap_n8n_diagnose_body(body);
     if !status.is_success() {
         let msg = body
             .get("message")
@@ -182,30 +174,7 @@ pub fn diagnose_remote(
     }
 
     // Accept either { plan: {...} } or a bare ActionPlan object.
-    if body.get("plan").is_some() {
-        let mut resp: CrashDiagnoseResponse =
-            serde_json::from_value(body).map_err(|e| format!("invalid diagnose response: {e}"))?;
-        // Re-normalize via parser for legacy fields inside plan.
-        if let Ok(normalized) =
-            parse_action_plan_value(&serde_json::to_value(&resp.plan).unwrap_or(json!({})))
-        {
-            resp.plan = normalized;
-        }
-        Ok(resp)
-    } else {
-        let plan = parse_action_plan_value(&body)?;
-        Ok(CrashDiagnoseResponse {
-            plan,
-            kb_version: body
-                .get("kbVersion")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            used_llm: body
-                .get("usedLlm")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
-        })
-    }
+    parse_diagnose_response_body(body)
 }
 
 /// Async wrappers for Tauri (uses reqwest async).
@@ -218,11 +187,7 @@ pub async fn lookup_remote_async(
         return Err("crash KB endpoint is not configured".into());
     }
     let url = join_url(base_url, "/v1/crash/lookup");
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
     let mut req = client.post(&url).json(request);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
@@ -256,11 +221,7 @@ pub async fn diagnose_remote_async(
         return Err("crash KB endpoint is not configured".into());
     }
     let url = join_url(base_url, "/v1/crash/diagnose");
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
     let mut req = client.post(&url).json(request);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
@@ -274,6 +235,7 @@ pub async fn diagnose_remote_async(
         .json()
         .await
         .map_err(|e| e.to_string())?;
+    let body = unwrap_n8n_diagnose_body(body);
     if !status.is_success() {
         let msg = body
             .get("message")
@@ -282,6 +244,23 @@ pub async fn diagnose_remote_async(
             .unwrap_or("request rejected");
         return Err(format!("crash KB diagnose {status}: {msg}"));
     }
+    parse_diagnose_response_body(body)
+}
+
+/// n8n Webhook Response Mode often wraps payloads as `[{ "json": { ... } }]`.
+pub fn unwrap_n8n_diagnose_body(body: Value) -> Value {
+    if let Some(arr) = body.as_array() {
+        if let Some(first) = arr.first() {
+            if let Some(inner) = first.get("json") {
+                return inner.clone();
+            }
+            return first.clone();
+        }
+    }
+    body
+}
+
+fn parse_diagnose_response_body(body: Value) -> Result<CrashDiagnoseResponse, String> {
     if body.get("plan").is_some() {
         let mut resp: CrashDiagnoseResponse =
             serde_json::from_value(body).map_err(|e| format!("invalid diagnose response: {e}"))?;
@@ -317,11 +296,7 @@ pub async fn publish_capsule_async(
         return Err("crash KB endpoint is not configured".into());
     }
     let url = join_url(base_url, "/v1/crash/capsules");
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
     let mut req = client.post(&url).json(capsule);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
@@ -355,11 +330,7 @@ pub async fn fetch_cooccurrence_async(
     if base_url.trim().is_empty() {
         return Err("crash KB endpoint is not configured".into());
     }
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
 
     let get_url = format!(
         "{}?version={}&loader={}&limit={}",
@@ -420,11 +391,7 @@ pub async fn fetch_modpacks_async(
     if base_url.trim().is_empty() {
         return Err("hub endpoint is not configured".into());
     }
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(45))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
 
     let mut url = format!(
         "{}?page={}&limit={}",
@@ -471,11 +438,7 @@ pub async fn fetch_modpack_categories_async(
     if base_url.trim().is_empty() {
         return Err("hub endpoint is not configured".into());
     }
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
     let url = join_url(base_url, "/v1/mods/modpack-categories");
     let mut req = client.get(&url);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
@@ -507,4 +470,34 @@ fn urlencoding_simple(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unwraps_n8n_array_wrapper() {
+        let wrapped = json!([{
+            "json": {
+                "schemaVersion": 1,
+                "humanExplanation": "from n8n",
+                "confidence": 0.9,
+                "actions": [],
+                "suspectedMods": [],
+                "needsUserReview": true
+            }
+        }]);
+        let body = unwrap_n8n_diagnose_body(wrapped);
+        assert_eq!(body["humanExplanation"], "from n8n");
+        let plan = parse_action_plan_value(&body).expect("parse plan");
+        assert_eq!(plan.human_explanation, "from n8n");
+    }
+
+    #[test]
+    fn unwrap_n8n_passthrough_object() {
+        let body = json!({"plan": {"schemaVersion": 1, "humanExplanation": "direct", "confidence": 0.5, "actions": [], "suspectedMods": [], "needsUserReview": false}});
+        let out = unwrap_n8n_diagnose_body(body.clone());
+        assert_eq!(out, body);
+    }
 }

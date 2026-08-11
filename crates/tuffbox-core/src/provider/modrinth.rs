@@ -446,6 +446,8 @@ impl From<ModrinthSearchHit> for ProjectInfo {
             license: hit.license,
             client_side: hit.client_side,
             server_side: hit.server_side,
+            issues_url: None,
+            source_url: None,
         }
     }
 }
@@ -483,6 +485,10 @@ struct ModrinthProject {
     /// Long-form project page (Markdown). Search hits omit this; GET /project includes it.
     #[serde(default)]
     body: Option<String>,
+    #[serde(default)]
+    issues_url: Option<String>,
+    #[serde(default)]
+    source_url: Option<String>,
 }
 
 impl From<ModrinthProject> for ProjectInfo {
@@ -508,6 +514,8 @@ impl From<ModrinthProject> for ProjectInfo {
             license: project.license,
             client_side: project.client_side,
             server_side: project.server_side,
+            issues_url: project.issues_url,
+            source_url: project.source_url,
         }
     }
 }

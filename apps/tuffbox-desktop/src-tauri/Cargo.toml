@@ -33,6 +33,7 @@ tempfile.workspace = true
 rayon.workspace = true
 reqwest.workspace = true
 keyring = { version = "3.6.3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
+url = "2"
 discord-rich-presence = "0.2"
 semver = "1.0.28"
 base64.workspace = true
@@ -40,3 +41,12 @@ md-5.workspace = true
 sha2.workspace = true
 hex.workspace = true
 sysinfo = "0.33"
+pest = "2.7"
+pest_derive = "2.7"
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Threading",
+] }

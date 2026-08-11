@@ -3,7 +3,6 @@
   import {
     Play,
     Square,
-    Plus,
     Settings,
     Workflow,
     LogIn,
@@ -19,11 +18,10 @@
     Clock,
     Users,
     ShieldAlert,
-  } from "lucide-svelte";
+    Gamepad2,
+  } from "@lucide/svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
-  import { confirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
-  import { open } from "@tauri-apps/plugin-shell";
   import {
     recentProjects,
     projectPath,
@@ -36,161 +34,133 @@
     isProjectRunning,
     loginTypeLabel,
     formatPlaytime,
+    ideStageRequest,
+    ideSuggestedStage,
+    ideIssueCount,
+    launcherSettingsLive,
     type RecentProject,
-    type CapeProvider,
-    type CapeCatalog,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import { launchWithFeedback, killWithFeedback, registerLaunchCrashListener } from "../lib/launch";
+  import { fetchCrashFixBanner, rollbackLastCrashFix } from "../lib/softVerify";
   import {
-    fetchCrashFixBanner,
-    rollbackLastCrashFix,
-  } from "../lib/softVerify";
+    homeCrashFixBanner,
+    homeSizes,
+    homeSkinPaths,
+    homeStats,
+  } from "../lib/homeBootstrap";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
-  import PromptDialog from "./PromptDialog.svelte";
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
   import InstanceHome from "./InstanceHome.svelte";
   import YoutubeFeed from "./YoutubeFeed.svelte";
-  import DashboardInstancesSection from "./DashboardInstancesSection.svelte";
 
-  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "me" | "library" | "chats" | "world";
+  import type { View } from "../lib/types";
 
-  /** Home layout: 1 classic | 2 yt main + instances under skin | 3 yt under skin | 4 hide yt */
-  type HomeLayout = "classic" | "yt-main" | "yt-under-skin" | "yt-hidden";
-  const HOME_LAYOUT_KEY = "tuffbox-home-layout";
-  const HOME_LAYOUT_OPTIONS: { id: HomeLayout; label: string }[] = [
-    { id: "classic", label: "YouTube then instances" },
-    { id: "yt-main", label: "YouTube main · instances under skin" },
-    { id: "yt-under-skin", label: "Instances main · YouTube under skin" },
-    { id: "yt-hidden", label: "Hide YouTube" },
-  ];
+  let { currentView = $bindable() }: { currentView: View } = $props();
 
-  function loadHomeLayout(): HomeLayout {
-    try {
-      const v = localStorage.getItem(HOME_LAYOUT_KEY);
-      if (v === "classic" || v === "yt-main" || v === "yt-under-skin" || v === "yt-hidden") {
-        return v;
-      }
-    } catch {}
-    return "classic";
-  }
+  let authReady = $state(false);
 
-  let homeLayout: HomeLayout = loadHomeLayout();
-  let authReady = false;
+  const projectStats = $derived($homeStats);
+  const instanceSizes = $derived($homeSizes);
+  const accountSkinPaths = $derived($homeSkinPaths);
+  const crashFixBanner = $derived($homeCrashFixBanner);
 
-  function setHomeLayout(next: HomeLayout) {
-    homeLayout = next;
-    try {
-      localStorage.setItem(HOME_LAYOUT_KEY, next);
-    } catch {}
-  }
+  let selectedPath = $state<string | null>($projectPath);
+  let showLoginModal = $state(false);
+  let showAccountManager = $state(false);
+  let potatoPc = $state(false);
+  let accountSwitchBusy = $state(false);
 
-  function onHomeLayoutChange(e: Event) {
-    const el = e.currentTarget;
-    if (!(el instanceof HTMLSelectElement)) return;
-    const v = el.value;
-    if (HOME_LAYOUT_OPTIONS.some((o) => o.id === v)) {
-      setHomeLayout(v as HomeLayout);
-    }
-  }
+  const selectedProject = $derived($recentProjects.find((p) => p.path === selectedPath));
+  const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
+  const hasInstanceHome = $derived(!!(selectedPath && selectedProject));
+  const hideInstanceHome = $derived(!!$launcherSettingsLive?.hideInstanceHome);
 
-  type ProjectStatBrief = { playtime: number; lastLaunch: string | null };
-  let projectStats: Record<string, ProjectStatBrief> = {};
-
-  async function loadProjectStats(path: string) {
-    try {
-      const s = await api.stats.get(path);
-      projectStats[path] = {
-        playtime: s.totalPlaytimeSeconds ?? 0,
-        lastLaunch: s.lastLaunch ?? null,
-      };
-      projectStats = { ...projectStats };
-    } catch {
-      projectStats[path] = { playtime: 0, lastLaunch: null };
-      projectStats = { ...projectStats };
-    }
-  }
-
-  function ensureStats(paths: string[]) {
-    for (const path of paths) {
-      if (projectStats[path] !== undefined) continue;
-      void loadProjectStats(path);
-    }
-  }
-
-  $: ensureStats($recentProjects.map((p) => p.path));
-
-  /** Last launched first; unknown lastLaunch keeps relative store order. */
-  $: sortedProjects = [...$recentProjects].sort((a, b) => {
-    const la = projectStats[a.path]?.lastLaunch;
-    const lb = projectStats[b.path]?.lastLaunch;
-    if (la && lb) return lb.localeCompare(la);
-    if (la && !lb) return -1;
-    if (!la && lb) return 1;
-    return 0;
+  // The sidebar rail switches instances through the global store — mirror it here.
+  $effect(() => {
+    const p = $projectPath;
+    if (p && p !== selectedPath) selectedPath = p;
+  });
+  const skinUrl = $derived($authState.profile?.skinUrl ?? null);
+  const capeUrl = $derived($authState.profile?.capeUrl ?? null);
+  const accountKey = $derived($authState.activeAccountUuid ?? $authState.profile?.uuid ?? "");
+  /** Shrink Minecraft nick under the skin preview so long names fit the 320px rail. */
+  const skinNameFontPx = $derived.by(() => {
+    const n = ($authState.profile?.name ?? "").length;
+    if (n <= 8) return 12;
+    if (n <= 12) return 11;
+    if (n <= 16) return 10;
+    if (n <= 20) return 9;
+    return 8;
   });
 
-  let selectedPath: string | null = $projectPath;
-  let activeMenuPath: string | null = null;
-  let menuAnchor: HTMLElement | null = null;
-  let showLoginModal = false;
-  let showAccountManager = false;
-  let showWorldPrompt = false;
-  let worldPromptOptions: string[] = [];
-  let worldPromptTarget: RecentProject | null = null;
-  let showClonePrompt = false;
-  let clonePromptName = "";
-  let cloneTarget: RecentProject | null = null;
-  let capeCatalog: CapeCatalog | null = null;
-  let capeBusy = false;
-  let mojangCapeMenuOpen = false;
-  let potatoPc = false;
-  const capeProviderOptions: { id: CapeProvider; label: string }[] = [
-    { id: "mojang", label: "Mojang" },
-    { id: "optifine", label: "OptiFine" },
-    { id: "tlauncher", label: "TLauncher" },
-    { id: "none", label: "None" },
-  ];
+  let crashFixBusy = $state(false);
+  let softVerifyNowUnix = $state(Math.floor(Date.now() / 1000));
+  let sizeLoading = $state(false);
 
-  $: selectedProject = $recentProjects.find((p) => p.path === selectedPath);
-  $: selectedRunning = isProjectRunning(selectedPath, $runningInstances);
-  $: hasInstanceHome = !!(selectedPath && selectedProject);
-  $: skinUrl = $authState.profile?.skinUrl ?? null;
-  $: capeUrl = $authState.profile?.capeUrl ?? null;
-  $: accountKey = $authState.activeAccountUuid ?? $authState.profile?.uuid ?? "";
-  $: mojangCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang");
-  $: otherCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang");
-  $: canChangeMojangCape =
-    $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate);
-
-  type CrashFixBanner = {
-    snapshotId: string;
-    fingerprintKey: string;
-    planSource?: string | null;
-    humanExplanation: string;
-    matchedCaseIds: string[];
-    actionsSummary: string[];
-    createdAt: string;
-    resolved: boolean;
-    rolledBack: boolean;
-    softVerifyStartedUnix?: number | null;
-    minPlaytimeSecs: number;
-  };
-  let crashFixBanner: CrashFixBanner | null = null;
-  let crashFixBusy = false;
+  const softVerifyRemainingSecs = $derived.by(() => {
+    const b = crashFixBanner;
+    if (!b?.softVerifyStartedUnix) return null;
+    const min = Number(b.minPlaytimeSecs ?? 180);
+    const started = Number(b.softVerifyStartedUnix);
+    const elapsed = Math.max(0, softVerifyNowUnix - started);
+    return Math.max(0, min - elapsed);
+  });
 
   async function refreshCrashFixBanner(path: string | null) {
     if (!path) {
-      crashFixBanner = null;
+      homeCrashFixBanner.set(null);
       return;
     }
-    crashFixBanner = await fetchCrashFixBanner(path);
+    try {
+      homeCrashFixBanner.set(await fetchCrashFixBanner(path));
+    } catch {
+      homeCrashFixBanner.set(null);
+    }
   }
 
-  $: void refreshCrashFixBanner(selectedPath);
+  $effect(() => {
+    void refreshCrashFixBanner(selectedPath);
+  });
+
+  $effect(() => {
+    // Selected size only — never walk every recent instance on home.
+    const path = selectedPath;
+    if (!path) return;
+    if ($homeSizes[path]) return;
+    let cancelled = false;
+    sizeLoading = true;
+    void (async () => {
+      try {
+        const label = await api.instance.getSize(path);
+        if (!cancelled) {
+          homeSizes.update((m) => ({ ...m, [path]: label }));
+        }
+      } catch {
+        if (!cancelled) {
+          homeSizes.update((m) => ({ ...m, [path]: "?" }));
+        }
+      } finally {
+        if (!cancelled) sizeLoading = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  $effect(() => {
+    const started = crashFixBanner?.softVerifyStartedUnix;
+    if (!started) return;
+    softVerifyNowUnix = Math.floor(Date.now() / 1000);
+    const id = setInterval(() => {
+      softVerifyNowUnix = Math.floor(Date.now() / 1000);
+    }, 1000);
+    return () => clearInterval(id);
+  });
 
   async function onRollbackCrashFix() {
     if (!selectedPath || crashFixBusy) return;
@@ -203,117 +173,111 @@
     }
   }
 
-  async function refreshCapes() {
-    if (!$authState.loggedIn || !$authState.profile) {
-      capeCatalog = null;
-      return;
-    }
-    try {
-      capeCatalog = await api.mcAuth.listCapes();
-    } catch {
-      capeCatalog = null;
-    }
-  }
+  $effect(() => {
+    const uuids = $authState.accounts.map((a) => a.uuid).filter(Boolean);
+    const missing = uuids.filter((u) => !$homeSkinPaths[u]);
+    if (!missing.length) return;
+    void api.home
+      .accountSkinPaths(missing)
+      .then((map) => {
+        if (map && Object.keys(map).length) {
+          homeSkinPaths.update((prev) => ({ ...prev, ...map }));
+        }
+      })
+      .catch(() => {});
+  });
 
-  async function selectCapeProvider(provider: CapeProvider) {
-    if (capeBusy) return;
-    capeBusy = true;
+  async function switchHomeAccount(uuid: string) {
+    if (accountSwitchBusy || uuid === $authState.activeAccountUuid) return;
+    accountSwitchBusy = true;
     try {
-      const state = await api.mcAuth.setCapeProvider(provider);
+      const state = await api.mcAuth.switchAccount(uuid);
       authState.set(state);
-      await refreshCapes();
-      // Only Mojang owns multiple switchable capes — open the change menu after catalog loads.
-      mojangCapeMenuOpen =
-        provider === "mojang" &&
-        state.loginType === "microsoft" &&
-        (capeCatalog?.offers ?? []).some((o) => o.provider === "mojang" && o.canActivate);
-      toasts.success(`Cape: ${provider === "none" ? "hidden" : provider}`);
-    } catch (e) {
-      toasts.error(String(e));
-    } finally {
-      capeBusy = false;
-    }
-  }
-
-  async function activateMojangCape(capeId: string) {
-    if (capeBusy) return;
-    capeBusy = true;
-    try {
-      const state = await api.mcAuth.applyCape(capeId);
-      authState.set(state);
-      mojangCapeMenuOpen = true;
       if (state.profile) {
         try {
-          skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
-        } catch {}
+          const path = await api.mcAuth.getSkinPath(state.profile.uuid);
+          skinPath.set(path);
+          homeSkinPaths.update((prev) => ({ ...prev, [state.profile!.uuid]: path }));
+        } catch {
+          skinPath.set(null);
+        }
+      } else {
+        skinPath.set(null);
       }
-      await refreshCapes();
-      toasts.success("Mojang cape activated");
+      toasts.success(`Switched to ${state.profile?.name ?? "account"}`);
     } catch (e) {
       toasts.error(String(e));
     } finally {
-      capeBusy = false;
+      accountSwitchBusy = false;
     }
   }
 
-  function openMojangCapeMenu() {
-    mojangCapeMenuOpen = true;
-    if (($authState.capeProvider ?? "mojang") !== "mojang") {
-      void selectCapeProvider("mojang");
-    }
-  }
-
-  let lastCapeRefreshKey = "";
-  $: capeRefreshKey = $authState.loggedIn
-    ? `${$authState.activeAccountUuid ?? ""}:${$authState.capeProvider ?? "mojang"}`
-    : "";
-  $: if (capeRefreshKey && capeRefreshKey !== lastCapeRefreshKey) {
-    lastCapeRefreshKey = capeRefreshKey;
-    void refreshCapes();
-  }
-
-  onMount(async () => {
-    potatoPc = document.documentElement.classList.contains("potato-pc");
-    try {
-      const status = await api.mcAuth.getAuthStatus();
-      authState.set(status);
-      if (status.loggedIn && status.profile) {
+  onMount(() => {
+    let cleanup: (() => void) | undefined;
+    void (async () => {
+      potatoPc = document.documentElement.classList.contains("potato-pc");
+      // Auth usually arrives via home bootstrap; refresh only if still empty.
+      if (!$authState.loggedIn && !$authState.profile) {
         try {
-          const path = await api.mcAuth.getSkinPath(status.profile.uuid);
-          skinPath.set(path);
-        } catch {}
+          const status = await api.mcAuth.getAuthStatus();
+          authState.set(status);
+          if (status.loggedIn && status.profile) {
+            try {
+              const path = await api.mcAuth.getSkinPath(status.profile.uuid);
+              skinPath.set(path);
+              homeSkinPaths.update((prev) => ({
+                ...prev,
+                [status.profile!.uuid]: path,
+              }));
+            } catch {}
+          }
+        } catch {
+        } finally {
+          authReady = true;
+        }
+      } else {
+        authReady = true;
       }
-    } catch {
-    } finally {
-      authReady = true;
-    }
 
-    if (selectedPath && !selectedProject && $recentProjects.length > 0) {
-      selectProject($recentProjects[0].path);
-    }
+      if (selectedPath && !selectedProject && $recentProjects.length > 0) {
+        selectProject($recentProjects[0].path);
+      }
 
-    // Global handler for JVM crashes that happen after the launch command
-    // has returned "started" — surfaces a categorized, retryable toast.
-    registerLaunchCrashListener();
+      // Global handler for JVM crashes that happen after the launch command
+      // has returned "started" — surfaces a categorized, retryable toast.
+      registerLaunchCrashListener();
 
-    // Refresh playtime when a session ends.
-    const { listen } = await import("@tauri-apps/api/event");
-    const unlistenExit = await listen<{ id: string }>("process-exited", (event) => {
-      const id = event.payload?.id;
-      if (id) void loadProjectStats(id);
-    });
-    const unlistenSoft = await listen("tuffbox:soft-verify-outcome", () => {
-      void refreshCrashFixBanner(selectedPath);
-    });
-    const onCrashFixApplied = () => {
-      void refreshCrashFixBanner(selectedPath);
-    };
-    window.addEventListener("tuffbox:crash-fix-applied", onCrashFixApplied);
-    return () => {
-      unlistenExit();
-      unlistenSoft();
-      window.removeEventListener("tuffbox:crash-fix-applied", onCrashFixApplied);
-    };
+      // Refresh playtime when a session ends.
+      const { listen } = await import("@tauri-apps/api/event");
+      const unlistenExit = await listen<{ id: string }>("process-exited", (event) => {
+        const id = event.payload?.id;
+        if (id) {
+          void api.stats.get(id).then((s) => {
+            homeStats.update((prev) => ({
+              ...prev,
+              [id]: {
+                playtime: s.totalPlaytimeSeconds ?? 0,
+                lastLaunch: s.lastLaunch ?? null,
+              },
+            }));
+          }).catch(() => {});
+          void api.home.invalidateCache(id).catch(() => {});
+        }
+      });
+      const unlistenSoft = await listen("tuffbox:soft-verify-outcome", () => {
+        void refreshCrashFixBanner(selectedPath);
+      });
+      const onCrashFixApplied = () => {
+        void refreshCrashFixBanner(selectedPath);
+      };
+      window.addEventListener("tuffbox:crash-fix-applied", onCrashFixApplied);
+      cleanup = () => {
+        unlistenExit();
+        unlistenSoft();
+        window.removeEventListener("tuffbox:crash-fix-applied", onCrashFixApplied);
+      };
+    })();
+    return () => cleanup?.();
   });
 
   async function loadProject(path: string) {
@@ -326,14 +290,17 @@
     selectedPath = manifestPath;
   }
 
-  function selectProject(path: string) {
-    const project = $recentProjects.find((p) => p.path === path);
-    if (project) {
-      selectedPath = path;
-      projectPath.set(path);
-      projectInfo.set(project.info);
+  async function selectProject(path: string) {
+    try {
+      await loadProject(path);
+    } catch {
+      const project = $recentProjects.find((p) => p.path === path);
+      if (project) {
+        selectedPath = path;
+        projectPath.set(path);
+        projectInfo.set(project.info);
+      }
     }
-    activeMenuPath = null;
   }
 
   async function launch() {
@@ -342,7 +309,15 @@
     await launchWithFeedback({ path: selectedPath, profile: "client" });
     const project = $recentProjects.find((p) => p.path === selectedPath);
     if (project) recentProjects.add(project);
-    void loadProjectStats(selectedPath);
+    void api.stats.get(selectedPath).then((s) => {
+      homeStats.update((prev) => ({
+        ...prev,
+        [selectedPath!]: {
+          playtime: s.totalPlaytimeSeconds ?? 0,
+          lastLaunch: s.lastLaunch ?? null,
+        },
+      }));
+    }).catch(() => {});
   }
 
   async function stopGame() {
@@ -351,276 +326,47 @@
   }
 
   function openSettings() {
-    currentView = "project-settings";
+    ideStageRequest.set("setup");
+    currentView = "ide";
   }
 
-  function toggleMenu(event: MouseEvent, path: string) {
-    event.stopPropagation();
-    if (activeMenuPath === path) {
-      activeMenuPath = null;
-    } else {
-      activeMenuPath = path;
-      menuAnchor = event.currentTarget as HTMLElement;
-    }
+  function openIdeStage(stage: string) {
+    ideStageRequest.set(stage);
+    currentView = "ide";
   }
 
-  function closeMenu() {
-    activeMenuPath = null;
-  }
-
-  let pinnedPaths: Record<string, boolean> = {};
-  let actionBusy = false;
-
-  async function togglePin(event: MouseEvent, projectPath: string) {
-    event.stopPropagation();
-    const isPinned = !pinnedPaths[projectPath];
-    pinnedPaths[projectPath] = isPinned;
-    pinnedPaths = { ...pinnedPaths };
-    try {
-      await api.session.pin(isPinned, projectPath);
-    } catch {}
-  }
-
-  function ensurePins(paths: string[]) {
-    let changed = false;
-    for (const path of paths) {
-      if (pinnedPaths[path] !== undefined) continue;
-      pinnedPaths[path] = false;
-      changed = true;
-      api.session.isPinned(path).then((pinned) => {
-        pinnedPaths[path] = pinned;
-        pinnedPaths = { ...pinnedPaths };
-      }).catch(() => {});
-    }
-    if (changed) pinnedPaths = { ...pinnedPaths };
-  }
-
-  let instanceSizes: Record<string, string> = {};
-  let loadingSizes: Record<string, boolean> = {};
-
-  async function loadSize(projectPath: string) {
-    if (instanceSizes[projectPath] || loadingSizes[projectPath]) return;
-    loadingSizes[projectPath] = true;
-    try {
-      instanceSizes[projectPath] = await api.instance.getSize(projectPath);
-      instanceSizes = { ...instanceSizes };
-    } catch {
-      instanceSizes[projectPath] = "?";
-    } finally {
-      loadingSizes[projectPath] = false;
-    }
-  }
-
-  function ensureSizes(paths: string[]) {
-    for (const path of paths) loadSize(path);
-  }
-
-  $: ensurePins($recentProjects.map((p) => p.path));
-  $: ensureSizes($recentProjects.map((p) => p.path));
-
-  async function handleAction(action: string, project: RecentProject) {
-    activeMenuPath = null;
-    switch (action) {
-      case "open-folder":
-        await invoke("open_project_folder", { path: project.path });
-        break;
-      case "change-version":
-        currentView = "project-settings";
-        selectProject(project.path);
-        break;
-      case "server-pack":
-        actionBusy = true;
-        try {
-          await invoke("export_server_pack", { path: project.path, targetPath: null });
-          toasts.success(`Server pack exported.`);
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "links":
-        actionBusy = true;
-        try {
-          const config: any = await invoke("get_publish_config", { path: project.path });
-          const links: string[] = [];
-          if (config?.modrinthProjectId) links.push(`https://modrinth.com/modpack/${config.modrinthProjectId}`);
-          if (config?.curseforgeProjectId) links.push(`https://www.curseforge.com/minecraft/modpacks/${config.curseforgeProjectId}`);
-          if (config?.githubRepository) links.push(`https://github.com/${config.githubRepository}/releases`);
-          if (links.length === 0) toasts.info("No publish links yet.", 5000);
-          else { await open(links[0]); toasts.success(`Opened ${links[0]}`); }
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "worlds":
-        actionBusy = true;
-        try {
-          const worlds: any[] = await invoke("list_worlds", { path: project.path });
-          if (worlds.length === 0) toasts.info("No worlds found.");
-          else { toasts.info(`${worlds.length} world(s) found.`, 5000); }
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "backup-world":
-        actionBusy = true;
-        try {
-          const worlds: any[] = await invoke("list_worlds", { path: project.path });
-          if (worlds.length === 0) { toasts.info("No worlds to backup."); break; }
-          worldPromptOptions = worlds.map((w: any) => w.name);
-          worldPromptTarget = project;
-          showWorldPrompt = true;
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "logs-zip":
-        actionBusy = true;
-        try {
-          await invoke("create_logs_zip", { path: project.path });
-          toasts.success(`Logs archive created.`);
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "copy-link":
-        await navigator.clipboard.writeText(project.path);
-        toasts.success("Path copied to clipboard");
-        break;
-      case "clone":
-        clonePromptName = `${project.info.name} copy`;
-        cloneTarget = project;
-        showClonePrompt = true;
-        break;
-      case "share":
-        actionBusy = true;
-        try {
-          const exported: any = await api.export.modrinthPack(null, project.path);
-          await navigator.clipboard.writeText(exported.path);
-          toasts.success(`Exported .mrpack: ${exported.path}`);
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "cleanup":
-        actionBusy = true;
-        try {
-          const result: any = await invoke("cleanup_project", { path: project.path });
-          toasts.success(`Cleaned ${result.count} files.`);
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "repair":
-        actionBusy = true;
-        try {
-          const report: any = await invoke("repair_project", { path: project.path });
-          const downloaded = report.downloaded?.length ?? 0;
-          const failed = report.failed?.length ?? 0;
-          toasts.success(
-            downloaded === 0 && failed === 0
-              ? "All mod files present and valid."
-              : `Repaired: ${downloaded} file(s) re-downloaded${failed ? `, ${failed} failed` : ""}.`
-          );
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "remove":
-        recentProjects.remove(project.path);
-        if (selectedPath === project.path) {
-          selectedPath = $recentProjects[0]?.path ?? null;
-          projectPath.set(selectedPath);
-          projectInfo.set($recentProjects[0]?.info ?? null);
-        }
-        break;
-      case "delete": {
-        const ok = await confirm(`Delete "${project.info.name}"?`, { title: "Delete", kind: "warning" });
-        if (!ok) break;
-        try {
-          await invoke("delete_project", { path: project.path });
-          recentProjects.remove(project.path);
-          if (selectedPath === project.path) {
-            selectedPath = $recentProjects[0]?.path ?? null;
-            projectPath.set(selectedPath);
-            projectInfo.set($recentProjects[0]?.info ?? null);
-          }
-        } catch (e) { toasts.error(String(e)); }
-        break;
-      }
-    }
-  }
-
-  async function handleLogout() {
-    try {
-      const state = await api.mcAuth.logout();
-      authState.set(state);
-      if (state.profile?.uuid) {
-        try {
-          skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
-        } catch {
-          skinPath.set(null);
-        }
-      } else {
-        skinPath.set(null);
-      }
-      capeCatalog = null;
-      toasts.info(state.loggedIn ? `Switched to ${state.profile?.name ?? "account"}` : "Logged out");
-    } catch (e) {
-      toasts.error(String(e));
-    }
-  }
-
-  function gradientFrom(name: string) {
-    const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
-    let hash = 0;
-    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    return colors[Math.abs(hash) % colors.length];
-  }
-
-  async function confirmBackupWorld(worldName: string) {
-    showWorldPrompt = false;
-    if (!worldPromptTarget) return;
-    try {
-      await invoke("backup_world", { path: worldPromptTarget.path, worldName });
-      toasts.success(`World "${worldName}" backed up.`);
-    } catch (e) { toasts.error(String(e)); }
-  }
-
-  async function confirmClone(newName: string) {
-    showClonePrompt = false;
-    if (!cloneTarget || !newName.trim()) return;
-    actionBusy = true;
-    try {
-      const clonedPath = await invoke<string>("clone_project", { path: cloneTarget.path, newName: newName.trim() });
-      const info = await invoke("validate_project", { path: clonedPath }) as import("../lib/api").ProjectSummary;
-      const manifestPath = info.manifestPath || clonedPath;
-      recentProjects.add({ path: manifestPath, info: info as any });
-      toasts.success(`Cloned to: ${manifestPath}`);
-    } catch (e) { toasts.error(String(e)); }
-    finally { actionBusy = false; }
+  function openIdeSuggested() {
+    ideStageRequest.set($ideSuggestedStage || "content");
+    currentView = "ide";
   }
 </script>
-
-<svelte:window on:click={closeMenu} />
 
 <div class="home fade-slide-in">
   <!-- Top bar: Quick actions left, Avatar right -->
   <div class="top-bar">
     <div class="quick-nav">
-      <button class="quick-action" on:click={() => (currentView = "mods")} title="Mods">
+      <button class="quick-action" onclick={() => openIdeStage("content")} title="Mods">
         <Package size={18} />
         <span>Mods</span>
       </button>
-      <button class="quick-action" on:click={() => (currentView = "graph")} title="Dependency Graph">
+      <button class="quick-action" onclick={() => openIdeStage("resolve")} title="Dependency Graph">
         <GitGraph size={18} />
         <span>Graph</span>
       </button>
-      <button class="quick-action" on:click={() => (currentView = "diagnostics")} title="Diagnostics">
+      <button class="quick-action" onclick={() => openIdeStage("diagnose")} title="Diagnostics">
         <Stethoscope size={18} />
         <span>Diagnostics</span>
       </button>
-      <button class="quick-action" on:click={() => (currentView = "snapshots")} title="Snapshots">
+      <button class="quick-action" onclick={() => openIdeStage("snapshots")} title="Snapshots">
         <History size={18} />
         <span>Snapshots</span>
       </button>
       {#if selectedProject}
-        <button class="quick-action" on:click={() => (currentView = "recipes")} title="Recipes">
+        <button class="quick-action" onclick={() => openIdeStage("recipes")} title="Recipes">
           <Puzzle size={18} />
           <span>Recipes</span>
         </button>
-        <button class="quick-action" on:click={() => (currentView = "quests")} title="Quests">
+        <button class="quick-action" onclick={() => openIdeStage("quests")} title="Quests">
           <Sparkles size={18} />
           <span>Quests</span>
         </button>
@@ -630,7 +376,7 @@
     <!-- Account avatar in top-right (sign-in lives in the skin panel) -->
     <div class="account-avatar-section">
       {#if $authState.loggedIn && $authState.profile}
-        <button class="account-avatar-btn" on:click={() => (currentView = "me")} title="Me — account & playtime">
+        <button class="account-avatar-btn" onclick={() => (currentView = "me")} title="Me — account & playtime">
           <HeadAvatar skinSrc={$skinPath} size={32} alt={$authState.profile.name} />
           <span class="avatar-name">{$authState.profile.name}</span>
           <span
@@ -649,7 +395,7 @@
     </div>
   </div>
 
-  <div class="main-layout" data-layout={homeLayout}>
+  <div class="main-layout">
     <div class="home-main">
       <!-- Hero: Play button + project info -->
       <section class="hero">
@@ -657,11 +403,12 @@
           <button
             class="play-btn"
             class:stop={selectedRunning && !$isLaunching}
-            on:click={selectedRunning && !$isLaunching ? stopGame : launch}
+            onclick={selectedRunning && !$isLaunching ? stopGame : launch}
             disabled={!selectedPath || $isLaunching}
+            aria-busy={$isLaunching}
           >
             {#if $isLaunching}
-              <span class="spinner"></span>
+              <span class="spinner" aria-hidden="true"></span>
               <span class="play-text">Launching...</span>
             {:else if selectedRunning}
               <Square size={24} fill="currentColor" />
@@ -673,37 +420,31 @@
           </button>
 
           <div class="hero-main">
-            {#if selectedProject}
-              <div class="project-quick-info">
-                <span class="project-name">{selectedProject.info.name}</span>
-                <span class="project-version">{selectedProject.info.minecraftVersion} · {selectedProject.info.loaderKind}</span>
-              </div>
-            {:else}
+            {#if !selectedProject}
               <div class="project-quick-info">
                 <span class="project-name muted">No instance selected</span>
-                <span class="project-version">Select an instance below or create a new one</span>
+                <span class="project-hint">Pick an instance in the left rail or create a new one</span>
               </div>
             {/if}
 
             <div class="hero-actions">
               {#if selectedProject}
-                <button class="action-btn primary" on:click={() => (currentView = "ide")}>
+                <button class="action-btn primary ide-open-btn" onclick={openIdeSuggested}>
                   <Workflow size={15} />
                   IDE
+                  {#if $ideIssueCount > 0}
+                    <span class="ide-issue-badge" title="{$ideIssueCount} pack issue{$ideIssueCount === 1 ? '' : 's'}">{$ideIssueCount}</span>
+                  {/if}
                 </button>
-                <button class="action-btn" on:click={openSettings}>
+                <button class="action-btn" onclick={openSettings}>
                   <Settings size={15} />
                   Settings
                 </button>
-                <button class="action-btn" on:click={() => invoke("open_project_folder", { path: selectedProject.path })}>
+                <button class="action-btn" onclick={() => invoke("open_project_folder", { path: selectedProject.path })}>
                   <FolderOpen size={15} />
                   Folder
                 </button>
               {/if}
-              <button class="action-btn accent" on:click={() => (newProjectOpen.set(true))}>
-                <Plus size={15} />
-                New
-              </button>
             </div>
 
             {#if crashFixBanner}
@@ -712,9 +453,11 @@
                 <div class="crash-fix-banner-body">
                   <strong>Crash fix applied</strong>
                   <span>
-                    {crashFixBanner.softVerifyStartedUnix
-                      ? `Soft-verify in progress (≥${crashFixBanner.minPlaytimeSecs}s stable play)…`
-                      : "Launch to soft-verify. One-click restore available."}
+                    {#if crashFixBanner.softVerifyStartedUnix}
+                      Soft-verify: ~{softVerifyRemainingSecs ?? 0}s left (≥{crashFixBanner.minPlaytimeSecs}s stable play)
+                    {:else}
+                      Launch to soft-verify. One-click restore available.
+                    {/if}
                   </span>
                   {#if crashFixBanner.actionsSummary?.length}
                     <span class="crash-fix-actions">
@@ -726,14 +469,14 @@
                   class="action-btn"
                   type="button"
                   disabled={crashFixBusy}
-                  on:click={onRollbackCrashFix}
+                  onclick={onRollbackCrashFix}
                 >
                   Restore snapshot
                 </button>
                 <button
                   class="action-btn"
                   type="button"
-                  on:click={() => (currentView = "diagnostics")}
+                  onclick={() => (currentView = "diagnostics")}
                 >
                   <Stethoscope size={14} /> Diagnostics
                 </button>
@@ -745,9 +488,22 @@
         {#if selectedProject}
           <div class="hero-right">
             <div class="instance-stats">
-              <div class="stat">
+              <div class="stat version-stat" title="Minecraft version · loader">
+                <Gamepad2 size={14} />
+                <span>{selectedProject.info.minecraftVersion} · {selectedProject.info.loaderKind}</span>
+              </div>
+              <div
+                class="stat size-stat"
+                title={instanceSizes[selectedProject.path] || "Calculating size…"}
+              >
                 <HardDrive size={14} />
-                <span>{instanceSizes[selectedProject.path] || "..."}</span>
+                {#if instanceSizes[selectedProject.path]}
+                  <span>{instanceSizes[selectedProject.path]}</span>
+                {:else if sizeLoading}
+                  <span class="skeleton skeleton-block skeleton-line short" style="width: 48px; height: 12px;"></span>
+                {:else}
+                  <span class="skeleton skeleton-block skeleton-line short" style="width: 48px; height: 12px;"></span>
+                {/if}
               </div>
               {#if projectStats[selectedProject.path]?.playtime}
                 <div class="stat">
@@ -764,37 +520,15 @@
         {/if}
       </section>
 
-      {#if hasInstanceHome && selectedPath}
+      {#if hasInstanceHome && selectedPath && !hideInstanceHome}
         <InstanceHome
           projectPath={selectedPath}
-          onOpenMods={() => (currentView = "mods")}
+          onOpenMods={() => openIdeStage("content")}
           onOpenWorld={() => (currentView = "world")}
         />
       {/if}
 
-      {#if homeLayout !== "yt-hidden" && homeLayout !== "yt-under-skin"}
-        <YoutubeFeed variant="row" />
-      {/if}
-
-      {#if homeLayout !== "yt-main"}
-        <DashboardInstancesSection
-          {homeLayout}
-          {sortedProjects}
-          {selectedPath}
-          {instanceSizes}
-          {loadingSizes}
-          {projectStats}
-          {pinnedPaths}
-          {activeMenuPath}
-          homeLayoutOptions={HOME_LAYOUT_OPTIONS}
-          onHomeLayoutChange={onHomeLayoutChange}
-          {selectProject}
-          {toggleMenu}
-          {togglePin}
-          {handleAction}
-          {gradientFrom}
-        />
-      {/if}
+      <YoutubeFeed variant="grid" />
     </div>
 
     <aside class="home-side">
@@ -810,8 +544,8 @@
             <div class="skin-skel-cape">
               <span class="skeleton skeleton-block skeleton-line short" style="width: 90px; height: 10px; margin-bottom: 10px;"></span>
               <div class="skin-skel-cape-row home-skel-stagger">
-                {#each Array(4) as _, i (i)}
-                  <span class="skeleton skeleton-block skeleton-round" style={`--i: ${i}; width: 64px; height: 28px;`}></span>
+                {#each Array(3) as _, i (i)}
+                  <span class="skeleton skeleton-block skeleton-round" style={`--i: ${i}; width: 100%; height: 36px;`}></span>
                 {/each}
               </div>
             </div>
@@ -820,7 +554,7 @@
           {#if potatoPc}
             <div class="skin-static-fallback">
               <HeadAvatar skinSrc={$skinPath} size={120} alt={$authState.profile.name} />
-              <span class="skin-static-name">{$authState.profile.name}</span>
+              <span class="skin-static-name" style={`font-size: ${skinNameFontPx}px`}>{$authState.profile.name}</span>
             </div>
           {:else}
           <SkinPreview3D
@@ -829,7 +563,7 @@
             accountKey={accountKey}
             playerName={$authState.profile.name}
             showName={false}
-            width={300}
+            width={318}
             height={400}
           />
           {/if}
@@ -847,200 +581,70 @@
                 )}
               </span>
             </div>
-            <button class="change-skin-btn" on:click={() => (showAccountManager = true)}>
+            <button class="change-skin-btn" onclick={() => (showAccountManager = true)}>
               <Users size={14} />
-              {$authState.accounts.length > 1
-                ? `${$authState.accounts.length} accounts`
-                : "Accounts"}
+              Manage
             </button>
           </div>
-          <div class="skin-player-name" title={$authState.profile.name}>
+          <div
+            class="skin-player-name"
+            title={$authState.profile.name}
+            style={`font-size: ${skinNameFontPx}px`}
+          >
             {$authState.profile.name}
           </div>
 
-          <div class="cape-panel">
-            <div class="cape-row-label">Cape provider</div>
-            <div class="cape-provider-grid">
-              {#each capeProviderOptions as opt (opt.id)}
-                <button
-                  type="button"
-                  class="cape-provider-btn"
-                  class:active={($authState.capeProvider ?? "mojang") === opt.id}
-                  disabled={capeBusy}
-                  on:click={() => selectCapeProvider(opt.id)}
-                >
-                  {opt.label}
-                </button>
-              {/each}
+          {#if $authState.accounts.length > 0}
+            <div class="accounts-switcher">
+              <div class="accounts-switcher-label">Accounts</div>
+              <div class="accounts-switcher-list">
+                {#each $authState.accounts as account (account.uuid)}
+                  <button
+                    type="button"
+                    class="account-chip"
+                    class:active={account.uuid === $authState.activeAccountUuid}
+                    disabled={accountSwitchBusy}
+                    title={account.name}
+                    onclick={() => switchHomeAccount(account.uuid)}
+                  >
+                    <HeadAvatar
+                      skinSrc={accountSkinPaths[account.uuid] ?? null}
+                      size={22}
+                      alt={account.name}
+                    />
+                    <span class="account-chip-name">{account.name}</span>
+                  </button>
+                {/each}
+              </div>
             </div>
-
-            {#if canChangeMojangCape}
-              <div class="cape-mojang-actions">
-                <button
-                  type="button"
-                  class="cape-activate"
-                  disabled={capeBusy}
-                  on:click={() => (mojangCapeMenuOpen ? (mojangCapeMenuOpen = false) : openMojangCapeMenu())}
-                >
-                  {mojangCapeMenuOpen ? "Hide cape menu" : "Show cape"}
-                </button>
-              </div>
-            {/if}
-
-            {#if mojangCapeMenuOpen && canChangeMojangCape}
-              <div class="cape-row-label">Change Mojang cape</div>
-              <div class="cape-offers">
-                {#each mojangCapeOffers as offer (offer.id)}
-                  <div class="cape-offer" class:active={offer.active}>
-                    <img src={offer.url} alt={offer.label} class="cape-thumb" />
-                    <div class="cape-offer-info">
-                      <strong>{offer.label}</strong>
-                      <span>mojang</span>
-                    </div>
-                    <button
-                      class="cape-activate"
-                      disabled={capeBusy || offer.active}
-                      on:click={() => activateMojangCape(offer.id)}
-                    >
-                      {offer.active ? "Active" : "Equip"}
-                    </button>
-                  </div>
-                {/each}
-              </div>
-            {:else if mojangCapeOffers.length && !canChangeMojangCape}
-              <div class="cape-row-label">Mojang cape</div>
-              <div class="cape-offers">
-                {#each mojangCapeOffers as offer (offer.id)}
-                  <div
-                    class="cape-offer"
-                    class:active={($authState.capeProvider ?? "mojang") === "mojang"}
-                  >
-                    <img src={offer.url} alt={offer.label} class="cape-thumb" />
-                    <div class="cape-offer-info">
-                      <strong>{offer.label}</strong>
-                      <span>mojang</span>
-                    </div>
-                    {#if ($authState.capeProvider ?? "mojang") !== "mojang"}
-                      <button
-                        class="cape-activate"
-                        disabled={capeBusy}
-                        on:click={() => selectCapeProvider("mojang")}
-                      >
-                        Show
-                      </button>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {/if}
-
-            {#if otherCapeOffers.length}
-              <div class="cape-row-label">Other sources</div>
-              <div class="cape-offers">
-                {#each otherCapeOffers as offer (offer.provider + offer.id)}
-                  <div
-                    class="cape-offer"
-                    class:active={($authState.capeProvider ?? "mojang") === offer.provider}
-                  >
-                    <img src={offer.url} alt={offer.label} class="cape-thumb" />
-                    <div class="cape-offer-info">
-                      <strong>{offer.label}</strong>
-                      <span>{offer.provider}</span>
-                    </div>
-                    {#if ($authState.capeProvider ?? "mojang") !== offer.provider}
-                      <button
-                        class="cape-activate"
-                        disabled={capeBusy}
-                        on:click={() => selectCapeProvider(offer.provider)}
-                      >
-                        Show
-                      </button>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {:else if !mojangCapeOffers.length}
-              <p class="cape-empty">No capes found for this username on the selected sources.</p>
-            {/if}
-          </div>
+          {/if}
         {:else}
           <div class="skin-panel-empty">
             <User size={48} />
             <p>Sign in to see your skin</p>
-            <button class="action-btn accent" on:click={() => (showLoginModal = true)}>
+            <button class="action-btn accent" onclick={() => (showLoginModal = true)}>
               <LogIn size={16} />
               Sign In
             </button>
           </div>
         {/if}
       </div>
-      {#if homeLayout === "yt-under-skin"}
-        <div class="skin-rail-youtube">
-          <YoutubeFeed variant="rail" />
-        </div>
-      {/if}
-
-      {#if homeLayout === "yt-main"}
-        <DashboardInstancesSection
-          {homeLayout}
-          {sortedProjects}
-          {selectedPath}
-          {instanceSizes}
-          {loadingSizes}
-          {projectStats}
-          {pinnedPaths}
-          {activeMenuPath}
-          homeLayoutOptions={HOME_LAYOUT_OPTIONS}
-          onHomeLayoutChange={onHomeLayoutChange}
-          {selectProject}
-          {toggleMenu}
-          {togglePin}
-          {handleAction}
-          {gradientFrom}
-          sideColumn={true}
-        />
-      {/if}
     </aside>
   </div>
 </div>
 
 {#if showLoginModal}
-  <MinecraftLogin on:close={() => (showLoginModal = false)} />
+  <MinecraftLogin onclose={() => (showLoginModal = false)} />
 {/if}
 
 {#if showAccountManager}
-  <AccountManager on:close={() => (showAccountManager = false)} />
+  <AccountManager onclose={() => (showAccountManager = false)} />
 {/if}
 
 {#if $newProjectOpen}
   <AddInstanceModal
-    on:close={() => (newProjectOpen.set(false))}
-    on:created={(e) => loadProject(e.detail)}
-  />
-{/if}
-
-{#if showWorldPrompt}
-  <PromptDialog
-    title="Backup World"
-    message="Select a world to back up."
-    mode="select"
-    options={worldPromptOptions}
-    defaultValue={worldPromptOptions[0]}
-    confirmLabel="Backup"
-    on:confirm={(e) => confirmBackupWorld(e.detail)}
-    on:cancel={() => (showWorldPrompt = false)}
-  />
-{/if}
-
-{#if showClonePrompt}
-  <PromptDialog
-    title="Clone Instance"
-    message="Enter a name for the cloned instance."
-    mode="text"
-    defaultValue={clonePromptName}
-    confirmLabel="Clone"
-    on:confirm={(e) => confirmClone(e.detail)}
-    on:cancel={() => (showClonePrompt = false)}
+    onclose={() => (newProjectOpen.set(false))}
+    oncreated={(path) => loadProject(path)}
   />
 {/if}
 
@@ -1104,7 +708,7 @@
 
   .account-avatar-btn:hover {
     border-color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.04);
+    background: color-mix(in srgb, var(--accent-primary) 4%, transparent);
   }
 
   .avatar-name {
@@ -1113,7 +717,7 @@
     font-size: 10px;
     letter-spacing: 0.4px;
     color: var(--text-primary);
-    max-width: 120px;
+    max-width: 220px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1153,8 +757,14 @@
   .home-main {
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 16px;
     min-width: 0;
+    overflow: visible;
+  }
+
+  .home-main :global(.youtube-feed) {
+    min-width: 0;
+    width: 100%;
   }
 
   .home-side {
@@ -1165,14 +775,7 @@
     max-width: 100%;
     position: sticky;
     top: 20px;
-    max-height: calc(100vh - 40px);
-    overflow-y: auto;
     align-self: start;
-  }
-
-  .skin-rail-youtube {
-    min-width: 0;
-    flex-shrink: 0;
   }
 
   .skin-panel {
@@ -1186,10 +789,21 @@
     flex-shrink: 0;
   }
 
-  /* Keep the canvas frame from being flexed/squashed inside the panel. */
+  /* Keep the canvas frame from being flexed/squashed inside the panel;
+     fill the panel width and drop nested rounding (panel already clips). */
   .skin-panel :global(.skin-3d-wrap),
   .skin-panel :global(.skin-3d-container) {
     flex-shrink: 0;
+    width: 100% !important;
+    max-width: 100%;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+  }
+
+  .skin-panel :global(.skin-3d-wrap) {
+    align-items: stretch;
   }
 
   .skin-panel-footer {
@@ -1214,22 +828,22 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     padding: 3px 7px;
-    border-radius: 6px;
+    border-radius: 4px;
   }
   .type-badge.microsoft {
-    color: #93c5fd;
-    background: rgba(59, 130, 246, 0.15);
-    border: 1px solid rgba(59, 130, 246, 0.35);
+    color: var(--badge-ms-fg, #93c5fd);
+    background: var(--badge-ms-bg, rgba(59, 130, 246, 0.15));
+    border: 1px solid var(--badge-ms-border, rgba(59, 130, 246, 0.35));
   }
   .type-badge.offline {
-    color: #fde68a;
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: var(--badge-offline-fg, #fde68a);
+    background: var(--badge-offline-bg, rgba(245, 158, 11, 0.12));
+    border: 1px solid var(--badge-offline-border, rgba(245, 158, 11, 0.3));
   }
   .type-badge.ygg {
-    color: #e9d5ff;
-    background: rgba(168, 85, 247, 0.15);
-    border: 1px solid rgba(168, 85, 247, 0.35);
+    color: var(--badge-ygg-fg, #e9d5ff);
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.15));
+    border: 1px solid var(--badge-ygg-border, rgba(168, 85, 247, 0.35));
   }
 
   .skin-player-name {
@@ -1238,18 +852,21 @@
     font-size: 12px;
     line-height: 1.4;
     letter-spacing: 0.5px;
-    color: var(--text-primary);
-    text-shadow:
+    color: var(--mc-nick-color, var(--text-primary));
+    text-shadow: var(
+      --mc-nick-shadow,
       2px 2px 0 color-mix(in srgb, var(--text-primary) 18%, #3f3f3f),
       -1px 0 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
       1px 0 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
       0 -1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
-      0 1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000);
+      0 1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000)
+    );
     text-align: center;
-    padding: 0 16px 12px;
+    padding: 0 10px 12px;
     margin-top: -4px;
+    max-width: 100%;
+    box-sizing: border-box;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
@@ -1273,64 +890,73 @@
     color: var(--accent-primary);
   }
 
-  .cape-panel {
+  .accounts-switcher {
     padding: 12px 16px 16px;
     border-top: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
-  .cape-row-label {
+
+  .accounts-switcher-label {
     font-size: 11px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-  .cape-provider-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
+
+  .accounts-switcher-list {
+    display: flex;
+    flex-direction: column;
     gap: 6px;
+    max-height: 200px;
+    overflow: auto;
   }
-  .cape-provider-btn {
-    padding: 7px 4px;
+
+  .account-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
     color: var(--text-secondary);
-    font-size: 10px;
-    font-weight: 700;
     cursor: pointer;
+    text-align: left;
+    transition:
+      border-color var(--motion-fast, 160ms) var(--ease-hover-in, ease),
+      background var(--motion-fast, 160ms) var(--ease-hover-in, ease),
+      color var(--motion-fast, 160ms) var(--ease-hover-in, ease);
   }
-  .cape-provider-btn.active {
+
+  .account-chip:hover:not(:disabled) {
     border-color: var(--accent-primary);
+    color: var(--text-primary);
+  }
+
+  .account-chip.active {
+    border-color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
   }
-  .cape-provider-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .cape-mojang-actions { display: flex; }
-  .cape-offers { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow: auto; }
-  .cape-offer {
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px; border-radius: var(--border-radius-sm);
-    border: 1px solid var(--border-color); background: var(--bg-primary);
+
+  .account-chip:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
-  .cape-offer.active { border-color: var(--accent-primary); }
-  .cape-thumb {
-    width: 36px; height: 28px; object-fit: contain;
-    image-rendering: pixelated; background: #111; border-radius: 4px;
+
+  .account-chip-name {
+    font-family: var(--font-minecraft);
+    font-size: 11px;
+    letter-spacing: 0.4px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .cape-offer-info { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .cape-offer-info strong { font-size: 12px; color: var(--text-primary); }
-  .cape-offer-info span { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
-  .cape-activate {
-    padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-color);
-    background: var(--bg-elevated); color: var(--text-secondary);
-    font-size: 11px; font-weight: 700; cursor: pointer;
-  }
-  .cape-activate:hover:not(:disabled) { border-color: var(--accent-primary); color: var(--accent-primary); }
-  .cape-activate:disabled { opacity: 0.55; cursor: default; }
-  .cape-empty { margin: 0; font-size: 11px; color: var(--text-muted); }
 
   .skin-panel-empty {
     display: flex;
@@ -1392,7 +1018,7 @@
 
   .skin-skel-cape-row {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 8px;
   }
 
@@ -1406,8 +1032,9 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 32px;
-    background: linear-gradient(135deg, rgba(27, 217, 106, 0.06), rgba(139, 92, 246, 0.04));
+    flex-wrap: wrap;
+    padding: 24px 32px;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 6%, transparent), color-mix(in srgb, var(--accent-secondary) 4%, transparent));
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
     margin-bottom: 0;
@@ -1419,26 +1046,32 @@
     align-items: center;
     gap: 16px 24px;
     min-width: 0;
+    flex: 1;
     flex-wrap: wrap;
   }
 
   .hero-main {
     display: flex;
     flex-direction: column;
+    justify-content: center;
     align-items: flex-start;
-    gap: 14px;
+    gap: 10px;
     min-width: 0;
+    flex: 1;
   }
 
   .hero-right {
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-shrink: 0;
   }
 
   .instance-stats {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
+    flex-shrink: 0;
   }
 
   .stat {
@@ -1450,6 +1083,18 @@
     background: var(--bg-secondary);
     padding: 6px 10px;
     border-radius: var(--border-radius-sm);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .stat span {
+    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .size-stat {
+    min-width: max-content;
   }
 
   .play-btn {
@@ -1461,13 +1106,13 @@
     gap: 10px;
     font-size: 18px;
     border-radius: var(--border-radius-lg);
-    box-shadow: 0 8px 24px rgba(27, 217, 106, 0.3);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 30%, transparent);
     padding: 0 24px;
     flex-shrink: 0;
   }
 
   .play-btn:hover {
-    box-shadow: 0 12px 32px rgba(27, 217, 106, 0.4);
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--accent-primary) 40%, transparent);
   }
 
   .play-btn:disabled {
@@ -1493,12 +1138,14 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 2px;
+    gap: 4px;
+    max-width: 420px;
   }
 
   .project-name {
     font-weight: 700;
     font-size: 15px;
+    line-height: 1.3;
     color: var(--text-primary);
   }
 
@@ -1506,16 +1153,25 @@
     color: var(--text-muted);
   }
 
-  .project-version {
-    font-size: 12px;
-    color: var(--text-muted);
+  .version-stat {
+    color: var(--text-secondary);
+    font-weight: 600;
     text-transform: capitalize;
+  }
+
+  /* Empty-state copy — do not Title-Case the sentence. */
+  .project-hint {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-muted);
+    text-transform: none;
   }
 
   .hero-actions {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    align-items: center;
   }
 
   .crash-fix-banner {
@@ -1526,8 +1182,8 @@
     margin-top: 12px;
     padding: 10px 12px;
     border-radius: 10px;
-    border: 1px solid color-mix(in srgb, var(--accent-primary, #1bd96a) 35%, transparent);
-    background: color-mix(in srgb, var(--accent-primary, #1bd96a) 10%, var(--bg-secondary));
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-secondary));
     max-width: 560px;
   }
 
@@ -1576,12 +1232,32 @@
   }
 
   .action-btn.primary:hover {
-    background: rgba(27, 217, 106, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  }
+
+  .ide-open-btn {
+    position: relative;
+  }
+
+  .ide-issue-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    margin-left: 2px;
+    border-radius: 999px;
+    background: var(--danger, #e5484d);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
   }
 
   .action-btn.accent {
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent, #000);
     border-color: transparent;
   }
 
