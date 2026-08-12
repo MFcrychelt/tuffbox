@@ -163,9 +163,7 @@
     gap: 8px;
     padding: 0 0 16px;
     font-size: 12px;
-    background: var(--ftbq-bg-panel);
-    border-left: 1px solid var(--ftbq-frame);
-    box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.05);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
     max-height: 100%;
     overflow: auto;
     overflow-x: hidden;
@@ -174,24 +172,24 @@
   }
   .ch-set h4 {
     margin: 0;
-    padding: 10px 12px 6px;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-primary, var(--ftbq-text, #212529));
+    padding: 10px 12px 8px;
+    font-size: 12px;
     font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-primary, var(--ftbq-text, #212529));
     background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
     border-bottom: 1px solid var(--ftbq-frame);
-    text-shadow: none;
   }
   .ch-set h4:not(:first-child) {
+    margin-top: 4px;
     border-top: 1px solid var(--ftbq-frame);
     color: var(--ftbq-accent-teal, #3db8a8);
   }
   .ch-set label {
     display: grid;
     gap: 4px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -202,11 +200,12 @@
   }
   .ch-set input,
   .ch-set select {
+    padding: 6px 8px;
     font-size: 12px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
     box-shadow: none;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
     border-radius: 6px;
     text-transform: none;
     outline: none;
@@ -224,6 +223,26 @@
     align-items: center;
     padding: 0 12px;
     font-size: 11px;
+    color: var(--text-secondary, var(--ftbq-text, #e8e8e8));
+  }
+  .extra-row code {
+    font-size: 11px;
+    color: var(--ftbq-accent-teal, #3db8a8);
+  }
+  .extra-row button {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 6px;
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    cursor: pointer;
+  }
+  .extra-row button:hover {
+    color: #ef4444;
+    border-color: color-mix(in srgb, #ef4444 45%, var(--ftbq-frame));
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
   }
   .extra-add {
     display: grid;
@@ -236,17 +255,17 @@
     font-size: 11px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
     border-radius: 6px;
     box-shadow: none;
   }
   .extra-add button {
+    padding: 0 10px;
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     cursor: pointer;
-    text-shadow: none;
   }
   .extra-add button:hover {
     background: var(--bg-hover, var(--ftbq-btn-hover-top));
-    color: var(--ftbq-accent-green);
+    color: var(--ftbq-accent-green, #55c95a);
   }
 </style>

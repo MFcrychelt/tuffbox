@@ -15,6 +15,7 @@
       iconRevision: number;
       external?: boolean;
       chapterTitle?: string;
+      chapterId?: string;
     };
   } = $props();
 
@@ -46,16 +47,32 @@
   );
 </script>
 
-<Handle type="target" position={Position.Top} style="opacity: 0; width: 6px; height: 6px;" />
-<Handle type="source" position={Position.Bottom} style="opacity: 0; width: 6px; height: 6px;" />
-
 <div
-  class="node-wrap"
+  class="node-root"
   class:sel={data.isSelected}
   class:issue={data.isIssue}
   class:external
-  title={external && data.chapterTitle ? `${q.title} (${data.chapterTitle})` : q.title}
 >
+  <Handle
+    type="target"
+    position={Position.Top}
+    class="conn-handle"
+    title={external ? undefined : "Drop here: this quest depends on the source"}
+  />
+  <Handle
+    type="source"
+    position={Position.Bottom}
+    class="conn-handle"
+    title={external ? undefined : "Drag to another quest’s top handle to create a dependency"}
+  />
+
+  <div
+    class="node-wrap"
+    class:sel={data.isSelected}
+    class:issue={data.isIssue}
+    class:external
+    title={external && data.chapterTitle ? `${q.title} (${data.chapterTitle})` : q.title}
+  >
   <div
     class="node-icon shape-{shape}"
     class:clipped
@@ -81,9 +98,41 @@
   {#if external && data.chapterTitle}
     <span class="ch-badge">{data.chapterTitle}</span>
   {/if}
+  </div>
 </div>
 
 <style>
+  .node-root {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .node-root :global(.conn-handle) {
+    width: 10px !important;
+    height: 10px !important;
+    min-width: 10px;
+    min-height: 10px;
+    background: var(--ftbq-accent-teal, #3db8a8) !important;
+    border: 2px solid var(--ftbq-frame, #3a3a42) !important;
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    z-index: 3;
+  }
+  .node-root:hover:not(.external) :global(.conn-handle),
+  .node-root.sel:not(.external) :global(.conn-handle) {
+    opacity: 0.95;
+  }
+  .node-root:hover:not(.external) :global(.conn-handle):hover,
+  .node-root.sel:not(.external) :global(.conn-handle):hover {
+    transform: scale(1.25);
+    background: var(--ftbq-accent-green, #55c95a) !important;
+  }
+  .node-root.external :global(.conn-handle) {
+    pointer-events: none;
+    opacity: 0 !important;
+  }
   .node-wrap {
     display: flex;
     flex-direction: column;

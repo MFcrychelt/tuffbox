@@ -24,6 +24,7 @@ pub mod item_catalog;
 pub mod jre;
 pub mod launcher;
 pub mod launch_error;
+pub mod launch_history;
 pub mod download_engine;
 pub mod download_cache;
 pub mod listing;

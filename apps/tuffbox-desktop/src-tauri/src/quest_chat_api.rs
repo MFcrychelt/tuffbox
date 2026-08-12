@@ -329,7 +329,24 @@ fn value_to_raw(value: serde_json::Value) -> String {
     }
 }
 
+fn split_quest_raw_error(err: &str) -> (String, Option<String>) {
+    const START: &str = "<<<QUEST_RAW_JSON>>>";
+    const END: &str = "<<<END_QUEST_RAW_JSON>>>";
+    if let Some(i) = err.find(START) {
+        let after = &err[i + START.len()..];
+        let after = after.strip_prefix('\n').unwrap_or(after);
+        if let Some(j) = after.find(END) {
+            let raw = after[..j].trim().to_string();
+            let short = err[..i].trim().to_string();
+            return (short, if raw.is_empty() { None } else { Some(raw) });
+        }
+    }
+    (err.to_string(), None)
+}
+
 /// Outline AI call with one repair retry on invalid QuestPlan JSON.
+/// On final failure the error includes `<<<QUEST_RAW_JSON>>>…<<<END_QUEST_RAW_JSON>>>`
+/// so the UI / session can keep the model output.
 async fn ai_quest_plan(
     system: &str,
     user: &str,
@@ -343,11 +360,15 @@ async fn ai_quest_plan(
         ai_json(system, user, history).await?
     };
     merge_usage(usage_acc, usage);
-    match parse_quest_plan(&value_to_raw(value)) {
+    let raw1 = value_to_raw(value);
+    match parse_quest_plan(&raw1) {
         Ok(plan) => Ok(plan),
         Err(first_err) => {
             let repair = format!(
-                "{user}\n\nYour previous answer was invalid QuestPlan JSON ({first_err}).\nReturn ONLY one JSON object matching schemaVersion 1 (chapters with quests, tasks, rewards). No markdown fences."
+                "{user}\n\nYour previous answer was invalid QuestPlan JSON ({first_err}).\n\
+Return ONLY compact JSON. desc/deps/tasks/rewards MUST be arrays (never plain strings).\n\
+Example: \"desc\": [\"Collect 10 oak wood\"], \"tasks\": [{{ \"type\": \"item\", \"item\": \"minecraft:oak_log\", \"count\": 10 }}].\n\
+Omit ids/schemaVersion. No markdown fences."
             );
             let (value2, usage2) = if let Some(p) = progress {
                 ai_json_stream(system, &repair, history, p, "outline").await?
@@ -355,8 +376,13 @@ async fn ai_quest_plan(
                 ai_json(system, &repair, history).await?
             };
             merge_usage(usage_acc, usage2);
-            parse_quest_plan(&value_to_raw(value2))
-                .map_err(|e| format!("Invalid QuestPlan JSON after retry: {e}"))
+            let raw2 = value_to_raw(value2);
+            match parse_quest_plan(&raw2) {
+                Ok(plan) => Ok(plan),
+                Err(e) => Err(format!(
+                    "Invalid QuestPlan JSON after retry: {e}\n<<<QUEST_RAW_JSON>>>\n{raw2}\n<<<END_QUEST_RAW_JSON>>>"
+                )),
+            }
         }
     }
 }
@@ -756,7 +782,7 @@ pub async fn quest_chat_turn(
         progress.push(&mut lore_log, "done", "Lore-only regenerate done");
         (base, lore_log)
     } else {
-        let (plan, log, usage) = run_generate_quest_line(
+        match run_generate_quest_line(
             &path,
             &message,
             &book,
@@ -768,9 +794,47 @@ pub async fn quest_chat_turn(
             target_chapter_id.as_deref(),
             progress,
         )
-        .await?;
-        usage_acc = usage;
-        (plan, log)
+        .await
+        {
+            Ok((plan, log, usage)) => {
+                usage_acc = usage;
+                (plan, log)
+            }
+            Err(e) => {
+                // Keep the long AI run: persist user turn + raw JSON (if present) into the chat.
+                let (short_err, raw) = split_quest_raw_error(&e);
+                let mut content = format!("Generation failed: {short_err}");
+                if let Some(raw_json) = &raw {
+                    content.push_str(
+                        "\n\nRaw model JSON was saved below — open JSON mode, fix, and Apply.\n\n",
+                    );
+                    content.push_str(raw_json);
+                }
+                session.messages.push(QuestChatMessage {
+                    role: "assistant".into(),
+                    content,
+                    created_at: Some(now_iso()),
+                    plan: None,
+                    progress_log: Some(vec![short_err.clone()]),
+                    usage: if usage_acc.is_empty() {
+                        None
+                    } else {
+                        Some(usage_acc.clone())
+                    },
+                });
+                session.updated_at = now_iso();
+                {
+                    let dir = project_dir.clone();
+                    let session_to_save = session.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let _guard = QUEST_IO_LOCK.lock().ok();
+                        let _ = save_quest_chat(&dir, &session_to_save);
+                    })
+                    .await;
+                }
+                return Err(e);
+            }
+        }
     };
 
     // Prefer full system prompt validation path

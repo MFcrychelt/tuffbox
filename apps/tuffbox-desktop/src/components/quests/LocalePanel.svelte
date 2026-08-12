@@ -17,6 +17,7 @@
     onCreateLocale,
     onJumpGap,
     onCompareLocaleChange,
+    onFillGapsFromBase = undefined,
   }: {
     locales: Record<string, LocaleMap>;
     activeLocale?: string | null;
@@ -26,6 +27,7 @@
     onCreateLocale: (code: string, fromCode: string | null) => Promise<void> | void;
     onJumpGap: (entry: LocaleGapEntry, targetCode: string) => void;
     onCompareLocaleChange: (code: string | null) => void;
+    onFillGapsFromBase?: (targetCode: string, baseCode: string, keys: string[]) => void;
   } = $props();
 
   let codes = $derived(Object.keys(locales).sort((a, b) => a.localeCompare(b)));
@@ -169,6 +171,20 @@
         ({gaps.filter((g) => g.kind === "missing").length} missing ·
         {gaps.filter((g) => g.kind === "empty").length} empty)
       </p>
+      {#if gaps.length > 0 && onFillGapsFromBase}
+        <button
+          type="button"
+          class="btn primary"
+          onclick={() =>
+            onFillGapsFromBase(
+              targetCode,
+              baseCode,
+              gaps.map((g) => g.key),
+            )}
+        >
+          Fill missing keys from base
+        </button>
+      {/if}
       <div class="gap-list">
         {#each gaps.slice(0, 200) as g (g.key)}
           <button type="button" class="gap-row" onclick={() => onJumpGap(g, targetCode)}>

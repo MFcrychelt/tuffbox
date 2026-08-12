@@ -27,6 +27,8 @@
     onAddDep,
     onRemoveDep,
     onOpenKubeJs,
+    focusFieldToken = 0,
+    focusField = null as string | null,
   }: {
     quest: QuestData;
     chapterQuests: QuestData[];
@@ -45,6 +47,9 @@
     onAddDep: (depId: string) => void;
     onRemoveDep: (depId: string) => void;
     onOpenKubeJs?: (id: string) => void;
+    /** Increment to focus `focusField` (title | tasks | icon). */
+    focusFieldToken?: number;
+    focusField?: string | null;
   } = $props();
 
   let depPick = $state("");
@@ -53,6 +58,8 @@
   let extraKey = $state("");
   let idCopied = $state(false);
   let idCopyTimer: ReturnType<typeof setTimeout> | null = null;
+  let titleInputEl = $state<HTMLInputElement | null>(null);
+  let lastFocusToken = $state(0);
 
   async function copyQuestId() {
     try {
@@ -72,6 +79,25 @@
   let cmpTitle = $state("");
   let cmpSubtitle = $state("");
   let cmpDesc = $state("");
+
+  // Locale gap jump sets compareLocale — open More so compare columns are visible.
+  $effect(() => {
+    if (showCompare) showAdvanced = true;
+  });
+
+  $effect(() => {
+    if (!focusFieldToken || focusFieldToken === lastFocusToken) return;
+    lastFocusToken = focusFieldToken;
+    const field = focusField;
+    queueMicrotask(() => {
+      if (field === "title" || field === "icon") {
+        titleInputEl?.focus();
+        titleInputEl?.select();
+      } else if (field === "tasks" || field === "item") {
+        document.getElementById("quest-how-to-prove")?.scrollIntoView({ block: "nearest" });
+      }
+    });
+  });
 
   let depOptions = $derived(buildDepOptions(chapters, chapterQuests, quest));
   let filteredDepOptions = $derived.by(() => {
@@ -359,6 +385,7 @@
       <div class="title-icon">
         <label class="grow"
           >Title<input
+            bind:this={titleInputEl}
             bind:value={quest.title}
             oninput={() => {
               quest.titleFromSnbt = true;
@@ -447,7 +474,7 @@
           }
         }}
       />
-      <select bind:value={depPick} size={Math.min(6, Math.max(3, filteredDepOptions.length + 1))}>
+      <select bind:value={depPick}>
         <option value="">Add dependency…</option>
         {#each filteredDepOptions as o (o.id)}
           <option value={o.id}>{o.label}</option>
@@ -679,9 +706,7 @@
 
 <style>
   .insp {
-    background: var(--ftbq-bg-panel);
-    border-left: 1px solid var(--ftbq-frame);
-    box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.05);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
     padding: 0;
     max-height: 100%;
     overflow: auto;

@@ -22,6 +22,7 @@
     Package,
     Wrench,
     Minus,
+    Compass,
   } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
@@ -61,8 +62,12 @@
 
   let {
     currentView = $bindable(),
+    onDiscover = undefined,
+    onCreate = undefined,
   }: {
     currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world";
+    onDiscover?: () => void;
+    onCreate?: () => void;
   } = $props();
 
   const LONG_PRESS_MS = 420;
@@ -859,6 +864,19 @@
         {/if}
       </div>
 
+      {#if onDiscover}
+        <button type="button" class="tb-btn" title="Discover" onclick={() => onDiscover()}>
+          <Compass size={16} />
+          <span>Discover</span>
+        </button>
+      {/if}
+      {#if onCreate}
+        <button type="button" class="tb-btn" title="Create" onclick={() => onCreate()}>
+          <Plus size={16} />
+          <span>Create</span>
+        </button>
+      {/if}
+
       <button type="button" class="tb-btn" title="Settings" onclick={() => (currentView = "settings")}>
         <Settings size={16} />
         <span>Settings</span>
@@ -1483,18 +1501,20 @@
       opacity var(--motion-fast) var(--ease-out),
       box-shadow var(--motion-fast) var(--ease-out);
   }
-  .inst-tile:hover { background: var(--bg-hover); }
   .inst-tile:hover .inst-icon {
     transform: translateY(-1px);
     filter: brightness(1.04);
   }
-  .inst-tile.selected {
-    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
-    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  .inst-tile:hover:not(.selected) .inst-name {
+    background: color-mix(in srgb, var(--bg-hover) 90%, transparent);
   }
   .inst-tile.selected .inst-icon {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+  }
+  .inst-tile.selected .inst-name {
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    color: var(--accent-primary);
   }
   .inst-tile.running .inst-icon {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 55%, transparent);
@@ -1531,8 +1551,16 @@
     animation: lib-hold-ring 420ms linear forwards;
   }
   .inst-tile:focus-visible {
-    outline: 2px solid var(--accent-primary);
-    outline-offset: 2px;
+    outline: none;
+  }
+  .inst-tile:focus-visible .inst-icon {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--accent-primary) 70%, transparent),
+      0 0 0 4px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  }
+  .inst-tile:focus-visible .inst-name {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    outline-offset: 1px;
   }
 
   .hold-ring {
@@ -1604,6 +1632,7 @@
     font-weight: 600;
     color: var(--text-primary);
     max-width: 100%;
+    width: fit-content;
     line-height: 1.3;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -1611,7 +1640,14 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
     white-space: normal;
-    transition: color var(--motion-fast) var(--ease-out);
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    box-sizing: border-box;
+    transition:
+      color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out),
+      border-color var(--motion-fast) var(--ease-out);
   }
   .inst-tile.drop-target .inst-name { color: var(--accent-primary); }
 

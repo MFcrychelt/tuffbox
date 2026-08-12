@@ -3,6 +3,7 @@
     SvelteFlow,
     Background,
     Controls,
+    MiniMap,
     BackgroundVariant,
     useSvelteFlow,
     type Node,
@@ -38,6 +39,9 @@
     onMove,
     onAddAt,
     onLink,
+    onUnlink = undefined,
+    onEdgeSelect = undefined,
+    onOpenChapter = undefined,
     onSelectMultiple = () => {},
     fitToken = 0,
     addQuestToken = 0,
@@ -59,6 +63,12 @@
     onMove: (q: QuestData, x: number, y: number) => void;
     onAddAt: (x: number, y: number) => void;
     onLink: (fromId: string, toDepId: string) => void;
+    /** Remove dependency edge: questId lists depId in dependencies. */
+    onUnlink?: (questId: string, depId: string) => void;
+    /** Fired when a dependency edge is selected or cleared. */
+    onEdgeSelect?: (edge: { questId: string; depId: string } | null) => void;
+    /** Open another chapter (cross-chapter ghost click). */
+    onOpenChapter?: (chapterId: string, questId?: string) => void;
     onSelectMultiple?: (ids: string[]) => void;
     fitToken?: number;
     addQuestToken?: number;
@@ -73,6 +83,7 @@
 
   let issueIds = $derived(new Set(issues.map((i) => i.questId)));
   let iconRevision = $state(0);
+  let selectedEdgeId = $state<string | null>(null);
 
   const { screenToFlowPosition, fitView: flowFitView, getViewport } = useSvelteFlow();
 
@@ -111,13 +122,14 @@
 
   function findExternalDep(
     depId: string,
-  ): { quest: QuestData; chapterTitle: string } | null {
+  ): { quest: QuestData; chapterTitle: string; chapterId: string } | null {
     for (const ch of chapters) {
       const direct = ch.quests.find((oq) => oq.id === depId);
       if (direct && !quests.some((q) => q.id === direct.id)) {
         return {
           quest: direct,
           chapterTitle: ch.title || ch.filename || ch.id.slice(0, 8),
+          chapterId: ch.id,
         };
       }
       const owner = ch.quests.find((oq) => oq.tasks?.some((t) => t.id === depId));
@@ -125,6 +137,7 @@
         return {
           quest: owner,
           chapterTitle: ch.title || ch.filename || ch.id.slice(0, 8),
+          chapterId: ch.id,
         };
       }
     }
@@ -180,7 +193,7 @@
                   y: q.y * BASE - BASE * 3,
                 },
                 draggable: false,
-                selectable: false,
+                selectable: true,
                 data: {
                   quest: ext.quest,
                   isIssue: false,
@@ -190,6 +203,7 @@
                   iconRevision: rev,
                   external: true,
                   chapterTitle: ext.chapterTitle,
+                  chapterId: ext.chapterId,
                 },
               });
             }
@@ -217,6 +231,9 @@
           target: q.id,
           type: "step",
           style,
+          selectable: !external,
+          data: { depId, dependentId: q.id },
+          selected: selectedEdgeId === `e-${depId}-${q.id}`,
         });
       }
     }
@@ -430,16 +447,65 @@
     }
   }
 
+  function isValidConnection(connection: Connection | null | undefined): boolean {
+    if (!connection?.source || !connection?.target) return false;
+    if (connection.source === connection.target) return false;
+    // Dependent (target) must be a local chapter quest — cannot depend "into" a ghost.
+    if (connection.target.startsWith("ext:")) return false;
+    const src = connection.source.startsWith("ext:")
+      ? connection.source.slice(4)
+      : connection.source;
+    const dependentId = connection.target;
+    if (!quests.some((q) => q.id === dependentId)) return false;
+    if (src === dependentId) return false;
+    const dependent = quests.find((q) => q.id === dependentId);
+    if (dependent?.dependencies?.includes(src)) return false;
+    return true;
+  }
+
+  function clearEdgeSelection() {
+    if (!selectedEdgeId) return;
+    selectedEdgeId = null;
+    edges = edges.map((ed) => (ed.selected ? { ...ed, selected: false } : ed));
+    onEdgeSelect?.(null);
+  }
+
+  function handleEdgeClick({ edge }: { edge: Edge }) {
+    const depId = (edge.data as { depId?: string } | undefined)?.depId;
+    const dependentId = (edge.data as { dependentId?: string } | undefined)?.dependentId;
+    if (!depId || !dependentId) return;
+    selectedEdgeId = edge.id;
+    edges = edges.map((ed) => ({
+      ...ed,
+      selected: ed.id === edge.id,
+      style:
+        ed.id === edge.id
+          ? `${String(ed.style ?? "").replace(/stroke:[^;]+;?/g, "").replace(/stroke-width:[^;]+;?/g, "")} stroke: var(--ftbq-accent-teal, #3db8a8); stroke-width: 4;`
+          : ed.style,
+    }));
+    onEdgeSelect?.({ questId: dependentId, depId });
+    onSelect(null);
+  }
+
   function handlePaneClick({ event }: { event: MouseEvent }) {
     // Double-click create is handled via ondblclick on the viewport (getWorldCoordinates).
     if (event.detail >= 2) return;
     if (marqueeActive) return;
+    clearEdgeSelection();
     focusCanvas();
     onSelect(null, event);
   }
 
   function handleNodeClick({ node, event }: { node: Node; event: MouseEvent | TouchEvent }) {
-    if (node.id.startsWith("ext:")) return;
+    if (node.id.startsWith("ext:")) {
+      const chapterId = (node.data as { chapterId?: string } | undefined)?.chapterId;
+      const questId = (node.data as { quest?: QuestData } | undefined)?.quest?.id;
+      if (chapterId && onOpenChapter) {
+        onOpenChapter(chapterId, questId);
+      }
+      return;
+    }
+    clearEdgeSelection();
     const q = quests.find((item) => item.id === node.id);
     if (q) {
       focusCanvas();
@@ -530,6 +596,8 @@
         type="search"
         class="tb-filter"
         placeholder="Filter…"
+        title="Hide nodes that don’t match (canvas filter). Ctrl+F searches fields and jumps."
+        aria-label="Filter quests on canvas"
         value={questFilter}
         oninput={(e) => onQuestFilterChange?.((e.currentTarget as HTMLInputElement).value)}
         onkeydown={(e) => {
@@ -603,6 +671,8 @@
       onpaneclick={handlePaneClick}
       onnodedragstop={handleNodeDragStop}
       onconnect={handleConnect}
+      isValidConnection={isValidConnection}
+      onedgeclick={handleEdgeClick}
       fitView
       fitViewOptions={{ padding: 0.2 }}
       defaultEdgeOptions={{
@@ -618,7 +688,15 @@
         patternColor="rgba(255,255,255,0.07)"
       />
       <Controls />
-      <!-- MiniMap hidden until dedicated logic lands -->
+      <MiniMap
+        pannable
+        zoomable
+        nodeStrokeWidth={2}
+        maskColor="rgba(0, 0, 0, 0.45)"
+        bgColor="var(--ftbq-bg-panel, #1a1a1e)"
+        nodeColor={() => "var(--ftbq-accent-teal, #3db8a8)"}
+        ariaLabel="Chapter minimap"
+      />
     </SvelteFlow>
 
     {#if marqueeScreen && (marqueeScreen.width > 0 || marqueeScreen.height > 0)}

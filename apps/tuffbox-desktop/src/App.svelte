@@ -640,6 +640,13 @@
     if (id === "action:optimize-pack") {
       ideStageRequest.set("content");
       currentView = "ide";
+      // Content stage mounts Mods asynchronously — delay so the listener is ready.
+      queueMicrotask(() => {
+        window.dispatchEvent(new CustomEvent("tuffbox:open-optimize-pack"));
+      });
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("tuffbox:open-optimize-pack"));
+      }, 120);
       return;
     }
     if (id === "action:export-mrpack") {

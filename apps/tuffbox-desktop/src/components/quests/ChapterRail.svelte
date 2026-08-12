@@ -264,8 +264,8 @@
   </div>
 
   {#if selectedChapter && dirtyIds.has(selectedChapter)}
-    <button type="button" class="save-ch" disabled={saving} onclick={() => onSave(selectedChapter)}>
-      <Save size={14} class="flex-shrink-0" /> Save chapter
+    <button type="button" class="save-ch" disabled={saving} onclick={() => onSave(selectedChapter)} title="Writes this chapter SNBT only (not locales/book/groups — use Save all)">
+      <Save size={14} class="flex-shrink-0" /> Save chapter only
     </button>
   {/if}
 </aside>

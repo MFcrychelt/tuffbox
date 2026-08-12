@@ -142,6 +142,9 @@
   }
   let selectedChapter = $state("");
   let selectedQuest = $state<QuestData | null>(null);
+  let applyNeedsSave = $state(false);
+  let inspectorFocusField = $state<string | null>(null);
+  let inspectorFocusToken = $state(0);
   let validationIssues = $state<QuestValidationIssue[]>([]);
   let dirtyChapters = $state(new Set<string>());
   /** Chapter id → JSON at last successful load/save (disk baseline for dirty + undo). */
@@ -920,6 +923,7 @@
     }
     if (bookDirty) await saveBookData();
     if (groupsDirty) await saveGroups();
+    applyNeedsSave = false;
   }
 
   async function revalidateFromDisk() {
@@ -1255,7 +1259,7 @@
     selectedQuest = q;
   }
 
-  /** Shift+drag: from depends on to. */
+  /** Canvas handle connect: dependent (from) lists prereq (toDepId) in dependencies. */
   function linkQuests(fromId: string, toDepId: string) {
     const ch = chapters.find((c) => c.id === selectedChapter);
     const q = ch?.quests.find((x) => x.id === fromId);
@@ -1560,12 +1564,20 @@
       } else {
         selection = clearSelection();
         selectedQuest = null;
+        selectedCanvasEdge = null;
       }
       return;
     }
 
     if ((e.key === "Delete" || e.key === "Backspace") && !isInput) {
       e.preventDefault();
+      if (selectedCanvasEdge) {
+        const ch = chapters.find((c) => c.id === selectedChapter);
+        const q = ch?.quests.find((x) => x.id === selectedCanvasEdge!.questId);
+        if (q) removeDep(q, selectedCanvasEdge.depId);
+        selectedCanvasEdge = null;
+        return;
+      }
       removeSelectedQuests();
       return;
     }
@@ -1648,8 +1660,9 @@
     }
     flashNotice(
       "success",
-      `AI plan applied in editor (${result.touchedChapterIds.length} chapter(s)). Undo (Ctrl+Z) to revert. Save to write SNBT.`,
+      `AI plan applied in editor (${result.touchedChapterIds.length} chapter(s)). Undo (Ctrl+Z) to revert.`,
     );
+    applyNeedsSave = true;
     fitToken += 1;
   }
 
@@ -1764,8 +1777,13 @@
   }
 
   function jumpToIssue(issue: QuestValidationIssue) {
-    issuesOpen = false;
+    // Keep the issues list open so authors can walk multiple findings.
     const qid = issue.questId;
+    const msg = (issue.message ?? "").toLowerCase();
+    let field: string | null = null;
+    if (msg.includes("empty title")) field = "title";
+    else if (msg.includes("no tasks") || msg.includes("item task")) field = "tasks";
+    else if (msg.includes("missing quest icon")) field = "icon";
     for (const ch of chapters) {
       const q = ch.quests.find((x) => x.id === qid);
       if (q) {
@@ -1774,6 +1792,10 @@
         selection = selectSingle(selection, q.id);
         panelTab = "quest";
         fitToken += 1;
+        if (field) {
+          inspectorFocusField = field;
+          inspectorFocusToken += 1;
+        }
         return;
       }
     }
@@ -1905,15 +1927,15 @@
             aria-controls="quest-issues-pop"
             onclick={() => (issuesOpen = !issuesOpen)}
           >
-            {validationIssues.length === 0 ? "✓" : `${validationIssues.length} issues`}
+            {validationIssues.length === 0 ? "✓ Live" : `${validationIssues.length} live`}
           </button>
           <button
             type="button"
             class="issues-btn"
-            title="Re-run Rust validate_quest_book on disk"
+            title="Re-run Rust validate_quest_book on disk (saved SNBT)"
             onclick={() => void revalidateFromDisk()}
           >
-            Revalidate
+            On disk
           </button>
           {#if issuesOpen && validationIssues.length > 0}
             <div class="issues-pop" id="quest-issues-pop" role="listbox" aria-label="Validation issues">
@@ -2087,6 +2109,18 @@
     </div>
   </div>
 
+  {#if applyNeedsSave && hasDirty}
+    <div class="apply-save-banner" role="status">
+      <span>AI plan is in the editor only — <strong>Save</strong> writes SNBT to disk.</span>
+      <button type="button" class="primary mini" onclick={() => void saveAll()} disabled={saving}>
+        Save all
+      </button>
+      <button type="button" class="ghost mini" onclick={() => (applyNeedsSave = false)} aria-label="Dismiss">
+        Dismiss
+      </button>
+    </div>
+  {/if}
+
   {#if $projectPath}
     <ProgressPanel
       bind:open={progressOpen}
@@ -2132,7 +2166,8 @@
         <input
           type="search"
           id="quest-global-search"
-          placeholder="Search… words, /regex/, or re:pattern (Enter next)"
+          placeholder="Search fields… (Ctrl+F). Filter toolbar hides nodes."
+          aria-label="Search quest fields"
           value={search.query}
           bind:this={searchInputEl}
           aria-controls="quest-search-results"
@@ -2265,6 +2300,25 @@
             onMove={moveQuest}
             onAddAt={addQuestAt}
             onLink={linkQuests}
+            onUnlink={(questId, depId) => {
+              const ch = chapters.find((c) => c.id === selectedChapter);
+              const q = ch?.quests.find((x) => x.id === questId);
+              if (q) removeDep(q, depId);
+              selectedCanvasEdge = null;
+            }}
+            onEdgeSelect={(edge) => {
+              selectedCanvasEdge = edge;
+            }}
+            onOpenChapter={(chapterId, questId) => {
+              selectedChapter = chapterId;
+              const ch = chapters.find((c) => c.id === chapterId);
+              const q = questId ? ch?.quests.find((x) => x.id === questId) ?? null : null;
+              selectedQuest = q;
+              selection = q ? selectSingle(selection, q.id) : clearSelection();
+              panelTab = q ? "quest" : "info";
+              fitToken += 1;
+              flashNotice("success", `Opened chapter “${ch?.title || chapterId.slice(0, 8)}”`);
+            }}
             onSelectMultiple={(ids) => {
               selection = selectAll(ids);
               if (ids.length === 1) {
@@ -2382,13 +2436,17 @@
                     if (selectedQuest) removeDep(selectedQuest, id);
                   }}
                   onOpenKubeJs={(id) => openKubeJsForId(id)}
+                  focusFieldToken={inspectorFocusToken}
+                  focusField={inspectorFocusField}
                 />
               {:else}
                 <div class="sel-empty">
                   <button
                     type="button"
                     class="primary"
-                    onclick={() => addQuestAt(0, 0)}
+                    onclick={() => {
+                      if (selectedChapter) addQuestToken += 1;
+                    }}
                     disabled={!selectedChapter}
                   >Add quest</button>
                   <p class="sel-hint">Double-click canvas or press N</p>
@@ -2564,6 +2622,20 @@
         onJumpGap={jumpToLocaleGap}
         onCompareLocaleChange={(code) => {
           compareLocale = code && code !== activeLocale ? code : null;
+        }}
+        onFillGapsFromBase={(targetCode, baseCode, keys) => {
+          const base = locales[baseCode] ?? {};
+          const target = { ...(locales[targetCode] ?? {}) };
+          let n = 0;
+          for (const key of keys) {
+            const v = base[key];
+            if (v === undefined) continue;
+            target[key] = structuredClone(v);
+            n += 1;
+          }
+          locales = { ...locales, [targetCode]: target };
+          markLocaleDirty(targetCode);
+          flashNotice("success", `Filled ${n} key(s) into ${targetCode} from ${baseCode}`);
         }}
       />
     </div>
@@ -2905,6 +2977,23 @@
     border-radius: 6px;
     box-shadow: none;
   }
+  .apply-save-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--text-primary, var(--ftbq-text));
+    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 40%, var(--ftbq-frame));
+    border-radius: 6px;
+  }
+  .apply-save-banner .mini {
+    padding: 4px 10px;
+    font-size: 11px;
+  }
   .qe-title {
     display: flex;
     align-items: center;
@@ -3233,31 +3322,35 @@
   .panel-tabs {
     display: flex;
     flex-shrink: 0;
-    gap: 2px;
+    gap: 1px;
     padding: 4px 4px 0;
     border-bottom: 1px solid var(--ftbq-frame);
     background: var(--bg-tertiary, var(--ftbq-bg));
   }
   .panel-tabs .tab {
     flex: 1;
-    padding: 8px 4px;
+    min-width: 0;
+    padding: 7px 2px;
     border: 1px solid transparent;
     border-bottom: none;
     border-radius: 6px 6px 0 0;
-    background: color-mix(in srgb, var(--bg-elevated, var(--ftbq-bg-canvas)) 85%, transparent);
+    background: transparent;
     color: var(--text-muted, var(--ftbq-text-muted, #868e96));
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.03em;
     cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .panel-tabs .tab:last-child {
     border-right: none;
   }
   .panel-tabs .tab:hover {
     color: var(--text-secondary, var(--ftbq-text, #495057));
-    background: color-mix(in srgb, var(--bg-hover, #dee2e6) 70%, transparent);
+    background: color-mix(in srgb, var(--bg-hover, #dee2e6) 55%, transparent);
   }
   .panel-tabs .tab.active {
     color: var(--text-primary, var(--ftbq-text, #212529));

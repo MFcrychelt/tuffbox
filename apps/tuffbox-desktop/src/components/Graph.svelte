@@ -211,7 +211,19 @@
     try {
       const raw: any = await invoke("refresh_graph", { path: $projectPath });
       if (myGen !== changePlanGen) return;
-      applyGraph(raw);
+      // Soft-apply background enrich: keep camera/physics so it doesn't feel like a 2nd load.
+      if (!manual && graph) {
+        pendingRestorePositions = new Map(
+          simNodes.map((n) => [
+            n.id,
+            { x: n.x, y: n.y, fx: n.fx, fy: n.fy, hubX: n.hubX, hubY: n.hubY, isHub: n.isHub },
+          ]),
+        );
+        resetViewOnNextLayout = false;
+        applyGraph(raw, { preserveLayout: true });
+      } else {
+        applyGraph(raw);
+      }
       await loadChangePlan(myGen);
       if (manual) message = "Dependency metadata refreshed.";
     } catch (e) {
@@ -249,16 +261,17 @@
       // Don't pre-select a node — otherwise every unrelated edge is dimmed
       // to near-invisible and the graph looks disconnected.
       lastLoadedPath = $projectPath;
-      // Paint local/cache graph immediately — network enrich runs in background.
+      // Paint local/cache graph immediately.
       loading = false;
 
-      // Local/cache graphs can disagree with the post-refresh Modrinth-enriched
-      // plan. Keep the change-plan panel in loading until network (or local fallback).
-      if (raw.source === "network") {
+      // Cache/network are already Modrinth-enriched (or fingerprint-current).
+      // Only cold "local" graphs need a background refresh — otherwise every open
+      // looked like two loads (get_graph → refresh_graph + sim restart).
+      if (raw.source === "local") {
+        void refreshGraph(false, gen);
+      } else {
         await loadChangePlan(gen);
         changePlanLoading = false;
-      } else {
-        void refreshGraph(false, gen);
       }
     } catch (e) {
       if (gen !== changePlanGen) return;
@@ -2304,7 +2317,7 @@
   });
 
   $effect(() => {
-    if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+    if ($projectPath && lastLoadedPath !== $projectPath) void load();
   });
   function handleNodeMouseDown(event: PointerEvent, node: PositionedNode) {
     event.stopPropagation();

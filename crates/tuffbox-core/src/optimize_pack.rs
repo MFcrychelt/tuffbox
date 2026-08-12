@@ -53,19 +53,34 @@ pub fn load_curated_packs_with_override() -> CuratedPacksFile {
     load_curated_packs()
 }
 
+/// Placeholder rows in `optimize-packs.json` (not published on Modrinth yet).
+/// Treating them as available makes Optimize bootstrap hang / fail on Content.
+pub fn is_unpublished_curated_stub(pack: &CuratedPackRef) -> bool {
+    let id = pack.project_id.trim();
+    let slug = pack.slug.as_deref().unwrap_or("").trim();
+    id.starts_with("tuffbox-opt-") || slug.starts_with("tuffbox-opt-")
+}
+
 pub fn curated_pack_for(loader: &str, mc_version: &str) -> Option<CuratedPackRef> {
     let file = load_curated_packs_with_override();
     let map = match loader {
         "fabric" => &file.fabric,
         "quilt" => {
-            if let Some(p) = file.quilt.get(mc_version) {
-                return Some(p.clone());
+            if let Some(p) = file
+                .quilt
+                .get(mc_version)
+                .cloned()
+                .filter(|p| !is_unpublished_curated_stub(p))
+            {
+                return Some(p);
             }
             &file.fabric
         }
         _ => return None,
     };
-    map.get(mc_version).cloned()
+    map.get(mc_version)
+        .cloned()
+        .filter(|p| !is_unpublished_curated_stub(p))
 }
 
 pub fn list_curated_pack_entries(loader: &str) -> Vec<(String, CuratedPackRef)> {
@@ -380,5 +395,18 @@ mod tests {
     #[test]
     fn curated_json_parses() {
         let _ = load_curated_packs();
+    }
+
+    #[test]
+    fn stub_curated_packs_are_unavailable() {
+        let stub = CuratedPackRef {
+            project_id: "tuffbox-opt-1-20-1".into(),
+            slug: Some("tuffbox-opt-1-20-1".into()),
+            name: Some("stub".into()),
+        };
+        assert!(is_unpublished_curated_stub(&stub));
+        // Bundled JSON still lists stubs, but curated_pack_for must hide them.
+        assert!(curated_pack_for("fabric", "1.20.1").is_none());
+        assert!(curated_pack_for("fabric", "1.21.1").is_none());
     }
 }

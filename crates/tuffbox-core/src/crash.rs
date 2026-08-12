@@ -3,6 +3,7 @@ use crate::{
     change_plan::{ChangeAction, ChangePlan, ChangeRisk},
     diagnostics::{Diagnostic, DiagnosticSeverity},
     graph::{DependencyGraph, NodeId},
+    launch_history::{self, LaunchHistoryEntry},
     manifest::{ModSpec, ProjectManifest},
     resolver::Resolver,
     snapshot::Snapshot,
@@ -18,6 +19,7 @@ use thiserror::Error;
 
 const MAX_REPORT_BYTES: u64 = 4 * 1024 * 1024;
 const LATEST_LOG_TAIL_LINES: usize = 900;
+const DEBUG_LOG_TAIL_LINES: usize = 2400;
 const MAX_EVIDENCE_PER_SUSPECT: usize = 8;
 pub const LATEST_COMPATIBLE_VERSION: &str = "latest-compatible";
 
@@ -96,6 +98,13 @@ pub struct SuspectEvidence {
     pub line_number: usize,
     pub kind: CrashSignalKind,
     pub text: String,
+    /// Positional / channel weight (0–100). Higher = stronger blame signal.
+    #[serde(default = "default_evidence_weight")]
+    pub weight: u8,
+}
+
+fn default_evidence_weight() -> u8 {
+    50
 }
 
 /// How strongly a suspect is implicated in the crash.
@@ -231,11 +240,29 @@ pub struct SupportPackResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ArchivedSessionLog {
+    pub session_id: String,
+    pub started_at: String,
+    pub exit_code: Option<i32>,
+    pub analysis: LatestLogAnalysis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CrashDiagnosis {
     pub reports: Vec<CrashReportSummary>,
     pub selected_report: Option<CrashReportAnalysis>,
     pub latest_log: LatestLogAnalysis,
     pub launcher_log: LatestLogAnalysis,
+    /// `logs/debug.log` when present (longer tail — early crash lines often live here).
+    #[serde(default)]
+    pub debug_log: LatestLogAnalysis,
+    /// Archived logs from crashed launches (newest first).
+    #[serde(default)]
+    pub session_logs: Vec<ArchivedSessionLog>,
+    /// Recent launch journal rows (newest first).
+    #[serde(default)]
+    pub launch_history: Vec<LaunchHistoryEntry>,
     pub suspected_mods: Vec<SuspectedMod>,
     pub hints: Vec<DiagnosisHint>,
     pub recent_snapshots: Vec<Snapshot>,
@@ -399,6 +426,7 @@ pub fn analyze_latest_log(
         project_dir.as_ref().join("logs").join("latest.log"),
         "logs/latest.log",
         manifest,
+        LATEST_LOG_TAIL_LINES,
     )
 }
 
@@ -418,13 +446,30 @@ pub fn analyze_launcher_log(
         .find(|path| path.is_file())
         .cloned()
         .unwrap_or_else(|| project_dir.join("logs").join("launcher.log"));
-    analyze_log_file(log_path, "launcher.log", manifest)
+    analyze_log_file(log_path, "launcher.log", manifest, LATEST_LOG_TAIL_LINES)
 }
 
-fn analyze_log_file(path: PathBuf, source: &str, manifest: &ProjectManifest) -> LatestLogAnalysis {
+pub fn analyze_debug_log(
+    project_dir: impl AsRef<Path>,
+    manifest: &ProjectManifest,
+) -> LatestLogAnalysis {
+    analyze_log_file(
+        project_dir.as_ref().join("logs").join("debug.log"),
+        "logs/debug.log",
+        manifest,
+        DEBUG_LOG_TAIL_LINES,
+    )
+}
+
+fn analyze_log_file(
+    path: PathBuf,
+    source: &str,
+    manifest: &ProjectManifest,
+    tail_lines: usize,
+) -> LatestLogAnalysis {
     let exists = path.is_file();
     let tail = if exists {
-        crate::process::read_log_tail(&path, LATEST_LOG_TAIL_LINES).unwrap_or_default()
+        crate::process::read_log_tail(&path, tail_lines).unwrap_or_default()
     } else {
         String::new()
     };
@@ -438,6 +483,27 @@ fn analyze_log_file(path: PathBuf, source: &str, manifest: &ProjectManifest) -> 
         suspected_mods,
         hints,
     }
+}
+
+fn load_archived_session_logs(
+    project_dir: &Path,
+    manifest: &ProjectManifest,
+) -> Vec<ArchivedSessionLog> {
+    launch_history::list_launch_history_default(project_dir)
+        .into_iter()
+        .filter(|e| e.archived)
+        .filter_map(|entry| {
+            let log_path = launch_history::archived_session_log_path(project_dir, &entry.id)?;
+            let source = format!("session/{}", entry.id);
+            let analysis = analyze_log_file(log_path, &source, manifest, DEBUG_LOG_TAIL_LINES);
+            Some(ArchivedSessionLog {
+                session_id: entry.id,
+                started_at: entry.started_at,
+                exit_code: entry.exit_code,
+                analysis,
+            })
+        })
+        .collect()
 }
 
 pub fn build_crash_diagnosis(
@@ -467,17 +533,37 @@ pub fn build_crash_diagnosis(
 
     let latest_log = analyze_latest_log(project_dir, manifest);
     let launcher_log = analyze_launcher_log(project_dir, manifest);
+    let debug_log = analyze_debug_log(project_dir, manifest);
+    let session_logs = load_archived_session_logs(project_dir, manifest);
+    let launch_history = launch_history::list_launch_history_default(project_dir);
+
+    // Archived crashed sessions appear in the source picker alongside crash-reports.
+    for archived in &session_logs {
+        let label = format_session_picker_label(archived);
+        reports.push(CrashReportSummary {
+            id: format!("{}{}", launch_history::SESSION_REPORT_PREFIX, archived.session_id),
+            name: label,
+            path: archived.analysis.path.clone(),
+            size: 0,
+            modified: None,
+        });
+    }
 
     // Explicit user pick always wins. Special id `__latest_log__` forces live-log
     // analysis (AI Explain / Diagnose sidebar) and never auto-selects a crash file.
     // `__launcher_log__` forces launcher.log.
-    // Auto-pick the newest crash report only when latest.log does not supersede it.
+    // `session/<id>` selects an archived crashed-session log.
     let force_latest_log = selected_report_id == Some("__latest_log__");
     let force_launcher_log = selected_report_id == Some("__launcher_log__");
+    let force_archived_session = selected_report_id
+        .filter(|id| launch_history::is_session_report_id(id))
+        .and_then(|id| launch_history::session_id_from_report_id(id).map(str::to_string));
     let explicit = selected_report_id
         .filter(|id| !id.is_empty() && *id != "__latest_log__" && *id != "__launcher_log__")
         .filter(|id| {
-            reports.iter().any(|report| report.id == *id) || validate_report_id(id).is_ok()
+            launch_history::is_session_report_id(id)
+                || reports.iter().any(|report| report.id == *id)
+                || validate_report_id(id).is_ok()
         });
     let newest = reports
         .iter()
@@ -486,7 +572,14 @@ pub fn build_crash_diagnosis(
         .map(|r| latest_log_supersedes_crash(project_dir, Some(r.path.as_path()), &latest_log.tail))
         .unwrap_or(false);
 
-    let selected_id = if force_latest_log || force_launcher_log {
+    let archived_session_analysis = force_archived_session.as_ref().and_then(|sid| {
+        session_logs
+            .iter()
+            .find(|s| s.session_id == *sid)
+            .map(|s| s.analysis.clone())
+    });
+
+    let selected_id = if force_latest_log || force_launcher_log || force_archived_session.is_some() {
         None
     } else if let Some(id) = explicit {
         Some(id)
@@ -497,11 +590,14 @@ pub fn build_crash_diagnosis(
     };
 
     let selected_report = selected_id
+        .filter(|id| !launch_history::is_session_report_id(id))
         .map(|id| analyze_crash_report(project_dir, id, manifest))
         .transpose()?;
 
     let analysis_source = if force_launcher_log {
         "launcher_log".to_string()
+    } else if force_archived_session.is_some() {
+        "archived_session".to_string()
     } else if selected_report
         .as_ref()
         .map(|r| r.summary.id.starts_with("hs_err/"))
@@ -510,6 +606,8 @@ pub fn build_crash_diagnosis(
         "hs_err".to_string()
     } else if selected_report.is_some() {
         "crash_report".to_string()
+    } else if stale && session_logs.first().is_some() {
+        "archived_session".to_string()
     } else {
         "latest_log".to_string()
     };
@@ -517,25 +615,46 @@ pub fn build_crash_diagnosis(
     // Healthy live session (and user did not explicitly open an old crash):
     // suppress crash-log suspects / fix plans so Diagnose doesn't nag about
     // a crash that was already fixed and successfully relaunched.
-    let session_healthy =
-        explicit.is_none() && !force_launcher_log && log_indicates_healthy_session(&latest_log.tail);
+    let session_healthy = explicit.is_none()
+        && force_archived_session.is_none()
+        && !force_launcher_log
+        && log_indicates_healthy_session(&latest_log.tail);
+
+    // When latest.log is a successful relaunch but we archived the crashed session,
+    // use the archived log for suspect/hint analysis (stale crash-report alone is misleading).
+    let archived_fallback = if session_healthy && stale {
+        session_logs.first().map(|s| s.analysis.clone())
+    } else {
+        None
+    };
 
     let mut suspect_sets = Vec::new();
     let mut combined_signals = Vec::new();
-    if !session_healthy {
+    let analyze_crash = !session_healthy
+        || archived_fallback.is_some()
+        || archived_session_analysis.is_some();
+
+    if analyze_crash {
         if let Some(report) = &selected_report {
             suspect_sets.push(report.suspected_mods.clone());
             combined_signals.extend(report.signals.clone());
         }
-        if force_launcher_log {
+        if let Some(archived) = archived_session_analysis.or(archived_fallback) {
+            suspect_sets.push(archived.suspected_mods.clone());
+            combined_signals.extend(archived.signals.clone());
+        } else if force_launcher_log {
             suspect_sets.push(launcher_log.suspected_mods.clone());
             combined_signals.extend(launcher_log.signals.clone());
-        } else {
+        } else if !session_healthy {
             suspect_sets.push(latest_log.suspected_mods.clone());
-            suspect_sets.push(launcher_log.suspected_mods.clone());
             combined_signals.extend(latest_log.signals.clone());
-            combined_signals.extend(launcher_log.signals.clone());
         }
+        if debug_log.exists && !debug_log.tail.is_empty() {
+            suspect_sets.push(debug_log.suspected_mods.clone());
+            combined_signals.extend(debug_log.signals.clone());
+        }
+        suspect_sets.push(launcher_log.suspected_mods.clone());
+        combined_signals.extend(launcher_log.signals.clone());
     }
     let suspected_mods = merge_suspected_mods(suspect_sets.into_iter().flatten());
     let suspected_mods = if session_healthy {

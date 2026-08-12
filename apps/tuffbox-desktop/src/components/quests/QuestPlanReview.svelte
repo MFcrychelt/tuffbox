@@ -296,6 +296,9 @@
         <X size={14} /> Discard
       </button>
     </div>
+    <p class="apply-hint save-note" role="note">
+      Apply updates the editor only. Use Save (Ctrl+S) to write SNBT.
+    </p>
     {#if applyBlockedReason}
       <p class="apply-hint" role="status">{applyBlockedReason}</p>
     {/if}

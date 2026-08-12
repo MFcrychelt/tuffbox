@@ -193,7 +193,7 @@
     <div class="color-palette">
       <div class="palette-label">Color codes found:</div>
       <div class="palette-chips">
-        {#each aggregations as agg}
+        {#each aggregations as agg (agg.code)}
           <button
             type="button"
             class="color-chip"
@@ -225,7 +225,7 @@
     </div>
   {:else}
     <div class="hit-list">
-      {#each hits as hit}
+      {#each hits as hit, i (`${hit.chapterId}:${hit.questId}:${hit.field}:${hit.lineIndex}:${hit.position}:${i}`)}
         <button
           type="button"
           class="hit-item"
@@ -252,26 +252,31 @@
 </div>
 
 {#if showPopup}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="popup-overlay"
     role="presentation"
     onclick={closePopup}
     oncontextmenu={(e) => e.preventDefault()}
   >
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
       class="popup"
       role="dialog"
       aria-modal="true"
       aria-label="Recolor"
+      tabindex="-1"
       style="left: {popupPos.x}px; top: {popupPos.y}px"
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closePopup();
+        }
+      }}
       oncontextmenu={(e) => e.preventDefault()}
     >
       <div class="popup-title">Recolor to:</div>
       <div class="popup-colors">
-        {#each MC_COLORS as mc}
+        {#each MC_COLORS as mc (mc.code)}
           <button
             type="button"
             class="popup-swatch"
@@ -303,29 +308,34 @@
     flex-direction: column;
     height: 100%;
     overflow: hidden;
-    background: var(--ftbq-bg-panel);
-    color: var(--ftbq-text, #e8e8e8);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
   }
   .cm-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--ftbq-border);
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--ftbq-frame);
     flex-shrink: 0;
   }
   .cm-title {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--ftbq-title-gold, #f2c94c);
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary, var(--ftbq-text, #212529));
   }
   .cm-count {
     font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    padding: 2px 6px;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 4px;
   }
   .cm-search {
     padding: 8px 12px;
-    border-bottom: 1px solid var(--ftbq-border);
+    border-bottom: 1px solid var(--ftbq-frame);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -337,21 +347,27 @@
     font-size: 12px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.55);
-    color: var(--ftbq-text, #e8e8e8);
-    border-radius: 3px;
+    box-shadow: none;
+    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    border-radius: 6px;
+    outline: none;
+  }
+  .search-input:focus {
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .cm-actions {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
   }
   .filter {
     display: flex;
     align-items: center;
     gap: 4px;
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
     cursor: pointer;
   }
   .filter input { width: 12px; height: 12px; }
@@ -360,22 +376,20 @@
     padding: 6px 12px;
     font-size: 11px;
     color: var(--ftbq-accent-green, #55c95a);
-    background: rgba(85,201,90,0.1);
-    border-bottom: 1px solid rgba(85,201,90,0.3);
+    background: color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 10%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 28%, var(--ftbq-frame));
     flex-shrink: 0;
   }
 
   .color-palette {
     padding: 8px 12px;
-    border-bottom: 1px solid var(--ftbq-border);
+    border-bottom: 1px solid var(--ftbq-frame);
     flex-shrink: 0;
   }
   .palette-label {
-    font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    font-size: 11px;
+    color: var(--ftbq-accent-teal, #3db8a8);
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     margin-bottom: 6px;
   }
   .palette-chips {
@@ -387,28 +401,32 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 3px 6px;
-    border: 1px solid var(--ftbq-border);
-    border-radius: 3px;
-    background: var(--ftbq-bg);
+    padding: 3px 7px;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--ftbq-bg) 45%, transparent);
     cursor: pointer;
     font-size: 10px;
-    color: var(--ftbq-text, #e8e8e8);
-    transition: border-color 0.15s;
+    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    transition: border-color 0.15s, background 0.15s;
   }
-  .color-chip:hover { border-color: var(--ftbq-accent-teal, #3db8a8); }
+  .color-chip:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+  }
   .chip-swatch {
     width: 10px;
     height: 10px;
     border-radius: 2px;
     flex-shrink: 0;
+    border: 1px solid color-mix(in srgb, #000 25%, transparent);
   }
   .chip-code {
     font-family: monospace;
     font-weight: 600;
   }
   .chip-count {
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
   }
 
   .cm-empty {
@@ -416,9 +434,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
     font-size: 12px;
     padding: 24px;
+    text-align: center;
   }
 
   .hit-list {
@@ -433,21 +452,23 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    padding: 6px 8px;
-    border: 1px solid var(--ftbq-border);
-    border-radius: 3px;
-    background: var(--ftbq-bg);
+    padding: 7px 8px;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--ftbq-bg) 40%, transparent);
     cursor: pointer;
     text-align: left;
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, background 0.15s;
     font-size: 11px;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
     width: 100%;
   }
-  .hit-item:hover { border-color: var(--ftbq-accent-teal, #3db8a8); }
+  .hit-item:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--ftbq-frame));
+  }
   .hit-item.selected {
-    border-color: var(--ftbq-accent-teal, #3db8a8);
-    background: rgba(61,184,168,0.08);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
   .hit-meta {
     display: flex;
@@ -460,11 +481,11 @@
     color: var(--ftbq-accent-teal, #3db8a8);
   }
   .hit-quest {
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
   }
   .hit-field {
     font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
     font-family: monospace;
   }
   .hit-color {
@@ -484,7 +505,7 @@
   }
   .hit-segment {
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -496,22 +517,22 @@
     position: fixed;
     inset: 0;
     z-index: 200;
-    background: rgba(0,0,0,0.3);
+    background: rgba(0,0,0,0.28);
   }
   .popup {
     position: fixed;
-    background: var(--ftbq-bg-panel);
-    border: 1px solid var(--ftbq-border);
-    border-radius: 3px;
+    background: var(--bg-elevated, var(--ftbq-bg-panel));
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 6px;
     padding: 12px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    box-shadow: 0 10px 28px rgba(0,0,0,0.28);
     z-index: 201;
     min-width: 200px;
   }
   .popup-title {
     font-size: 12px;
     font-weight: 600;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
     margin-bottom: 8px;
   }
   .popup-colors {
@@ -523,21 +544,22 @@
   .popup-swatch {
     width: 24px;
     height: 24px;
-    border-radius: 3px;
+    border-radius: 4px;
     border: 2px solid transparent;
     cursor: pointer;
     transition: border-color 0.15s, transform 0.1s;
   }
-  .popup-swatch:hover { transform: scale(1.15); }
+  .popup-swatch:hover { transform: scale(1.1); }
   .popup-swatch.active {
     border-color: var(--ftbq-accent-teal, #3db8a8);
-    transform: scale(1.15);
+    transform: scale(1.1);
   }
   .popup-preview {
     font-size: 12px;
     padding: 6px 8px;
-    background: var(--ftbq-bg);
-    border-radius: 3px;
+    background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 6px;
     margin-bottom: 8px;
     min-height: 28px;
   }
@@ -547,20 +569,23 @@
   }
 
   .btn {
-    padding: 6px 12px;
-    border: 1px solid var(--ftbq-border);
-    background: rgba(0,0,0,0.25);
-    color: var(--ftbq-text, #e8e8e8);
+    padding: 6px 10px;
+    border: 1px solid var(--ftbq-frame);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
     font-size: 12px;
     font-weight: 600;
-    border-radius: 2px;
+    border-radius: 6px;
     cursor: pointer;
   }
-  .btn:hover:not(:disabled) { border-color: var(--ftbq-accent-teal, #3db8a8); }
+  .btn:hover:not(:disabled) {
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--ftbq-frame));
+  }
   .btn:disabled { opacity: 0.4; cursor: default; }
   .btn.primary {
-    border-color: var(--ftbq-accent-green, #55c95a);
-    background: rgba(85,201,90,0.18);
+    border-color: color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 55%, var(--ftbq-frame));
+    background: color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 14%, transparent);
     color: var(--ftbq-accent-green, #55c95a);
   }
   .btn.ghost { background: transparent; }

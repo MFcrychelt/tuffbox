@@ -12180,6 +12180,14 @@ fn build_and_spawn(
         );
         overlay_hook::stop_ipc_server();
         if exit.code == Some(0) {
+            if let Ok(project_dir) = manifest_parent(&stats_path_for_exit) {
+                let _ = tuffbox_core::launch_history::record_launch_exit(
+                    &project_dir,
+                    exit.code,
+                    exit.duration_secs,
+                    None,
+                );
+            }
             return;
         }
         let _ = record_crash(stats_path_for_exit.clone());
@@ -12197,6 +12205,18 @@ fn build_and_spawn(
                 &log_text,
                 &crash_ctx.mc_version,
                 &crash_ctx.loader_kind,
+            );
+            let crash_report_abs = info
+                .log_path
+                .as_deref()
+                .map(PathBuf::from)
+                .filter(|p| p.is_file());
+            let _ = tuffbox_core::launch_history::archive_crashed_session(
+                &project_dir,
+                exit.code,
+                exit.duration_secs,
+                Some(fp.key.clone()),
+                crash_report_abs.as_deref(),
             );
             let _ = pack_events::append_crash_detected(
                 &project_dir,

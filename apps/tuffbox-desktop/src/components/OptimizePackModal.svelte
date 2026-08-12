@@ -102,6 +102,7 @@
     findings = [];
     curatedMeta = null;
     useAiConfigs = false;
+    curatedAvailable = false;
 
     const path = get(projectPath);
     if (!path) {
@@ -112,24 +113,45 @@
 
     try {
       const listed = await api.mods.listCuratedOptimizePacks(path);
-      curatedAvailable = listed.available;
+      curatedAvailable = !!listed.available;
       const info = get(projectInfo);
       const preferCurated =
         curatedAvailable && loaderIsFabricFamily(listed.loader || info?.loaderKind);
       mode = preferCurated ? "curated" : "custom";
 
       if (preferCurated) {
-        await loadCurated(path);
+        try {
+          await loadCurated(path);
+        } catch (curatedErr) {
+          // Unpublished / missing Modrinth pack — fall through to Custom without a sticky error.
+          curatedAvailable = false;
+          mode = "custom";
+          const curatedMsg =
+            curatedErr instanceof Error ? curatedErr.message : String(curatedErr);
+          await loadCustom(path, false);
+          warnings = [
+            curatedMsg,
+            "Opened Custom optimize instead.",
+            ...warnings,
+          ];
+        }
       } else {
         await loadCustom(path, false);
       }
+      error = null;
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
       mode = "custom";
+      curatedAvailable = false;
       try {
         await loadCustom(path, false);
+        error = null;
       } catch (e2) {
         error = e2 instanceof Error ? e2.message : String(e2);
+      }
+      if (error == null && e) {
+        // custom recovered; keep a soft warning only
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg && !warnings.includes(msg)) warnings = [...warnings, msg];
       }
     } finally {
       loading = false;
@@ -197,12 +219,23 @@
       if (next === "curated") {
         if (!curatedAvailable) {
           error = `No curated pack for this Minecraft version — use Custom or publish a pack and update optimize-packs.json.`;
+          mode = "custom";
           loading = false;
           return;
         }
-        await loadCurated(path);
+        try {
+          await loadCurated(path);
+          error = null;
+        } catch (e) {
+          curatedAvailable = false;
+          mode = "custom";
+          error = e instanceof Error ? e.message : String(e);
+          await loadCustom(path, useAiConfigs);
+          // Keep curated failure visible but stay on a usable Custom plan.
+        }
       } else {
         await loadCustom(path, useAiConfigs);
+        error = null;
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -307,13 +340,15 @@
     await launchWithFeedback({ path, profile: "client" });
   }
 
+  // One-shot open: always re-bootstrap when the dialog opens (avoid stale session).
   $effect(() => {
-    if (open && !sessionOpen) {
-      sessionOpen = true;
-      void bootstrap();
-    } else if (!open && sessionOpen) {
+    if (!open) {
       sessionOpen = false;
+      return;
     }
+    if (sessionOpen) return;
+    sessionOpen = true;
+    void bootstrap();
   });
 </script>
 

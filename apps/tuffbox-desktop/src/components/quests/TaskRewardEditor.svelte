@@ -363,7 +363,7 @@
   }
 </script>
 
-<section class="tr ftbq-tr">
+<section class="tr ftbq-tr" id="quest-how-to-prove">
   <div class="tr-h">
     <h4>How to prove</h4>
     <div class="add-row">
@@ -723,9 +723,10 @@
         {#if onOpenKubeJs}
           <div class="kjs-row">
             <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(task.id)}
-              >Open in KubeJS</button
+              >Open KubeJS</button
             >
           </div>
+          <p class="hint">Custom task stub — implement FTBQuestsEvents.customTask in Book → KubeJS.</p>
         {:else}
           <p class="hint">Wire logic in Book → KubeJS (FTBQuestsEvents.customTask).</p>
         {/if}
@@ -950,9 +951,10 @@
         {#if onOpenKubeJs}
           <div class="kjs-row">
             <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(reward.id)}
-              >Open in KubeJS</button
+              >Open KubeJS</button
             >
           </div>
+          <p class="hint">Custom reward stub — implement FTBQuestsEvents.customReward in Book → KubeJS.</p>
         {:else}
           <p class="hint">Wire logic in Book → KubeJS (FTBQuestsEvents.customReward).</p>
         {/if}

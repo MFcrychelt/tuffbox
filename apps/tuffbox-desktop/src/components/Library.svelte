@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    Library as LibraryIcon,
     Search,
     Plus,
     Download,
@@ -501,40 +500,43 @@
 </script>
 
 <div class="library fade-slide-in lib-page">
-  <div class="library-header lib-header-enter" class:compact={tab === "yours"}>
-    <div class="title-row">
-      <span class="lib-title-icon"><LibraryIcon size={22} /></span>
-      <h1>Library</h1>
+  {#if tab === "yours"}
+    <div class="yours-wrap">
+      <LibraryInstancesPane
+        bind:currentView
+        onDiscover={() => switchTab("discover")}
+        onCreate={() => switchTab("create")}
+      />
     </div>
+  {:else}
+  <div class="library-subnav lib-header-enter">
     <div class="header-actions">
-      {#if tab !== "yours"}
-        <div class="import-wrap">
-          <button
-            type="button"
-            class="header-btn"
-            class:busy={importing}
-            disabled={importing}
-            onclick={(e) => { e.stopPropagation(); (importMenuOpen = !importMenuOpen);  }}
-            title="Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance"
-          >
-            {#if importing}
-              <span class="mini-spinner dark"></span> Importing…
-            {:else}
-              <Download size={15} /> Import
-            {/if}
-          </button>
-          {#if importMenuOpen}
-            <div class="import-menu" role="menu">
-              <button type="button" role="menuitem" onclick={importPackFile}>
-                File (.mrpack / .zip)
-              </button>
-              <button type="button" role="menuitem" onclick={importInstanceFolder}>
-                Instance folder
-              </button>
-            </div>
+      <div class="import-wrap">
+        <button
+          type="button"
+          class="header-btn"
+          class:busy={importing}
+          disabled={importing}
+          onclick={(e) => { e.stopPropagation(); (importMenuOpen = !importMenuOpen);  }}
+          title="Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance"
+        >
+          {#if importing}
+            <span class="mini-spinner dark"></span> Importing…
+          {:else}
+            <Download size={15} /> Import
           {/if}
-        </div>
-      {/if}
+        </button>
+        {#if importMenuOpen}
+          <div class="import-menu" role="menu">
+            <button type="button" role="menuitem" onclick={importPackFile}>
+              File (.mrpack / .zip)
+            </button>
+            <button type="button" role="menuitem" onclick={importInstanceFolder}>
+              Instance folder
+            </button>
+          </div>
+        {/if}
+      </div>
       <div class="tabs">
         <button class:active={tab === "yours"} onclick={() => switchTab("yours")}>
           <LayoutGrid size={15} /> Your packs
@@ -553,11 +555,7 @@
     </div>
   </div>
 
-  {#if tab === "yours"}
-    <div class="yours-wrap">
-      <LibraryInstancesPane bind:currentView />
-    </div>
-  {:else if tab === "discover"}
+  {#if tab === "discover"}
   <div class="tab-scroll">
     {#if catalogViewResult}
       <CatalogProjectView
@@ -781,6 +779,7 @@
     </div>
   </div>
   {/if}
+  {/if}
 </div>
 
 {#if $newProjectOpen}
@@ -821,21 +820,15 @@
   .lib-header-enter {
     animation: lib-page-header var(--motion-enter) var(--ease-spring) both;
   }
-  .lib-title-icon {
-    display: inline-flex;
-    animation: lib-icon-spin-in 520ms var(--ease-spring) both;
-  }
 
-  .library-header {
+  .library-subnav {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    margin-bottom: 22px;
+    justify-content: flex-end;
+    margin-top: 4px;
+    margin-bottom: 14px;
     gap: 16px;
     flex-wrap: wrap;
-  }
-  .library-header.compact {
-    margin-bottom: 6px;
   }
   .header-actions {
     display: flex;
@@ -893,17 +886,6 @@
   .import-menu button:hover {
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
-  }
-  .title-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--accent-primary);
-  }
-  .title-row h1 {
-    margin: 0;
-    font-size: 22px;
-    color: var(--text-primary);
   }
 
   .tabs {
@@ -1436,18 +1418,12 @@
     from { opacity: 0; transform: translateY(-8px); }
     to { opacity: 1; transform: none; }
   }
-  @keyframes lib-icon-spin-in {
-    from { opacity: 0; transform: rotate(-40deg) scale(0.6); }
-    to { opacity: 1; transform: none; }
-  }
 
-  :global(.potato-pc) .lib-header-enter,
-  :global(.potato-pc) .lib-title-icon {
+  :global(.potato-pc) .lib-header-enter {
     animation: none !important;
   }
   @media (prefers-reduced-motion: reduce) {
-    .lib-header-enter,
-    .lib-title-icon {
+    .lib-header-enter {
       animation: none !important;
     }
   }

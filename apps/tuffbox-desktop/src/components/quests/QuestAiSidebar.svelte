@@ -60,8 +60,39 @@
   let input = $state("");
   let showJson = $state(false);
   let rawJson = $state("");
-  let forceAi = $state(true);
+  let forceAi = $state(false);
   let busy = $state(false);
+  const AI_ADV_PREFS_KEY = "tuffbox.quests.aiAdvanced";
+
+  function loadAiAdvPrefs() {
+    try {
+      const raw = localStorage.getItem(AI_ADV_PREFS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { forceAi?: boolean; pendingIntent?: string };
+      if (typeof parsed.forceAi === "boolean") forceAi = parsed.forceAi;
+      if (
+        parsed.pendingIntent === "generate" ||
+        parsed.pendingIntent === "extend" ||
+        parsed.pendingIntent === "lore" ||
+        parsed.pendingIntent === "branch"
+      ) {
+        pendingIntent = parsed.pendingIntent;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function saveAiAdvPrefs() {
+    try {
+      localStorage.setItem(
+        AI_ADV_PREFS_KEY,
+        JSON.stringify({ forceAi, pendingIntent }),
+      );
+    } catch {
+      /* ignore */
+    }
+  }
   let error = $state("");
   let aiReadyHint = $state("");
   let merge = $state<QuestPlanMergeResult | null>(null);
@@ -79,6 +110,7 @@
   let wasOpen = $state(false);
   let unlistenProgress: UnlistenFn | undefined;
   let unlistenTokens: UnlistenFn | undefined;
+  let aiPrefsReady = $state(false);
   type ExampleChip = { label: string; text: string };
 
   function uiLang(): "ru" | "en" {
@@ -414,8 +446,31 @@
         error = "";
         progressLog = [...progressLog, "Cancelled"];
       } else {
-        error = msg;
-        progressLog = [...progressLog, `Error: ${msg}`];
+        const rawMatch = msg.match(
+          /<<<QUEST_RAW_JSON>>>\r?\n?([\s\S]*?)\r?\n?<<<END_QUEST_RAW_JSON>>>/,
+        );
+        const recovered = (rawMatch?.[1] ?? streamDraft).trim();
+        if (recovered) {
+          rawJson = recovered;
+          showJson = true;
+          composerHint =
+            "AI JSON saved in the editor — fix arrays (desc/tasks must be lists) and Apply";
+          error = msg
+            .replace(/<<<QUEST_RAW_JSON>>>[\s\S]*<<<END_QUEST_RAW_JSON>>>/, "")
+            .trim();
+        } else {
+          error = msg;
+        }
+        progressLog = [...progressLog, `Error: ${error || msg}`];
+        // Reload chat — backend may have persisted the raw output.
+        if (activeId) {
+          try {
+            session = await api.quests.loadChat(activeId, $projectPath!);
+          } catch {
+            /* ignore */
+          }
+        }
+        await refreshList();
       }
     } finally {
       busy = false;
@@ -479,6 +534,8 @@
   }
 
   onMount(() => {
+    loadAiAdvPrefs();
+    aiPrefsReady = true;
     void refreshList();
     void listen<QuestAiProgressPayload>("quest-ai-progress", (event) => {
       const payload = event.payload;
@@ -510,6 +567,13 @@
   onDestroy(() => {
     unlistenProgress?.();
     unlistenTokens?.();
+  });
+
+  $effect(() => {
+    if (!aiPrefsReady) return;
+    void forceAi;
+    void pendingIntent;
+    saveAiAdvPrefs();
   });
 
   $effect(() => {
@@ -741,7 +805,7 @@
     {#if showJson}
       <textarea
         rows="4"
-        placeholder={'{ "schemaVersion": 1, … }'}
+        placeholder={'{ "why": "…", "chapters": [{ "title": "…", "quests": […] }] }'}
         bind:this={composerEl}
         bind:value={rawJson}
         oninput={() => (composerHint = "")}

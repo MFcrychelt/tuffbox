@@ -36,7 +36,9 @@
       { keys: ["Scroll"], action: "Zoom in/out" },
       { keys: ["N"], action: "Add quest at view center" },
       { keys: ["Double-click"], action: "Add new quest" },
-      { keys: ["Shift", "Drag"], action: "Link quests (create dependency)" },
+      { keys: ["Drag handle"], action: "Link quests (bottom → top handle)" },
+      { keys: ["Click edge", "Del"], action: "Unlink selected dependency" },
+      { keys: ["Shift", "Click"], action: "Add/remove from multi-select" },
       { keys: ["Click + Drag"], action: "Marquee select" },
     ]},
     { category: "Quest AI", items: [

@@ -272,6 +272,13 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   onMount(() => {
+    const onOpenOptimize = () => {
+      if (!$projectPath) return;
+      contentFilter = "mod";
+      actionsMenuOpen = false;
+      optimizePackOpen = true;
+    };
+    window.addEventListener("tuffbox:open-optimize-pack", onOpenOptimize);
     const unsub = projectPath.subscribe((path) => {
       if (path && lastLoadedPath !== path) {
         void load(true);
@@ -282,7 +289,10 @@ import { trapFocus } from "../lib/focusTrap";
         clearFocusedMod();
       }
     });
-    return unsub;
+    return () => {
+      window.removeEventListener("tuffbox:open-optimize-pack", onOpenOptimize);
+      unsub();
+    };
   });
 
   onMount(async () => {
@@ -2777,6 +2787,16 @@ import { trapFocus } from "../lib/focusTrap";
     >
       <Lightbulb size={14} />
       {recsLoading ? "…" : "Ideas"}
+    </button>
+    <button
+      type="button"
+      class="ghost mini"
+      onclick={() => { actionsMenuOpen = false; optimizePackOpen = true; }}
+      disabled={!$projectPath || contentFilter !== "mod"}
+      title="Install performance mods and safe config patches"
+    >
+      <Zap size={14} />
+      Optimize
     </button>
     <div class="more-wrap">
       <button

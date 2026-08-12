@@ -38,6 +38,19 @@ export function validateQuestBook(
       if (!q.tasks?.length) {
         issues.push({ questId: q.id, message: "No tasks defined" });
       }
+      for (const t of q.tasks ?? []) {
+        if (t.type === "item" && !itemTaskHasItem(t.properties?.item)) {
+          issues.push({ questId: q.id, message: "Item task has no item" });
+        }
+      }
+      if (!iconDisplayId(q.icon)) {
+        const hasItemVisual = (q.tasks ?? []).some(
+          (t) => t.type === "item" && itemTaskHasItem(t.properties?.item),
+        );
+        if (!hasItemVisual) {
+          issues.push({ questId: q.id, message: "Missing quest icon" });
+        }
+      }
     }
   }
 
@@ -162,6 +175,13 @@ function collectItemIds(v: unknown, out: string[]) {
   for (const child of listFilterChildren(v)) {
     collectItemIds(child, out);
   }
+}
+
+function itemTaskHasItem(v: unknown): boolean {
+  if (typeof v === "string") return v.trim().length > 0;
+  if (!v || typeof v !== "object") return false;
+  if (isItemObject(v)) return !!stackDisplayId(v as ItemValue);
+  return false;
 }
 
 /** Concrete item ids referenced by a quest (icon / item tasks / item rewards). */

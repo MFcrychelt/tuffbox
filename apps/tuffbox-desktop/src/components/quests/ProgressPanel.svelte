@@ -134,6 +134,12 @@
       <code class="prog-path">{progressTeamLabel.relativePath}</code>
     {/if}
   </div>
+  {#if progressTeams.length === 0}
+    <p class="prog-empty-hint">
+      Run the client once and open a world so FTB Quests writes save progress, then refresh.
+      Simulate mode still works without a save.
+    </p>
+  {/if}
 </details>
 
 <style>
@@ -204,6 +210,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 280px;
+  }
+  .prog-empty-hint {
+    margin: 0 4px 8px;
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--ftbq-text-muted, #9a9aa0);
   }
   .prog-modes :global(button.ghost.sel) {
     color: var(--ftbq-accent-teal, #3db8a8);
