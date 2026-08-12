@@ -50,6 +50,7 @@
   import { formatCascadeLabel } from "./diagnostics/cascadeLabel";
   import {
     buildUnifiedProblems,
+    collectFixAllActions,
     hasBlockingProblems,
     type FixAction as ProblemFixAction,
     type Problem,
@@ -184,6 +185,8 @@
     }
   });
   let applyingProblemId = $state<string | null>(null);
+  let fixAllBusy = $state(false);
+  let appliedProblemIds = $state<Set<string>>(new Set());
   /** Detail panel under the verdict: rules findings vs AI explanation. */
   let aiSoftError = $state<string | null>(null);
   let sharingLog = $state(false);
@@ -204,7 +207,15 @@
     if (!(el instanceof HTMLSelectElement)) return;
     if (el.value === LATEST_LOG_SOURCE) chooseLatestLog();
     else if (el.value === LAUNCHER_LOG_SOURCE) chooseLauncherLog();
+    else if (el.value.startsWith("session/")) chooseArchivedSession(el.value);
     else chooseReport(el.value);
+  }
+
+  async function chooseArchivedSession(reportId: string) {
+    preferLatestLog = false;
+    preferLauncherLog = false;
+    selectedReportId = reportId;
+    await load(true);
   }
 
   async function shareCurrentLog() {
@@ -276,6 +287,7 @@
     lastLoadedPath = path;
     preferLatestLog = true;
     selectedReportId = "";
+    appliedProblemIds = new Set();
     void load(true);
     void refreshSoftVerifyStatus(path);
   }
@@ -330,12 +342,10 @@
     error = null;
     message = null;
     try {
-      const summary: string = await invoke("apply_fix_action", {
-        path: $projectPath,
-        action: { kind: "installDependency", label: `Install ${modId}`, modId },
-      });
+      const summary = await applyFixBatchOrThrow([
+        { kind: "installDependency", label: `Install ${modId}`, modId },
+      ]);
       message = `${summary}. Reloading...`;
-      await load(true);
     } catch (e) {
       error = String(e);
     } finally {
@@ -351,12 +361,10 @@
     error = null;
     message = null;
     try {
-      const summary: string = await invoke("apply_fix_action", {
-        path: $projectPath,
-        action: { kind: "disableMod", label: `Disable ${modId}`, modId },
-      });
+      const summary = await applyFixBatchOrThrow([
+        { kind: "disableMod", label: `Disable ${modId}`, modId },
+      ]);
       message = `${summary}. Rerun the Test profile to verify.`;
-      await load(true);
     } catch (e) {
       error = String(e);
     } finally {
@@ -391,12 +399,10 @@
     error = null;
     message = null;
     try {
-      const summary: string = await invoke("apply_fix_action", {
-        path: $projectPath,
-        action: { kind: "updateMod", label: `Update ${topSuspect.name}`, modId: topSuspect.id },
-      });
+      const summary = await applyFixBatchOrThrow([
+        { kind: "updateMod", label: `Update ${topSuspect.name}`, modId: topSuspect.id },
+      ]);
       message = summary || `Updated ${topSuspect.name}`;
-      await load(true);
     } catch (e) {
       error = String(e);
     } finally {
@@ -411,12 +417,10 @@
     error = null;
     message = null;
     try {
-      const summary: string = await invoke("apply_fix_action", {
-        path: $projectPath,
-        action: { kind: "removeMod", label: `Remove ${modId}`, modId },
-      });
+      const summary = await applyFixBatchOrThrow([
+        { kind: "removeMod", label: `Remove ${modId}`, modId },
+      ]);
       message = `${summary}. Reloading...`;
-      await load(true);
     } catch (e) {
       error = String(e);
     } finally {
@@ -754,7 +758,7 @@
 
   /** ActionPlan review modal (replaces window.confirm). */
   let planReviewOpen = $state(false);
-  let planReviewSource = $state<"ai" | "network">("ai");
+  let planReviewSource = $state<"ai" | "network" | "fix-all">("ai");
   let planReviewRows = $state<{
     key: string;
     selected: boolean;
@@ -766,6 +770,8 @@
     risk: string;
     diffKind?: "add" | "remove" | "change" | "other";
     destructive?: boolean;
+    problemId?: string;
+    problemTitle?: string | null;
     raw: any;
   }[]>([]);
   let planReviewAcknowledged = $state(false);
@@ -1245,10 +1251,107 @@
     const selected = planReviewRows.filter((r) => r.selected);
     if (!selected.length) return;
     planReviewOpen = false;
-    if (planReviewSource === "network") {
+    if (planReviewSource === "fix-all") {
+      await executeFixAllApply(selected);
+    } else if (planReviewSource === "network") {
       await executeNetworkPlanApply(selected.map((r) => r.raw));
     } else {
       await executeAiPlanApply(selected.map((r) => r.raw));
+    }
+  }
+
+  function openFixAllReview() {
+    const rows = collectFixAllActions(unifiedProblems);
+    if (!rows.length) {
+      message = "No automatic fixes available — use per-problem buttons or Resolve.";
+      return;
+    }
+    planReviewSource = "fix-all";
+    planReviewRows = rows.map((r) => ({
+      key: r.key,
+      selected: !r.destructive,
+      op: r.action.label,
+      modId: r.action.modId,
+      path: null,
+      patchPreview: null,
+      reason: r.action.label,
+      risk: r.destructive ? "high" : "low",
+      diffKind: r.destructive ? ("remove" as const) : ("add" as const),
+      destructive: r.destructive,
+      problemId: r.problemId,
+      problemTitle: r.problemTitle,
+      raw: r.action,
+    }));
+    const destructive = rows.some((r) => r.destructive);
+    planReviewNeedsAck = destructive;
+    planReviewAcknowledged = !destructive;
+    planReviewExplanation = `Apply ${rows.length} fix(es) from the Problems list. Snapshot is created once before the batch.`;
+    planReviewOpen = true;
+  }
+
+  async function invokeFixBatch(actions: ProblemFixAction[]) {
+    if (!$projectPath || !actions.length) return null;
+    return invoke<{ summary: string; stopped: boolean; applied: { ok: boolean; error?: string }[] }>(
+      "apply_fix_actions",
+      {
+        path: $projectPath,
+        actions: actions.map((a) => normalizeFixAction(a)),
+      },
+    );
+  }
+
+  async function applyFixBatchOrThrow(
+    actions: Array<ProblemFixAction | FixAction>,
+    opts?: { problemId?: string; reload?: boolean },
+  ): Promise<string> {
+    const result = await invokeFixBatch(actions.map((a) => normalizeFixAction(a)));
+    if (!result) throw new Error("Fix batch returned no result");
+    if (result.stopped) {
+      const failed = result.applied.find((a) => !a.ok);
+      throw new Error(failed?.error ?? "Fix failed");
+    }
+    if (opts?.problemId) {
+      appliedProblemIds = new Set([...appliedProblemIds, opts.problemId]);
+    }
+    verifyPrompt = true;
+    showApplyTrail = true;
+    requestIdeIssuesRefresh();
+    if (opts?.reload !== false) {
+      await load(true);
+      void detectWrongLoaderMods();
+      void detectDuplicateModJars();
+    }
+    return result.summary;
+  }
+
+  async function executeFixAllApply(selected: typeof planReviewRows) {
+    if (!$projectPath) return;
+    fixAllBusy = true;
+    error = null;
+    try {
+      const actions = selected.map((r) => r.raw as ProblemFixAction);
+      const result = await invokeFixBatch(actions);
+      if (!result) return;
+      if (result.stopped) {
+        const failed = result.applied.find((a) => !a.ok);
+        error = failed?.error ?? "Batch stopped after an error.";
+      }
+      message = `${result.summary}. Snapshot saved — Test launch to verify.`;
+      verifyPrompt = true;
+      showApplyTrail = true;
+      requestIdeIssuesRefresh();
+      for (const row of selected) {
+        if (row.problemId) {
+          appliedProblemIds = new Set([...appliedProblemIds, row.problemId]);
+        }
+      }
+      await load(true);
+      void detectWrongLoaderMods();
+      void detectDuplicateModJars();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      fixAllBusy = false;
     }
   }
 
@@ -1741,15 +1844,8 @@
     error = null;
     message = null;
     try {
-      const summary: string = await invoke("apply_fix_action", {
-        path: $projectPath,
-        action: normalized,
-      });
+      const summary = await applyFixBatchOrThrow([normalized]);
       message = summary || `Applied fix: ${hint.title}`;
-      verifyPrompt = true;
-      showApplyTrail = true;
-      requestIdeIssuesRefresh();
-      await load(true);
     } catch (e) {
       error = String(e);
     } finally {
@@ -1990,11 +2086,17 @@
     }),
   );
   const problemsBlocking = $derived(hasBlockingProblems(unifiedProblems));
+  const fixAllCount = $derived(collectFixAllActions(unifiedProblems).length);
 
   const graphDiagnostics = $derived(diagnosis?.graphDiagnostics ?? []);
   const sourceLabel = $derived((() => {
     if (preferLatestLog) return "Game log";
     if (preferLauncherLog) return "Launcher log";
+    if (selectedReportId?.startsWith("session/")) {
+      const rep = diagnosis?.reports?.find((r) => r.id === selectedReportId);
+      return rep?.name ?? "Archived session";
+    }
+    if (diagnosis?.analysisSource === "archived_session") return "Archived crash session";
     if (selectedReportId?.startsWith("hs_err")) return "Native crash";
     if (selectedReportId) return "Crash report";
     return "Log";
@@ -2057,17 +2159,11 @@
       applyingHintId = problem.id;
       error = null;
       try {
-        await invoke("apply_fix_action", {
-          path: $projectPath,
-          action: { kind: "installDependency", label: action.label, modId },
-        });
+        await applyFixBatchOrThrow(
+          [{ kind: "installDependency", label: action.label, modId }],
+          { problemId: problem.id },
+        );
         message = `Installed ${modId}. Snapshot saved — Test launch to verify.`;
-        verifyPrompt = true;
-        showApplyTrail = true;
-        requestIdeIssuesRefresh();
-        await load(true);
-        void detectWrongLoaderMods();
-        void detectDuplicateModJars();
       } catch (e) {
         error = String(e);
       } finally {
@@ -2117,21 +2213,15 @@
           message = "No missing dependencies found for this mod.";
           return;
         }
-        let installed = 0;
-        for (const mid of missingIds) {
-          await invoke("apply_fix_action", {
-            path: $projectPath,
-            action: { kind: "installDependency", label: `Install ${mid}`, modId: mid },
-          });
-          installed += 1;
-        }
-        message = `Installed ${installed} dep(s) for ${requester}. Snapshot saved — Test launch to verify.`;
-        verifyPrompt = true;
-        showApplyTrail = true;
-        requestIdeIssuesRefresh();
-        await load(true);
-        void detectWrongLoaderMods();
-        void detectDuplicateModJars();
+        await applyFixBatchOrThrow(
+          missingIds.map((mid) => ({
+            kind: "installDependency",
+            label: `Install ${mid}`,
+            modId: mid,
+          })),
+          { problemId: problem.id },
+        );
+        message = `Installed ${missingIds.length} dep(s) for ${requester}. Snapshot saved — Test launch to verify.`;
       } catch (e) {
         error = String(e);
       } finally {
@@ -2147,14 +2237,11 @@
     if (kind === "raiseMemory") {
       applyingProblemId = problem.id;
       try {
-        await invoke("apply_fix_action", {
-          path: $projectPath,
-          action: { kind: "raiseMemory", label: action.label, modId: null },
-        });
+        await applyFixBatchOrThrow(
+          [{ kind: "raiseMemory", label: action.label, modId: null }],
+          { problemId: problem.id },
+        );
         message = "Memory raised. Snapshot saved — Test launch to verify.";
-        verifyPrompt = true;
-        showApplyTrail = true;
-        await load(true);
       } catch (e) {
         error = String(e);
       } finally {
@@ -2168,14 +2255,8 @@
     error = null;
     try {
       const normalized = normalizeFixAction(action);
-      await invoke("apply_fix_action", {
-        path: $projectPath,
-        action: normalized,
-      });
-      message = `Applied: ${action.label}. Snapshot saved — Test launch to verify.`;
-      verifyPrompt = true;
-      showApplyTrail = true;
-      await load(true);
+      const summary = await applyFixBatchOrThrow([normalized], { problemId: problem.id });
+      message = `${summary}. Snapshot saved — Test launch to verify.`;
     } catch (e) {
       error = String(e);
     } finally {
@@ -2313,7 +2394,11 @@
             </option>
             {#each diagnosis.reports as report (report.id)}
               <option value={report.id}>
-                {report.id.startsWith("hs_err") ? "Native crash" : "Crash report"} · {report.name}
+                {report.id.startsWith("session/")
+                  ? report.name
+                  : report.id.startsWith("hs_err")
+                    ? `Native crash · ${report.name}`
+                    : `Crash report · ${report.name}`}
               </option>
             {/each}
           </select>
@@ -2461,7 +2546,10 @@
       cascadeLabel={aiAnalysis && cascadeFormatted.label ? cascadeFormatted.label : null}
       cascadeDetail={aiAnalysis ? cascadeFormatted.detail : null}
       sourceLabel={sourceLabel}
+      fixAllCount={fixAllCount}
+      fixAllBusy={fixAllBusy}
       onScrollToWarnings={scrollToPackWarnings}
+      onFixAll={openFixAllReview}
     />
 
     {#if !sessionOk}
@@ -2542,6 +2630,7 @@
         problems={unifiedProblems}
         sessionOk={sessionOk}
         applyingId={applyingProblemId}
+        appliedIds={appliedProblemIds}
         onApply={applyProblemAction}
         onWhy={onProblemWhy}
       />
@@ -2581,13 +2670,10 @@
           if (!id) return;
           fixingIdx = -1;
           try {
-            await invoke("apply_fix_action", {
-              path: $projectPath,
-              action: { kind: "updateMod", label: `Update ${id}`, modId: id },
-            });
+            await applyFixBatchOrThrow([
+              { kind: "updateMod", label: `Update ${id}`, modId: id },
+            ]);
             message = `Update requested for ${id}`;
-            verifyPrompt = true;
-            await load(true);
           } catch (err) {
             error = String(err);
           } finally {
@@ -2696,13 +2782,10 @@
           onUpdateMod={async (id) => {
             if (!id) return;
             try {
-              await invoke("apply_fix_action", {
-                path: $projectPath,
-                action: { kind: "updateMod", label: `Update ${id}`, modId: id },
-              });
+              await applyFixBatchOrThrow([
+                { kind: "updateMod", label: `Update ${id}`, modId: id },
+              ]);
               message = `Update requested for ${id}`;
-              verifyPrompt = true;
-              await load(true);
             } catch (err) {
               error = String(err);
             }
@@ -2785,7 +2868,7 @@
   bind:acknowledged={planReviewAcknowledged}
   canApply={planReviewCanApply}
   selectedCount={planReviewSelectedCount}
-  busy={aiApplyBusy || pendingBusy}
+  busy={aiApplyBusy || pendingBusy || fixAllBusy}
   networkTrust={planReviewSource === "network" ? networkTrust : null}
   onCancel={() => (planReviewOpen = false)}
   onConfirm={confirmPlanReviewApply}

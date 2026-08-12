@@ -684,6 +684,55 @@ export function hasBlockingProblems(problems: Problem[]): boolean {
   return problems.some((p) => p.severity === "critical" || p.severity === "error");
 }
 
+const NAV_FIX_KINDS = new Set([
+  "openResolve",
+  "openSetup",
+  "openEvidence",
+  "reviewAiPlan",
+  "aiPlanAction",
+  "installAllMissing",
+  "installMissingForMod",
+]);
+
+export type FixAllActionRow = {
+  key: string;
+  problemId: string;
+  problemTitle: string;
+  action: FixAction;
+  destructive: boolean;
+};
+
+/** Collect deduped machine-applicable fixes for Fix All review. */
+export function collectFixAllActions(problems: Problem[]): FixAllActionRow[] {
+  const seen = new Set<string>();
+  const rows: FixAllActionRow[] = [];
+  for (const p of problems) {
+    for (const a of p.actions) {
+      if (NAV_FIX_KINDS.has(a.kind)) continue;
+      const key = `${a.kind}:${a.modId ?? ""}:${a.label}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({
+        key,
+        problemId: p.id,
+        problemTitle: p.title,
+        action: a,
+        destructive: riskForActionKind(a.kind) === "destructive",
+      });
+    }
+  }
+  const order = (kind: string) => {
+    if (kind.includes("install")) return 0;
+    if (kind.includes("update") || kind === "reinstallMod") return 1;
+    if (kind === "raiseMemory" || kind === "autoJava" || kind === "acceptEula" || kind === "changePort")
+      return 2;
+    if (kind.includes("remove") || kind === "disableMod") return 3;
+    return 2;
+  };
+  rows.sort((a, b) => order(a.action.kind) - order(b.action.kind));
+  return rows;
+}
+
 export function crashProblems(problems: Problem[]): Problem[] {
   return problems.filter((p) => p.layer === "crash");
 }

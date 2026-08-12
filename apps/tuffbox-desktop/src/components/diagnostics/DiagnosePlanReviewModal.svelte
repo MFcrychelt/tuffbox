@@ -15,7 +15,7 @@
     onConfirm,
   }: {
     open?: boolean;
-    source?: "ai" | "network";
+    source?: "ai" | "network" | "fix-all";
     explanation?: string;
     hasDestructive?: boolean;
     rows?: {
@@ -29,6 +29,7 @@
       risk: string;
       diffKind?: "add" | "remove" | "change" | "other";
       destructive?: boolean;
+      problemTitle?: string | null;
       raw: any;
     }[];
     needsAck?: boolean;
@@ -56,6 +57,13 @@
         networkTrust.mc != null ||
         networkTrust.loader != null),
   );
+  const modalTitle = $derived(
+    source === "fix-all"
+      ? "Review fixes"
+      : source === "network"
+        ? "Review network ActionPlan"
+        : "Review AI ActionPlan",
+  );
 </script>
 
 {#if open}
@@ -69,7 +77,7 @@
     <div class="modal plan-review-modal" role="dialog" aria-modal="true">
       <div class="modal-header">
         <div>
-          <h2>{source === "network" ? "Review network ActionPlan" : "Review AI ActionPlan"}</h2>
+          <h2>{modalTitle}</h2>
           <p>Snapshot will be created first. Uncheck actions you do not want applied.</p>
         </div>
         <button class="icon-btn" type="button" onclick={() => onCancel?.()} aria-label="Close">×</button>
@@ -94,7 +102,7 @@
           {/if}
         </div>
       {/if}
-      {#if source === "network" && hasDestructive}
+      {#if (source === "network" || source === "fix-all") && hasDestructive}
         <p class="plan-review-warn">
           This plan includes destructive actions (disable/remove). A snapshot will be created first — use Restore on the home screen if something breaks.
         </p>
@@ -112,6 +120,9 @@
                 {#if row.modId}<code>{row.modId}</code>{/if}
                 <span class="risk-pill">{row.risk}</span>
               </div>
+              {#if row.problemTitle}
+                <p class="problem-ref">From: {row.problemTitle}</p>
+              {/if}
               {#if row.reason}<p>{row.reason}</p>{/if}
               {#if row.patchPreview}
                 <pre class="patch-preview">{row.patchPreview}</pre>
@@ -123,7 +134,9 @@
       {#if needsAck}
         <label class="plan-review-ack">
           <input type="checkbox" bind:checked={acknowledged} />
-          I reviewed these actions (required — plan flagged needsUserReview)
+          {source === "fix-all"
+            ? "I reviewed these fixes including any destructive steps"
+            : "I reviewed these actions (required — plan flagged needsUserReview)"}
         </label>
       {/if}
       <div class="plan-review-actions">
@@ -227,6 +240,12 @@
   }
   .plan-review-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .plan-review-body p { margin: 4px 0 0; font-size: 12px; color: var(--text-secondary); }
+  .problem-ref {
+    margin: 0 0 2px !important;
+    font-size: 11px !important;
+    color: var(--text-muted) !important;
+    font-weight: 600;
+  }
   .patch-preview {
     margin: 6px 0 0;
     padding: 8px;

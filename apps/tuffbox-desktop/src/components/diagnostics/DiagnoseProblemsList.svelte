@@ -12,12 +12,14 @@
     problems = [],
     sessionOk = false,
     applyingId = null,
+    appliedIds = new Set<string>(),
     onApply,
     onWhy,
   }: {
     problems?: Problem[];
     sessionOk?: boolean;
     applyingId?: string | null;
+    appliedIds?: Set<string>;
     onApply?: (problem: Problem, action: FixAction) => void;
     onWhy?: (problem: Problem) => void;
   } = $props();
@@ -95,11 +97,14 @@
     otherActs[0]}
   {@const secondaryInstalls = installActs.filter((a) => a !== primary)}
   {@const secondaryOther = otherActs.filter((a) => a !== primary).slice(0, 4)}
-  <li class="dx-card sev-{p.severity}" class:busy={applyingId === p.id}>
+  <li class="dx-card sev-{p.severity}" class:busy={applyingId === p.id} class:applied={appliedIds.has(p.id)}>
     <div class="dx-card-top">
       <span class="sev-chip">{severityChip(p.severity)}</span>
       <span class="cat-chip">{p.category}</span>
       <span class="src-chip">{p.source === "ai" ? "AI" : p.source}</span>
+      {#if appliedIds.has(p.id)}
+        <span class="applied-chip">Applied — verify</span>
+      {/if}
     </div>
     <h4>{p.title}</h4>
     {#if p.summary}
@@ -215,6 +220,18 @@
     background: linear-gradient(135deg, rgba(245, 158, 11, 0.07), var(--bg-secondary) 70%);
   }
   .dx-card.busy { opacity: 0.75; }
+  .dx-card.applied {
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+  .applied-chip {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    color: var(--accent-primary);
+  }
   .dx-card-top { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
   .sev-chip, .cat-chip, .src-chip {
     padding: 2px 8px;

@@ -255,7 +255,7 @@ pub struct CrashDiagnosis {
     pub latest_log: LatestLogAnalysis,
     pub launcher_log: LatestLogAnalysis,
     /// `logs/debug.log` when present (longer tail — early crash lines often live here).
-    #[serde(default)]
+    #[serde(default = "default_empty_log_analysis")]
     pub debug_log: LatestLogAnalysis,
     /// Archived logs from crashed launches (newest first).
     #[serde(default)]
@@ -292,6 +292,17 @@ pub struct CrashDiagnosis {
 
 fn default_analysis_source() -> String {
     "crash_report".into()
+}
+
+fn default_empty_log_analysis() -> LatestLogAnalysis {
+    LatestLogAnalysis {
+        path: PathBuf::new(),
+        exists: false,
+        tail: String::new(),
+        signals: Vec::new(),
+        suspected_mods: Vec::new(),
+        hints: Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -628,18 +639,22 @@ pub fn build_crash_diagnosis(
         None
     };
 
+    let has_archived_crash_context =
+        archived_session_analysis.is_some() || archived_fallback.is_some();
+
     let mut suspect_sets = Vec::new();
     let mut combined_signals = Vec::new();
-    let analyze_crash = !session_healthy
-        || archived_fallback.is_some()
-        || archived_session_analysis.is_some();
+    let analyze_crash = !session_healthy || has_archived_crash_context;
 
     if analyze_crash {
         if let Some(report) = &selected_report {
             suspect_sets.push(report.suspected_mods.clone());
             combined_signals.extend(report.signals.clone());
         }
-        if let Some(archived) = archived_session_analysis.or(archived_fallback) {
+        if let Some(archived) = archived_session_analysis
+            .clone()
+            .or_else(|| archived_fallback.clone())
+        {
             suspect_sets.push(archived.suspected_mods.clone());
             combined_signals.extend(archived.signals.clone());
         } else if force_launcher_log {
@@ -656,22 +671,26 @@ pub fn build_crash_diagnosis(
         suspect_sets.push(launcher_log.suspected_mods.clone());
         combined_signals.extend(launcher_log.signals.clone());
     }
+
     let suspected_mods = merge_suspected_mods(suspect_sets.into_iter().flatten());
-    let suspected_mods = if session_healthy {
+    let log_for_enrich = archived_session_analysis
+        .or_else(|| archived_fallback.clone())
+        .unwrap_or_else(|| latest_log.clone());
+    let suspected_mods = if session_healthy && !has_archived_crash_context {
         suspected_mods
     } else {
         enrich_diagnosis_suspects(
             project_dir,
             manifest,
             &selected_report,
-            &latest_log,
+            &log_for_enrich,
             suspected_mods,
         )
     };
 
     let graph = DependencyGraph::from_manifest(manifest);
     let graph_diagnostics = Resolver::analyze_project(manifest, &graph);
-    let fix_plan = if session_healthy {
+    let fix_plan = if session_healthy && !has_archived_crash_context {
         ChangePlan {
             summary: "Minecraft launched successfully — no crash-log fixes needed. Remaining items below are dependency-graph checks only.".to_string(),
             risk: ChangeRisk::Low,
@@ -687,7 +706,7 @@ pub fn build_crash_diagnosis(
         )
     };
 
-    let mut hints = if session_healthy {
+    let mut hints = if session_healthy && !has_archived_crash_context {
         Vec::new()
     } else {
         build_hints(&combined_signals, &suspected_mods)
@@ -697,12 +716,16 @@ pub fn build_crash_diagnosis(
             id: "session-healthy".into(),
             title: "Build launched successfully".into(),
             severity: "info".into(),
-            detail: "latest.log shows a healthy Minecraft session with no fresh crash markers. \
+            detail: if has_archived_crash_context {
+                "latest.log shows a healthy session. Fix suggestions below come from the archived crashed launch — verify before applying.".into()
+            } else {
+                "latest.log shows a healthy Minecraft session with no fresh crash markers. \
                 Historical crash-reports are kept for reference but are not used for fix suggestions."
-                .into(),
+                    .into()
+            },
             steps: vec![
                 "Play normally — no crash-log actions are required.".into(),
-                "Open a crash-report below only if you want to revisit an old failure.".into(),
+                "Open a crash-report or archived session below to revisit a past failure.".into(),
                 "Use Live logs while the game is running to watch the current session.".into(),
             ],
             related_mods: Vec::new(),
@@ -713,17 +736,30 @@ pub fn build_crash_diagnosis(
 
     let world_coords = selected_report
         .as_ref()
-        .and_then(|r| extract_world_coords(&r.content));
+        .and_then(|r| extract_world_coords(&r.content))
+        .or_else(|| {
+            archived_fallback
+                .as_ref()
+                .and_then(|a| extract_world_coords(&a.tail))
+        });
     let memory_hint = selected_report
         .as_ref()
         .and_then(|r| extract_memory_hint(&r.content))
-        .or_else(|| extract_memory_hint(&latest_log.tail));
+        .or_else(|| extract_memory_hint(&latest_log.tail))
+        .or_else(|| {
+            archived_fallback
+                .as_ref()
+                .and_then(|a| extract_memory_hint(&a.tail))
+        });
 
     Ok(CrashDiagnosis {
         reports,
         selected_report,
         latest_log,
         launcher_log,
+        debug_log,
+        session_logs,
+        launch_history,
         suspected_mods,
         hints,
         recent_snapshots,
@@ -736,6 +772,15 @@ pub fn build_crash_diagnosis(
         world_coords,
         memory_hint,
     })
+}
+
+fn format_session_picker_label(archived: &ArchivedSessionLog) -> String {
+    let ts = archived.started_at.chars().take(16).collect::<String>();
+    let code = archived
+        .exit_code
+        .map(|c| format!(" exit {c}"))
+        .unwrap_or_default();
+    format!("Crashed session {ts}{code}")
 }
 
 /// True when `logs/latest.log` is newer than `crash_report_path` and looks like a
@@ -1048,6 +1093,120 @@ pub fn parse_crash_mod_entries(
     entries
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogSection {
+    General,
+    ModList,
+    Description,
+    StackTrace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StackContext {
+    Plain,
+    DescriptionLine,
+    PrimaryHead,
+    PrimaryFrame,
+    CausedByHead,
+    CausedByFrame,
+}
+
+fn detect_log_section(line: &str, current: LogSection) -> LogSection {
+    let trimmed = line.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if trimmed.starts_with("-- ") && trimmed.ends_with(" --") {
+        let title = trimmed.trim_matches('-').trim().to_ascii_lowercase();
+        if title.contains("mod list")
+            || title.contains("mods")
+            || title.contains("fabric mods")
+            || title.contains("quilt mods")
+        {
+            return LogSection::ModList;
+        }
+        if title.contains("head") || title.contains("stacktrace") || title.contains("stack trace") {
+            return LogSection::StackTrace;
+        }
+        if title.contains("system details") {
+            return LogSection::General;
+        }
+    }
+    if lower.starts_with("mod list:")
+        || lower.starts_with("fabric mods:")
+        || lower.starts_with("quilt mods:")
+        || lower.contains("| mod id |")
+        || lower.contains("|    mod id    |")
+    {
+        return LogSection::ModList;
+    }
+    if lower.starts_with("description:") {
+        return LogSection::Description;
+    }
+    if trimmed.starts_with('\t') || trimmed.starts_with("at ") || lower.contains("caused by:") {
+        return LogSection::StackTrace;
+    }
+    current
+}
+
+fn is_mod_list_table_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with('|') && trimmed.contains('|') && !trimmed.to_ascii_lowercase().contains("mod id")
+}
+
+fn stack_context_for_line(
+    line: &str,
+    section: LogSection,
+    in_caused_by: bool,
+    primary_frames: usize,
+) -> (StackContext, bool, usize) {
+    let trimmed = line.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if section == LogSection::Description || lower.starts_with("description:") {
+        return (StackContext::DescriptionLine, in_caused_by, primary_frames);
+    }
+    if lower.contains("caused by:") {
+        return (StackContext::CausedByHead, true, 0);
+    }
+    let is_frame = trimmed.starts_with("at ")
+        || trimmed.starts_with("\tat ")
+        || trimmed.contains("knot//")
+        || (trimmed.starts_with('-') && trimmed.contains('('));
+    if is_frame {
+        if in_caused_by {
+            return (StackContext::CausedByFrame, true, primary_frames);
+        }
+        if primary_frames == 0 {
+            return (StackContext::PrimaryHead, false, 1);
+        }
+        return (StackContext::PrimaryFrame, false, primary_frames.saturating_add(1));
+    }
+    if in_caused_by && !is_frame && !lower.contains("exception") {
+        // Plain line after Caused by before frames — still part of caused-by block.
+        return (StackContext::CausedByHead, true, primary_frames);
+    }
+    (StackContext::Plain, false, if is_frame { primary_frames } else { 0 })
+}
+
+fn evidence_weight(ctx: StackContext, section: LogSection) -> u8 {
+    match (ctx, section) {
+        (StackContext::DescriptionLine, _) => 98,
+        (StackContext::CausedByHead, _) => 92,
+        (StackContext::CausedByFrame, _) => 88,
+        (StackContext::PrimaryHead, _) => 85,
+        (StackContext::PrimaryFrame, _) => 72,
+        (_, LogSection::ModList) => 12,
+        (StackContext::Plain, LogSection::StackTrace) => 40,
+        _ => 50,
+    }
+}
+
+fn scaled_confidence(base: u8, weight: u8) -> u8 {
+    ((base as u16 * weight as u16) / 100).min(99) as u8
+}
+
+fn should_skip_token_match(section: LogSection, line: &str) -> bool {
+    section == LogSection::ModList || is_mod_list_table_row(line)
+}
+
 pub fn analyze_text_for_suspects(
     text: &str,
     source: &str,
@@ -1056,8 +1215,17 @@ pub fn analyze_text_for_suspects(
     let candidates = build_candidates(manifest);
     let mut signals = Vec::new();
     let mut suspects: BTreeMap<String, SuspectAccumulator> = BTreeMap::new();
+    let mut section = LogSection::General;
+    let mut in_caused_by = false;
+    let mut primary_frames = 0usize;
 
     for (index, line) in text.lines().enumerate() {
+        section = detect_log_section(line, section);
+        let (stack_ctx, next_caused, next_primary_frames) =
+            stack_context_for_line(line, section, in_caused_by, primary_frames);
+        in_caused_by = next_caused;
+        primary_frames = next_primary_frames;
+
         let line_number = index + 1;
         let Some(kind) = classify_signal_line(line) else {
             continue;
@@ -1070,6 +1238,9 @@ pub fn analyze_text_for_suspects(
             text: line.trim().to_string(),
         };
         signals.push(signal);
+
+        let weight = evidence_weight(stack_ctx, section);
+        let skip_tokens = should_skip_token_match(section, line);
 
         if matches!(
             kind,
@@ -1085,40 +1256,38 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence(source, line_number, kind, line),
-                        96,
+                        evidence_weighted(source, line_number, kind, line, weight),
+                        scaled_confidence(96, weight),
                     );
                 } else if !is_noise_token(&mod_id) {
                     add_inferred_suspect(
                         &mut suspects,
                         &mod_id,
                         None,
-                        evidence(source, line_number, kind, line),
-                        82,
+                        evidence_weighted(source, line_number, kind, line, weight),
+                        scaled_confidence(82, weight),
                     );
                 }
             }
         }
 
-        if !matches!(
-            kind,
-            CrashSignalKind::Performance | CrashSignalKind::ResourceWarning
-        ) {
+        if !skip_tokens
+            && !matches!(
+                kind,
+                CrashSignalKind::Performance | CrashSignalKind::ResourceWarning
+            )
+        {
             for candidate in &candidates {
                 if candidate_matches_line(candidate, line) {
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence(source, line_number, kind, line),
-                        confidence_for_kind(kind),
+                        evidence_weighted(source, line_number, kind, line, weight),
+                        scaled_confidence(confidence_for_kind(kind), weight),
                     );
                 }
             }
 
-            // Stack-trace FQN / mixin package attribution: `knot//
-            // net.earthcomputer.clientcommands...PlayerRandCracker` or
-            // `dev.isxander.controlify.mixins...` map to the mod whose id/name
-            // matches the package component, without blind substring matches.
             if matches!(
                 kind,
                 CrashSignalKind::Exception
@@ -1129,11 +1298,12 @@ pub fn analyze_text_for_suspects(
                 for pkg in extract_java_packages(line) {
                     for candidate in &candidates {
                         if candidate_matches_java_package(candidate, &pkg) {
+                            let pkg_weight = weight.max(80);
                             add_manifest_suspect(
                                 &mut suspects,
                                 candidate.module,
-                                evidence(source, line_number, kind, line),
-                                88,
+                                evidence_weighted(source, line_number, kind, line, pkg_weight),
+                                scaled_confidence(88, pkg_weight),
                             );
                             if let Some(entry) =
                                 suspects.get_mut(&normalize_token(&candidate.module.id))
@@ -1155,8 +1325,8 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence(source, line_number, kind, line),
-                        92,
+                        evidence_weighted(source, line_number, kind, line, weight.max(90)),
+                        scaled_confidence(92, weight.max(90)),
                     );
                 } else {
                     let inferred = infer_id_from_jar(&jar_name);
@@ -1165,8 +1335,8 @@ pub fn analyze_text_for_suspects(
                             &mut suspects,
                             &inferred,
                             Some(jar_name),
-                            evidence(source, line_number, kind, line),
-                            68,
+                            evidence_weighted(source, line_number, kind, line, weight),
+                            scaled_confidence(68, weight),
                         );
                     }
                 }
@@ -1189,8 +1359,8 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence(source, line_number, kind, line),
-                        confidence_for_kind(kind),
+                        evidence_weighted(source, line_number, kind, line, weight.max(85)),
+                        scaled_confidence(confidence_for_kind(kind), weight.max(85)),
                     );
                 } else if !is_noise_token(&mod_id)
                     && !is_invented_vanilla_resource_mod_id(&mod_id)
@@ -1199,8 +1369,8 @@ pub fn analyze_text_for_suspects(
                         &mut suspects,
                         &mod_id,
                         None,
-                        evidence(source, line_number, kind, line),
-                        confidence_for_kind(kind).saturating_sub(8),
+                        evidence_weighted(source, line_number, kind, line, weight),
+                        scaled_confidence(confidence_for_kind(kind).saturating_sub(8), weight),
                     );
                 }
             }
@@ -1221,8 +1391,8 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence(source, line_number, kind, line),
-                        confidence_for_kind(kind),
+                        evidence_weighted(source, line_number, kind, line, weight.max(90)),
+                        scaled_confidence(confidence_for_kind(kind), weight.max(90)),
                     );
                 }
             }
@@ -1286,9 +1456,20 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
                 entry.evidence.push(evidence);
             }
         }
-        entry.confidence = entry
-            .confidence
-            .saturating_add((entry.evidence.len().saturating_sub(1) as u8).min(7));
+        let strong_count = entry
+            .evidence
+            .iter()
+            .filter(|e| e.weight >= 70 || is_strong_match_source(&match_source_for_kind(e.kind)))
+            .count();
+        entry.confidence = entry.confidence.saturating_add((strong_count.saturating_sub(1) as u8).min(5));
+        let distinct_sources: HashSet<String> = entry
+            .evidence
+            .iter()
+            .map(|e| e.source.clone())
+            .collect();
+        if distinct_sources.len() >= 2 {
+            entry.confidence = entry.confidence.saturating_add(4).min(99);
+        }
     }
 
     let mut out = by_id
@@ -2400,6 +2581,8 @@ fn is_strong_match_source(source: &str) -> bool {
             | "class_in_jar"
             | "mixin"
             | "package"
+            | "missing_dependency"
+            | "caused_by"
     )
 }
 
@@ -2465,6 +2648,7 @@ fn enrich_diagnosis_suspects(
                             line_number: signal.line_number,
                             kind: CrashSignalKind::SuspectedMods,
                             text: signal.text.clone(),
+                            weight: 97,
                         },
                         97,
                         "suspected_mods_line",
@@ -2488,6 +2672,7 @@ fn enrich_diagnosis_suspects(
                             line_number: signal.line_number,
                             kind: CrashSignalKind::SuspectedMods,
                             text: signal.text.clone(),
+                            weight: 90,
                         }],
                         authors: Vec::new(),
                         blame_role: BlameRole::Related,
@@ -2565,6 +2750,7 @@ fn enrich_diagnosis_suspects(
                     line_number: 0,
                     kind: CrashSignalKind::Exception,
                     text: format!("{} provided by {}", hit.class_name, hit.file_name.as_deref().unwrap_or(&hit.mod_id)),
+                    weight: 93,
                 };
                 if let Some(module) = manifest.mods.iter().find(|m| {
                     normalize_token(&m.id) == normalize_token(&hit.mod_id)
@@ -2673,17 +2859,19 @@ fn push_evidence(entry: &mut SuspectAccumulator, evidence: SuspectEvidence) {
     }
 }
 
-fn evidence(
+fn evidence_weighted(
     source: &str,
     line_number: usize,
     kind: CrashSignalKind,
     line: &str,
+    weight: u8,
 ) -> SuspectEvidence {
     SuspectEvidence {
         source: source.to_string(),
         line_number,
         kind,
         text: line.trim().to_string(),
+        weight,
     }
 }
 
@@ -4187,6 +4375,120 @@ Caused by: java.lang.IllegalStateException: boom
         assert_eq!(c.label, "Entity");
         let mem = extract_memory_hint(text).expect("mem");
         assert!(mem.contains("2048"));
+    }
+
+    fn multi_mod_manifest() -> ProjectManifest {
+        let mut m = manifest();
+        for (id, name, jar) in [
+            ("fabric-api", "Fabric API", "fabric-api-0.92.0.jar"),
+            ("create", "Create", "create-0.5.1.jar"),
+            ("indium", "Indium", "indium-1.0.27.jar"),
+            ("sodium", "Sodium", "sodium-0.5.8.jar"),
+        ] {
+            m.mods.push(ModSpec {
+                id: id.to_string(),
+                name: name.to_string(),
+                source: ModSource {
+                    kind: SourceKind::Modrinth,
+                    project_id: Some(id.to_string()),
+                    file_id: None,
+                    url: None,
+                    path: None,
+                    icon_url: None,
+                    categories: Vec::new(),
+                },
+                version: "1.0.0".to_string(),
+                file_name: Some(jar.to_string()),
+                hashes: None,
+                side: Side::Both,
+                dependencies: Vec::new(),
+                status: Vec::new(),
+                content_type: crate::manifest::ContentType::Mod,
+                authors: Vec::new(),
+                option: None,
+            });
+        }
+        m
+    }
+
+    #[test]
+    fn mod_list_dump_does_not_promote_every_mod_to_primary() {
+        let manifest = multi_mod_manifest();
+        let text = "\
+---- Minecraft Crash Report ----
+Description: create failed during tick
+
+-- Mods --
+| Mod id       | Version |
+| fabric-api   | 0.92.0  |
+| create       | 0.5.1   |
+| indium       | 1.0.27  |
+| sodium       | 0.5.8   |
+
+java.lang.RuntimeException: Tick failed
+Caused by: java.lang.IllegalStateException: create broke
+\tat knot//com.simibubi.create.content.kinetics.base.KineticBlockEntity.tick(KineticBlockEntity.java:88)
+";
+        let (_signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        let create = suspects.iter().find(|s| s.id == "create").expect("create");
+        assert_eq!(create.blame_role, BlameRole::Primary);
+        for id in ["fabric-api", "indium", "sodium"] {
+            let s = suspects.iter().find(|x| x.id == id).expect(id);
+            assert_ne!(
+                s.blame_role,
+                BlameRole::Primary,
+                "{id} must not be primary from mod-list dump alone"
+            );
+        }
+    }
+
+    #[test]
+    fn mixin_conflict_ranks_both_mods_secondary_not_random_primary() {
+        let manifest = multi_mod_manifest();
+        let text = "\
+Mixin apply failed indium.mixins.json:MixinItemRenderer failed
+Mixin apply failed sodium.mixins.json:MixinWorldRenderer failed
+Caused by: org.spongepowered.asm.mixin.transformer.throwables.MixinTransformerError
+";
+        let (_signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        let primaries: Vec<_> = suspects
+            .iter()
+            .filter(|s| s.blame_role == BlameRole::Primary)
+            .collect();
+        assert!(
+            primaries.len() <= 1,
+            "mixin conflict should not invent multiple primaries: {:?}",
+            primaries.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+        assert!(suspects.iter().any(|s| s.id == "indium" || s.id == "sodium"));
+    }
+
+    #[test]
+    fn description_beats_library_mod_in_stack() {
+        let manifest = multi_mod_manifest();
+        let text = "\
+Description: create tick failure near contraption
+
+java.lang.RuntimeException: wrapper
+\tat knot//net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.lambda$static$0(ServerTickEvents.java:12)
+Caused by: java.lang.IllegalStateException: create entity stuck
+\tat knot//com.simibubi.create.content.contraptions.Contraption.tick(Contraption.java:44)
+";
+        let (_signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        let create = suspects.iter().find(|s| s.id == "create").expect("create");
+        assert!(
+            create.confidence >= 80,
+            "create should rank above fabric-api library frame"
+        );
+        if let Some(fapi) = suspects.iter().find(|s| s.id == "fabric-api") {
+            assert!(
+                create.confidence > fapi.confidence,
+                "content mod in Caused by should beat library API frame"
+            );
+        }
     }
 }
 

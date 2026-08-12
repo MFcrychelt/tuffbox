@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CheckCircle, AlertTriangle, CircleHelp, Loader2 } from "@lucide/svelte";
+  import { CheckCircle, AlertTriangle, CircleHelp, Loader2, Wrench } from "@lucide/svelte";
   import {
     type Problem,
     countBySeverity,
@@ -16,7 +16,10 @@
     cascadeLabel = null,
     cascadeDetail = null,
     sourceLabel = "Game log",
+    fixAllCount = 0,
+    fixAllBusy = false,
     onScrollToWarnings,
+    onFixAll,
   }: {
     problems?: Problem[];
     sessionOk?: boolean;
@@ -26,7 +29,10 @@
     cascadeLabel?: string | null;
     cascadeDetail?: string | null;
     sourceLabel?: string;
+    fixAllCount?: number;
+    fixAllBusy?: boolean;
     onScrollToWarnings?: () => void;
+    onFixAll?: () => void;
   } = $props();
 
   const counts = $derived(countBySeverity(problems));
@@ -116,6 +122,18 @@
       </span>
     {/if}
   </div>
+  {#if fixAllCount > 0 && !loading && !analyzing}
+    <button
+      type="button"
+      class="fix-all-btn"
+      disabled={fixAllBusy}
+      onclick={() => onFixAll?.()}
+      title="Review and apply all automatic fixes at once"
+    >
+      <Wrench size={14} />
+      {fixAllBusy ? "Applying…" : `Fix all (${fixAllCount})`}
+    </button>
+  {/if}
 </div>
 
 <style>
@@ -178,6 +196,21 @@
     cursor: pointer;
     text-decoration: underline;
   }
+  .fix-all-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: var(--border-radius-sm);
+    border: none;
+    background: var(--accent-primary);
+    color: #000;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .fix-all-btn:disabled { opacity: 0.55; cursor: not-allowed; }
   :global(.spin) { animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>

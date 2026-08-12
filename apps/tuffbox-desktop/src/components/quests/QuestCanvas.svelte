@@ -650,9 +650,9 @@
       <div class="empty-hint">
         {#if showEmptyAddCta}
           <button type="button" class="empty-add" onclick={(e) => { e.stopPropagation(); addAtCenter(); }}>
-            Add quest
+            + Add first quest
           </button>
-          <span class="empty-sub">or double-click / press N</span>
+          <span class="empty-sub">Double-click canvas · Press N · Use toolbar button</span>
         {:else}
           <span>{emptyHint}</span>
         {/if}
@@ -742,6 +742,14 @@
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 4px;
   }
+  .canvas-toolbar .tb-filter:focus {
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+  .canvas-toolbar .tb:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 80%, #fff);
+    outline-offset: 1px;
+  }
   .filt-count {
     font-size: 11px;
     color: var(--ftbq-text-muted, #9a9aa0);
@@ -750,6 +758,13 @@
     display: inline-flex;
     gap: 4px;
     margin-left: auto;
+  }
+  .layout-btns .tb {
+    opacity: 0.85;
+    transition: opacity 0.15s ease, background 0.15s ease;
+  }
+  .layout-btns .tb:hover {
+    opacity: 1;
   }
   .tb {
     display: inline-flex;

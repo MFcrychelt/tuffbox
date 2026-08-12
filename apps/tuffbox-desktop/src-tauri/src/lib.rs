@@ -25,6 +25,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use tuffbox_core::{
     ContentProvider, DependencyGraph, ModSource, ModSpec, PackBrief, ProjectManifest,
     ProviderFileInfo, ProviderSearchQuery, Resolver, Side, SnapshotStore, SourceKind,
@@ -2700,155 +2701,269 @@ fn apply_mod_reinstall(
 }
 
 /// Applies a machine-actionable fix produced by crash diagnosis.
+fn execute_fix_action_inner(
+    app: &tauri::AppHandle,
+    path: &str,
+    action: &FixAction,
+    skip_snapshot: bool,
+) -> Result<String, String> {
+    let manifest_path = PathBuf::from(path);
+    let mod_id = action.mod_id.clone().unwrap_or_default();
+    match action.kind.as_str() {
+        "disableMod" => {
+            if mod_id.is_empty() {
+                return Err("disableMod requires a mod id".into());
+            }
+            let res = disable_project_mod_inner(&manifest_path, &mod_id)?;
+            Ok(format!(
+                "Disabled {} ({})",
+                res.get("id").and_then(|v| v.as_str()).unwrap_or(&mod_id),
+                res.get("fileName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("jar")
+            ))
+        }
+        "removeMod" => {
+            if mod_id.is_empty() {
+                return Err("removeMod requires a mod id".into());
+            }
+            remove_project_mod_inner(&manifest_path, &mod_id)?;
+            Ok(format!("Removed {mod_id}"))
+        }
+        "reinstallMod" => {
+            if mod_id.is_empty() {
+                return Err("reinstallMod requires a mod id".into());
+            }
+            if !skip_snapshot {
+                auto_snapshot(&manifest_path, "fix-reinstall-mod").map_err(|e| e.to_string())?;
+            }
+            let mut manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+            let msg = apply_mod_reinstall(app, &manifest_path, &mut manifest, &mod_id)?;
+            save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+            Ok(msg)
+        }
+        "updateMod" => {
+            if mod_id.is_empty() {
+                return Err("updateMod requires a mod id".into());
+            }
+            if !skip_snapshot {
+                auto_snapshot(&manifest_path, "fix-update-mod").map_err(|e| e.to_string())?;
+            }
+            let mut manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+            let msg = apply_mod_update_to_latest(app, &manifest_path, &mut manifest, &mod_id)?;
+            save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+            Ok(msg)
+        }
+        "installDependency" => {
+            if mod_id.is_empty() {
+                return Err("installDependency requires a mod id".into());
+            }
+            if !skip_snapshot {
+                auto_snapshot(&manifest_path, "fix-install-dep").map_err(|e| e.to_string())?;
+            }
+            let mut manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+            install_modrinth_with_dependencies(&mut manifest, &[mod_id.clone()], "both")?;
+            save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+            download_project_mods_tracked(app, &manifest_path, &manifest, None, false);
+            Ok(format!("Installed dependency {mod_id}"))
+        }
+        "updateLoader" => {
+            if !skip_snapshot {
+                auto_snapshot(&manifest_path, "fix-update-loader").map_err(|e| e.to_string())?;
+            }
+            let mut manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+            let (loader_slug, _loaders) = update_loaders_for(&manifest);
+            let latest = tuffbox_core::versions::fetch_loader_versions(
+                &loader_slug,
+                &manifest.minecraft.version,
+            )
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .max_by(|a, b| a.id.cmp(&b.id))
+            .ok_or_else(|| format!("no {loader_slug} build for {}", manifest.minecraft.version))?;
+            manifest.loader.version = latest.id.clone();
+            save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+            Ok(format!("Updated loader to {}", latest.id))
+        }
+        "raiseMemory" => {
+            if !skip_snapshot {
+                auto_snapshot(&manifest_path, "fix-raise-memory").map_err(|e| e.to_string())?;
+            }
+            let mut manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+            let target = 6144u32;
+            for profile in manifest.profiles.iter_mut() {
+                if profile.memory_mb.map(|m| m < target).unwrap_or(true) {
+                    profile.memory_mb = Some(target);
+                }
+            }
+            save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+            Ok(format!("Set allocated memory to {} MB", target))
+        }
+        "acceptEula" => {
+            let instance_dir = tuffbox_core::instance_dir_for_manifest(&manifest_path)
+                .ok_or_else(|| "could not resolve instance directory".to_string())?;
+            let eula_path = instance_dir.join("eula.txt");
+            std::fs::write(&eula_path, "# Auto-accepted by TuffBox crash fix\neula=true\n")
+                .map_err(|e| format!("failed to write {}: {e}", eula_path.display()))?;
+            Ok("Set eula=true in eula.txt".into())
+        }
+        "changePort" => {
+            let instance_dir = tuffbox_core::instance_dir_for_manifest(&manifest_path)
+                .ok_or_else(|| "could not resolve instance directory".to_string())?;
+            let props_path = instance_dir.join("server.properties");
+            let content = std::fs::read_to_string(&props_path).unwrap_or_default();
+            let mut props = tuffbox_core::properties_parser::PropertiesFile::parse(&content);
+            props.set("server-port", "25566");
+            std::fs::write(&props_path, props.to_string())
+                .map_err(|e| format!("failed to write {}: {e}", props_path.display()))?;
+            Ok("Changed server-port to 25566".into())
+        }
+        "autoJava" => {
+            if !skip_snapshot {
+                auto_snapshot(&manifest_path, "fix-auto-java").map_err(|e| e.to_string())?;
+            }
+            let mut manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+            let runtimes = tuffbox_core::jre::find_all_runtimes().map_err(|e| e.to_string())?;
+            let required = tuffbox_core::jre::required_java_major(&manifest.minecraft.version);
+            let best = tuffbox_core::jre::find_runtime_for(&runtimes, required)
+                .ok_or_else(|| "no compatible Java runtime found on this machine".to_string())?;
+            let mut java = manifest.java.clone().unwrap_or(tuffbox_core::manifest::JavaSpec {
+                major: None,
+                distribution: None,
+                path: None,
+            });
+            java.path = Some(best.path.clone());
+            java.major = Some(best.major.try_into().unwrap_or(u16::MAX));
+            manifest.java = Some(java);
+            save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+            Ok(format!("Selected Java {} ({})", best.major, best.path))
+        }
+        other => Err(format!("unknown fix action kind: {other}")),
+    }
+}
+
+fn fix_action_batch_order(kind: &str) -> u8 {
+    match kind {
+        "installDependency" | "installAllMissing" | "installMissingForMod" => 0,
+        "updateMod" | "reinstallMod" | "updateLoader" => 1,
+        "raiseMemory" | "autoJava" | "acceptEula" | "changePort" => 2,
+        "disableMod" | "removeMod" | "removeWrongJar" => 3,
+        _ => 2,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FixActionOutcome {
+    action: FixAction,
+    ok: bool,
+    summary: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FixActionBatchResult {
+    applied: Vec<FixActionOutcome>,
+    stopped: bool,
+    summary: String,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn apply_fix_actions(
+    app: tauri::AppHandle,
+    path: String,
+    actions: Vec<FixAction>,
+) -> Result<FixActionBatchResult, String> {
+    if actions.is_empty() {
+        return Ok(FixActionBatchResult {
+            applied: Vec::new(),
+            stopped: false,
+            summary: "No actions to apply".into(),
+        });
+    }
+    let path_for_record = path.clone();
+    let mut ordered = actions;
+    ordered.sort_by_key(|a| fix_action_batch_order(&a.kind));
+
+    let app_handle = app.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        auto_snapshot(&manifest_path, "fix-batch").map_err(|e| e.to_string())?;
+
+        let mut applied = Vec::new();
+        let mut launcher_actions = Vec::new();
+        let mut summaries = Vec::new();
+        let mut stopped = false;
+
+        for action in ordered {
+            match execute_fix_action_inner(&app_handle, &path, &action, true) {
+                Ok(summary) => {
+                    summaries.push(summary.clone());
+                    launcher_actions.push(fix_action_to_launcher_action(&action, &summary));
+                    applied.push(FixActionOutcome {
+                        action: action.clone(),
+                        ok: true,
+                        summary: Some(summary),
+                        error: None,
+                    });
+                }
+                Err(err) => {
+                    applied.push(FixActionOutcome {
+                        action: action.clone(),
+                        ok: false,
+                        summary: None,
+                        error: Some(err.clone()),
+                    });
+                    stopped = true;
+                    break;
+                }
+            }
+        }
+
+        let summary = if summaries.is_empty() {
+            "No fixes applied".into()
+        } else {
+            format!("Applied {} fix(es): {}", summaries.len(), summaries.join("; "))
+        };
+
+        Ok::<_, String>((applied, stopped, summary, launcher_actions))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let (applied, stopped, summary, launcher_actions) = result;
+    if !launcher_actions.is_empty() {
+        let _ = swarm_api::record_user_fix_attempt(
+            Path::new(&path_for_record),
+            "diagnose_batch",
+            &summary,
+            launcher_actions,
+            None,
+        );
+    }
+
+    Ok(FixActionBatchResult {
+        applied,
+        stopped,
+        summary,
+    })
+}
+
 #[tauri::command(rename_all = "camelCase")]
 async fn apply_fix_action(
     app: tauri::AppHandle,
     path: String,
     action: FixAction,
 ) -> Result<String, String> {
-    let manifest_path = PathBuf::from(&path);
     let path_for_record = path.clone();
-    let mod_id = action.mod_id.clone().unwrap_or_default();
     let action_for_record = action.clone();
     let result = tokio::task::spawn_blocking(move || {
-        match action.kind.as_str() {
-            "disableMod" => {
-                if mod_id.is_empty() {
-                    return Err("disableMod requires a mod id".into());
-                }
-                let res = disable_project_mod_inner(&manifest_path, &mod_id)?;
-                Ok(format!(
-                    "Disabled {} ({})",
-                    res.get("id").and_then(|v| v.as_str()).unwrap_or(&mod_id),
-                    res.get("fileName")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("jar")
-                ))
-            }
-            "removeMod" => {
-                if mod_id.is_empty() {
-                    return Err("removeMod requires a mod id".into());
-                }
-                remove_project_mod_inner(&manifest_path, &mod_id)?;
-                Ok(format!("Removed {mod_id}"))
-            }
-            "reinstallMod" => {
-                if mod_id.is_empty() {
-                    return Err("reinstallMod requires a mod id".into());
-                }
-                auto_snapshot(&manifest_path, "fix-reinstall-mod").map_err(|e| e.to_string())?;
-                let mut manifest =
-                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-                let msg =
-                    apply_mod_reinstall(&app, &manifest_path, &mut manifest, &mod_id)?;
-                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-                Ok(msg)
-            }
-            "updateMod" => {
-                if mod_id.is_empty() {
-                    return Err("updateMod requires a mod id".into());
-                }
-                auto_snapshot(&manifest_path, "fix-update-mod").map_err(|e| e.to_string())?;
-                let mut manifest =
-                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-                let msg = apply_mod_update_to_latest(&app, &manifest_path, &mut manifest, &mod_id)?;
-                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-                Ok(msg)
-            }
-            "installDependency" => {
-                if mod_id.is_empty() {
-                    return Err("installDependency requires a mod id".into());
-                }
-                auto_snapshot(&manifest_path, "fix-install-dep").map_err(|e| e.to_string())?;
-                let mut manifest =
-                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-                install_modrinth_with_dependencies(&mut manifest, &[mod_id.clone()], "both")?;
-                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-                download_project_mods_tracked(&app, &manifest_path, &manifest, None, false);
-                Ok(format!("Installed dependency {mod_id}"))
-            }
-            "updateLoader" => {
-                auto_snapshot(&manifest_path, "fix-update-loader").map_err(|e| e.to_string())?;
-                let mut manifest =
-                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-                let (loader_slug, _loaders) = update_loaders_for(&manifest);
-                let latest = tuffbox_core::versions::fetch_loader_versions(
-                    &loader_slug,
-                    &manifest.minecraft.version,
-                )
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .max_by(|a, b| a.id.cmp(&b.id))
-                .ok_or_else(|| {
-                    format!(
-                        "no {loader_slug} build for {}",
-                        manifest.minecraft.version
-                    )
-                })?;
-                manifest.loader.version = latest.id.clone();
-                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-                Ok(format!("Updated loader to {}", latest.id))
-            }
-            "raiseMemory" => {
-                auto_snapshot(&manifest_path, "fix-raise-memory").map_err(|e| e.to_string())?;
-                let mut manifest =
-                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-                let target = 6144u32;
-                for profile in manifest.profiles.iter_mut() {
-                    if profile.memory_mb.map(|m| m < target).unwrap_or(true) {
-                        profile.memory_mb = Some(target);
-                    }
-                }
-                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-                Ok(format!("Set allocated memory to {} MB", target))
-            }
-            "acceptEula" => {
-                let instance_dir =
-                    tuffbox_core::instance_dir_for_manifest(&manifest_path)
-                        .ok_or_else(|| "could not resolve instance directory".to_string())?;
-                let eula_path = instance_dir.join("eula.txt");
-                std::fs::write(&eula_path, "# Auto-accepted by TuffBox crash fix\neula=true\n")
-                    .map_err(|e| format!("failed to write {}: {e}", eula_path.display()))?;
-                Ok("Set eula=true in eula.txt".into())
-            }
-            "changePort" => {
-                let instance_dir =
-                    tuffbox_core::instance_dir_for_manifest(&manifest_path)
-                        .ok_or_else(|| "could not resolve instance directory".to_string())?;
-                let props_path = instance_dir.join("server.properties");
-                let content = std::fs::read_to_string(&props_path).unwrap_or_default();
-                let mut props = tuffbox_core::properties_parser::PropertiesFile::parse(&content);
-                props.set("server-port", "25566");
-                std::fs::write(&props_path, props.to_string())
-                    .map_err(|e| format!("failed to write {}: {e}", props_path.display()))?;
-                Ok("Changed server-port to 25566".into())
-            }
-            "autoJava" => {
-                auto_snapshot(&manifest_path, "fix-auto-java").map_err(|e| e.to_string())?;
-                let mut manifest =
-                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-                let runtimes = tuffbox_core::jre::find_all_runtimes().map_err(|e| e.to_string())?;
-                let required = tuffbox_core::jre::required_java_major(&manifest.minecraft.version);
-                let best = tuffbox_core::jre::find_runtime_for(&runtimes, required)
-                    .ok_or_else(|| "no compatible Java runtime found on this machine".to_string())?;
-                let mut java = manifest.java.clone().unwrap_or(tuffbox_core::manifest::JavaSpec {
-                    major: None,
-                    distribution: None,
-                    path: None,
-                });
-                java.path = Some(best.path.clone());
-                java.major = Some(best.major.try_into().unwrap_or(u16::MAX));
-                manifest.java = Some(java);
-                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-                Ok(format!("Selected Java {} ({})", best.major, best.path))
-            }
-            other => Err(format!("unknown fix action kind: {other}")),
-        }
+        execute_fix_action_inner(&app, &path, &action, false)
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    // Track pending fix so a later healthy relaunch can record *how* it was resolved.
     let launcher = fix_action_to_launcher_action(&action_for_record, &result);
     let _ = swarm_api::record_user_fix_attempt(
         Path::new(&path_for_record),
@@ -15969,6 +16084,7 @@ pub fn run() {
             create_crash_fix_plan,
             apply_crash_fix_plan,
             apply_fix_action,
+            apply_fix_actions,
             get_history_settings,
             update_history_settings,
             list_project_change_history,

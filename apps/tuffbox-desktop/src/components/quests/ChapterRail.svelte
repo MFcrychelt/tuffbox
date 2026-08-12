@@ -355,11 +355,15 @@
     align-items: stretch;
     border: none;
     border-left: 3px solid transparent;
+    transition: background 0.12s ease, border-color 0.12s ease;
   }
   .ch-row-wrap.sel {
     background: color-mix(in srgb, var(--ftbq-accent-green) 10%, transparent);
     border-left-color: var(--ftbq-accent-green);
+    text-align: left;
+    cursor: pointer;
     box-shadow: none;
+    transition: background 0.12s ease;
   }
   .ch-row-wrap.dirty:not(.sel) {
     border-left-color: color-mix(in srgb, var(--ftbq-quest-started) 40%, transparent);
@@ -380,6 +384,7 @@
     text-align: left;
     cursor: pointer;
     box-shadow: none;
+    transition: background 0.12s ease;
   }
   .ch-row:hover {
     background: var(--bg-hover, color-mix(in srgb, var(--ftbq-text) 6%, transparent));
@@ -387,14 +392,16 @@
   .ch-row-wrap.sel .ch-row {
     color: var(--ftbq-text, #e8e8e8);
   }
+  .ch-row-wrap.sel .ch-row:hover {
+    background: color-mix(in srgb, var(--ftbq-accent-green) 15%, transparent);
+  }
   .ch-menu-wrap {
     position: relative;
     padding: 4px 4px 4px 0;
-    opacity: 0.4;
-  }
-  .ch-row-wrap:hover .ch-menu-wrap,
-  .ch-row-wrap.sel .ch-menu-wrap {
-    opacity: 1;
+    font-weight: 800;
+    color: var(--ftbq-text, #e8e8e8);
+    box-shadow: none;
+    transition: box-shadow 0.12s ease, border-color 0.12s ease;
   }
   .ch-menu {
     position: fixed;
@@ -445,8 +452,12 @@
     color: var(--ftbq-text, #e8e8e8);
     box-shadow: none;
   }
+  .ch-row-wrap:hover .glyph {
+    border-color: color-mix(in srgb, var(--ftbq-text-muted) 40%, var(--ftbq-frame));
+  }
   .ch-row-wrap.sel .glyph {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--ftbq-accent-green) 35%, transparent);
+    border-color: color-mix(in srgb, var(--ftbq-accent-green) 50%, var(--ftbq-frame));
   }
   .ch-text {
     display: grid;
