@@ -1,38 +1,38 @@
-# Glasscraft Home Redesign Implementation Plan
+﻿# Glasscraft Home Redesign Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Goal:** Сделать главный экран солидным modern-glassy: процедурные Minecraft-текстуры (CSS-only), glass-панели на Home, глобальный текстурный слой app-shell и 4 новые биом-темы.
+**Goal:** Ð¡Ð´ÐµÐ»Ð°Ñ‚ÑŒ Ð³Ð»Ð°Ð²Ð½Ñ‹Ð¹ ÑÐºÑ€Ð°Ð½ ÑÐ¾Ð»Ð¸Ð´Ð½Ñ‹Ð¼ modern-glassy: Ð¿Ñ€Ð¾Ñ†ÐµÐ´ÑƒÑ€Ð½Ñ‹Ðµ Minecraft-Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ñ‹ (CSS-only), glass-Ð¿Ð°Ð½ÐµÐ»Ð¸ Ð½Ð° Home, Ð³Ð»Ð¾Ð±Ð°Ð»ÑŒÐ½Ñ‹Ð¹ Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ð½Ñ‹Ð¹ ÑÐ»Ð¾Ð¹ app-shell Ð¸ 4 Ð½Ð¾Ð²Ñ‹Ðµ Ð±Ð¸Ð¾Ð¼-Ñ‚ÐµÐ¼Ñ‹.
 
-**Architecture:** Всё через существующую токен-систему: новый слой `textures.css` (utility-классы `.tex-*` + дефолтный `--app-shell-bg` со speckle), апгрейд glass-токенов в `styles.css`, точечные правки `HomeHero.svelte`/`Dashboard.svelte`, 4 новых `[data-theme]` блока + shared Glasscraft-блок в `themes.css`, записи в каталоге `themes.ts`. Ни одного PNG-ассета.
+**Architecture:** Ð’ÑÑ‘ Ñ‡ÐµÑ€ÐµÐ· ÑÑƒÑ‰ÐµÑÑ‚Ð²ÑƒÑŽÑ‰ÑƒÑŽ Ñ‚Ð¾ÐºÐµÐ½-ÑÐ¸ÑÑ‚ÐµÐ¼Ñƒ: Ð½Ð¾Ð²Ñ‹Ð¹ ÑÐ»Ð¾Ð¹ `textures.css` (utility-ÐºÐ»Ð°ÑÑÑ‹ `.tex-*` + Ð´ÐµÑ„Ð¾Ð»Ñ‚Ð½Ñ‹Ð¹ `--app-shell-bg` ÑÐ¾ speckle), Ð°Ð¿Ð³Ñ€ÐµÐ¹Ð´ glass-Ñ‚Ð¾ÐºÐµÐ½Ð¾Ð² Ð² `styles.css`, Ñ‚Ð¾Ñ‡ÐµÑ‡Ð½Ñ‹Ðµ Ð¿Ñ€Ð°Ð²ÐºÐ¸ `HomeHero.svelte`/`Dashboard.svelte`, 4 Ð½Ð¾Ð²Ñ‹Ñ… `[data-theme]` Ð±Ð»Ð¾ÐºÐ° + shared Glasscraft-Ð±Ð»Ð¾Ðº Ð² `themes.css`, Ð·Ð°Ð¿Ð¸ÑÐ¸ Ð² ÐºÐ°Ñ‚Ð°Ð»Ð¾Ð³Ðµ `themes.ts`. ÐÐ¸ Ð¾Ð´Ð½Ð¾Ð³Ð¾ PNG-Ð°ÑÑÐµÑ‚Ð°.
 
-**Tech Stack:** Svelte 5 (runes), чистый CSS (gradient layers, color-mix, backdrop-filter), Tauri.
+**Tech Stack:** Svelte 5 (runes), Ñ‡Ð¸ÑÑ‚Ñ‹Ð¹ CSS (gradient layers, color-mix, backdrop-filter), Tauri.
 
 **Spec:** `docs/superpowers/specs/2026-08-13-home-glasscraft-redesign-design.md` (commit 8632d99f)
 
 ## Global Constraints
 
-- Svelte 5 only: `$state`/`$derived`/`$effect`, `onclick` (не `on:click`), `{#snippet}` (не `<slot>`).
-- Border-radius только `var(--border-radius-sm|md|lg|xl)`; мелкий декор ≤4px и 999px допустим. Проверка: `npm run lint:tokens` (из `apps/tuffbox-desktop`).
-- `html.potato-pc` и `prefers-reduced-motion`: текстуры и blur отключаются (см. Task 2).
-- Никаких PNG/JPG ассетов — только CSS-градиенты. `image-rendering: pixelated` на текстурных слоях.
-- Каждый коммит добавляет ТОЛЬКО файлы своей задачи (`git add <file...>`) — в репо много незакоммиченной чужой работы, не подметать её.
-- Рабочая директория для npm-команд: `apps/tuffbox-desktop`.
-- Не ломать тему `minecraft` (её overrides изолированы под `html[data-theme="minecraft"]`).
+- Svelte 5 only: `$state`/`$derived`/`$effect`, `onclick` (Ð½Ðµ `on:click`), `{#snippet}` (Ð½Ðµ `<slot>`).
+- Border-radius Ñ‚Ð¾Ð»ÑŒÐºÐ¾ `var(--border-radius-sm|md|lg|xl)`; Ð¼ÐµÐ»ÐºÐ¸Ð¹ Ð´ÐµÐºÐ¾Ñ€ â‰¤4px Ð¸ 999px Ð´Ð¾Ð¿ÑƒÑÑ‚Ð¸Ð¼. ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ°: `npm run lint:tokens` (Ð¸Ð· `apps/tuffbox-desktop`).
+- `html.potato-pc` Ð¸ `prefers-reduced-motion`: Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ñ‹ Ð¸ blur Ð¾Ñ‚ÐºÐ»ÑŽÑ‡Ð°ÑŽÑ‚ÑÑ (ÑÐ¼. Task 2).
+- ÐÐ¸ÐºÐ°ÐºÐ¸Ñ… PNG/JPG Ð°ÑÑÐµÑ‚Ð¾Ð² â€” Ñ‚Ð¾Ð»ÑŒÐºÐ¾ CSS-Ð³Ñ€Ð°Ð´Ð¸ÐµÐ½Ñ‚Ñ‹. `image-rendering: pixelated` Ð½Ð° Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ð½Ñ‹Ñ… ÑÐ»Ð¾ÑÑ….
+- ÐšÐ°Ð¶Ð´Ñ‹Ð¹ ÐºÐ¾Ð¼Ð¼Ð¸Ñ‚ Ð´Ð¾Ð±Ð°Ð²Ð»ÑÐµÑ‚ Ð¢ÐžÐ›Ð¬ÐšÐž Ñ„Ð°Ð¹Ð»Ñ‹ ÑÐ²Ð¾ÐµÐ¹ Ð·Ð°Ð´Ð°Ñ‡Ð¸ (`git add <file...>`) â€” Ð² Ñ€ÐµÐ¿Ð¾ Ð¼Ð½Ð¾Ð³Ð¾ Ð½ÐµÐ·Ð°ÐºÐ¾Ð¼Ð¼Ð¸Ñ‡ÐµÐ½Ð½Ð¾Ð¹ Ñ‡ÑƒÐ¶Ð¾Ð¹ Ñ€Ð°Ð±Ð¾Ñ‚Ñ‹, Ð½Ðµ Ð¿Ð¾Ð´Ð¼ÐµÑ‚Ð°Ñ‚ÑŒ ÐµÑ‘.
+- Ð Ð°Ð±Ð¾Ñ‡Ð°Ñ Ð´Ð¸Ñ€ÐµÐºÑ‚Ð¾Ñ€Ð¸Ñ Ð´Ð»Ñ npm-ÐºÐ¾Ð¼Ð°Ð½Ð´: `apps/tuffbox-desktop`.
+- ÐÐµ Ð»Ð¾Ð¼Ð°Ñ‚ÑŒ Ñ‚ÐµÐ¼Ñƒ `minecraft` (ÐµÑ‘ overrides Ð¸Ð·Ð¾Ð»Ð¸Ñ€Ð¾Ð²Ð°Ð½Ñ‹ Ð¿Ð¾Ð´ `html[data-theme="minecraft"]`).
 
 ---
 
-### Task 1: Glass-токены + утилита `.glass-panel`
+### Task 1: Glass-Ñ‚Ð¾ÐºÐµÐ½Ñ‹ + ÑƒÑ‚Ð¸Ð»Ð¸Ñ‚Ð° `.glass-panel`
 
 **Files:**
-- Modify: `apps/tuffbox-desktop/src/styles.css` (:root glass-блок ~L61-72; potato-блок ~L436-441; reduced-motion ~L341-347; utilities рядом с `.tb-truncate` ~L414)
+- Modify: `apps/tuffbox-desktop/src/styles.css` (:root glass-Ð±Ð»Ð¾Ðº ~L61-72; potato-Ð±Ð»Ð¾Ðº ~L436-441; reduced-motion ~L341-347; utilities Ñ€ÑÐ´Ð¾Ð¼ Ñ `.tb-truncate` ~L414)
 
 **Interfaces:**
-- Produces: CSS-токен `--glass-saturate` (default `140%`), утилита `.glass-panel`. Потребляется в Task 3/4 и существующими glass-поверхностями (hero toolbar, crash banner).
+- Produces: CSS-Ñ‚Ð¾ÐºÐµÐ½ `--glass-saturate` (default `140%`), ÑƒÑ‚Ð¸Ð»Ð¸Ñ‚Ð° `.glass-panel`. ÐŸÐ¾Ñ‚Ñ€ÐµÐ±Ð»ÑÐµÑ‚ÑÑ Ð² Task 3/4 Ð¸ ÑÑƒÑ‰ÐµÑÑ‚Ð²ÑƒÑŽÑ‰Ð¸Ð¼Ð¸ glass-Ð¿Ð¾Ð²ÐµÑ€Ñ…Ð½Ð¾ÑÑ‚ÑÐ¼Ð¸ (hero toolbar, crash banner).
 
-- [ ] **Step 1: Обновить :root glass-токены**
+- [x] **Step 1: ÐžÐ±Ð½Ð¾Ð²Ð¸Ñ‚ÑŒ :root glass-Ñ‚Ð¾ÐºÐµÐ½Ñ‹**
 
-В `styles.css`, в `:root` заменить блок:
+Ð’ `styles.css`, Ð² `:root` Ð·Ð°Ð¼ÐµÐ½Ð¸Ñ‚ÑŒ Ð±Ð»Ð¾Ðº:
 
 ```css
   --glass-bg: rgba(11, 11, 13, 0.42);
@@ -41,7 +41,7 @@
   --glass-highlight: color-mix(in srgb, #fff 14%, transparent);
 ```
 
-на:
+Ð½Ð°:
 
 ```css
   --glass-bg: rgba(11, 11, 13, 0.42);
@@ -51,12 +51,12 @@
   --glass-highlight: color-mix(in srgb, #fff 14%, transparent);
 ```
 
-- [ ] **Step 2: Добавить утилиту `.glass-panel`**
+- [x] **Step 2: Ð”Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ ÑƒÑ‚Ð¸Ð»Ð¸Ñ‚Ñƒ `.glass-panel`**
 
-Сразу после блока `.tb-truncate-2` в `styles.css`:
+Ð¡Ñ€Ð°Ð·Ñƒ Ð¿Ð¾ÑÐ»Ðµ Ð±Ð»Ð¾ÐºÐ° `.tb-truncate-2` Ð² `styles.css`:
 
 ```css
-/* Frosted glass surface — panels and cards over textured/ambient shell. */
+/* Frosted glass surface â€” panels and cards over textured/ambient shell. */
 .glass-panel {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
@@ -68,17 +68,17 @@
 }
 ```
 
-- [ ] **Step 3: Гарды potato-pc / reduced-motion**
+- [x] **Step 3: Ð“Ð°Ñ€Ð´Ñ‹ potato-pc / reduced-motion**
 
-В `html.potato-pc { ... }` (там уже `--glass-blur: 0;`) добавить `--glass-saturate: 100%;`.
-В `@media (prefers-reduced-motion: reduce) { html { ... } }` рядом с `--glass-blur: 0;` добавить `--glass-saturate: 100%;`.
+Ð’ `html.potato-pc { ... }` (Ñ‚Ð°Ð¼ ÑƒÐ¶Ðµ `--glass-blur: 0;`) Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ `--glass-saturate: 100%;`.
+Ð’ `@media (prefers-reduced-motion: reduce) { html { ... } }` Ñ€ÑÐ´Ð¾Ð¼ Ñ `--glass-blur: 0;` Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ `--glass-saturate: 100%;`.
 
-- [ ] **Step 4: Проверка**
+- [x] **Step 4: ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ°**
 
 Run: `npm run lint:tokens` (cwd `apps/tuffbox-desktop`)
-Expected: PASS (без ошибок; новых radius-литералов нет).
+Expected: PASS (Ð±ÐµÐ· Ð¾ÑˆÐ¸Ð±Ð¾Ðº; Ð½Ð¾Ð²Ñ‹Ñ… radius-Ð»Ð¸Ñ‚ÐµÑ€Ð°Ð»Ð¾Ð² Ð½ÐµÑ‚).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/tuffbox-desktop/src/styles.css
@@ -87,21 +87,21 @@ git commit -m "feat(ui): glass tokens v2 (blur 14px + saturate) and .glass-panel
 
 ---
 
-### Task 2: Процедурные текстуры — `textures.css`
+### Task 2: ÐŸÑ€Ð¾Ñ†ÐµÐ´ÑƒÑ€Ð½Ñ‹Ðµ Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ñ‹ â€” `textures.css`
 
 **Files:**
 - Create: `apps/tuffbox-desktop/src/styles/textures.css`
-- Modify: `apps/tuffbox-desktop/src/main.ts` (добавить import после `./styles/themes.css`)
+- Modify: `apps/tuffbox-desktop/src/main.ts` (Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ import Ð¿Ð¾ÑÐ»Ðµ `./styles/themes.css`)
 
 **Interfaces:**
-- Produces: классы `.tex-stone`, `.tex-dirt`, `.tex-grass`, `.tex-deepslate`, `.tex-netherrack`, `.tex-sculk`, `.tex-amethyst`; токены `--tex-size` (16px), `--tex-speck-a/b/c` (per-class overrides); дефолтный `--app-shell-bg` со stone-speckle (наследуют темы без своего `--app-shell-bg`). Потребляется в Task 3 (hero fallback), Task 4 (skin vitrine), Task 5 (биом-темы переопределяют speckle-цвета и `--app-shell-bg`).
+- Produces: ÐºÐ»Ð°ÑÑÑ‹ `.tex-stone`, `.tex-dirt`, `.tex-grass`, `.tex-deepslate`, `.tex-netherrack`, `.tex-sculk`, `.tex-amethyst`; Ñ‚Ð¾ÐºÐµÐ½Ñ‹ `--tex-size` (16px), `--tex-speck-a/b/c` (per-class overrides); Ð´ÐµÑ„Ð¾Ð»Ñ‚Ð½Ñ‹Ð¹ `--app-shell-bg` ÑÐ¾ stone-speckle (Ð½Ð°ÑÐ»ÐµÐ´ÑƒÑŽÑ‚ Ñ‚ÐµÐ¼Ñ‹ Ð±ÐµÐ· ÑÐ²Ð¾ÐµÐ³Ð¾ `--app-shell-bg`). ÐŸÐ¾Ñ‚Ñ€ÐµÐ±Ð»ÑÐµÑ‚ÑÑ Ð² Task 3 (hero fallback), Task 4 (skin vitrine), Task 5 (Ð±Ð¸Ð¾Ð¼-Ñ‚ÐµÐ¼Ñ‹ Ð¿ÐµÑ€ÐµÐ¾Ð¿Ñ€ÐµÐ´ÐµÐ»ÑÑŽÑ‚ speckle-Ñ†Ð²ÐµÑ‚Ð° Ð¸ `--app-shell-bg`).
 
-**Техника:** каждая текстура — один общий слоёный стек на базовом селекторе; вариант задаёт только 3 цвета-«крошки» через `--tex-speck-*`. Тайл 16px с кластерами ~2px + checker 8px = пиксель-шум в духе MC.
+**Ð¢ÐµÑ…Ð½Ð¸ÐºÐ°:** ÐºÐ°Ð¶Ð´Ð°Ñ Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ð° â€” Ð¾Ð´Ð¸Ð½ Ð¾Ð±Ñ‰Ð¸Ð¹ ÑÐ»Ð¾Ñ‘Ð½Ñ‹Ð¹ ÑÑ‚ÐµÐº Ð½Ð° Ð±Ð°Ð·Ð¾Ð²Ð¾Ð¼ ÑÐµÐ»ÐµÐºÑ‚Ð¾Ñ€Ðµ; Ð²Ð°Ñ€Ð¸Ð°Ð½Ñ‚ Ð·Ð°Ð´Ð°Ñ‘Ñ‚ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ 3 Ñ†Ð²ÐµÑ‚Ð°-Â«ÐºÑ€Ð¾ÑˆÐºÐ¸Â» Ñ‡ÐµÑ€ÐµÐ· `--tex-speck-*`. Ð¢Ð°Ð¹Ð» 16px Ñ ÐºÐ»Ð°ÑÑ‚ÐµÑ€Ð°Ð¼Ð¸ ~2px + checker 8px = Ð¿Ð¸ÐºÑÐµÐ»ÑŒ-ÑˆÑƒÐ¼ Ð² Ð´ÑƒÑ…Ðµ MC.
 
-- [ ] **Step 1: Создать `textures.css`**
+- [x] **Step 1: Ð¡Ð¾Ð·Ð´Ð°Ñ‚ÑŒ `textures.css`**
 
 ```css
-/* Procedural Minecraft-flavoured pixel textures — pure CSS, zero assets.
+/* Procedural Minecraft-flavoured pixel textures â€” pure CSS, zero assets.
    Layer stack is shared; each variant only re-colors the three speckle
    tones via --tex-speck-a (light fleck) / --tex-speck-b (dark fleck) /
    --tex-speck-c (checker). Themes may override the vars per data-theme. */
@@ -133,7 +133,7 @@ git commit -m "feat(ui): glass tokens v2 (blur 14px + saturate) and .glass-panel
     auto;
 }
 
-/* Shared speckle stack for component surfaces (hero fallback, vitrine…). */
+/* Shared speckle stack for component surfaces (hero fallback, vitrineâ€¦). */
 :where(.tex-stone, .tex-dirt, .tex-grass, .tex-deepslate, .tex-netherrack, .tex-sculk, .tex-amethyst) {
   background-image:
     radial-gradient(circle at 22% 30%, var(--tex-speck-a) 0 10%, transparent 11%),
@@ -204,7 +204,7 @@ html.potato-pc {
 }
 ```
 
-- [ ] **Step 2: Подключить в `main.ts`**
+- [x] **Step 2: ÐŸÐ¾Ð´ÐºÐ»ÑŽÑ‡Ð¸Ñ‚ÑŒ Ð² `main.ts`**
 
 ```ts
 import "./styles.css";
@@ -212,12 +212,12 @@ import "./styles/themes.css";
 import "./styles/textures.css";
 ```
 
-- [ ] **Step 3: Проверка**
+- [x] **Step 3: ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ°**
 
 Run: `npm run lint:tokens; npm run build`
-Expected: оба PASS (vite build собирает CSS без ошибок).
+Expected: Ð¾Ð±Ð° PASS (vite build ÑÐ¾Ð±Ð¸Ñ€Ð°ÐµÑ‚ CSS Ð±ÐµÐ· Ð¾ÑˆÐ¸Ð±Ð¾Ðº).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/tuffbox-desktop/src/styles/textures.css apps/tuffbox-desktop/src/main.ts
@@ -226,18 +226,18 @@ git commit -m "feat(ui): procedural CSS pixel-texture layer (.tex-*) and texture
 
 ---
 
-### Task 3: HomeHero — «cave scene» fallback + grass-кромка + glass-выравнивание
+### Task 3: HomeHero â€” Â«cave sceneÂ» fallback + grass-ÐºÑ€Ð¾Ð¼ÐºÐ° + glass-Ð²Ñ‹Ñ€Ð°Ð²Ð½Ð¸Ð²Ð°Ð½Ð¸Ðµ
 
 **Files:**
 - Modify: `apps/tuffbox-desktop/src/components/HomeHero.svelte` (style: `.poster-procedural` ~L366-373; `.poster-toolbar-bar` ~L409-418; `.storefront-ghost` ~L686-692; `.crash-fix-banner` ~L694-706)
 
 **Interfaces:**
-- Consumes: `.tex-deepslate`-подобный speckle (встроен прямо в `.poster-procedural`, т.к. у элемента уже есть свои gradient-слои — класс `.tex-*` не комбинируется), `--glass-saturate` из Task 1.
-- Produces: ничего наружу.
+- Consumes: `.tex-deepslate`-Ð¿Ð¾Ð´Ð¾Ð±Ð½Ñ‹Ð¹ speckle (Ð²ÑÑ‚Ñ€Ð¾ÐµÐ½ Ð¿Ñ€ÑÐ¼Ð¾ Ð² `.poster-procedural`, Ñ‚.Ðº. Ñƒ ÑÐ»ÐµÐ¼ÐµÐ½Ñ‚Ð° ÑƒÐ¶Ðµ ÐµÑÑ‚ÑŒ ÑÐ²Ð¾Ð¸ gradient-ÑÐ»Ð¾Ð¸ â€” ÐºÐ»Ð°ÑÑ `.tex-*` Ð½Ðµ ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð¸Ñ€ÑƒÐµÑ‚ÑÑ), `--glass-saturate` Ð¸Ð· Task 1.
+- Produces: Ð½Ð¸Ñ‡ÐµÐ³Ð¾ Ð½Ð°Ñ€ÑƒÐ¶Ñƒ.
 
-- [ ] **Step 1: Текстурный fallback вместо плоского градиента**
+- [x] **Step 1: Ð¢ÐµÐºÑÑ‚ÑƒÑ€Ð½Ñ‹Ð¹ fallback Ð²Ð¼ÐµÑÑ‚Ð¾ Ð¿Ð»Ð¾ÑÐºÐ¾Ð³Ð¾ Ð³Ñ€Ð°Ð´Ð¸ÐµÐ½Ñ‚Ð°**
 
-Заменить `.poster-procedural` на:
+Ð—Ð°Ð¼ÐµÐ½Ð¸Ñ‚ÑŒ `.poster-procedural` Ð½Ð°:
 
 ```css
   .poster-procedural {
@@ -278,14 +278,14 @@ git commit -m "feat(ui): procedural CSS pixel-texture layer (.tex-*) and texture
   }
 ```
 
-- [ ] **Step 2: Glass-выравнивание**
+- [x] **Step 2: Glass-Ð²Ñ‹Ñ€Ð°Ð²Ð½Ð¸Ð²Ð°Ð½Ð¸Ðµ**
 
-В `.poster-toolbar-bar`, `.storefront-ghost`, `.crash-fix-banner` заменить оба backdrop-filter (и `-webkit-` версии):
-`blur(var(--glass-blur, 10px))` → `blur(var(--glass-blur)) saturate(var(--glass-saturate, 100%))`.
+Ð’ `.poster-toolbar-bar`, `.storefront-ghost`, `.crash-fix-banner` Ð·Ð°Ð¼ÐµÐ½Ð¸Ñ‚ÑŒ Ð¾Ð±Ð° backdrop-filter (Ð¸ `-webkit-` Ð²ÐµÑ€ÑÐ¸Ð¸):
+`blur(var(--glass-blur, 10px))` â†’ `blur(var(--glass-blur)) saturate(var(--glass-saturate, 100%))`.
 
-- [ ] **Step 3: Гард potato-pc**
+- [x] **Step 3: Ð“Ð°Ñ€Ð´ potato-pc**
 
-В существующем блоке `:global(html.potato-pc) .poster...` (рядом, ~L327-330) добавить:
+Ð’ ÑÑƒÑ‰ÐµÑÑ‚Ð²ÑƒÑŽÑ‰ÐµÐ¼ Ð±Ð»Ð¾ÐºÐµ `:global(html.potato-pc) .poster...` (Ñ€ÑÐ´Ð¾Ð¼, ~L327-330) Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ:
 
 ```css
   :global(html.potato-pc) .poster-procedural {
@@ -293,14 +293,14 @@ git commit -m "feat(ui): procedural CSS pixel-texture layer (.tex-*) and texture
   }
 ```
 
-(после этого останется только `background-color: var(--bg-primary)`).
+(Ð¿Ð¾ÑÐ»Ðµ ÑÑ‚Ð¾Ð³Ð¾ Ð¾ÑÑ‚Ð°Ð½ÐµÑ‚ÑÑ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ `background-color: var(--bg-primary)`).
 
-- [ ] **Step 4: Проверка**
+- [x] **Step 4: ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ°**
 
 Run: `npm run lint:tokens; npm run check`
-Expected: PASS, 0 новых ошибок svelte-check.
+Expected: PASS, 0 Ð½Ð¾Ð²Ñ‹Ñ… Ð¾ÑˆÐ¸Ð±Ð¾Ðº svelte-check.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/tuffbox-desktop/src/components/HomeHero.svelte
@@ -309,18 +309,18 @@ git commit -m "feat(home): textured cave fallback with grass edge in hero, glass
 
 ---
 
-### Task 4: Dashboard — glass-панели + витрина скина
+### Task 4: Dashboard â€” glass-Ð¿Ð°Ð½ÐµÐ»Ð¸ + Ð²Ð¸Ñ‚Ñ€Ð¸Ð½Ð° ÑÐºÐ¸Ð½Ð°
 
 **Files:**
 - Modify: `apps/tuffbox-desktop/src/components/Dashboard.svelte` (style: `.skin-panel` ~L785-795, `.home-feed :global(.youtube-feed)` ~L735-742)
 
 **Interfaces:**
-- Consumes: `--glass-bg`, `--glass-border`, `--glass-blur`, `--glass-saturate`, `--glass-highlight` (Task 1), speckle-токены (Task 2).
-- Produces: ничего наружу.
+- Consumes: `--glass-bg`, `--glass-border`, `--glass-blur`, `--glass-saturate`, `--glass-highlight` (Task 1), speckle-Ñ‚Ð¾ÐºÐµÐ½Ñ‹ (Task 2).
+- Produces: Ð½Ð¸Ñ‡ÐµÐ³Ð¾ Ð½Ð°Ñ€ÑƒÐ¶Ñƒ.
 
-- [ ] **Step 1: Skin-панель → glass + каменная витрина под 3D-превью**
+- [x] **Step 1: Skin-Ð¿Ð°Ð½ÐµÐ»ÑŒ â†’ glass + ÐºÐ°Ð¼ÐµÐ½Ð½Ð°Ñ Ð²Ð¸Ñ‚Ñ€Ð¸Ð½Ð° Ð¿Ð¾Ð´ 3D-Ð¿Ñ€ÐµÐ²ÑŒÑŽ**
 
-В `.skin-panel` заменить `background: var(--bg-secondary);` на:
+Ð’ `.skin-panel` Ð·Ð°Ð¼ÐµÐ½Ð¸Ñ‚ÑŒ `background: var(--bg-secondary);` Ð½Ð°:
 
 ```css
   background: var(--glass-bg);
@@ -328,7 +328,7 @@ git commit -m "feat(home): textured cave fallback with grass edge in hero, glass
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 ```
 
-И в том же `<style>` добавить витрину (speckle под полупрозрачным canvas превью):
+Ð˜ Ð² Ñ‚Ð¾Ð¼ Ð¶Ðµ `<style>` Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ Ð²Ð¸Ñ‚Ñ€Ð¸Ð½Ñƒ (speckle Ð¿Ð¾Ð´ Ð¿Ð¾Ð»ÑƒÐ¿Ñ€Ð¾Ð·Ñ€Ð°Ñ‡Ð½Ñ‹Ð¼ canvas Ð¿Ñ€ÐµÐ²ÑŒÑŽ):
 
 ```css
   .skin-panel :global(.skin-3d-container) {
@@ -352,18 +352,18 @@ git commit -m "feat(home): textured cave fallback with grass edge in hero, glass
   }
 ```
 
-Если при визуальной проверке окажется, что `.skin-3d-container` рисует собственный непрозрачный фон (текстуры не видно) — применить тот же блок к `:global(.skin-3d-wrap)` вместо container (проверить в dev, оставить один вариант).
+Ð•ÑÐ»Ð¸ Ð¿Ñ€Ð¸ Ð²Ð¸Ð·ÑƒÐ°Ð»ÑŒÐ½Ð¾Ð¹ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐµ Ð¾ÐºÐ°Ð¶ÐµÑ‚ÑÑ, Ñ‡Ñ‚Ð¾ `.skin-3d-container` Ñ€Ð¸ÑÑƒÐµÑ‚ ÑÐ¾Ð±ÑÑ‚Ð²ÐµÐ½Ð½Ñ‹Ð¹ Ð½ÐµÐ¿Ñ€Ð¾Ð·Ñ€Ð°Ñ‡Ð½Ñ‹Ð¹ Ñ„Ð¾Ð½ (Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ñ‹ Ð½Ðµ Ð²Ð¸Ð´Ð½Ð¾) â€” Ð¿Ñ€Ð¸Ð¼ÐµÐ½Ð¸Ñ‚ÑŒ Ñ‚Ð¾Ñ‚ Ð¶Ðµ Ð±Ð»Ð¾Ðº Ðº `:global(.skin-3d-wrap)` Ð²Ð¼ÐµÑÑ‚Ð¾ container (Ð¿Ñ€Ð¾Ð²ÐµÑ€Ð¸Ñ‚ÑŒ Ð² dev, Ð¾ÑÑ‚Ð°Ð²Ð¸Ñ‚ÑŒ Ð¾Ð´Ð¸Ð½ Ð²Ð°Ñ€Ð¸Ð°Ð½Ñ‚).
 
-- [ ] **Step 2: YouTube-лента → glass**
+- [x] **Step 2: YouTube-Ð»ÐµÐ½Ñ‚Ð° â†’ glass**
 
-В `.home-feed :global(.youtube-feed)` заменить `background: var(--bg-secondary);` на `background: var(--glass-bg);` и добавить туда же обе строки `backdrop-filter` (как в Step 1).
+Ð’ `.home-feed :global(.youtube-feed)` Ð·Ð°Ð¼ÐµÐ½Ð¸Ñ‚ÑŒ `background: var(--bg-secondary);` Ð½Ð° `background: var(--glass-bg);` Ð¸ Ð´Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ Ñ‚ÑƒÐ´Ð° Ð¶Ðµ Ð¾Ð±Ðµ ÑÑ‚Ñ€Ð¾ÐºÐ¸ `backdrop-filter` (ÐºÐ°Ðº Ð² Step 1).
 
-- [ ] **Step 3: Проверка**
+- [x] **Step 3: ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ°**
 
 Run: `npm run lint:tokens; npm run check`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/tuffbox-desktop/src/components/Dashboard.svelte
@@ -372,24 +372,24 @@ git commit -m "feat(home): glass skin panel with stone vitrine and glass youtube
 
 ---
 
-### Task 5: Биом-темы — Overworld / Nether / Deep Dark / Amethyst
+### Task 5: Ð‘Ð¸Ð¾Ð¼-Ñ‚ÐµÐ¼Ñ‹ â€” Overworld / Nether / Deep Dark / Amethyst
 
 **Files:**
-- Modify: `apps/tuffbox-desktop/src/styles/themes.css` (новые блоки — после `[data-theme="minecraft"]`-секции, перед shared Minimal-блоком ~L533)
+- Modify: `apps/tuffbox-desktop/src/styles/themes.css` (Ð½Ð¾Ð²Ñ‹Ðµ Ð±Ð»Ð¾ÐºÐ¸ â€” Ð¿Ð¾ÑÐ»Ðµ `[data-theme="minecraft"]`-ÑÐµÐºÑ†Ð¸Ð¸, Ð¿ÐµÑ€ÐµÐ´ shared Minimal-Ð±Ð»Ð¾ÐºÐ¾Ð¼ ~L533)
 - Modify: `apps/tuffbox-desktop/src/lib/themes.ts` (ThemeId + THEMES)
 
 **Interfaces:**
-- Consumes: `--tex-*` speckle-переопределения (Task 2), glass-токены (Task 1).
-- Produces: `ThemeId` += `"overworld" | "nether" | "deepdark" | "amethyst"`; 4 записи `THEMES` с shades; per-theme `--app-shell-bg` со своей speckle-палитрой.
+- Consumes: `--tex-*` speckle-Ð¿ÐµÑ€ÐµÐ¾Ð¿Ñ€ÐµÐ´ÐµÐ»ÐµÐ½Ð¸Ñ (Task 2), glass-Ñ‚Ð¾ÐºÐµÐ½Ñ‹ (Task 1).
+- Produces: `ThemeId` += `"overworld" | "nether" | "deepdark" | "amethyst"`; 4 Ð·Ð°Ð¿Ð¸ÑÐ¸ `THEMES` Ñ shades; per-theme `--app-shell-bg` ÑÐ¾ ÑÐ²Ð¾ÐµÐ¹ speckle-Ð¿Ð°Ð»Ð¸Ñ‚Ñ€Ð¾Ð¹.
 
-- [ ] **Step 1: Каталог тем**
+- [x] **Step 1: ÐšÐ°Ñ‚Ð°Ð»Ð¾Ð³ Ñ‚ÐµÐ¼**
 
-В `themes.ts` расширить `ThemeId` и `THEMES`:
+Ð’ `themes.ts` Ñ€Ð°ÑÑˆÐ¸Ñ€Ð¸Ñ‚ÑŒ `ThemeId` Ð¸ `THEMES`:
 
 ```ts
 export type ThemeId =
   | "tuffbox"
-  // …existing…
+  // â€¦existingâ€¦
   | "minecraft"
   | "overworld"
   | "nether"
@@ -405,9 +405,9 @@ export type ThemeId =
   { id: "amethyst", label: "Amethyst", shades: ["#0f0a18", "#1c1230", "#b07cff"] },
 ```
 
-- [ ] **Step 2: Четыре `[data-theme]` блока в themes.css**
+- [x] **Step 2: Ð§ÐµÑ‚Ñ‹Ñ€Ðµ `[data-theme]` Ð±Ð»Ð¾ÐºÐ° Ð² themes.css**
 
-Каждый блок: полная палитра + `--app-shell-bg` со speckle-слоями (первые 5 слоёв = текстура, затем ambient, затем цвет) + companion-правило `background-size` для `.app-shell`. Шаблон (показан для overworld; остальные — по таблице палитр ниже, тот же каркас):
+ÐšÐ°Ð¶Ð´Ñ‹Ð¹ Ð±Ð»Ð¾Ðº: Ð¿Ð¾Ð»Ð½Ð°Ñ Ð¿Ð°Ð»Ð¸Ñ‚Ñ€Ð° + `--app-shell-bg` ÑÐ¾ speckle-ÑÐ»Ð¾ÑÐ¼Ð¸ (Ð¿ÐµÑ€Ð²Ñ‹Ðµ 5 ÑÐ»Ð¾Ñ‘Ð² = Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ð°, Ð·Ð°Ñ‚ÐµÐ¼ ambient, Ð·Ð°Ñ‚ÐµÐ¼ Ñ†Ð²ÐµÑ‚) + companion-Ð¿Ñ€Ð°Ð²Ð¸Ð»Ð¾ `background-size` Ð´Ð»Ñ `.app-shell`. Ð¨Ð°Ð±Ð»Ð¾Ð½ (Ð¿Ð¾ÐºÐ°Ð·Ð°Ð½ Ð´Ð»Ñ overworld; Ð¾ÑÑ‚Ð°Ð»ÑŒÐ½Ñ‹Ðµ â€” Ð¿Ð¾ Ñ‚Ð°Ð±Ð»Ð¸Ñ†Ðµ Ð¿Ð°Ð»Ð¸Ñ‚Ñ€ Ð½Ð¸Ð¶Ðµ, Ñ‚Ð¾Ñ‚ Ð¶Ðµ ÐºÐ°Ñ€ÐºÐ°Ñ):
 
 ```css
 [data-theme="overworld"] {
@@ -462,7 +462,7 @@ html[data-theme="overworld"] .app-shell {
 }
 ```
 
-Палитры остальных (тот же каркас, подставить значения):
+ÐŸÐ°Ð»Ð¸Ñ‚Ñ€Ñ‹ Ð¾ÑÑ‚Ð°Ð»ÑŒÐ½Ñ‹Ñ… (Ñ‚Ð¾Ñ‚ Ð¶Ðµ ÐºÐ°Ñ€ÐºÐ°Ñ, Ð¿Ð¾Ð´ÑÑ‚Ð°Ð²Ð¸Ñ‚ÑŒ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ñ):
 
 | token | nether | deepdark | amethyst |
 |-------|--------|----------|----------|
@@ -488,14 +488,14 @@ html[data-theme="overworld"] .app-shell {
 | tex-speck-b | `rgba(22,5,7,0.26)` | `rgba(0,0,0,0.28)` | `rgba(10,5,20,0.24)` |
 | tex-speck-c | `rgba(120,32,28,0.10)` | `rgba(16,60,64,0.12)` | `rgba(96,62,150,0.10)` |
 | glass-bg | `rgba(20,6,8,0.55)` | `rgba(5,9,14,0.55)` | `rgba(15,10,24,0.55)` |
-| hero-scrim rgba-база | `20,6,8` | `5,9,14` | `15,10,24` |
+| hero-scrim rgba-Ð±Ð°Ð·Ð° | `20,6,8` | `5,9,14` | `15,10,24` |
 
-- [ ] **Step 3: Shared «Glasscraft»-блок**
+- [x] **Step 3: Shared Â«GlasscraftÂ»-Ð±Ð»Ð¾Ðº**
 
-После четырёх блоков:
+ÐŸÐ¾ÑÐ»Ðµ Ñ‡ÐµÑ‚Ñ‹Ñ€Ñ‘Ñ… Ð±Ð»Ð¾ÐºÐ¾Ð²:
 
 ```css
-/* ── Glasscraft biome themes: glass cards, ambient rail/header, glowing CTAs ── */
+/* â”€â”€ Glasscraft biome themes: glass cards, ambient rail/header, glowing CTAs â”€â”€ */
 :is(
   [data-theme="overworld"],
   [data-theme="nether"],
@@ -560,48 +560,48 @@ html[data-theme="overworld"] .app-shell {
 }
 ```
 
-- [ ] **Step 4: Проверка**
+- [x] **Step 4: ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ°**
 
 Run: `npm run lint:tokens; npm run check; npm run build`
-Expected: все PASS.
+Expected: Ð²ÑÐµ PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/tuffbox-desktop/src/styles/themes.css apps/tuffbox-desktop/src/lib/themes.ts
-git commit -m "feat(themes): Glasscraft biome set — Overworld, Nether, Deep Dark, Amethyst"
+git commit -m "feat(themes): Glasscraft biome set â€” Overworld, Nether, Deep Dark, Amethyst"
 ```
 
 ---
 
-### Task 6: Финальная проверка и визуальный проход
+### Task 6: Ð¤Ð¸Ð½Ð°Ð»ÑŒÐ½Ð°Ñ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ° Ð¸ Ð²Ð¸Ð·ÑƒÐ°Ð»ÑŒÐ½Ñ‹Ð¹ Ð¿Ñ€Ð¾Ñ…Ð¾Ð´
 
-**Files:** — (только проверки)
+**Files:** â€” (Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ¸)
 
-- [ ] **Step 1: Статические проверки**
+- [x] **Step 1: Ð¡Ñ‚Ð°Ñ‚Ð¸Ñ‡ÐµÑÐºÐ¸Ðµ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ¸**
 
 Run (cwd `apps/tuffbox-desktop`): `npm run lint:perf; npm run check; npm run build`
-Expected: всё зелёное; bundle-budget не упал (CSS прирост ~10KB допустим; если упал — проверить лимит в `scripts/check-bundle-budget.mjs` и при необходимости обоснованно поднять порог в конфиге скрипта, зафиксировав в коммите).
+Expected: Ð²ÑÑ‘ Ð·ÐµÐ»Ñ‘Ð½Ð¾Ðµ; bundle-budget Ð½Ðµ ÑƒÐ¿Ð°Ð» (CSS Ð¿Ñ€Ð¸Ñ€Ð¾ÑÑ‚ ~10KB Ð´Ð¾Ð¿ÑƒÑÑ‚Ð¸Ð¼; ÐµÑÐ»Ð¸ ÑƒÐ¿Ð°Ð» â€” Ð¿Ñ€Ð¾Ð²ÐµÑ€Ð¸Ñ‚ÑŒ Ð»Ð¸Ð¼Ð¸Ñ‚ Ð² `scripts/check-bundle-budget.mjs` Ð¸ Ð¿Ñ€Ð¸ Ð½ÐµÐ¾Ð±Ñ…Ð¾Ð´Ð¸Ð¼Ð¾ÑÑ‚Ð¸ Ð¾Ð±Ð¾ÑÐ½Ð¾Ð²Ð°Ð½Ð½Ð¾ Ð¿Ð¾Ð´Ð½ÑÑ‚ÑŒ Ð¿Ð¾Ñ€Ð¾Ð³ Ð² ÐºÐ¾Ð½Ñ„Ð¸Ð³Ðµ ÑÐºÑ€Ð¸Ð¿Ñ‚Ð°, Ð·Ð°Ñ„Ð¸ÐºÑÐ¸Ñ€Ð¾Ð²Ð°Ð² Ð² ÐºÐ¾Ð¼Ð¼Ð¸Ñ‚Ðµ).
 
-- [ ] **Step 2: Визуальный чеклист** (через `npm run tauri:dev` или отклонить как ручной шаг пользователя)
+- [x] **Step 2: Ð’Ð¸Ð·ÑƒÐ°Ð»ÑŒÐ½Ñ‹Ð¹ Ñ‡ÐµÐºÐ»Ð¸ÑÑ‚** (Ñ‡ÐµÑ€ÐµÐ· `npm run tauri:dev` Ð¸Ð»Ð¸ Ð¾Ñ‚ÐºÐ»Ð¾Ð½Ð¸Ñ‚ÑŒ ÐºÐ°Ðº Ñ€ÑƒÑ‡Ð½Ð¾Ð¹ ÑˆÐ°Ð³ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»Ñ)
 
-1. Home на теме `tuffbox`: фон окна с лёгким stone-speckle; hero fallback с текстурой и grass-кромкой (инстанс без обложки); skin-панель и лента — glass.
-2. Каждая из 4 биом-тем: Settings → Appearance → переключить — Home читаем, текстура в палитре темы, CTA со свечением.
-3. Тема `minecraft`: без изменений (плоская, свой layout).
-4. `potato-pc` (Settings → Performance): текстуры и blur отключены.
-5. Длинный ник/имя инстанса: обрезка по ellipsis не сломалась.
+1. Home Ð½Ð° Ñ‚ÐµÐ¼Ðµ `tuffbox`: Ñ„Ð¾Ð½ Ð¾ÐºÐ½Ð° Ñ Ð»Ñ‘Ð³ÐºÐ¸Ð¼ stone-speckle; hero fallback Ñ Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ð¾Ð¹ Ð¸ grass-ÐºÑ€Ð¾Ð¼ÐºÐ¾Ð¹ (Ð¸Ð½ÑÑ‚Ð°Ð½Ñ Ð±ÐµÐ· Ð¾Ð±Ð»Ð¾Ð¶ÐºÐ¸); skin-Ð¿Ð°Ð½ÐµÐ»ÑŒ Ð¸ Ð»ÐµÐ½Ñ‚Ð° â€” glass.
+2. ÐšÐ°Ð¶Ð´Ð°Ñ Ð¸Ð· 4 Ð±Ð¸Ð¾Ð¼-Ñ‚ÐµÐ¼: Settings â†’ Appearance â†’ Ð¿ÐµÑ€ÐµÐºÐ»ÑŽÑ‡Ð¸Ñ‚ÑŒ â€” Home Ñ‡Ð¸Ñ‚Ð°ÐµÐ¼, Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ð° Ð² Ð¿Ð°Ð»Ð¸Ñ‚Ñ€Ðµ Ñ‚ÐµÐ¼Ñ‹, CTA ÑÐ¾ ÑÐ²ÐµÑ‡ÐµÐ½Ð¸ÐµÐ¼.
+3. Ð¢ÐµÐ¼Ð° `minecraft`: Ð±ÐµÐ· Ð¸Ð·Ð¼ÐµÐ½ÐµÐ½Ð¸Ð¹ (Ð¿Ð»Ð¾ÑÐºÐ°Ñ, ÑÐ²Ð¾Ð¹ layout).
+4. `potato-pc` (Settings â†’ Performance): Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ñ‹ Ð¸ blur Ð¾Ñ‚ÐºÐ»ÑŽÑ‡ÐµÐ½Ñ‹.
+5. Ð”Ð»Ð¸Ð½Ð½Ñ‹Ð¹ Ð½Ð¸Ðº/Ð¸Ð¼Ñ Ð¸Ð½ÑÑ‚Ð°Ð½ÑÐ°: Ð¾Ð±Ñ€ÐµÐ·ÐºÐ° Ð¿Ð¾ ellipsis Ð½Ðµ ÑÐ»Ð¾Ð¼Ð°Ð»Ð°ÑÑŒ.
 
-- [ ] **Step 3: Финальный коммит (если были правки по итогам проверок)**
+- [x] **Step 3: Ð¤Ð¸Ð½Ð°Ð»ÑŒÐ½Ñ‹Ð¹ ÐºÐ¾Ð¼Ð¼Ð¸Ñ‚ (ÐµÑÐ»Ð¸ Ð±Ñ‹Ð»Ð¸ Ð¿Ñ€Ð°Ð²ÐºÐ¸ Ð¿Ð¾ Ð¸Ñ‚Ð¾Ð³Ð°Ð¼ Ð¿Ñ€Ð¾Ð²ÐµÑ€Ð¾Ðº)**
 
 ```bash
-git add <только затронутые файлы>
+git add <Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð·Ð°Ñ‚Ñ€Ð¾Ð½ÑƒÑ‚Ñ‹Ðµ Ñ„Ð°Ð¹Ð»Ñ‹>
 git commit -m "fix(ui): glasscraft review pass"
 ```
 
 ---
 
-## Self-Review выполнен при написании
+## Self-Review Ð²Ñ‹Ð¿Ð¾Ð»Ð½ÐµÐ½ Ð¿Ñ€Ð¸ Ð½Ð°Ð¿Ð¸ÑÐ°Ð½Ð¸Ð¸
 
-- Spec coverage: текстуры (Task 2,3,4), glass-апгрейд (Task 1,3,4), Home (Task 3,4), биом-темы (Task 5), гарды potato/reduced-motion (Task 1,2,3), критерии приёмки (Task 6). Расхождение со спекой осознанное: potato глушит `.tex-*` классами и `--app-shell-bg: var(--bg-primary)` вместо `--tex-opacity` (alpha внутри gradient-стека токеном не управляется) — эффект тот же.
-- Placeholders: нет — весь CSS/TS приведён полностью, кроме табличной подстановки палитр Task 5 (все значения даны в таблице).
-- Type consistency: `--tex-speck-a/b/c`, `--tex-size`, `--glass-saturate`, `.tex-*`, ThemeId — согласованы между задачами.
+- Spec coverage: Ñ‚ÐµÐºÑÑ‚ÑƒÑ€Ñ‹ (Task 2,3,4), glass-Ð°Ð¿Ð³Ñ€ÐµÐ¹Ð´ (Task 1,3,4), Home (Task 3,4), Ð±Ð¸Ð¾Ð¼-Ñ‚ÐµÐ¼Ñ‹ (Task 5), Ð³Ð°Ñ€Ð´Ñ‹ potato/reduced-motion (Task 1,2,3), ÐºÑ€Ð¸Ñ‚ÐµÑ€Ð¸Ð¸ Ð¿Ñ€Ð¸Ñ‘Ð¼ÐºÐ¸ (Task 6). Ð Ð°ÑÑ…Ð¾Ð¶Ð´ÐµÐ½Ð¸Ðµ ÑÐ¾ ÑÐ¿ÐµÐºÐ¾Ð¹ Ð¾ÑÐ¾Ð·Ð½Ð°Ð½Ð½Ð¾Ðµ: potato Ð³Ð»ÑƒÑˆÐ¸Ñ‚ `.tex-*` ÐºÐ»Ð°ÑÑÐ°Ð¼Ð¸ Ð¸ `--app-shell-bg: var(--bg-primary)` Ð²Ð¼ÐµÑÑ‚Ð¾ `--tex-opacity` (alpha Ð²Ð½ÑƒÑ‚Ñ€Ð¸ gradient-ÑÑ‚ÐµÐºÐ° Ñ‚Ð¾ÐºÐµÐ½Ð¾Ð¼ Ð½Ðµ ÑƒÐ¿Ñ€Ð°Ð²Ð»ÑÐµÑ‚ÑÑ) â€” ÑÑ„Ñ„ÐµÐºÑ‚ Ñ‚Ð¾Ñ‚ Ð¶Ðµ.
+- Placeholders: Ð½ÐµÑ‚ â€” Ð²ÐµÑÑŒ CSS/TS Ð¿Ñ€Ð¸Ð²ÐµÐ´Ñ‘Ð½ Ð¿Ð¾Ð»Ð½Ð¾ÑÑ‚ÑŒÑŽ, ÐºÑ€Ð¾Ð¼Ðµ Ñ‚Ð°Ð±Ð»Ð¸Ñ‡Ð½Ð¾Ð¹ Ð¿Ð¾Ð´ÑÑ‚Ð°Ð½Ð¾Ð²ÐºÐ¸ Ð¿Ð°Ð»Ð¸Ñ‚Ñ€ Task 5 (Ð²ÑÐµ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ñ Ð´Ð°Ð½Ñ‹ Ð² Ñ‚Ð°Ð±Ð»Ð¸Ñ†Ðµ).
+- Type consistency: `--tex-speck-a/b/c`, `--tex-size`, `--glass-saturate`, `.tex-*`, ThemeId â€” ÑÐ¾Ð³Ð»Ð°ÑÐ¾Ð²Ð°Ð½Ñ‹ Ð¼ÐµÐ¶Ð´Ñƒ Ð·Ð°Ð´Ð°Ñ‡Ð°Ð¼Ð¸.
