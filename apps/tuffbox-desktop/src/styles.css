@@ -57,6 +57,20 @@
      so fixed overlays, pointer hit-tests, and layout share one coordinate space.
      (Zoom only on .app-shell used to offset Library menus / folder drag.) */
   --ui-scale: 1;
+
+  /* Poster-home: glass only over pack art; overlay type stays light on the photo. */
+  --glass-bg: rgba(11, 11, 13, 0.42);
+  --glass-border: color-mix(in srgb, #fff 14%, var(--border-color));
+  --glass-blur: 14px;
+  --glass-saturate: 140%;
+  --glass-highlight: color-mix(in srgb, #fff 14%, transparent);
+  --hero-fg: #fafafa;
+  --hero-fg-muted: color-mix(in srgb, #fafafa 72%, transparent);
+  --hero-scrim:
+    linear-gradient(90deg, rgba(11, 11, 13, 0.72) 0%, transparent 55%),
+    linear-gradient(0deg, rgba(11, 11, 13, 0.68) 0%, transparent 52%);
+  --play-glow: 0 8px 28px color-mix(in srgb, var(--accent-primary) 38%, transparent);
+  --play-glow-hover: 0 12px 36px color-mix(in srgb, var(--accent-primary) 52%, transparent);
 }
 
 /* Fill the viewport after html zoom shrinks/enlarges CSS pixels. */
@@ -120,6 +134,11 @@ html[data-ui-scaled="1"] #app {
   --badge-ygg-fg: #6d28d9;
   --badge-ygg-bg: rgba(109, 40, 217, 0.1);
   --badge-ygg-border: rgba(109, 40, 217, 0.28);
+
+  --glass-bg: rgba(11, 11, 13, 0.65);
+  --glass-highlight: color-mix(in srgb, #fff 40%, var(--bg-primary));
+  --play-glow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  --play-glow-hover: 0 12px 32px color-mix(in srgb, var(--accent-primary) 32%, transparent);
 }
 
 [data-theme="win95"] {
@@ -321,6 +340,14 @@ textarea:focus-visible,
 /* ── Reduced motion ───────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
+  html {
+    --glass-blur: 0;
+    --glass-saturate: 100%;
+    --stagger-step: 0;
+    --play-glow: 0 4px 16px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    --play-glow-hover: 0 4px 16px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  }
+
   *,
   *::before,
   *::after {
@@ -402,6 +429,17 @@ textarea:focus {
   overflow: hidden;
 }
 
+/* Frosted glass surface — panels and cards over textured/ambient shell. */
+.glass-panel {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow:
+    var(--shadow-md),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
 /* Text selection follows active theme accent (not fixed TuffBox green). */
 ::selection {
   background: color-mix(in srgb, var(--accent-primary) 38%, transparent);
@@ -409,6 +447,13 @@ textarea:focus {
 }
 
 /* Potato PC mode — strip motion cost on weak machines. */
+html.potato-pc {
+  --glass-blur: 0;
+  --glass-saturate: 100%;
+  --play-glow: none;
+  --play-glow-hover: none;
+}
+
 html.potato-pc *,
 html.potato-pc *::before,
 html.potato-pc *::after {
