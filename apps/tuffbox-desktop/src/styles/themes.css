@@ -481,6 +481,243 @@
   --ambient-b: rgba(91, 159, 255, 0.05);
 }
 
+/* ── Glasscraft biome set ──────────────────────────────────────────
+   Modern glassy dark themes on procedural MC textures. Each block:
+   full palette + biome speckle baked into --app-shell-bg (tile sizes
+   inline via `0 0 / size` — see textures.css), then the shared
+   Glasscraft material block below adds glass cards / glowing CTAs. */
+[data-theme="overworld"] {
+  --bg-primary: #0d100c;
+  --bg-secondary: #131811;
+  --bg-tertiary: #1a2416;
+  --bg-elevated: #22301c;
+  --bg-hover: #2a3c22;
+  --bg-active: #35502a;
+  --text-primary: #f2f8ee;
+  --text-secondary: #c4d4b8;
+  --text-muted: #7f9474;
+  --accent-primary: #52d465;
+  --accent-hover: #6fe083;
+  --accent-secondary: #f0a44a;
+  --accent-danger: #ef5350;
+  --accent-warning: #f0c14b;
+  --border-color: #26341f;
+  --shadow-sm: 0 1px 2px rgba(4, 8, 3, 0.5);
+  --shadow-md: 0 6px 18px rgba(4, 8, 3, 0.5);
+  --shadow-lg: 0 16px 40px rgba(4, 8, 3, 0.55);
+  --on-accent: #07130a;
+  --ambient-a: rgba(82, 212, 101, 0.07);
+  --ambient-b: rgba(240, 164, 74, 0.05);
+  /* dirt/grass speckle */
+  --tex-speck-a: rgba(196, 146, 98, 0.10);
+  --tex-speck-b: rgba(28, 17, 9, 0.22);
+  --tex-speck-c: rgba(70, 120, 50, 0.10);
+  --glass-bg: rgba(13, 16, 12, 0.55);
+  --glass-highlight: color-mix(in srgb, #fff 12%, transparent);
+  --hero-scrim:
+    linear-gradient(90deg, rgba(13, 16, 12, 0.72) 0%, transparent 55%),
+    linear-gradient(0deg, rgba(13, 16, 12, 0.68) 0%, transparent 52%);
+  --app-shell-bg:
+    radial-gradient(circle at 22% 30%, var(--tex-speck-a) 0 10%, transparent 11%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 68% 12%, var(--tex-speck-b) 0 12%, transparent 13%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 82% 64%, var(--tex-speck-a) 0 9%, transparent 10%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 38% 78%, var(--tex-speck-b) 0 13%, transparent 14%) 0 0 / var(--tex-size) var(--tex-size),
+    repeating-conic-gradient(var(--tex-speck-c) 0% 25%, transparent 0% 50%) 0 0 / calc(var(--tex-size) / 2) calc(var(--tex-size) / 2),
+    radial-gradient(ellipse 85% 55% at 8% -8%, var(--ambient-a), transparent 58%),
+    radial-gradient(ellipse 70% 45% at 96% 4%, var(--ambient-b), transparent 52%),
+    var(--bg-primary);
+}
+
+[data-theme="nether"] {
+  --bg-primary: #140608;
+  --bg-secondary: #1c0a0c;
+  --bg-tertiary: #241012;
+  --bg-elevated: #2e1618;
+  --bg-hover: #3a1d20;
+  --bg-active: #482528;
+  --text-primary: #fdf1ec;
+  --text-secondary: #e8c4b8;
+  --text-muted: #a88478;
+  --accent-primary: #ff6a2b;
+  --accent-hover: #ff8547;
+  --accent-secondary: #ffc24b;
+  --accent-danger: #ff4545;
+  --accent-warning: #fcd34d;
+  --border-color: #33141a;
+  --shadow-sm: 0 1px 2px rgba(8, 2, 3, 0.5);
+  --shadow-md: 0 6px 18px rgba(8, 2, 3, 0.5);
+  --shadow-lg: 0 16px 40px rgba(8, 2, 3, 0.55);
+  --on-accent: #1a0803;
+  --ambient-a: rgba(255, 106, 43, 0.08);
+  --ambient-b: rgba(255, 60, 60, 0.05);
+  /* netherrack speckle + ember ambient */
+  --tex-speck-a: rgba(255, 122, 82, 0.08);
+  --tex-speck-b: rgba(22, 5, 7, 0.26);
+  --tex-speck-c: rgba(120, 32, 28, 0.10);
+  --glass-bg: rgba(20, 6, 8, 0.55);
+  --glass-highlight: color-mix(in srgb, #fff 12%, transparent);
+  --hero-scrim:
+    linear-gradient(90deg, rgba(20, 6, 8, 0.72) 0%, transparent 55%),
+    linear-gradient(0deg, rgba(20, 6, 8, 0.68) 0%, transparent 52%);
+  --app-shell-bg:
+    radial-gradient(circle at 22% 30%, var(--tex-speck-a) 0 10%, transparent 11%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 68% 12%, var(--tex-speck-b) 0 12%, transparent 13%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 82% 64%, var(--tex-speck-a) 0 9%, transparent 10%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 38% 78%, var(--tex-speck-b) 0 13%, transparent 14%) 0 0 / var(--tex-size) var(--tex-size),
+    repeating-conic-gradient(var(--tex-speck-c) 0% 25%, transparent 0% 50%) 0 0 / calc(var(--tex-size) / 2) calc(var(--tex-size) / 2),
+    radial-gradient(ellipse 85% 55% at 8% -8%, var(--ambient-a), transparent 58%),
+    radial-gradient(ellipse 70% 45% at 96% 4%, var(--ambient-b), transparent 52%),
+    var(--bg-primary);
+}
+
+[data-theme="deepdark"] {
+  --bg-primary: #05090e;
+  --bg-secondary: #081018;
+  --bg-tertiary: #0a141c;
+  --bg-elevated: #0e1c26;
+  --bg-hover: #14262f;
+  --bg-active: #1a3240;
+  --text-primary: #e8f6f6;
+  --text-secondary: #a8ccd0;
+  --text-muted: #5f8890;
+  --accent-primary: #2fd6c8;
+  --accent-hover: #54e4d6;
+  --accent-secondary: #1e9e93;
+  --accent-danger: #f87171;
+  --accent-warning: #eab308;
+  --border-color: #12242e;
+  --shadow-sm: 0 1px 2px rgba(2, 5, 8, 0.5);
+  --shadow-md: 0 6px 18px rgba(2, 5, 8, 0.5);
+  --shadow-lg: 0 16px 40px rgba(2, 5, 8, 0.55);
+  --on-accent: #03201c;
+  --ambient-a: rgba(47, 214, 200, 0.06);
+  --ambient-b: rgba(30, 100, 120, 0.05);
+  /* deepslate + sculk speckle */
+  --tex-speck-a: rgba(47, 214, 200, 0.10);
+  --tex-speck-b: rgba(0, 0, 0, 0.28);
+  --tex-speck-c: rgba(16, 60, 64, 0.12);
+  --glass-bg: rgba(5, 9, 14, 0.55);
+  --glass-highlight: color-mix(in srgb, #fff 12%, transparent);
+  --hero-scrim:
+    linear-gradient(90deg, rgba(5, 9, 14, 0.72) 0%, transparent 55%),
+    linear-gradient(0deg, rgba(5, 9, 14, 0.68) 0%, transparent 52%);
+  --app-shell-bg:
+    radial-gradient(circle at 22% 30%, var(--tex-speck-a) 0 10%, transparent 11%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 68% 12%, var(--tex-speck-b) 0 12%, transparent 13%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 82% 64%, var(--tex-speck-a) 0 9%, transparent 10%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 38% 78%, var(--tex-speck-b) 0 13%, transparent 14%) 0 0 / var(--tex-size) var(--tex-size),
+    repeating-conic-gradient(var(--tex-speck-c) 0% 25%, transparent 0% 50%) 0 0 / calc(var(--tex-size) / 2) calc(var(--tex-size) / 2),
+    radial-gradient(ellipse 85% 55% at 8% -8%, var(--ambient-a), transparent 58%),
+    radial-gradient(ellipse 70% 45% at 96% 4%, var(--ambient-b), transparent 52%),
+    var(--bg-primary);
+}
+
+[data-theme="amethyst"] {
+  --bg-primary: #0f0a18;
+  --bg-secondary: #150e22;
+  --bg-tertiary: #1c1230;
+  --bg-elevated: #25183e;
+  --bg-hover: #2f2050;
+  --bg-active: #3b2a62;
+  --text-primary: #f4efff;
+  --text-secondary: #c8bce8;
+  --text-muted: #8d7fb0;
+  --accent-primary: #b07cff;
+  --accent-hover: #c495ff;
+  --accent-secondary: #8f6fd0;
+  --accent-danger: #fb7185;
+  --accent-warning: #fbbf24;
+  --border-color: #2a1d44;
+  --shadow-sm: 0 1px 2px rgba(6, 3, 12, 0.5);
+  --shadow-md: 0 6px 18px rgba(6, 3, 12, 0.5);
+  --shadow-lg: 0 16px 40px rgba(6, 3, 12, 0.55);
+  --on-accent: #170b28;
+  --ambient-a: rgba(176, 124, 255, 0.08);
+  --ambient-b: rgba(124, 88, 200, 0.06);
+  /* calcite/amethyst speckle */
+  --tex-speck-a: rgba(198, 156, 255, 0.10);
+  --tex-speck-b: rgba(10, 5, 20, 0.24);
+  --tex-speck-c: rgba(96, 62, 150, 0.10);
+  --glass-bg: rgba(15, 10, 24, 0.55);
+  --glass-highlight: color-mix(in srgb, #fff 12%, transparent);
+  --hero-scrim:
+    linear-gradient(90deg, rgba(15, 10, 24, 0.72) 0%, transparent 55%),
+    linear-gradient(0deg, rgba(15, 10, 24, 0.68) 0%, transparent 52%);
+  --app-shell-bg:
+    radial-gradient(circle at 22% 30%, var(--tex-speck-a) 0 10%, transparent 11%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 68% 12%, var(--tex-speck-b) 0 12%, transparent 13%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 82% 64%, var(--tex-speck-a) 0 9%, transparent 10%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 38% 78%, var(--tex-speck-b) 0 13%, transparent 14%) 0 0 / var(--tex-size) var(--tex-size),
+    repeating-conic-gradient(var(--tex-speck-c) 0% 25%, transparent 0% 50%) 0 0 / calc(var(--tex-size) / 2) calc(var(--tex-size) / 2),
+    radial-gradient(ellipse 85% 55% at 8% -8%, var(--ambient-a), transparent 58%),
+    radial-gradient(ellipse 70% 45% at 96% 4%, var(--ambient-b), transparent 52%),
+    var(--bg-primary);
+}
+
+/* ── Glasscraft biome themes: glass cards, ambient rail/header, glowing CTAs ── */
+:is(
+  [data-theme="overworld"],
+  [data-theme="nether"],
+  [data-theme="deepdark"],
+  [data-theme="amethyst"]
+) {
+  --accent-gradient: linear-gradient(145deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
+  --brand-mark-gradient: var(--accent-gradient);
+  --brand-mark-fg: var(--on-accent);
+  --brand-mark-shadow: 0 4px 12px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  --rail-bg: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-primary) 6%, var(--bg-secondary)) 0%,
+    color-mix(in srgb, var(--bg-secondary) 88%, transparent) 42%,
+    color-mix(in srgb, var(--bg-primary) 78%, transparent) 100%
+  );
+  --rail-border: color-mix(in srgb, var(--accent-primary) 8%, var(--border-color));
+  --rail-backdrop: saturate(140%) blur(22px);
+  --header-bg: color-mix(in srgb, var(--bg-secondary) 72%, transparent);
+  --header-border: color-mix(in srgb, var(--accent-primary) 6%, var(--border-color));
+  --header-backdrop: saturate(140%) blur(18px);
+}
+
+/* Quiet glass cards. */
+:is(
+  [data-theme="overworld"],
+  [data-theme="nether"],
+  [data-theme="deepdark"],
+  [data-theme="amethyst"]
+)
+  :where(.card, .panel, .tb-card, .projects-section, .settings-grid > .card) {
+  background: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
+  border-color: var(--border-color);
+  box-shadow: var(--shadow-sm);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+  backdrop-filter: blur(12px) saturate(130%);
+}
+
+/* Primary CTAs: solid accent with soft biome glow. */
+:is(
+  [data-theme="overworld"],
+  [data-theme="nether"],
+  [data-theme="deepdark"],
+  [data-theme="amethyst"]
+)
+  :is(button.primary, button.accent, .play-btn:not(.stop), .primary-action, .tb-btn.primary):not(:disabled) {
+  background: var(--accent-gradient);
+  color: var(--on-accent);
+  border-color: transparent;
+  box-shadow: 0 6px 22px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+}
+
+:is(
+  [data-theme="overworld"],
+  [data-theme="nether"],
+  [data-theme="deepdark"],
+  [data-theme="amethyst"]
+)
+  :is(button.primary, button.accent, .play-btn:not(.stop), .primary-action, .tb-btn.primary):not(:disabled):hover {
+  filter: brightness(1.08);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--accent-primary) 42%, transparent);
+}
+
 /* Shared Minimal material system (quiet chrome + soft radii; CTAs only).
    Do NOT paint every bare <button> — that flooded video cards / action rows
    with accent glow (Solar yellow noise). */
