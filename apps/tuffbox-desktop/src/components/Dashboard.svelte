@@ -1,24 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import {
-    Play,
-    Square,
-    Settings,
-    Workflow,
     LogIn,
     User,
-    Package,
-    FolderOpen,
-    FolderInput,
-    HardDrive,
-    Clock,
     Users,
-    ShieldAlert,
-    Search,
-    MoreHorizontal,
-    Pencil,
-    Copy,
-    Trash2,
   } from "@lucide/svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
   import { invoke } from "@tauri-apps/api/core";
@@ -37,13 +23,10 @@
     isProjectRunning,
     loginTypeLabel,
     formatPlaytime,
-    ideStageRequest,
-    ideSuggestedStage,
-    ideIssueCount,
-    launcherSettingsLive,
     libraryTabRequest,
     addInstanceMode,
     openAddInstance,
+    launcherSettingsLive,
     type RecentProject,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
@@ -60,7 +43,7 @@
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
-  import InstanceHome from "./InstanceHome.svelte";
+  import HomeHero, { type PosterCoverKind } from "./HomeHero.svelte";
   import YoutubeFeed from "./YoutubeFeed.svelte";
   import PromptDialog from "./PromptDialog.svelte";
 
@@ -82,7 +65,9 @@
 
   let selectedPath = $state<string | null>($projectPath);
   let showAccountManager = $state(false);
-  let potatoPc = $state(false);
+  let potatoPc = $state(
+    typeof document !== "undefined" && document.documentElement.classList.contains("potato-pc"),
+  );
   let accountSwitchBusy = $state(false);
   let heroOverflowOpen = $state(false);
   let heroActionBusy = $state(false);
@@ -93,25 +78,90 @@
 
   const selectedProject = $derived($recentProjects.find((p) => p.path === selectedPath));
   const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
-  const hasInstanceHome = $derived(!!(selectedPath && selectedProject));
-  const hideInstanceHome = $derived(!!$launcherSettingsLive?.hideInstanceHome);
-  /** Pack icon data URL from listing / home bootstrap (null = loaded, none). */
-  const selectedPackIcon = $derived(
-    selectedPath ? ($homeIcons[selectedPath] ?? null) : null
-  );
   const selectedInstanceMeta = $derived.by(() => {
     const info = selectedProject?.info;
     if (!info) return "";
     const loader = info.loaderVersion?.trim()
       ? `${info.loaderKind} ${info.loaderVersion.trim()}`
       : info.loaderKind;
-    return `${info.minecraftVersion} · ${loader}`;
+    const bits = [`${info.minecraftVersion} · ${loader}`];
+    const path = selectedProject?.path;
+    if (path && projectStats[path]?.playtime) {
+      bits.push(formatPlaytime(projectStats[path].playtime));
+    }
+    if (path && instanceSizes[path] && instanceSizes[path] !== "?") {
+      bits.push(instanceSizes[path]);
+    }
+    return bits.join(" · ");
+  });
+
+  type CoverState = { url: string | null; kind: PosterCoverKind };
+  let coverByPath = $state<Record<string, CoverState>>({});
+  const listingFetched = new SvelteSet<string>();
+
+  const posterCover = $derived.by((): CoverState => {
+    if (!selectedPath) return { url: null, kind: "none" };
+    return coverByPath[selectedPath] ?? { url: null, kind: "none" };
+  });
+
+  $effect(() => {
+    const path = selectedPath;
+    if (!path || listingFetched.has(path)) return;
+    listingFetched.add(path);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const listing = await api.project.getListing(path);
+        if (cancelled) return;
+        const first = listing.gallery?.[0];
+        if (first?.url) {
+          coverByPath = { ...coverByPath, [path]: { url: first.url, kind: "gallery" } };
+          return;
+        }
+        if (first?.path) {
+          const data = await api.project.readListingAsset(first.path, path);
+          if (cancelled) return;
+          coverByPath = { ...coverByPath, [path]: { url: data, kind: "gallery" } };
+          return;
+        }
+        const icon = $homeIcons[path];
+        if (icon && !potatoPc) {
+          coverByPath = { ...coverByPath, [path]: { url: icon, kind: "icon" } };
+          return;
+        }
+        coverByPath = { ...coverByPath, [path]: { url: null, kind: "none" } };
+      } catch {
+        if (cancelled) return;
+        const icon = $homeIcons[path];
+        coverByPath = {
+          ...coverByPath,
+          [path]: icon && !potatoPc ? { url: icon, kind: "icon" } : { url: null, kind: "none" },
+        };
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  $effect(() => {
+    const path = selectedPath;
+    if (!path || potatoPc) return;
+    const existing = coverByPath[path];
+    if (existing?.kind === "gallery") return;
+    const icon = $homeIcons[path];
+    if (icon && (!existing || existing.kind === "none")) {
+      coverByPath = { ...coverByPath, [path]: { url: icon, kind: "icon" } };
+    }
   });
 
   // The sidebar rail switches instances through the global store — mirror it here.
   $effect(() => {
     const p = $projectPath;
-    if (p && p !== selectedPath) selectedPath = p;
+    if (p && p !== selectedPath) {
+      selectedPath = p;
+      heroOverflowOpen = false;
+    }
   });
   const skinUrl = $derived($authState.profile?.skinUrl ?? null);
   const capeUrl = $derived($authState.profile?.capeUrl ?? null);
@@ -128,7 +178,6 @@
 
   let crashFixBusy = $state(false);
   let softVerifyNowUnix = $state(Math.floor(Date.now() / 1000));
-  let sizeLoading = $state(false);
 
   const softVerifyRemainingSecs = $derived.by(() => {
     const b = crashFixBanner;
@@ -161,7 +210,6 @@
     if (!path) return;
     if ($homeSizes[path]) return;
     let cancelled = false;
-    sizeLoading = true;
     void (async () => {
       try {
         const label = await api.instance.getSize(path);
@@ -172,8 +220,6 @@
         if (!cancelled) {
           homeSizes.update((m) => ({ ...m, [path]: "?" }));
         }
-      } finally {
-        if (!cancelled) sizeLoading = false;
       }
     })();
     return () => {
@@ -334,7 +380,6 @@
 
   async function launch() {
     if (!selectedPath) return;
-    await invoke("set_last_opened_project", { path: selectedPath });
     await launchWithFeedback({ path: selectedPath, profile: "client" });
     const project = $recentProjects.find((p) => p.path === selectedPath);
     if (project) recentProjects.add(project);
@@ -356,16 +401,6 @@
 
   function openSettings() {
     currentView = "project-settings";
-  }
-
-  function openIdeStage(stage: string) {
-    ideStageRequest.set(stage);
-    currentView = "ide";
-  }
-
-  function openIdeSuggested() {
-    ideStageRequest.set($ideSuggestedStage || "content");
-    currentView = "ide";
   }
 
   function closeHeroOverflow() {
@@ -457,275 +492,53 @@
       heroActionBusy = false;
     }
   }
-
-  function onHeroOverflowPointerDown(e: MouseEvent) {
-    if (!heroOverflowOpen) return;
-    const t = e.target as HTMLElement | null;
-    if (t?.closest?.(".hero-overflow")) return;
-    closeHeroOverflow();
-  }
-
-  function onHeroOverflowKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && heroOverflowOpen) closeHeroOverflow();
-  }
 </script>
 
-<svelte:window onmousedown={onHeroOverflowPointerDown} onkeydown={onHeroOverflowKeydown} />
-
 <div class="home fade-slide-in">
-  <!-- Top bar: Open IDE left (account lives in the skin panel; Me via sidebar) -->
-  <div class="top-bar">
-    <div class="ide-entry">
-      <button
-        type="button"
-        class="ide-entry-btn"
-        onclick={openIdeSuggested}
-        disabled={!selectedProject}
-        title={selectedProject ? "Open IDE" : "Select an instance first"}
-      >
-        <Workflow size={18} />
-        <span>Open IDE</span>
-        {#if $ideIssueCount > 0}
-          <span class="ide-issue-badge" title="{$ideIssueCount} pack issue{$ideIssueCount === 1 ? '' : 's'}">{$ideIssueCount}</span>
-        {/if}
-      </button>
-    </div>
-  </div>
-
   <div class="main-layout">
     <div class="home-main">
-      <!-- Hero: Play/Stop CTA + instance identity -->
-      <section class="hero">
-        <div class="hero-left">
-          <button
-            class="play-btn"
-            class:stop={selectedRunning && !$isLaunching}
-            onclick={selectedRunning && !$isLaunching ? stopGame : launch}
-            disabled={!selectedPath || $isLaunching}
-            aria-busy={$isLaunching}
-            title={$isLaunching ? ($launchProgress?.message ?? "Launching…") : undefined}
-          >
-            {#if $isLaunching}
-              <span class="spinner" aria-hidden="true"></span>
-              <span class="play-text play-phase">
-                {$launchProgress?.message ?? "Launching…"}
-              </span>
-              {#if $launchProgress?.percent != null}
-                <span class="play-pct" aria-hidden="true">{$launchProgress.percent}%</span>
-              {/if}
-            {:else if selectedRunning}
-              <Square size={24} fill="currentColor" />
-              <span class="play-text">Stop</span>
-            {:else}
-              <Play size={28} fill="currentColor" />
-              <span class="play-text">Play</span>
-            {/if}
-          </button>
+      <HomeHero
+        hasSelection={!!selectedProject}
+        emptyZero={$recentProjects.length === 0}
+        meta={selectedInstanceMeta}
+        launching={$isLaunching}
+        launchMessage={$launchProgress?.message ?? ""}
+        launchPercent={$launchProgress?.percent ?? null}
+        running={selectedRunning}
+        playDisabled={!selectedPath}
+        coverUrl={posterCover.url}
+        coverKind={posterCover.kind}
+        potato={potatoPc}
+        actionBusy={heroActionBusy}
+        overflowOpen={heroOverflowOpen}
+        signedIn={$authState.loggedIn}
+        playerName={$authState.profile?.name ?? ""}
+        crashBanner={crashFixBanner}
+        crashFixBusy={crashFixBusy}
+        softVerifyRemainingSecs={softVerifyRemainingSecs}
+        onPlay={launch}
+        onStop={stopGame}
+        onSettings={openSettings}
+        onFolder={() => {
+          if (selectedProject) void invoke("open_project_folder", { path: selectedProject.path });
+        }}
+        onToggleOverflow={toggleHeroOverflow}
+        onRename={openRenamePrompt}
+        onClone={openClonePrompt}
+        onDelete={() => void deleteSelectedInstance()}
+        onCreate={() => openAddInstance("blank")}
+        onImport={() => openAddInstance("import")}
+        onBrowse={browseLibrary}
+        onRollback={() => void onRollbackCrashFix()}
+        onDiagnostics={() => (currentView = "diagnostics")}
+        onSignIn={() => loginModalOpen.set(true)}
+      />
 
-          <div class="hero-main">
-            {#if selectedProject}
-              <div class="hero-identity">
-                <div
-                  class="hero-pack-icon"
-                  class:has-image={!!selectedPackIcon}
-                  aria-hidden="true"
-                >
-                  {#if selectedPackIcon}
-                    <img src={selectedPackIcon} alt="" draggable="false" />
-                  {:else}
-                    <span class="hero-pack-letter">{selectedProject.info.name[0] ?? "?"}</span>
-                  {/if}
-                </div>
-                <div class="hero-identity-text">
-                  <h2 class="hero-instance-name">{selectedProject.info.name}</h2>
-                  <p class="hero-instance-meta">{selectedInstanceMeta}</p>
-                </div>
-              </div>
-
-              <div class="hero-actions">
-                <button class="action-btn" onclick={openSettings} disabled={heroActionBusy}>
-                  <Settings size={15} />
-                  Settings
-                </button>
-                <button
-                  class="action-btn"
-                  onclick={() => invoke("open_project_folder", { path: selectedProject.path })}
-                  disabled={heroActionBusy}
-                >
-                  <FolderOpen size={15} />
-                  Folder
-                </button>
-                <div class="hero-overflow">
-                  <button
-                    type="button"
-                    class="action-btn hero-overflow-btn"
-                    aria-label="More instance actions"
-                    aria-expanded={heroOverflowOpen}
-                    aria-haspopup="menu"
-                    disabled={heroActionBusy}
-                    onclick={toggleHeroOverflow}
-                  >
-                    <MoreHorizontal size={15} />
-                  </button>
-                  {#if heroOverflowOpen}
-                    <div class="hero-overflow-menu" role="menu">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        disabled={heroActionBusy}
-                        onclick={openRenamePrompt}
-                      >
-                        <Pencil size={14} />
-                        Rename
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        disabled={heroActionBusy}
-                        onclick={openClonePrompt}
-                      >
-                        <Copy size={14} />
-                        Clone
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        class="danger"
-                        disabled={heroActionBusy}
-                        onclick={() => void deleteSelectedInstance()}
-                      >
-                        <Trash2 size={14} />
-                        Delete
-                      </button>
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            {:else if $recentProjects.length === 0}
-              <div class="hero-empty hero-empty-zero">
-                <p class="hero-empty-title">No instances yet</p>
-                <p class="hero-empty-hint">
-                  Create a blank pack, import one you already have, or browse the library.
-                </p>
-                <div class="hero-empty-ctas">
-                  <button
-                    type="button"
-                    class="action-btn hero-empty-cta"
-                    onclick={() => openAddInstance("blank")}
-                  >
-                    <Package size={15} />
-                    Create
-                  </button>
-                  <button
-                    type="button"
-                    class="action-btn hero-empty-cta"
-                    onclick={() => openAddInstance("import")}
-                  >
-                    <FolderInput size={15} />
-                    Import
-                  </button>
-                  <button
-                    type="button"
-                    class="action-btn hero-empty-cta"
-                    onclick={browseLibrary}
-                  >
-                    <Search size={15} />
-                    Browse
-                  </button>
-                </div>
-              </div>
-            {:else}
-              <div class="hero-empty">
-                <p class="hero-empty-title">Select an instance</p>
-                <p class="hero-empty-hint">
-                  Choose one from the list on the left, or create a new instance to get started.
-                </p>
-                <button
-                  type="button"
-                  class="action-btn hero-empty-cta"
-                  onclick={() => openAddInstance("blank")}
-                >
-                  <Package size={15} />
-                  Create instance
-                </button>
-              </div>
-            {/if}
-
-            {#if crashFixBanner}
-              <div class="crash-fix-banner" role="status">
-                <ShieldAlert size={16} />
-                <div class="crash-fix-banner-body">
-                  <strong>Fix applied</strong>
-                  <span>
-                    {#if crashFixBanner.softVerifyStartedUnix}
-                      Play about {softVerifyRemainingSecs ?? 0}s more to confirm it works.
-                    {:else}
-                      Launch the game to confirm the fix. You can restore anytime.
-                    {/if}
-                  </span>
-                </div>
-                <div class="crash-fix-banner-actions">
-                  <button
-                    class="action-btn accent"
-                    type="button"
-                    disabled={crashFixBusy}
-                    onclick={onRollbackCrashFix}
-                  >
-                    Restore
-                  </button>
-                  <button
-                    class="ghost crash-fix-diag"
-                    type="button"
-                    onclick={() => (currentView = "diagnostics")}
-                  >
-                    Diagnostics
-                  </button>
-                </div>
-              </div>
-            {/if}
-          </div>
+      {#if $launcherSettingsLive?.showYoutubeOnHome === true}
+        <div class="home-feed">
+          <YoutubeFeed variant="row" />
         </div>
-
-        {#if selectedProject}
-          <div class="hero-right">
-            <div class="instance-stats">
-              <div
-                class="stat size-stat"
-                title={instanceSizes[selectedProject.path] || "Calculating size…"}
-              >
-                <HardDrive size={14} />
-                {#if instanceSizes[selectedProject.path]}
-                  <span>{instanceSizes[selectedProject.path]}</span>
-                {:else if sizeLoading}
-                  <span class="skeleton skeleton-block skeleton-line short" style="width: 48px; height: 12px;"></span>
-                {:else}
-                  <span class="skeleton skeleton-block skeleton-line short" style="width: 48px; height: 12px;"></span>
-                {/if}
-              </div>
-              {#if projectStats[selectedProject.path]?.playtime}
-                <div class="stat">
-                  <Clock size={14} />
-                  <span>{formatPlaytime(projectStats[selectedProject.path].playtime)}</span>
-                </div>
-              {:else if projectStats[selectedProject.path] === undefined}
-                <div class="stat skel-stat" aria-hidden="true">
-                  <span class="skeleton skeleton-block skeleton-line short" style="width: 52px; height: 12px;"></span>
-                </div>
-              {/if}
-            </div>
-          </div>
-        {/if}
-      </section>
-
-      {#if hasInstanceHome && selectedPath && !hideInstanceHome}
-        <InstanceHome
-          projectPath={selectedPath}
-          onOpenMods={() => openIdeStage("content")}
-          onOpenWorld={() => (currentView = "world")}
-        />
       {/if}
-
-      <YoutubeFeed variant="row" />
     </div>
 
     <aside class="home-side">
@@ -757,6 +570,7 @@
           <SkinPreview3D
             skinUrl={skinUrl}
             capeUrl={capeUrl}
+            cachedPath={$skinPath}
             accountKey={accountKey}
             playerName={$authState.profile.name}
             showName={false}
@@ -767,10 +581,14 @@
           <div class="skin-panel-footer">
             <div class="skin-meta">
               <span
-                class="type-badge"
-                class:microsoft={$authState.loginType === "microsoft"}
-                class:offline={$authState.loginType === "offline"}
-                class:ygg={$authState.loginType === "yggdrasil"}
+                class={[
+                  "type-badge",
+                  {
+                    microsoft: $authState.loginType === "microsoft",
+                    offline: $authState.loginType === "offline",
+                    ygg: $authState.loginType === "yggdrasil",
+                  },
+                ]}
               >
                 {loginTypeLabel(
                   $authState.loginType,
@@ -798,8 +616,7 @@
                 {#each $authState.accounts as account (account.uuid)}
                   <button
                     type="button"
-                    class="account-chip"
-                    class:active={account.uuid === $authState.activeAccountUuid}
+                    class={["account-chip", { active: account.uuid === $authState.activeAccountUuid }]}
                     disabled={accountSwitchBusy}
                     title={account.name}
                     onclick={() => switchHomeAccount(account.uuid)}
@@ -829,9 +646,9 @@
             <button
               type="button"
               class="skin-panel-empty-manage"
-              onclick={() => (showAccountManager = true)}
+              onclick={() => loginModalOpen.set(true)}
             >
-              Manage accounts
+              More sign-in options
             </button>
           </div>
         {/if}
@@ -882,46 +699,6 @@
     margin: 0 auto;
   }
 
-  /* ─── Top Bar ─────────────────────────────────────── */
-  .top-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-    gap: 16px;
-  }
-
-  .ide-entry {
-    display: flex;
-    align-items: center;
-  }
-
-  .ide-entry-btn {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 14px;
-    border-radius: var(--border-radius-md);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 600;
-    transition: all 0.15s ease;
-  }
-
-  .ide-entry-btn:hover:not(:disabled) {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-    border-color: var(--bg-hover);
-  }
-
-  .ide-entry-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-
   /* ─── Main Layout (2-column stack) ─── */
   .main-layout {
     display: grid;
@@ -938,13 +715,64 @@
     overflow: visible;
   }
 
-  .home-main :global(.youtube-feed) {
+  .home-feed {
+    margin-top: 0;
     min-width: 0;
     width: 100%;
   }
 
-  /* Row strip: keep horizontal scroll inside home-main, not the page. */
-  .home-main :global(.youtube-feed .feed-row) {
+  .home-main:has(:global(.youtube-feed.is-full)) {
+    min-height: calc(100dvh - 6.5rem);
+  }
+
+  .home-feed:has(:global(.youtube-feed.is-full)) {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .home-feed :global(.youtube-feed) {
+    min-width: 0;
+    width: 100%;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    box-shadow:
+      var(--shadow-md),
+      inset 0 1px 0 var(--glass-highlight);
+    border-radius: var(--border-radius-xl);
+    padding: 10px 14px;
+  }
+
+  .home-feed :global(.youtube-feed.is-full) {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: calc(100dvh - 6.5rem);
+  }
+
+  .home-feed :global(.youtube-feed.is-collapsed) {
+    padding: 8px 14px;
+  }
+
+  .home-feed :global(.youtube-feed.is-collapsed .section-header) {
+    min-height: 36px;
+  }
+
+  .home-feed :global(.youtube-feed.is-collapsed .section-header h2) {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .home-feed :global(.youtube-feed.is-collapsed .section-header svg) {
+    width: 16px;
+    height: 16px;
+  }
+
+  .home-feed :global(.youtube-feed .feed-row) {
     max-width: 100%;
   }
 
@@ -960,9 +788,14 @@
   }
 
   .skin-panel {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     border-radius: var(--border-radius-xl);
+    box-shadow:
+      var(--shadow-md),
+      inset 0 1px 0 var(--glass-highlight);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -1049,6 +882,7 @@
     box-sizing: border-box;
     overflow: hidden;
     white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .change-skin-btn {
@@ -1231,377 +1065,6 @@
     gap: 8px;
   }
 
-  .skel-stat {
-    display: inline-flex;
-    align-items: center;
-  }
-
-  /* ─── Hero ────────────────────────────────────────── */
-  .hero {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    padding: 20px 24px;
-    background: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 6%, transparent), color-mix(in srgb, var(--accent-secondary) 4%, transparent));
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-xl);
-    margin-bottom: 0;
-    gap: 16px;
-  }
-
-  .hero-left {
-    display: flex;
-    align-items: center;
-    gap: 16px 24px;
-    min-width: 0;
-    flex: 1;
-    flex-wrap: wrap;
-  }
-
-  .hero-main {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: flex-start;
-    gap: 10px;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .hero-right {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-shrink: 0;
-  }
-
-  .instance-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-
-  .stat {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-muted);
-    background: var(--bg-secondary);
-    padding: 6px 10px;
-    border-radius: var(--border-radius-sm);
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-
-  .stat span {
-    white-space: nowrap;
-    overflow: visible;
-    text-overflow: clip;
-  }
-
-  .size-stat {
-    min-width: max-content;
-  }
-
-  .play-btn {
-    min-width: 160px;
-    width: auto;
-    max-width: 280px;
-    height: 56px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    font-size: 18px;
-    border-radius: var(--border-radius-lg);
-    box-shadow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 30%, transparent);
-    padding: 0 20px;
-    flex-shrink: 0;
-  }
-
-  .play-btn:hover {
-    box-shadow: 0 12px 32px color-mix(in srgb, var(--accent-primary) 40%, transparent);
-  }
-
-  .play-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    box-shadow: none;
-  }
-
-  .play-btn.stop {
-    background: var(--accent-danger, #ef4444);
-    box-shadow: 0 8px 24px rgba(239, 68, 68, 0.3);
-  }
-
-  .play-btn.stop:hover {
-    box-shadow: 0 12px 32px rgba(239, 68, 68, 0.4);
-  }
-
-  .play-text {
-    font-weight: 800;
-  }
-
-  .play-text.play-phase {
-    font-size: 13px;
-    font-weight: 700;
-    line-height: 1.2;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 160px;
-  }
-
-  .play-pct {
-    font-size: 11px;
-    font-weight: 700;
-    opacity: 0.85;
-    flex-shrink: 0;
-  }
-
-  .hero-identity {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    min-width: 0;
-    max-width: 520px;
-  }
-
-  .hero-pack-icon {
-    width: 52px;
-    height: 52px;
-    flex-shrink: 0;
-    border-radius: var(--border-radius-md);
-    overflow: hidden;
-    display: grid;
-    place-items: center;
-    background: color-mix(in srgb, var(--accent-primary) 18%, var(--bg-secondary));
-    border: 1px solid var(--border-color);
-  }
-
-  .hero-pack-icon.has-image {
-    background: var(--bg-secondary);
-  }
-
-  .hero-pack-icon img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
-
-  .hero-pack-letter {
-    font-size: 20px;
-    font-weight: 800;
-    color: var(--text-primary);
-    text-transform: uppercase;
-    line-height: 1;
-  }
-
-  .hero-identity-text {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-  }
-
-  .hero-instance-name {
-    margin: 0;
-    font-size: 22px;
-    font-weight: 800;
-    line-height: 1.2;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .hero-instance-meta {
-    margin: 0;
-    font-size: 13px;
-    font-weight: 600;
-    line-height: 1.3;
-    color: var(--text-secondary);
-    text-transform: capitalize;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .hero-empty {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
-    max-width: 420px;
-  }
-
-  .hero-empty-zero {
-    max-width: 480px;
-  }
-
-  .hero-empty-title {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 700;
-    line-height: 1.25;
-    color: var(--text-primary);
-  }
-
-  .hero-empty-hint {
-    margin: 0;
-    font-size: 13px;
-    line-height: 1.45;
-    color: var(--text-secondary);
-  }
-
-  .hero-empty-cta {
-    margin-top: 4px;
-  }
-
-  .hero-empty-ctas {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    margin-top: 4px;
-  }
-
-  .hero-empty-ctas .hero-empty-cta {
-    margin-top: 0;
-  }
-
-  .hero-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
-  .hero-actions .action-btn {
-    padding: 6px 12px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
-    background: transparent;
-    border-color: color-mix(in srgb, var(--border-color) 80%, transparent);
-  }
-
-  .hero-actions .action-btn:hover {
-    color: var(--text-primary);
-    background: var(--bg-secondary);
-    border-color: var(--border-color);
-  }
-
-  .hero-actions .action-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .hero-overflow {
-    position: relative;
-  }
-
-  .hero-overflow-btn {
-    padding-inline: 8px;
-  }
-
-  .hero-overflow-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 40;
-    min-width: 160px;
-    padding: 6px;
-    border-radius: var(--border-radius-md);
-    border: 1px solid var(--border-color);
-    background: var(--bg-elevated, var(--bg-secondary));
-    box-shadow: var(--shadow-lg, 0 12px 28px rgba(0, 0, 0, 0.35));
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .hero-overflow-menu button {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    text-align: left;
-    padding: 8px 10px;
-    border: none;
-    border-radius: var(--border-radius-sm);
-    background: transparent;
-    color: var(--text-primary);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .hero-overflow-menu button:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-    color: var(--accent-primary);
-  }
-
-  .hero-overflow-menu button:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-
-  .hero-overflow-menu button.danger {
-    color: var(--danger, #e5484d);
-  }
-
-  .hero-overflow-menu button.danger:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--danger, #e5484d) 12%, transparent);
-    color: var(--danger, #e5484d);
-  }
-
-  .crash-fix-banner {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 10px;
-    margin-top: 12px;
-    padding: 10px 12px;
-    border-radius: var(--border-radius-md);
-    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
-    background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-secondary));
-    max-width: 560px;
-  }
-
-  .crash-fix-banner-body {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    flex: 1;
-    min-width: 160px;
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-
-  .crash-fix-banner-body strong {
-    color: var(--text-secondary);
-    font-size: 13px;
-  }
-
-  .crash-fix-banner-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .crash-fix-diag {
-    padding: 6px 8px;
-    font-size: 11px;
-    font-weight: 500;
-    border-radius: var(--border-radius-sm);
-  }
-
   .action-btn {
     display: flex;
     align-items: center;
@@ -1621,22 +1084,6 @@
     color: var(--text-primary);
   }
 
-  .ide-issue-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 4px;
-    margin-left: 2px;
-    border-radius: 999px;
-    background: var(--danger, #e5484d);
-    color: #fff;
-    font-size: 10px;
-    font-weight: 800;
-    line-height: 1;
-  }
-
   .action-btn.accent {
     background: var(--accent-primary);
     color: var(--on-accent, #000);
@@ -1645,18 +1092,5 @@
 
   .action-btn.accent:hover {
     background: var(--accent-hover);
-  }
-
-  .spinner {
-    width: 20px;
-    height: 20px;
-    border: 2.5px solid rgba(0, 0, 0, 0.15);
-    border-top-color: #000;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
   }
 </style>

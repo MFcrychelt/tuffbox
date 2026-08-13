@@ -1,9 +1,11 @@
 <script lang="ts">
   import { api } from "../lib/api";
+  import { convertFileSrc } from "@tauri-apps/api/core";
 
   let {
     skinUrl = null,
     capeUrl = null,
+    cachedPath = null,
     accountKey = "",
     playerName = "",
     showName = true,
@@ -12,6 +14,7 @@
   }: {
     skinUrl?: string | null;
     capeUrl?: string | null;
+    cachedPath?: string | null;
     accountKey?: string;
     playerName?: string;
     showName?: boolean;
@@ -28,6 +31,8 @@
   let lastSkin = "";
   let lastCape = "";
   let lastAccount = "";
+  let lastCachedPath = "";
+  let skinShown = false;
   let capeFrames: HTMLCanvasElement[] = [];
   let capeFrameIdx = 0;
   let capeAnimTimer: ReturnType<typeof setInterval> | null = null;
@@ -116,8 +121,25 @@
     }
   }
 
+  const skinDataCache = new Map<string, string>();
+
   async function toDataUrl(url: string): Promise<string> {
-    return api.mcAuth.getSkinBase64(url);
+    const hit = skinDataCache.get(url);
+    if (hit) return hit;
+    const data = await api.mcAuth.getSkinBase64(url);
+    skinDataCache.set(url, data);
+    return data;
+  }
+
+  async function loadSkinFromCachedPath(path: string): Promise<boolean> {
+    if (!viewer || !path) return false;
+    try {
+      await viewer.loadSkin(convertFileSrc(path), { model: "auto-detect" });
+      return true;
+    } catch (e) {
+      console.warn("[SkinPreview3D] cached skin failed:", e);
+      return false;
+    }
   }
 
   /** skinview-utils / loadCapeToCanvas accepted atlas ratios. */
@@ -321,20 +343,34 @@
   async function applyTextures() {
     if (!viewer) return;
     const skin = skinUrl;
+    const cache = cachedPath;
     const nextCape = capeKey(capeUrl);
     const skinChanged = !!(skin && skin !== lastSkin);
+    const cacheChanged = !!(cache && cache !== lastCachedPath);
     const capeChanged = nextCape !== lastCape;
-    const hadSkin = !!lastSkin && lastSkin !== "";
+    const hadSkin = skinShown;
 
     // Quiet cape-only updates: keep the visible skin, no skeleton overlay.
-    const showOverlay = skinChanged || !hadSkin;
+    const needsSkinFetch = skinChanged && !!skin;
+    const canShowCache = (skinChanged || cacheChanged || !hadSkin) && !!cache;
+    const showOverlay = !hadSkin && !cache;
     if (showOverlay) {
       loading = true;
     }
     loadError = "";
     try {
+      let displayedFromCache = false;
+      if (canShowCache && cache) {
+        displayedFromCache = await loadSkinFromCachedPath(cache);
+        if (displayedFromCache) {
+          lastCachedPath = cache;
+          skinShown = true;
+          loading = false;
+        }
+      }
+
       const skinPromise =
-        skinChanged && skin
+        needsSkinFetch && skin
           ? toDataUrl(skin)
           : Promise.resolve(null as string | null);
       const capePromise =
@@ -347,6 +383,7 @@
       if (skinData) {
         await viewer.loadSkin(skinData, { model: "auto-detect" });
         lastSkin = skin!;
+        skinShown = true;
       }
 
       if (nextCape && capeChanged) {
@@ -375,6 +412,8 @@
     lastSkin = "";
     lastCape = "";
     lastAccount = "";
+    lastCachedPath = "";
+    skinShown = false;
     loadError = "";
     void initViewer();
   }
@@ -384,11 +423,21 @@
     const skin = skinUrl;
     const cape = capeUrl;
     const acct = accountKey;
+    const cache = cachedPath;
     if (!viewer) return;
-    if (skin === lastSkin && capeKey(cape) === lastCape && acct === lastAccount) return;
+    if (
+      skin === lastSkin &&
+      capeKey(cape) === lastCape &&
+      acct === lastAccount &&
+      (cache ?? "") === lastCachedPath
+    ) {
+      return;
+    }
     if (acct !== lastAccount) {
       lastAccount = acct;
       lastSkin = "";
+      lastCachedPath = "";
+      skinShown = false;
       lastCape = lastCape || "__pending_clear__";
       stopCapeAnim();
       try {
@@ -484,6 +533,10 @@
     touch-action: none;
     overscroll-behavior: contain;
     width: 100%;
+    /* Vitrine speckle palette (deepslate-ish), consumed by .skin-bg. */
+    --tex-speck-a: rgba(255, 255, 255, 0.045);
+    --tex-speck-b: rgba(0, 0, 0, 0.20);
+    --tex-speck-c: rgba(0, 0, 0, 0.05);
   }
 
   .skin-bg {
@@ -493,8 +546,30 @@
       radial-gradient(ellipse 55% 42% at 50% 38%, rgba(210, 195, 170, 0.14), transparent 62%),
       radial-gradient(ellipse 80% 50% at 50% 100%, rgba(0, 0, 0, 0.55), transparent 58%),
       radial-gradient(ellipse 100% 80% at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.45) 100%),
+      radial-gradient(circle at 22% 30%, var(--tex-speck-a) 0 10%, transparent 11%),
+      radial-gradient(circle at 68% 12%, var(--tex-speck-b) 0 12%, transparent 13%),
+      radial-gradient(circle at 82% 64%, var(--tex-speck-a) 0 9%, transparent 10%),
+      radial-gradient(circle at 38% 78%, var(--tex-speck-b) 0 13%, transparent 14%),
+      repeating-conic-gradient(var(--tex-speck-c) 0% 25%, transparent 0% 50%),
       linear-gradient(180deg, #2a2c30 0%, #1a1c1f 52%, #121314 100%);
+    background-size:
+      auto, auto, auto,
+      var(--tex-size) var(--tex-size),
+      var(--tex-size) var(--tex-size),
+      var(--tex-size) var(--tex-size),
+      var(--tex-size) var(--tex-size),
+      calc(var(--tex-size) / 2) calc(var(--tex-size) / 2),
+      auto;
+    image-rendering: pixelated;
     pointer-events: none;
+  }
+
+  :global(html.potato-pc) .skin-bg {
+    background:
+      radial-gradient(ellipse 55% 42% at 50% 38%, rgba(210, 195, 170, 0.14), transparent 62%),
+      radial-gradient(ellipse 80% 50% at 50% 100%, rgba(0, 0, 0, 0.55), transparent 58%),
+      radial-gradient(ellipse 100% 80% at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.45) 100%),
+      linear-gradient(180deg, #2a2c30 0%, #1a1c1f 52%, #121314 100%);
   }
 
   canvas {
@@ -627,9 +702,26 @@
     box-shadow:
       inset 0 -36px 52px color-mix(in srgb, var(--accent-primary) 6%, transparent),
       0 10px 24px color-mix(in srgb, var(--text-primary) 8%, transparent);
+    --tex-speck-a: rgba(255, 255, 255, 0.35);
+    --tex-speck-b: rgba(60, 70, 60, 0.08);
+    --tex-speck-c: rgba(60, 70, 60, 0.04);
   }
 
   :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .skin-bg {
+    background:
+      radial-gradient(ellipse 50% 40% at 50% 36%, rgba(255, 255, 255, 0.8), transparent 58%),
+      radial-gradient(ellipse 70% 45% at 50% 100%, color-mix(in srgb, var(--accent-primary) 10%, transparent), transparent 60%),
+      radial-gradient(ellipse 100% 80% at 50% 50%, transparent 42%, color-mix(in srgb, var(--bg-tertiary) 55%, transparent) 100%),
+      radial-gradient(circle at 22% 30%, var(--tex-speck-a) 0 10%, transparent 11%),
+      radial-gradient(circle at 68% 12%, var(--tex-speck-b) 0 12%, transparent 13%),
+      radial-gradient(circle at 82% 64%, var(--tex-speck-a) 0 9%, transparent 10%),
+      radial-gradient(circle at 38% 78%, var(--tex-speck-b) 0 13%, transparent 14%),
+      repeating-conic-gradient(var(--tex-speck-c) 0% 25%, transparent 0% 50%),
+      linear-gradient(180deg, #eef2ec 0%, #e0e7de 48%, #d4ddd2 100%);
+  }
+
+  :global(html.potato-pc:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"]))
+    .skin-bg {
     background:
       radial-gradient(ellipse 50% 40% at 50% 36%, rgba(255, 255, 255, 0.8), transparent 58%),
       radial-gradient(ellipse 70% 45% at 50% 100%, color-mix(in srgb, var(--accent-primary) 10%, transparent), transparent 60%),
