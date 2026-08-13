@@ -2,6 +2,7 @@ import { mount } from "svelte";
 import App from "./App.svelte";
 import "./styles.css";
 import "./styles/themes.css";
+import "./styles/textures.css";
 import { applyTheme, readStoredTheme } from "./lib/themes";
 import { installActionFeedback } from "./lib/actionFeedback";
 
