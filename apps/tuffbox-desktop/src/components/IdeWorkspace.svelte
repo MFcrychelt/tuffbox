@@ -45,6 +45,7 @@
   import QuestEditor from "./QuestEditor.svelte";
   import ExportBuilder from "./ExportBuilder.svelte";
   import ReleaseRoom from "./ReleaseRoom.svelte";
+  import GithubPackUpdateBanner from "./GithubPackUpdateBanner.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import BriefEditor from "./BriefEditor.svelte";
   import IdeNextBar from "./IdeNextBar.svelte";
@@ -455,6 +456,9 @@
         activeStage === "snapshots"
       }
     >
+      {#if $projectPath}
+        <GithubPackUpdateBanner />
+      {/if}
       {#if activeStage === "brief"}
         <BriefEditor />
       {:else if activeStage === "setup"}

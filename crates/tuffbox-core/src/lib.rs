@@ -71,6 +71,7 @@ pub mod overrides;
 pub mod optimize_pack;
 pub mod tune_chat;
 pub mod tune_config_ai;
+pub mod github_pack;
 pub mod packwiz;
 pub mod properties_parser;
 pub mod recipe_layout;
@@ -105,7 +106,10 @@ pub use mod_files::*;
 pub use mod_index_cache::*;
 pub use mod_scan::*;
 pub use murmur2::*;
-pub use packwiz::{import_packwiz_pack, is_packwiz_pack, PackwizImportError};
+pub use packwiz::{
+    export_packwiz_pack, import_packwiz_pack, is_packwiz_pack, PackwizExportError,
+    PackwizExportResult, PackwizImportError,
+};
 pub use process::*;
 pub use provider::*;
 pub use quest_plan::*;

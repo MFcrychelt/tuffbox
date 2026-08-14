@@ -405,6 +405,7 @@ pub fn maybe_confirm_crash_resolution(
         actor: Some(
             crate::pack_events::actor_for_plan_source(rec.plan_source.as_deref()).to_string(),
         ),
+        ..Default::default()
     };
     let store = SnapshotStore::new(project_dir);
     let resolved_snap = store.create_with_meta(
@@ -859,6 +860,7 @@ pub fn record_user_fix_attempt(
             .map(format_launcher_action_summary)
             .collect(),
         actor: Some(actor),
+        managed_files: Vec::new(),
     };
     write_last_crash_fix_marker(project_dir, &snapshot, &plan, &fp)?;
     // Ensure marker carries episode id for History grouping.
@@ -945,6 +947,7 @@ pub fn auto_snapshot_crash_fix(
         operation: "crash_fix".into(),
         actions_summary: actions_summary.clone(),
         actor: Some(actor),
+        ..Default::default()
     };
     let store = SnapshotStore::new(project_dir);
     let snapshot = store
@@ -1017,6 +1020,7 @@ pub fn auto_snapshot_crash_fix_heuristic(
         actor: Some(
             crate::pack_events::actor_for_plan_source(Some("heuristic")).to_string(),
         ),
+        ..Default::default()
     };
     let store = SnapshotStore::new(project_dir);
     let episode_id = crate::pack_events::episode_id_for_fingerprint(fp);

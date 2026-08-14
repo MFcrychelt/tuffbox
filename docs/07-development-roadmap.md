@@ -629,6 +629,8 @@ AI explanation появляется в crash screen, но любые дейст�
 
 # Stage 16. TuffSwarm Network
 
+GitHub Pack Transport (friend-server packs over public GitHub repos) is a **separate** increment: [`15-github-pack-transport.md`](15-github-pack-transport.md). Do not fold it into TuffSwarm.
+
 ## Цель
 
 Федеративная сеть узлов TuffBox: обмен опытом крашей и marketplace генерации за полезную работу.

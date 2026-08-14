@@ -116,7 +116,7 @@ pub(crate) fn auto_snapshot_before_mod_op(
     manifest_path: &Path,
     operation: &str,
 ) -> anyhow::Result<Snapshot> {
-    auto_snapshot_detailed_ex(manifest_path, operation, &[], &[], false)
+    auto_snapshot_detailed_ex(manifest_path, operation, &[], &[], false, Vec::new())
 }
 
 pub(crate) fn auto_snapshot_detailed(
@@ -125,7 +125,24 @@ pub(crate) fn auto_snapshot_detailed(
     changed_files: &[PathBuf],
     actions_summary: &[String],
 ) -> anyhow::Result<Snapshot> {
-    auto_snapshot_detailed_ex(manifest_path, operation, changed_files, actions_summary, true)
+    auto_snapshot_detailed_ex(manifest_path, operation, changed_files, actions_summary, true, Vec::new())
+}
+
+pub(crate) fn auto_snapshot_with_managed(
+    manifest_path: &Path,
+    operation: &str,
+    changed_files: &[PathBuf],
+    actions_summary: &[String],
+    managed_files: Vec<PathBuf>,
+) -> anyhow::Result<Snapshot> {
+    auto_snapshot_detailed_ex(
+        manifest_path,
+        operation,
+        changed_files,
+        actions_summary,
+        true,
+        managed_files,
+    )
 }
 
 fn auto_snapshot_detailed_ex(
@@ -134,6 +151,7 @@ fn auto_snapshot_detailed_ex(
     changed_files: &[PathBuf],
     actions_summary: &[String],
     journal: bool,
+    managed_files: Vec<PathBuf>,
 ) -> anyhow::Result<Snapshot> {
     let project_dir = manifest_path.parent().ok_or_else(|| {
         anyhow::anyhow!("manifest path has no parent: {}", manifest_path.display())
@@ -157,6 +175,7 @@ fn auto_snapshot_detailed_ex(
         operation: operation.to_string(),
         actions_summary: summary,
         actor: Some(actor),
+        managed_files,
         ..Default::default()
     };
     let snapshot = store.create_with_meta(
@@ -196,7 +215,30 @@ pub(crate) fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::
     staged
         .persist(path)
         .map_err(|error| anyhow::Error::new(error.error))?;
+    persist_lockfile_for_manifest(path, manifest)?;
     Ok(())
+}
+
+pub(crate) fn lockfile_path_for_manifest(manifest_path: &Path) -> PathBuf {
+    manifest_path.with_extension("lock.json")
+}
+
+pub(crate) fn save_lockfile(
+    path: &Path,
+    lockfile: &tuffbox_core::TuffboxLockfile,
+) -> anyhow::Result<()> {
+    lockfile.save_to_path(path)?;
+    Ok(())
+}
+
+pub(crate) fn persist_lockfile_for_manifest(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> anyhow::Result<tuffbox_core::TuffboxLockfile> {
+    let graph = tuffbox_core::DependencyGraph::from_manifest(manifest);
+    let lockfile = tuffbox_core::TuffboxLockfile::from_manifest_and_graph(manifest, &graph);
+    save_lockfile(&lockfile_path_for_manifest(manifest_path), &lockfile)?;
+    Ok(lockfile)
 }
 
 // ── File utilities ───────────────────────────────────────────────

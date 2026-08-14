@@ -2409,6 +2409,94 @@ export const api = {
     validateModrinth(p?: string) { return cmd<ExportIssue[]>("validate_modrinth_export", pathArg(p)); },
   },
 
+  // ── GitHub Pack Transport (public repos, anonymous consume) ─────
+  transport: {
+    github: {
+      parseSource(source: string) {
+        return cmd<{ owner: string; repo: string; ref: string | null }>("github_pack_parse_source", { source });
+      },
+      inspectSource(source: string) {
+        return cmd<{
+          owner: string;
+          repo: string;
+          fullName: string;
+          description: string;
+          defaultBranch: string;
+          htmlUrl: string;
+          packVersion?: string | null;
+          status?: string | null;
+          ready: boolean;
+        }>("github_pack_inspect_source", { source });
+      },
+      authStatus() {
+        return cmd<boolean>("github_pack_auth_status");
+      },
+      startDeviceCode() {
+        return cmd<{
+          userCode: string;
+          verificationUri: string;
+          message: string;
+          expiresIn: number;
+          interval: number;
+        }>("github_pack_start_device_code");
+      },
+      pollDeviceCode() {
+        return cmd<string>("github_pack_poll_device_code");
+      },
+      stagePreview(p?: string) {
+        return cmd<{
+          packVersion: string;
+          manifestFile: string;
+          fileCount: number;
+          managedFiles: string[];
+          shareUrl: string | null;
+          contentDigest: string;
+          hasExternalAssets: boolean;
+        }>("github_pack_stage_preview", pathArg(p));
+      },
+      publish(repository: string, p?: string) {
+        return cmd<Record<string, unknown>>("github_pack_publish", { ...pathArg(p), repository });
+      },
+      install(source: string, targetDir: string, instanceName?: string | null) {
+        return cmd<Record<string, unknown>>("github_pack_install", {
+          source,
+          targetDir,
+          instanceName: instanceName ?? null,
+        });
+      },
+      checkUpdate(p?: string) {
+        return cmd<{
+          updateAvailable: boolean;
+          repo?: string;
+          installedVersion?: string;
+          installedCommitSha?: string | null;
+          remoteCommitSha?: string;
+          reason?: string;
+        }>("github_pack_check_update", pathArg(p));
+      },
+      previewUpdate(p?: string) {
+        return cmd<{
+          repo: string;
+          installedVersion: string;
+          incomingVersion: string;
+          remoteCommitSha: string;
+          requiresFullReinstall: boolean;
+          customFiles: boolean;
+          signerState?: "ok" | "changed" | "unsigned";
+          changes: Array<Record<string, unknown>>;
+        }>("github_pack_preview_update", pathArg(p));
+      },
+      applyUpdate(p?: string) {
+        return cmd<{
+          ok: boolean;
+          snapshotId: string;
+          version: string;
+          changes: Array<Record<string, unknown>>;
+        }>("github_pack_apply_update", pathArg(p));
+      },
+    },
+  },
+
   // ── Modpack library (remote browse + import) ─────────────────────
   modpacks: {
     getModpackUrl(projectId: string) { return cmd<string>("get_modrinth_pack_download", { projectId }); },

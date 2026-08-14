@@ -58,6 +58,7 @@
   } from "../lib/libraryGroups";
   import { portal } from "../lib/portal";
   import PromptDialog from "./PromptDialog.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
 
   let {
@@ -78,6 +79,10 @@
   let actionBusy = $state(false);
   let exportMenuOpen = $state(false);
   let addMenuOpen = $state(false);
+  let githubImportOpen = $state(false);
+  let githubConfirmOpen = $state(false);
+  let githubPendingSource = $state("");
+  let githubInspectSummary = $state("");
   let foldersMenuOpen = $state(false);
   let groupMap = $state<GroupMap>(loadGroupMap());
   let collapsed = $state(loadCollapsedGroups());
@@ -588,6 +593,42 @@
     await importFromSource(selected);
   }
 
+  async function importGithubRepo() {
+    addMenuOpen = false;
+    githubImportOpen = true;
+  }
+
+  async function confirmGithubImport(source: string) {
+    githubImportOpen = false;
+    const trimmed = source.trim();
+    if (!trimmed) return;
+    try {
+      const info = await api.transport.github.inspectSource(trimmed);
+      if (info.status === "publishing") {
+        toasts.error("This pack is still publishing oversized assets. Try again when the author finishes.");
+        return;
+      }
+      githubPendingSource = trimmed;
+      const version = info.packVersion ? ` v${info.packVersion}` : "";
+      const ready = info.ready
+        ? "ready"
+        : info.status
+          ? String(info.status)
+          : "packwiz pack";
+      githubInspectSummary = `${info.fullName || trimmed}${version} · ${ready}. Install anonymously?`;
+      githubConfirmOpen = true;
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
+  async function confirmGithubInstall() {
+    githubConfirmOpen = false;
+    const source = githubPendingSource;
+    githubPendingSource = "";
+    if (source) await importFromSource(source);
+  }
+
   async function resolveImportTargetDir(): Promise<string> {
     try {
       const info = await api.launcher.instancesPathInfo();
@@ -835,6 +876,9 @@
             </button>
             <button type="button" role="menuitem" onclick={importInstanceFolder} disabled={actionBusy}>
               <Folder size={14} /> Import instance folder
+            </button>
+            <button type="button" role="menuitem" onclick={importGithubRepo} disabled={actionBusy}>
+              <Link2 size={14} /> Import GitHub repository
             </button>
           </div>
         {/if}
@@ -1216,6 +1260,28 @@
       showClonePrompt = false;
       cloneTarget = null;
     }}
+  />
+{/if}
+
+{#if githubImportOpen}
+  <PromptDialog
+    title="Import from GitHub"
+    message="Public repo only. Paste owner/repo or a github.com URL. No login needed."
+    mode="text"
+    defaultValue=""
+    confirmLabel="Preview"
+    onconfirm={(v) => void confirmGithubImport(v)}
+    oncancel={() => (githubImportOpen = false)}
+  />
+{/if}
+
+{#if githubConfirmOpen}
+  <ConfirmDialog
+    title="Install GitHub pack"
+    message={githubInspectSummary}
+    confirmLabel="Install"
+    onconfirm={() => void confirmGithubInstall()}
+    oncancel={() => (githubConfirmOpen = false)}
   />
 {/if}
 

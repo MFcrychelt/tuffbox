@@ -5,6 +5,7 @@
   import { api } from "../lib/api";
   import { projectPath, projectInfo, recentProjects } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
+  import GithubPackTransport from "./GithubPackTransport.svelte";
 
   type Issue = { severity: "error" | "warning"; code: string; message: string; target?: string | null };
   type Artifact = { id: string; kind: string; path: string; createdAt: string; fileCount: number; overrideCount: number };
@@ -375,6 +376,7 @@
             GitHub repository
             <input bind:value={publishConfig.githubRepository} placeholder="owner/repository" />
           </label>
+          <GithubPackTransport bind:repository={publishConfig.githubRepository} />
           <label>
             Modrinth project id / slug
             <input bind:value={publishConfig.modrinthProjectId} placeholder="project-slug" />

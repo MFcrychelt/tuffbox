@@ -1,6 +1,8 @@
 mod auth;
 mod cosmetics_local;
 mod create_mode_api;
+mod github_auth;
+mod github_pack_commands;
 mod helpers;
 mod home_bootstrap;
 mod integrations;
@@ -49,6 +51,7 @@ pub(crate) use helpers::{
     load_backup_index, load_launcher_data, load_stats,
     manifest_parent, resolve_manifest_path, safe_project_file,
     save_backup_index, save_manifest, save_stats, save_launcher_data,
+    persist_lockfile_for_manifest,
     slugify_project_name,
     unified_text_diff, read_small_text_file, validate_relative_snapshot_path,
     QUEST_IO_LOCK,
@@ -11591,9 +11594,9 @@ fn create_release_draft(path: String, changelog: String) -> Result<ReleaseDraftR
 
 #[tauri::command]
 fn generate_lockfile(path: String) -> Result<TuffboxLockfile, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let graph = DependencyGraph::from_manifest(&manifest);
-    Ok(TuffboxLockfile::from_manifest_and_graph(&manifest, &graph))
+    let manifest_path = PathBuf::from(&path);
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    persist_lockfile_for_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -12666,6 +12669,17 @@ async fn install_modpack(
     target_dir: String,
     instance_name: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    if !std::path::Path::new(&source).exists()
+        && tuffbox_core::github_pack::parse_github_source(&source).is_ok()
+    {
+        return crate::github_pack_commands::github_pack_install(
+            app,
+            source,
+            target_dir,
+            instance_name,
+        )
+        .await;
+    }
     tokio::task::spawn_blocking(move || {
         use tauri::Emitter;
         use tuffbox_core::{
@@ -16115,6 +16129,17 @@ pub fn run() {
             list_release_artifacts,
             create_release_draft,
             generate_lockfile,
+            github_auth::github_pack_start_device_code,
+            github_auth::github_pack_poll_device_code,
+            github_auth::github_pack_auth_status,
+            github_pack_commands::github_pack_parse_source,
+            github_pack_commands::github_pack_inspect_source,
+            github_pack_commands::github_pack_stage_preview,
+            github_pack_commands::github_pack_install,
+            github_pack_commands::github_pack_check_update,
+            github_pack_commands::github_pack_preview_update,
+            github_pack_commands::github_pack_apply_update,
+            github_pack_commands::github_pack_publish,
             capture_test_run_logs,
             list_test_runs,
             finalize_test_run,

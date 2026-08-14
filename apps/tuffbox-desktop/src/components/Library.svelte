@@ -28,6 +28,8 @@
   import CreationTrends from "./CreationTrends.svelte";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LibraryInstancesPane from "./LibraryInstancesPane.svelte";
+  import PromptDialog from "./PromptDialog.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
 
@@ -42,6 +44,10 @@
   let kudosLoading = $state(false);
   let importing = $state(false);
   let importMenuOpen = $state(false);
+  let githubImportOpen = $state(false);
+  let githubConfirmOpen = $state(false);
+  let githubPendingSource = $state("");
+  let githubInspectSummary = $state("");
 
   async function loadSwarm() {
     try {
@@ -169,6 +175,42 @@
     await importFromSource(selected);
   }
 
+  async function importGithubRepo() {
+    importMenuOpen = false;
+    githubImportOpen = true;
+  }
+
+  async function confirmGithubImport(source: string) {
+    githubImportOpen = false;
+    const trimmed = source.trim();
+    if (!trimmed) return;
+    try {
+      const info = await api.transport.github.inspectSource(trimmed);
+      if (info.status === "publishing") {
+        toasts.error("This pack is still publishing oversized assets. Try again when the author finishes.");
+        return;
+      }
+      githubPendingSource = trimmed;
+      const version = info.packVersion ? ` v${info.packVersion}` : "";
+      const ready = info.ready
+        ? "ready"
+        : info.status
+          ? String(info.status)
+          : "packwiz pack";
+      githubInspectSummary = `${info.fullName || trimmed}${version} · ${ready}. Install anonymously?`;
+      githubConfirmOpen = true;
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
+  async function confirmGithubInstall() {
+    githubConfirmOpen = false;
+    const source = githubPendingSource;
+    githubPendingSource = "";
+    if (source) await importFromSource(source);
+  }
+
   async function onPackCreated(path: string) {
     newProjectOpen.set(false);
     try {
@@ -193,7 +235,10 @@
   }
 
   function onGlobalKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") importMenuOpen = false;
+    if (e.key === "Escape") {
+      importMenuOpen = false;
+      githubImportOpen = false;
+    }
   }
 
   // ── Discover (Modrinth / CurseForge modpacks) ───────────────────
@@ -534,6 +579,9 @@
             <button type="button" role="menuitem" onclick={importInstanceFolder}>
               Instance folder
             </button>
+            <button type="button" role="menuitem" onclick={importGithubRepo}>
+              GitHub repository
+            </button>
           </div>
         {/if}
       </div>
@@ -787,6 +835,28 @@
     initialMode={$addInstanceMode}
     onclose={() => newProjectOpen.set(false)}
     oncreated={onPackCreated}
+  />
+{/if}
+
+{#if githubImportOpen}
+  <PromptDialog
+    title="Import from GitHub"
+    message="Public repo only. Paste owner/repo or a github.com URL. No login needed."
+    mode="text"
+    defaultValue=""
+    confirmLabel="Preview"
+    onconfirm={(v) => void confirmGithubImport(v)}
+    oncancel={() => (githubImportOpen = false)}
+  />
+{/if}
+
+{#if githubConfirmOpen}
+  <ConfirmDialog
+    title="Install GitHub pack"
+    message={githubInspectSummary}
+    confirmLabel="Install"
+    onconfirm={() => void confirmGithubInstall()}
+    oncancel={() => (githubConfirmOpen = false)}
   />
 {/if}
 
