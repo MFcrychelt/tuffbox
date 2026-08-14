@@ -14,6 +14,7 @@ use crate::manifest::ProjectManifest;
 
 /// Bundled map: loader → MC version → Modrinth project.
 const CURATED_PACKS_JSON: &str = include_str!("../data/optimize-packs.json");
+const OPTIMIZE_MODS_JSON: &str = include_str!("../data/optimize-mods.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,12 +33,61 @@ pub struct CuratedPacksFile {
     pub fabric: HashMap<String, CuratedPackRef>,
     #[serde(default)]
     pub quilt: HashMap<String, CuratedPackRef>,
+    #[serde(default)]
+    pub neoforge: HashMap<String, CuratedPackRef>,
+    #[serde(default)]
+    pub forge: HashMap<String, CuratedPackRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimizeModEntry {
+    pub name: String,
+    #[serde(default)]
+    pub modrinth_slug: Option<String>,
+    #[serde(default)]
+    pub curseforge_slug: Option<String>,
+    pub reason: String,
+    #[serde(default = "default_risk_low")]
+    pub risk: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub loaders: Vec<String>,
+}
+
+fn default_risk_low() -> String {
+    "low".into()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OptimizeModsFile {
+    #[serde(default)]
+    schema_version: u32,
+    mods: HashMap<String, OptimizeModEntry>,
+    profiles: HashMap<String, HashMap<String, Vec<String>>>,
+}
+
+/// Resolved mod candidate for custom optimize (slug + metadata).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimizeModCandidate {
+    pub slug: String,
+    pub name: String,
+    pub reason: String,
+    pub risk: String,
+    pub category: String,
+    pub modrinth_slug: Option<String>,
+    pub curseforge_slug: Option<String>,
 }
 
 pub fn load_curated_packs() -> CuratedPacksFile {
     serde_json::from_str(CURATED_PACKS_JSON).unwrap_or(CuratedPacksFile {
         fabric: HashMap::new(),
         quilt: HashMap::new(),
+        neoforge: HashMap::new(),
+        forge: HashMap::new(),
     })
 }
 
@@ -54,33 +104,226 @@ pub fn load_curated_packs_with_override() -> CuratedPacksFile {
 }
 
 /// Placeholder rows in `optimize-packs.json` (not published on Modrinth yet).
-/// Treating them as available makes Optimize bootstrap hang / fail on Content.
 pub fn is_unpublished_curated_stub(pack: &CuratedPackRef) -> bool {
     let id = pack.project_id.trim();
     let slug = pack.slug.as_deref().unwrap_or("").trim();
     id.starts_with("tuffbox-opt-") || slug.starts_with("tuffbox-opt-")
 }
 
-pub fn curated_pack_for(loader: &str, mc_version: &str) -> Option<CuratedPackRef> {
-    let file = load_curated_packs_with_override();
-    let map = match loader {
-        "fabric" => &file.fabric,
-        "quilt" => {
-            if let Some(p) = file
-                .quilt
-                .get(mc_version)
-                .cloned()
-                .filter(|p| !is_unpublished_curated_stub(p))
-            {
-                return Some(p);
-            }
-            &file.fabric
+fn loader_curated_map<'a>(
+    file: &'a CuratedPacksFile,
+    loader: &str,
+) -> Option<&'a HashMap<String, CuratedPackRef>> {
+    match loader {
+        "fabric" => Some(&file.fabric),
+        "quilt" => Some(&file.fabric),
+        "neoforge" => Some(&file.neoforge),
+        "forge" => Some(&file.forge),
+        _ => None,
+    }
+}
+
+/// Parse `1.20.1` style versions for ordering within the same minor series.
+fn parse_mc_version_parts(v: &str) -> Option<(u32, u32, u32)> {
+    let mut it = v.split('.');
+    let major = it.next()?.parse().ok()?;
+    let minor = it.next()?.parse().ok()?;
+    let patch = it
+        .next()
+        .map(|p| p.parse().ok())
+        .flatten()
+        .unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+fn cmp_mc_version(a: &str, b: &str) -> std::cmp::Ordering {
+    match (parse_mc_version_parts(a), parse_mc_version_parts(b)) {
+        (Some(va), Some(vb)) => va.cmp(&vb),
+        _ => a.cmp(b),
+    }
+}
+
+/// Resolve a version key from a profile map: exact → same minor (closest patch) → `default`.
+pub fn resolve_version_profile_key(
+    profiles: &HashMap<String, Vec<String>>,
+    mc_version: &str,
+) -> Option<String> {
+    if profiles.contains_key(mc_version) {
+        return Some(mc_version.to_string());
+    }
+    let target = parse_mc_version_parts(mc_version)?;
+    let mut same_minor: Vec<String> = profiles
+        .keys()
+        .filter(|k| *k != "default")
+        .filter(|k| {
+            parse_mc_version_parts(k)
+                .map(|p| p.0 == target.0 && p.1 == target.1)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+    same_minor.sort_by(|a, b| cmp_mc_version(a, b));
+    if let Some(best) = same_minor
+        .iter()
+        .filter(|k| cmp_mc_version(k, mc_version) != std::cmp::Ordering::Greater)
+        .max_by(|a, b| cmp_mc_version(a, b))
+        .or_else(|| same_minor.last())
+    {
+        return Some((*best).clone());
+    }
+    profiles.contains_key("default").then(|| "default".to_string())
+}
+
+fn resolve_curated_pack(
+    map: &HashMap<String, CuratedPackRef>,
+    mc_version: &str,
+) -> Option<CuratedPackRef> {
+    if let Some(p) = map.get(mc_version).filter(|p| !is_unpublished_curated_stub(p)) {
+        return Some(p.clone());
+    }
+    let keys_map: HashMap<String, Vec<String>> = map
+        .keys()
+        .map(|k| (k.clone(), Vec::new()))
+        .collect();
+    if let Some(key) = resolve_version_profile_key(&keys_map, mc_version) {
+        if let Some(p) = map.get(&key).filter(|p| !is_unpublished_curated_stub(p)) {
+            return Some(p.clone());
         }
-        _ => return None,
-    };
-    map.get(mc_version)
+    }
+    map.get("default")
         .cloned()
         .filter(|p| !is_unpublished_curated_stub(p))
+}
+
+fn load_optimize_mods() -> OptimizeModsFile {
+    serde_json::from_str(OPTIMIZE_MODS_JSON).unwrap_or(OptimizeModsFile {
+        schema_version: 1,
+        mods: HashMap::new(),
+        profiles: HashMap::new(),
+    })
+}
+
+fn load_optimize_mods_with_override() -> OptimizeModsFile {
+    if let Ok(path) = std::env::var("TUFFBOX_OPT_MODS") {
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(parsed) = serde_json::from_str(&raw) {
+                return parsed;
+            }
+        }
+    }
+    load_optimize_mods()
+}
+
+/// Aliases used to detect already-installed optimization mods in the manifest.
+pub fn recommendation_aliases(slug: &str) -> Vec<&'static str> {
+    match slug {
+        "ferrite-core" | "ferritecore" => vec!["ferrite-core", "ferritecore"],
+        "entityculling" | "entity-culling" => vec!["entityculling", "entity-culling"],
+        "embeddium" => vec!["embeddium", "rubidium", "sodium", "magnesium"],
+        "rubidium" => vec!["rubidium", "embeddium", "sodium", "magnesium"],
+        "sodium" => vec!["sodium", "embeddium", "rubidium", "magnesium"],
+        "sodium-extra" => vec!["sodium-extra"],
+        "iris" => vec!["iris", "oculus"],
+        "oculus" => vec!["oculus", "iris"],
+        "modernfix" => vec!["modernfix", "modernfix-mvus"],
+        "lithium" => vec!["lithium", "radium", "canary"],
+        "radium" => vec!["radium", "lithium", "canary"],
+        "canary" => vec!["canary", "radium", "lithium"],
+        "c2me-fabric" | "c2me" => vec!["c2me-fabric", "c2me", "c2me-opts"],
+        "bobby" => vec!["bobby"],
+        "starlight" => vec!["starlight"],
+        "reeses-sodium-options" => vec!["reeses-sodium-options", "reeses-sodium-options-forge"],
+        "moreculling" => vec!["moreculling", "more-culling"],
+        "dynamic-fps" => vec!["dynamic-fps"],
+        "immediatelyfast" => vec!["immediatelyfast"],
+        "nvidium" => vec!["nvidium"],
+        "krypton" => vec!["krypton"],
+        "lazydfu" => vec!["lazydfu"],
+        "indium" => vec!["indium"],
+        _ => Vec::new(),
+    }
+}
+
+pub fn aliases_for_candidate(slug: &str) -> Vec<String> {
+    let mut aliases: Vec<String> = recommendation_aliases(slug)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if !aliases.iter().any(|a| a == slug) {
+        aliases.insert(0, slug.to_string());
+    }
+    aliases
+}
+
+fn mod_entry_supports_loader(entry: &OptimizeModEntry, loader: &str) -> bool {
+    entry.loaders.is_empty() || entry.loaders.iter().any(|l| l == loader)
+}
+
+/// Version- and loader-aware optimization mod list (Fabulously Optimized–inspired).
+pub fn optimization_candidates(loader: &str, mc_version: &str) -> Vec<OptimizeModCandidate> {
+    let file = load_optimize_mods_with_override();
+    let loader_profiles = file
+        .profiles
+        .get(loader)
+        .or_else(|| if loader == "quilt" { file.profiles.get("fabric") } else { None });
+    let Some(loader_profiles) = loader_profiles else {
+        return Vec::new();
+    };
+    let profile_key =
+        resolve_version_profile_key(loader_profiles, mc_version).unwrap_or_else(|| {
+            if loader_profiles.contains_key("default") {
+                "default".to_string()
+            } else {
+                mc_version.to_string()
+            }
+        });
+    let mod_ids = loader_profiles
+        .get(&profile_key)
+        .or_else(|| loader_profiles.get("default"))
+        .cloned()
+        .unwrap_or_default();
+
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for id in mod_ids {
+        let Some(entry) = file.mods.get(&id) else {
+            continue;
+        };
+        if !mod_entry_supports_loader(entry, loader) {
+            continue;
+        }
+        let slug = entry
+            .modrinth_slug
+            .as_deref()
+            .unwrap_or(id.as_str())
+            .to_string();
+        if !seen.insert(slug.clone()) {
+            continue;
+        }
+        out.push(OptimizeModCandidate {
+            slug,
+            name: entry.name.clone(),
+            reason: entry.reason.clone(),
+            risk: entry.risk.clone(),
+            category: entry.category.clone(),
+            modrinth_slug: entry.modrinth_slug.clone(),
+            curseforge_slug: entry.curseforge_slug.clone(),
+        });
+    }
+    out
+}
+
+pub fn curated_pack_for(loader: &str, mc_version: &str) -> Option<CuratedPackRef> {
+    let file = load_curated_packs_with_override();
+    if loader == "quilt" {
+        if let Some(map) = loader_curated_map(&file, "quilt") {
+            if let Some(p) = resolve_curated_pack(map, mc_version) {
+                return Some(p);
+            }
+        }
+    }
+    let map = loader_curated_map(&file, loader)?;
+    resolve_curated_pack(map, mc_version)
 }
 
 pub fn list_curated_pack_entries(loader: &str) -> Vec<(String, CuratedPackRef)> {
@@ -94,10 +337,15 @@ pub fn list_curated_pack_entries(loader: &str) -> Vec<(String, CuratedPackRef)> 
             }
             m
         }
+        "neoforge" => file.neoforge,
+        "forge" => file.forge,
         _ => HashMap::new(),
     };
-    let mut out: Vec<_> = map.into_iter().collect();
-    out.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out: Vec<_> = map
+        .into_iter()
+        .filter(|(_, p)| !is_unpublished_curated_stub(p))
+        .collect();
+    out.sort_by(|a, b| cmp_mc_version(&a.0, &b.0));
     out
 }
 
@@ -405,8 +653,41 @@ mod tests {
             name: Some("stub".into()),
         };
         assert!(is_unpublished_curated_stub(&stub));
-        // Bundled JSON still lists stubs, but curated_pack_for must hide them.
-        assert!(curated_pack_for("fabric", "1.20.1").is_none());
-        assert!(curated_pack_for("fabric", "1.21.1").is_none());
+    }
+
+    #[test]
+    fn fabulously_optimized_curated_for_fabric_1211() {
+        let pack = curated_pack_for("fabric", "1.21.1").expect("FO curated");
+        assert_eq!(pack.slug.as_deref(), Some("fabulously-optimized"));
+    }
+
+    #[test]
+    fn optimization_candidates_fabric_1211_includes_sodium() {
+        let mods = optimization_candidates("fabric", "1.21.1");
+        assert!(mods.iter().any(|m| m.slug == "sodium"));
+        assert!(mods.iter().any(|m| m.slug == "lithium"));
+        assert!(!mods.iter().any(|m| m.slug == "embeddium"));
+    }
+
+    #[test]
+    fn optimization_candidates_neoforge_uses_embeddium() {
+        let mods = optimization_candidates("neoforge", "1.21.1");
+        assert!(mods.iter().any(|m| m.slug == "embeddium"));
+        assert!(!mods.iter().any(|m| m.slug == "sodium"));
+    }
+
+    #[test]
+    fn version_profile_falls_back_to_minor_series() {
+        let file = load_optimize_mods();
+        let fabric = file.profiles.get("fabric").unwrap();
+        let key = resolve_version_profile_key(fabric, "1.21.3").unwrap();
+        assert!(key == "1.21.1" || key == "1.21.4" || key == "default");
+    }
+
+    #[test]
+    fn optimize_mods_json_parses() {
+        let file = load_optimize_mods();
+        assert!(!file.mods.is_empty());
+        assert!(file.profiles.contains_key("fabric"));
     }
 }

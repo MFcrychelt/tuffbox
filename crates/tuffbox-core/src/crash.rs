@@ -1152,6 +1152,24 @@ fn is_mod_list_table_row(line: &str) -> bool {
     trimmed.starts_with('|') && trimmed.contains('|') && !trimmed.to_ascii_lowercase().contains("mod id")
 }
 
+/// First mod id from a pipe-formatted `-- Mods --` table row, e.g. `| fabric-api | 0.92.0 |`.
+fn extract_mod_list_id(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('|') {
+        return None;
+    }
+    let cells: Vec<&str> = trimmed
+        .trim_matches('|')
+        .split('|')
+        .map(|c| c.trim())
+        .collect();
+    let id = cells.first()?;
+    if id.is_empty() || id.to_ascii_lowercase().contains("mod id") {
+        return None;
+    }
+    Some(id.to_string())
+}
+
 fn stack_context_for_line(
     line: &str,
     section: LogSection,
@@ -1221,6 +1239,23 @@ pub fn analyze_text_for_suspects(
 
     for (index, line) in text.lines().enumerate() {
         section = detect_log_section(line, section);
+        if section == LogSection::ModList {
+            if let Some(id) = extract_mod_list_id(line) {
+                if let Some(candidate) = candidates
+                    .iter()
+                    .find(|c| c.module.id == id || c.tokens.iter().any(|t| t == &id))
+                {
+                    let line_number = index + 1;
+                    add_manifest_suspect(
+                        &mut suspects,
+                        candidate.module,
+                        evidence_weighted(source, line_number, CrashSignalKind::SuspectedMods, line, 12),
+                        scaled_confidence(confidence_for_kind(CrashSignalKind::SuspectedMods), 12),
+                    );
+                }
+            }
+            continue;
+        }
         let (stack_ctx, next_caused, next_primary_frames) =
             stack_context_for_line(line, section, in_caused_by, primary_frames);
         in_caused_by = next_caused;
@@ -1325,8 +1360,8 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence_weighted(source, line_number, kind, line, weight.max(90)),
-                        scaled_confidence(92, weight.max(90)),
+                        evidence_weighted(source, line_number, kind, line, weight.max(100)),
+                        scaled_confidence(92, weight.max(100)),
                     );
                 } else {
                     let inferred = infer_id_from_jar(&jar_name);
@@ -1339,6 +1374,22 @@ pub fn analyze_text_for_suspects(
                             scaled_confidence(68, weight),
                         );
                     }
+                }
+            }
+        }
+
+        if matches!(kind, CrashSignalKind::Entrypoint) {
+            for mod_id in extract_quoted_mod_ids(line) {
+                if let Some(candidate) = candidates
+                    .iter()
+                    .find(|candidate| candidate.tokens.iter().any(|t| t == &mod_id))
+                {
+                    add_manifest_suspect(
+                        &mut suspects,
+                        candidate.module,
+                        evidence_weighted(source, line_number, kind, line, weight.max(100)),
+                        scaled_confidence(confidence_for_kind(kind), weight.max(100)),
+                    );
                 }
             }
         }
@@ -1359,8 +1410,8 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence_weighted(source, line_number, kind, line, weight.max(85)),
-                        scaled_confidence(confidence_for_kind(kind), weight.max(85)),
+                        evidence_weighted(source, line_number, kind, line, weight.max(100)),
+                        scaled_confidence(confidence_for_kind(kind), weight.max(100)),
                     );
                 } else if !is_noise_token(&mod_id)
                     && !is_invented_vanilla_resource_mod_id(&mod_id)
@@ -1378,7 +1429,7 @@ pub fn analyze_text_for_suspects(
 
         if matches!(
             kind,
-            CrashSignalKind::Mixin | CrashSignalKind::SuspectedMods
+            CrashSignalKind::Mixin | CrashSignalKind::SuspectedMods | CrashSignalKind::CausedBy
         ) {
             for token in tokenize(line) {
                 if token.len() < 3 || is_noise_token(&token) {
@@ -2594,7 +2645,9 @@ fn assign_blame_roles(suspects: &mut [SuspectedMod]) {
             .filter(|src| is_strong_match_source(src))
             .count();
         // Multi-signal agreement → primary; single strong → secondary; else related.
-        if strong >= 2 || (s.confidence >= 92 && strong >= 1) {
+        let has_caused = s.evidence.iter().any(|e| e.kind == CrashSignalKind::CausedBy);
+        let has_entry = s.match_sources.iter().any(|src| src == "entrypoint");
+        if has_caused || has_entry || (s.confidence >= 92 && strong >= 1) {
             s.blame_role = BlameRole::Primary;
             s.confidence = s.confidence.saturating_add(4).min(99);
         } else if strong == 1 || s.confidence >= 75 {

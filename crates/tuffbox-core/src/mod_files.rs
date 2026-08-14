@@ -63,9 +63,12 @@ pub fn content_dir_for(instance_dir: &Path, content_type: ContentType) -> PathBu
     instance_dir.join(content_type.folder_name())
 }
 
-/// Ensures a single content entry's file is present and hash-valid inside
-/// its content-type-appropriate folder under `instance_dir`, downloading it
-/// from `source.url` if necessary.
+/// Ensures a single content entry's file is present inside its
+/// content-type-appropriate folder under `instance_dir`, downloading it
+/// from `source.url` if missing or empty.
+///
+/// Warm launches skip SHA-1: hashes are verified at download time. Re-reading
+/// every jar on Play (a 200-mod pack is hundreds of MB) is the common stall.
 pub fn materialize_mod_file(
     instance_dir: &Path,
     module: &ModSpec,
@@ -90,7 +93,23 @@ pub fn materialize_mod_file_with_progress(
         return Ok(MaterializeOutcome::Skipped);
     }
 
-    // Resolve CurseForge projectID/fileID → CDN URL when missing (or a website link).
+    let Some(file_name) = &module.file_name else {
+        return Err(ModFileError::NoFileName(module.id.clone()));
+    };
+
+    let target_dir = content_dir_for(instance_dir, module.content_type);
+    let target = target_dir.join(file_name);
+
+    // Fast path for Play: if the jar is already on disk, do not SHA-1 it and
+    // do not resolve CurseForge CDN URLs. Both used to run on every launch.
+    if target.is_file() {
+        if std::fs::metadata(&target).map(|m| m.len() > 0).unwrap_or(false) {
+            return Ok(MaterializeOutcome::AlreadyPresent);
+        }
+    }
+
+    // Resolve CurseForge projectID/fileID → CDN URL only when we actually
+    // need to download (missing or empty file).
     let mut resolved_url = module.source.url.clone();
     if matches!(module.source.kind, SourceKind::Curseforge) {
         let needs_resolve = resolved_url
@@ -118,29 +137,12 @@ pub fn materialize_mod_file_with_progress(
         }
     }
 
-    let Some(file_name) = &module.file_name else {
-        return Err(ModFileError::NoFileName(module.id.clone()));
-    };
     let Some(url) = &resolved_url else {
         return Err(ModFileError::NoDownloadUrl(module.id.clone()));
     };
 
-    let target_dir = content_dir_for(instance_dir, module.content_type);
     std::fs::create_dir_all(&target_dir)?;
-    let target = target_dir.join(file_name);
     let expected_sha1 = module.hashes.as_ref().and_then(|h| h.sha1.as_deref());
-
-    if target.is_file() {
-        let matches = match expected_sha1 {
-            Some(expected) => sha1_file(&target)
-                .map(|actual| actual.eq_ignore_ascii_case(expected))
-                .unwrap_or(false),
-            None => true,
-        };
-        if matches {
-            return Ok(MaterializeOutcome::AlreadyPresent);
-        }
-    }
 
     let download_result = if crate::provider::curseforge::url_needs_curseforge_key(url) {
         download_with_curseforge_key(url, &target, expected_sha1, &module.id, progress)
@@ -519,6 +521,44 @@ mod tests {
         );
         let outcome = materialize_mod_file(dir.path(), &module).unwrap();
         assert!(matches!(outcome, MaterializeOutcome::AlreadyPresent));
+    }
+
+    #[test]
+    fn existing_file_with_sha1_skips_rehash_and_redownload() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("mods")).unwrap();
+        std::fs::write(dir.path().join("mods").join("example.jar"), b"already here").unwrap();
+        let mut module = sample_mod(
+            SourceKind::Modrinth,
+            Some("example.jar"),
+            Some("https://example.invalid/should-not-be-fetched.jar"),
+        );
+        module.hashes = Some(crate::manifest::FileHashes {
+            sha1: Some("deadbeef".into()),
+            sha512: None,
+        });
+        let outcome = materialize_mod_file(dir.path(), &module).unwrap();
+        assert!(matches!(outcome, MaterializeOutcome::AlreadyPresent));
+    }
+
+    #[test]
+    fn curseforge_existing_file_skips_api_even_without_url() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("mods")).unwrap();
+        std::fs::write(dir.path().join("mods").join("example.jar"), b"cf-mod").unwrap();
+        let module = sample_mod(SourceKind::Curseforge, Some("example.jar"), None);
+        let outcome = materialize_mod_file(dir.path(), &module).unwrap();
+        assert!(matches!(outcome, MaterializeOutcome::AlreadyPresent));
+    }
+
+    #[test]
+    fn empty_on_disk_file_is_not_treated_as_present() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("mods")).unwrap();
+        std::fs::write(dir.path().join("mods").join("example.jar"), b"").unwrap();
+        let module = sample_mod(SourceKind::Modrinth, Some("example.jar"), None);
+        let result = materialize_mod_file(dir.path(), &module);
+        assert!(matches!(result, Err(ModFileError::NoDownloadUrl(_))));
     }
 
     #[test]

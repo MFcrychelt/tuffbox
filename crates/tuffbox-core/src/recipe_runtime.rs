@@ -66,12 +66,19 @@ pub fn prepare_recipe_bridge(
     };
     std::fs::create_dir_all(&mods_dir).map_err(|error| error.to_string())?;
     let installed = mods_dir.join("tuffbox-jei-bridge.runtime.jar");
-    std::fs::copy(&source, &installed).map_err(|error| {
-        format!(
-            "failed to install JEI runtime bridge {}: {error}",
-            source.display()
-        )
-    })?;
+    let skip_copy = installed.is_file()
+        && std::fs::metadata(&source)
+            .ok()
+            .zip(std::fs::metadata(&installed).ok())
+            .is_some_and(|(s, d)| s.len() == d.len());
+    if !skip_copy {
+        std::fs::copy(&source, &installed).map_err(|error| {
+            format!(
+                "failed to install JEI runtime bridge {}: {error}",
+                source.display()
+            )
+        })?;
+    }
 
     let runtime_dir = game_dir.join(".tuffbox");
     std::fs::create_dir_all(&runtime_dir).map_err(|error| error.to_string())?;

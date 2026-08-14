@@ -108,7 +108,7 @@ pub fn prepare_cosmetics_bridge(
     match find_cosmetics_jar(mc, loader) {
         Some((src, anchor)) => {
             let dest = mods_dir.join("tuffbox-cosmetics.runtime.jar");
-            fs::copy(&src, &dest).map_err(|e| format!("copy cosmetics jar: {e}"))?;
+            copy_if_unchanged(&src, &dest).map_err(|e| format!("copy cosmetics jar: {e}"))?;
             cleanup.push(dest);
             if anchor == mc {
                 notes.push(format!("tuffbox-cosmetics injected ({anchor})"));
@@ -159,6 +159,17 @@ pub fn prepare_cosmetics_bridge(
         cleanup_paths: cleanup,
         message: notes.join("; "),
     }))
+}
+
+fn copy_if_unchanged(src: &Path, dest: &Path) -> Result<(), String> {
+    if dest.is_file() {
+        if let (Ok(s), Ok(d)) = (fs::metadata(src), fs::metadata(dest)) {
+            if s.len() == d.len() {
+                return Ok(());
+            }
+        }
+    }
+    fs::copy(src, dest).map(|_| ()).map_err(|e| e.to_string())
 }
 
 fn write_local_skin_hint(game_dir: &Path, username: &str) -> Result<(), String> {
@@ -420,23 +431,21 @@ fn ensure_custom_skin_loader(
         _ => "Fabric",
     };
 
-    // Prefer cached jar matching mc
+    // Prefer cached jar matching mc. Do not wait on Modrinth during Play —
+    // a cache miss used to stall launch up to 30s.
     if let Some(existing) = find_cached_csl(&cache, mc, loader_tag) {
         let dest = mods_dir.join("tuffbox-csl.runtime.jar");
-        fs::copy(&existing, &dest).map_err(|e| e.to_string())?;
+        copy_if_unchanged(&existing, &dest)?;
         return Ok(Some(dest));
     }
 
-    // Download from Modrinth (project idMHQ4n2)
-    match download_csl_from_modrinth(mc, loader_tag, &cache) {
-        Ok(Some(path)) => {
-            let dest = mods_dir.join("tuffbox-csl.runtime.jar");
-            fs::copy(&path, &dest).map_err(|e| e.to_string())?;
-            Ok(Some(dest))
-        }
-        Ok(None) => Ok(None),
-        Err(e) => Err(e),
-    }
+    let cache_bg = cache.clone();
+    let mc_bg = mc.to_string();
+    let loader_bg = loader_tag.to_string();
+    std::thread::spawn(move || {
+        let _ = download_csl_from_modrinth(&mc_bg, &loader_bg, &cache_bg);
+    });
+    Ok(None)
 }
 
 fn find_cached_csl(cache: &Path, mc: &str, loader_tag: &str) -> Option<PathBuf> {

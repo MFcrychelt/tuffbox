@@ -1,13 +1,18 @@
-//! Import packwiz packs (`pack.toml` + `index.toml` + `.pw.toml` metafiles).
+//! Import/export packwiz packs (`pack.toml` + `index.toml` + `.pw.toml` metafiles).
 //!
-//! No packwiz binary — parses the on-disk TOML format into [`ProjectManifest`].
+//! No packwiz binary — parses/writes the on-disk TOML format.
 
 use crate::manifest::{
     ContentType, FileHashes, JavaSpec, LoaderKind, LoaderSpec, MinecraftSpec, ModOption, ModSource,
     ModSpec, ProfileSpec, ProjectManifest, ProjectMetadata, Side, SourceKind,
 };
-use serde::Deserialize;
-use std::{collections::HashMap, fs, path::Path};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -22,6 +27,22 @@ pub enum PackwizImportError {
     MissingIndex(String),
     #[error("unsupported loader in pack.toml versions")]
     UnknownLoader,
+}
+
+#[derive(Debug, Error)]
+pub enum PackwizExportError {
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("output path must be a directory (got a file): {0}")]
+    NotADirectory(String),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackwizExportResult {
+    pub path: PathBuf,
+    pub file_count: usize,
+    pub override_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,6 +158,307 @@ struct PwOption {
 /// True when `path` is a directory containing `pack.toml`.
 pub fn is_packwiz_pack(path: impl AsRef<Path>) -> bool {
     path.as_ref().join("pack.toml").is_file()
+}
+
+/// Export a TuffBox project as a packwiz directory (`pack.toml` + `index.toml` + metafiles).
+///
+/// Does not copy jar binaries — remote Modrinth/CurseForge/direct URL downloads are
+/// written as `.pw.toml` metafiles so `packwiz` / packwiz-compatible tools can fetch them.
+pub fn export_packwiz_pack(
+    manifest: &ProjectManifest,
+    manifest_path: impl AsRef<Path>,
+    output_dir: impl AsRef<Path>,
+) -> Result<PackwizExportResult, PackwizExportError> {
+    let output_dir = output_dir.as_ref();
+    let project_dir = manifest_path
+        .as_ref()
+        .parent()
+        .ok_or_else(|| PackwizExportError::NotADirectory("manifest has no parent".into()))?;
+    if output_dir.is_file() {
+        return Err(PackwizExportError::NotADirectory(
+            output_dir.display().to_string(),
+        ));
+    }
+    // Avoid writing into the live project tree by accident.
+    if same_dir(output_dir, project_dir) {
+        return Err(PackwizExportError::NotADirectory(
+            "packwiz output must not be the project root".into(),
+        ));
+    }
+    fs::create_dir_all(output_dir)?;
+
+    let mut versions: BTreeMap<String, String> = BTreeMap::new();
+    versions.insert("minecraft".into(), manifest.minecraft.version.clone());
+    let loader_key = match manifest.loader.kind {
+        LoaderKind::Fabric => "fabric",
+        LoaderKind::Quilt => "quilt",
+        LoaderKind::Forge => "forge",
+        LoaderKind::Neoforge => "neoforge",
+        LoaderKind::Vanilla => "vanilla",
+    };
+    if !matches!(manifest.loader.kind, LoaderKind::Vanilla) {
+        versions.insert(loader_key.into(), manifest.loader.version.clone());
+    }
+
+    // (relative path, sha256 hex, metafile?)
+    let mut index_entries: Vec<(String, String, bool)> = Vec::new();
+    let mut override_count = 0usize;
+
+    for m in &manifest.mods {
+        let folder = m.content_type.folder_name();
+        if mod_has_packwiz_remote(m) {
+            let meta_rel = format!("{folder}/{}.pw.toml", sanitize_filename(&m.id));
+            let meta_path = output_dir.join(&meta_rel);
+            if let Some(parent) = meta_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let body = render_pw_toml(m);
+            fs::write(&meta_path, &body)?;
+            let hash = hex::encode(Sha256::digest(body.as_bytes()));
+            index_entries.push((meta_rel.replace('\\', "/"), hash, true));
+        } else if let Some(file_name) = m.file_name.as_ref() {
+            let src = project_dir.join(folder).join(file_name);
+            if src.is_file() {
+                let rel = format!("{folder}/{}", sanitize_filename(file_name));
+                let dest = output_dir.join(&rel);
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&src, &dest)?;
+                let bytes = fs::read(&dest)?;
+                let hash = hex::encode(Sha256::digest(&bytes));
+                index_entries.push((rel.replace('\\', "/"), hash, false));
+            }
+        }
+    }
+
+    for root in PACKWIZ_OVERRIDE_ROOTS {
+        let src_root = project_dir.join(root);
+        if !src_root.is_dir() {
+            continue;
+        }
+        override_count += copy_tree_hashed(project_dir, &src_root, output_dir, &mut index_entries)?;
+    }
+
+    index_entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut index_toml = String::from("hash-format = \"sha256\"\n\n");
+    for (file, hash, metafile) in &index_entries {
+        index_toml.push_str("[[files]]\n");
+        index_toml.push_str(&format!("file = {}\n", toml_string(file)));
+        index_toml.push_str(&format!("hash = {}\n", toml_string(hash)));
+        if *metafile {
+            index_toml.push_str("metafile = true\n");
+        }
+        index_toml.push('\n');
+    }
+    fs::write(output_dir.join("index.toml"), &index_toml)?;
+    let index_hash = hex::encode(Sha256::digest(index_toml.as_bytes()));
+
+    let author = manifest.project.authors.first().cloned();
+    let mut pack_toml = String::new();
+    pack_toml.push_str(&format!("name = {}\n", toml_string(&manifest.project.name)));
+    if let Some(a) = &author {
+        pack_toml.push_str(&format!("author = {}\n", toml_string(a)));
+    }
+    pack_toml.push_str(&format!("version = {}\n", toml_string(&manifest.project.version)));
+    if let Some(desc) = &manifest.project.description {
+        if !desc.trim().is_empty() {
+            pack_toml.push_str(&format!("description = {}\n", toml_string(desc)));
+        }
+    }
+    pack_toml.push_str("pack-format = \"packwiz:1.1.0\"\n\n");
+    pack_toml.push_str("[index]\n");
+    pack_toml.push_str("file = \"index.toml\"\n");
+    pack_toml.push_str("hash-format = \"sha256\"\n");
+    pack_toml.push_str(&format!("hash = {}\n\n", toml_string(&index_hash)));
+    pack_toml.push_str("[versions]\n");
+    for (k, v) in &versions {
+        pack_toml.push_str(&format!("{k} = {}\n", toml_string(v)));
+    }
+    fs::write(output_dir.join("pack.toml"), pack_toml)?;
+
+    Ok(PackwizExportResult {
+        path: output_dir.to_path_buf(),
+        file_count: index_entries.len() + 2, // + pack.toml + index.toml
+        override_count,
+    })
+}
+
+const PACKWIZ_OVERRIDE_ROOTS: &[&str] = &[
+    "config",
+    "defaultconfigs",
+    "kubejs",
+    "scripts",
+    "resourcepacks",
+    "shaderpacks",
+    "datapacks",
+];
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let a = fs::canonicalize(a).unwrap_or_else(|_| a.to_path_buf());
+    let b = fs::canonicalize(b).unwrap_or_else(|_| b.to_path_buf());
+    a == b
+}
+
+fn mod_has_packwiz_remote(m: &ModSpec) -> bool {
+    match m.source.kind {
+        SourceKind::Curseforge => {
+            m.source.project_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
+                && m.source.file_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
+        }
+        _ => m
+            .source
+            .url
+            .as_deref()
+            .map(|u| !u.trim().is_empty())
+            .unwrap_or(false),
+    }
+}
+
+fn copy_tree_hashed(
+    project_dir: &Path,
+    dir: &Path,
+    output_dir: &Path,
+    index_entries: &mut Vec<(String, String, bool)>,
+) -> Result<usize, PackwizExportError> {
+    let mut count = 0usize;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            count += copy_tree_hashed(project_dir, &path, output_dir, index_entries)?;
+        } else if path.is_file() {
+            let rel = path
+                .strip_prefix(project_dir)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let dest = output_dir.join(&rel);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&path, &dest)?;
+            let bytes = fs::read(&dest)?;
+            let hash = hex::encode(Sha256::digest(&bytes));
+            index_entries.push((rel, hash, false));
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn toml_string(s: &str) -> String {
+    // Minimal TOML string quoting (escape backslash and quotes).
+    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+fn sanitize_filename(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn render_pw_toml(m: &ModSpec) -> String {
+    let filename = m
+        .file_name
+        .clone()
+        .unwrap_or_else(|| format!("{}.jar", m.id));
+    let side = match m.side {
+        Side::Client => "client",
+        Side::Server => "server",
+        Side::Both | Side::Optional | Side::Unknown => "both",
+    };
+    let mut out = String::new();
+    out.push_str(&format!("name = {}\n", toml_string(&m.name)));
+    out.push_str(&format!("filename = {}\n", toml_string(&filename)));
+    out.push_str(&format!("side = {}\n", toml_string(side)));
+    if m.pinned() {
+        out.push_str("pin = true\n");
+    }
+    out.push('\n');
+
+    // download table
+    out.push_str("[download]\n");
+    let (hash_format, hash) = match &m.hashes {
+        Some(h) if h.sha512.as_ref().map(|s| !s.is_empty()).unwrap_or(false) => {
+            ("sha512", h.sha512.clone().unwrap())
+        }
+        Some(h) if h.sha1.as_ref().map(|s| !s.is_empty()).unwrap_or(false) => {
+            ("sha1", h.sha1.clone().unwrap())
+        }
+        _ => ("sha256", String::new()),
+    };
+    if !hash.is_empty() {
+        out.push_str(&format!("hash-format = {}\n", toml_string(hash_format)));
+        out.push_str(&format!("hash = {}\n", toml_string(&hash)));
+    } else {
+        out.push_str("hash-format = \"sha256\"\n");
+        out.push_str("hash = \"\"\n");
+    }
+
+    match m.source.kind {
+        SourceKind::Curseforge => {
+            out.push_str("mode = \"metadata:curseforge\"\n");
+        }
+        _ => {
+            if let Some(url) = &m.source.url {
+                if !url.is_empty() {
+                    out.push_str(&format!("url = {}\n", toml_string(url)));
+                }
+            }
+        }
+    }
+    out.push('\n');
+
+    match m.source.kind {
+        SourceKind::Modrinth => {
+            if let Some(pid) = &m.source.project_id {
+                out.push_str("[update.modrinth]\n");
+                out.push_str(&format!("mod-id = {}\n", toml_string(pid)));
+                if !m.version.is_empty() && m.version != "unknown" {
+                    out.push_str(&format!("version = {}\n", toml_string(&m.version)));
+                }
+                out.push('\n');
+            }
+        }
+        SourceKind::Curseforge => {
+            if let Some(pid) = &m.source.project_id {
+                out.push_str("[update.curseforge]\n");
+                out.push_str(&format!("project-id = {}\n", pid));
+                if let Some(fid) = &m.source.file_id {
+                    out.push_str(&format!("file-id = {}\n", fid));
+                }
+                out.push('\n');
+            }
+        }
+        _ => {}
+    }
+
+    if m.side == Side::Optional || m.option.is_some() {
+        out.push_str("[option]\n");
+        out.push_str("optional = true\n");
+        if let Some(opt) = &m.option {
+            if let Some(desc) = &opt.description {
+                out.push_str(&format!("description = {}\n", toml_string(desc)));
+            }
+            out.push_str(&format!("default = {}\n", if opt.default { "true" } else { "false" }));
+        } else {
+            out.push_str("default = true\n");
+        }
+        out.push('\n');
+    }
+
+    out
 }
 
 /// Import a packwiz pack directory into a [`ProjectManifest`].
@@ -470,5 +792,84 @@ default = true
         writeln!(f, "name = \"x\"").unwrap();
         assert!(is_packwiz_pack(&dir));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_packwiz_roundtrip_smoke() {
+        let dir = std::env::temp_dir().join("tuffbox_packwiz_export_test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let manifest = ProjectManifest {
+            schema_version: crate::manifest::CURRENT_PROJECT_SCHEMA_VERSION.into(),
+            project: ProjectMetadata {
+                id: "demo".into(),
+                name: "Demo Pack".into(),
+                version: "1.2.3".into(),
+                description: Some("hi".into()),
+                authors: vec!["Tester".into()],
+            },
+            minecraft: MinecraftSpec {
+                version: "1.21.1".into(),
+            },
+            loader: LoaderSpec {
+                kind: LoaderKind::Fabric,
+                version: "0.16.0".into(),
+            },
+            brief: None,
+            listing: None,
+            java: None,
+            profiles: vec![],
+            mods: vec![ModSpec {
+                id: "sodium".into(),
+                name: "Sodium".into(),
+                source: ModSource {
+                    kind: SourceKind::Modrinth,
+                    project_id: Some("AANobbMI".into()),
+                    file_id: Some("ver1".into()),
+                    url: Some("https://example.com/sodium.jar".into()),
+                    path: None,
+                    icon_url: None,
+                    categories: vec![],
+                },
+                version: "0.6.0".into(),
+                file_name: Some("sodium.jar".into()),
+                hashes: Some(FileHashes {
+                    sha1: None,
+                    sha512: Some("abc".into()),
+                }),
+                side: Side::Client,
+                dependencies: vec![],
+                status: vec![],
+                content_type: ContentType::Mod,
+                authors: vec![],
+                option: None,
+            }],
+            overrides: None,
+        };
+
+        let project = std::env::temp_dir().join("tuffbox_packwiz_export_project");
+        let _ = fs::remove_dir_all(&project);
+        fs::create_dir_all(project.join("mods")).unwrap();
+        fs::create_dir_all(project.join("config")).unwrap();
+        fs::write(project.join("config/demo.toml"), "ok = true\n").unwrap();
+        let manifest_path = project.join("tuffbox.project.json");
+        fs::write(&manifest_path, "{}").unwrap();
+
+        let out = export_packwiz_pack(&manifest, &manifest_path, &dir).unwrap();
+        assert!(out.path.join("pack.toml").is_file());
+        assert!(out.path.join("index.toml").is_file());
+        assert!(out.path.join("mods/sodium.pw.toml").is_file());
+        assert!(out.path.join("config/demo.toml").is_file());
+        assert!(out.override_count >= 1);
+        let pack = fs::read_to_string(out.path.join("pack.toml")).unwrap();
+        assert!(pack.contains("hash = "));
+        let index = fs::read_to_string(out.path.join("index.toml")).unwrap();
+        assert!(index.contains("config/demo.toml"));
+        let round = import_packwiz_pack(&dir).unwrap();
+        assert_eq!(round.mods.len(), 1);
+        assert_eq!(round.mods[0].source.kind, SourceKind::Modrinth);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&project);
     }
 }

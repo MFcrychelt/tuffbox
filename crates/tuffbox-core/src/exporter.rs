@@ -165,6 +165,87 @@ struct ModrinthHashes {
     sha512: Option<String>,
 }
 
+pub fn validate_curseforge_export(manifest: &ProjectManifest) -> Vec<ExportIssue> {
+    let mut issues = Vec::new();
+    if manifest.minecraft.version.trim().is_empty() {
+        issues.push(issue(
+            ExportIssueSeverity::Error,
+            "MISSING_MINECRAFT_VERSION",
+            "Minecraft version is required for CurseForge export.",
+            None,
+        ));
+    }
+    if !matches!(manifest.loader.kind, LoaderKind::Vanilla)
+        && manifest.loader.version.trim().is_empty()
+    {
+        issues.push(issue(
+            ExportIssueSeverity::Error,
+            "MISSING_LOADER_VERSION",
+            "Loader version is required for CurseForge export.",
+            None,
+        ));
+    }
+    if manifest.mods.is_empty() {
+        issues.push(issue(
+            ExportIssueSeverity::Warning,
+            "NO_MODS",
+            "The project has no mods; CurseForge zip will contain only overrides.",
+            None,
+        ));
+    }
+    let mut cf_count = 0usize;
+    for module in &manifest.mods {
+        let has_cf = matches!(module.source.kind, SourceKind::Curseforge)
+            && module
+                .source
+                .project_id
+                .as_deref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
+            && module
+                .source
+                .file_id
+                .as_deref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+        if has_cf {
+            cf_count += 1;
+            continue;
+        }
+        if module.file_name.is_some() {
+            issues.push(issue(
+                ExportIssueSeverity::Warning,
+                "CF_MOD_AS_OVERRIDE",
+                "No CurseForge project/file IDs; jar will be embedded in overrides/mods if present locally.",
+                Some(module.id.clone()),
+            ));
+        } else if module.source.url.as_deref().map(|u| !u.is_empty()).unwrap_or(false) {
+            issues.push(issue(
+                ExportIssueSeverity::Warning,
+                "CF_REMOTE_SIDE_CHANNEL",
+                "Non-CurseForge remote kept in tuffbox.remote-mods.json (CF App will not auto-install it).",
+                Some(module.id.clone()),
+            ));
+        } else {
+            issues.push(issue(
+                ExportIssueSeverity::Warning,
+                "CF_MOD_UNRESOLVED",
+                "Mod has neither CurseForge IDs nor a local jar/url; it may be missing from the zip.",
+                Some(module.id.clone()),
+            ));
+        }
+    }
+    if !manifest.mods.is_empty() && cf_count == 0 {
+        issues.push(issue(
+            ExportIssueSeverity::Warning,
+            "CF_NO_MANIFEST_FILES",
+            "No mods have CurseForge IDs; manifest.json files[] will be empty (overrides-only pack).",
+            None,
+        ));
+    }
+    issues
+}
+
 pub fn validate_modrinth_export(manifest: &ProjectManifest) -> Vec<ExportIssue> {
     let mut issues = Vec::new();
     if manifest.minecraft.version.trim().is_empty() {

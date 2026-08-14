@@ -34,6 +34,7 @@ pub mod mc_install;
 pub mod mc_manifest;
 pub mod mclo_gs;
 pub mod mod_files;
+pub mod mod_group_test;
 pub mod mod_index_cache;
 pub mod quest_plan;
 pub mod quest_chat;
@@ -77,6 +78,7 @@ pub mod recipe_layout;
 pub mod recipe_runtime;
 pub mod cosmetics_runtime;
 pub mod overlay_runtime;
+pub mod test_load;
 pub mod recipe_scan;
 pub mod registry;
 pub mod tag_normalizer;
@@ -105,7 +107,10 @@ pub use mod_files::*;
 pub use mod_index_cache::*;
 pub use mod_scan::*;
 pub use murmur2::*;
-pub use packwiz::{import_packwiz_pack, is_packwiz_pack, PackwizImportError};
+pub use packwiz::{
+    export_packwiz_pack, import_packwiz_pack, is_packwiz_pack, PackwizExportError,
+    PackwizExportResult, PackwizImportError,
+};
 pub use process::*;
 pub use provider::*;
 pub use quest_plan::*;
