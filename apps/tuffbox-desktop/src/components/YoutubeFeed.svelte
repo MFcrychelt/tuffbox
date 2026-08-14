@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Youtube, ChevronDown, PictureInPicture2 } from "@lucide/svelte";
+  import { Youtube, ChevronDown, PictureInPicture2, Play } from "@lucide/svelte";
   import { supabase } from "../lib/supabaseAuth";
   import { launcherSettingsLive, openYoutubePlayer } from "../lib/store";
+  import HomeYoutubePlacementToggle from "./HomeYoutubePlacementToggle.svelte";
 
   type FeedVideo = {
     video_id: string;
@@ -340,18 +341,21 @@
   class:is-collapsed={!expanded}
   aria-busy={loading && expanded}
 >
-  <button
-    type="button"
-    class="section-header"
-    onclick={toggleExpanded}
-    aria-expanded={expanded}
-  >
-    <Youtube size={18} />
-    <h2>Minecraft on YouTube</h2>
-    <span class="chevron" class:rotated={expanded} aria-hidden="true">
-      <ChevronDown size={18} />
-    </span>
-  </button>
+  <div class="section-header">
+    <button
+      type="button"
+      class="section-header-main"
+      onclick={toggleExpanded}
+      aria-expanded={expanded}
+    >
+      <Youtube size={18} />
+      <h2>Minecraft on YouTube</h2>
+      <span class="chevron" class:rotated={expanded} aria-hidden="true">
+        <ChevronDown size={18} />
+      </span>
+    </button>
+    <HomeYoutubePlacementToggle compact={variant === "rail"} />
+  </div>
   {#if expanded}
     {#if loading}
       <div class="feed-row home-skel-stagger" aria-hidden="true" onwheel={onFeedWheel}>
@@ -387,6 +391,9 @@
                 {#if video.thumbnail_url}
                   <img src={video.thumbnail_url} alt="" loading="lazy" />
                 {/if}
+                <span class="thumb-play" aria-hidden="true">
+                  <Play size={16} fill="currentColor" />
+                </span>
               </div>
               <span class="title">{video.title}</span>
               {#if video.channel_name}
@@ -426,9 +433,17 @@
   .section-header {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     width: 100%;
     margin: 0 0 16px;
+  }
+
+  .section-header-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
     padding: 0;
     background: transparent;
     border: none;
@@ -441,12 +456,12 @@
     margin-bottom: 0;
   }
 
-  .section-header :global(svg) {
+  .section-header-main :global(svg) {
     color: var(--accent-primary);
     flex-shrink: 0;
   }
 
-  .section-header h2 {
+  .section-header-main h2 {
     margin: 0;
     flex: 1;
     font-size: 18px;
@@ -454,7 +469,7 @@
     color: var(--text-primary);
   }
 
-  .rail .section-header h2 {
+  .rail .section-header-main h2 {
     font-size: 14px;
   }
 
@@ -666,14 +681,24 @@
     box-shadow: 0 0 22px color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
 
+  .video-card:hover .thumb img {
+    transform: scale(1.05);
+  }
+
+  .video-card:hover .thumb-play,
+  .video-card:focus-visible .thumb-play {
+    opacity: 1;
+  }
+
   .thumb {
+    position: relative;
     width: 100%;
     aspect-ratio: 16 / 9;
-    border-radius: var(--border-radius-md, 8px);
+    border-radius: var(--border-radius-md);
     overflow: hidden;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    transition: border-color var(--motion-fast, 160ms) ease, box-shadow var(--motion-fast, 160ms) ease;
   }
 
   .thumb img {
@@ -681,6 +706,31 @@
     height: 100%;
     object-fit: cover;
     display: block;
+    transition: transform var(--motion-enter, 320ms) var(--ease-soft, ease);
+  }
+
+  .thumb-play {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, #000 40%, transparent);
+    color: #fff;
+    opacity: 0;
+    transition: opacity var(--motion-fast, 160ms) var(--ease-out, ease);
+    pointer-events: none;
+  }
+
+  .thumb-play :global(svg) {
+    filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.5));
+  }
+
+  :global(html.potato-pc) .video-card:hover .thumb img {
+    transform: none;
+  }
+
+  :global(html.potato-pc) .thumb-play {
+    display: none;
   }
 
   .title {

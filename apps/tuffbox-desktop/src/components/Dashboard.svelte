@@ -27,6 +27,7 @@
     addInstanceMode,
     openAddInstance,
     launcherSettingsLive,
+    homeYoutubePlacement,
     type RecentProject,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
@@ -44,6 +45,7 @@
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
   import HomeHero, { type PosterCoverKind } from "./HomeHero.svelte";
+  import HomeInstanceShelf from "./HomeInstanceShelf.svelte";
   import YoutubeFeed from "./YoutubeFeed.svelte";
   import PromptDialog from "./PromptDialog.svelte";
 
@@ -94,6 +96,10 @@
     }
     return bits.join(" · ");
   });
+  const youtubeOnHome = $derived($launcherSettingsLive?.showYoutubeOnHome === true);
+  const youtubeBesideSkin = $derived(youtubeOnHome && $homeYoutubePlacement === "right");
+  const skinPreviewHeight = $derived(youtubeBesideSkin ? 240 : 400);
+  const skinAvatarSize = $derived(youtubeBesideSkin ? 72 : 120);
 
   type CoverState = { url: string | null; kind: PosterCoverKind };
   let coverByPath = $state<Record<string, CoverState>>({});
@@ -500,6 +506,7 @@
       <HomeHero
         hasSelection={!!selectedProject}
         emptyZero={$recentProjects.length === 0}
+        title={selectedProject?.info.name ?? ""}
         meta={selectedInstanceMeta}
         launching={$isLaunching}
         launchMessage={$launchProgress?.message ?? ""}
@@ -534,14 +541,22 @@
         onSignIn={() => loginModalOpen.set(true)}
       />
 
-      {#if $launcherSettingsLive?.showYoutubeOnHome === true}
+      <HomeInstanceShelf
+        selectedPath={selectedPath}
+        potato={potatoPc}
+        showPlacementToggle={!youtubeOnHome}
+        onselect={(path) => void selectProject(path)}
+        onlibrary={() => (currentView = "library")}
+      />
+
+      {#if youtubeOnHome && !youtubeBesideSkin}
         <div class="home-feed">
           <YoutubeFeed variant="row" />
         </div>
       {/if}
     </div>
 
-    <aside class="home-side">
+    <aside class="home-side" class:has-feed={youtubeBesideSkin}>
       <div class="skin-panel" aria-busy={!authReady}>
         {#if !authReady}
           <div class="skin-skel" aria-hidden="true">
@@ -563,7 +578,7 @@
         {:else if $authState.loggedIn && $authState.profile}
           {#if potatoPc}
             <div class="skin-static-fallback">
-              <HeadAvatar skinSrc={$skinPath} size={120} alt={$authState.profile.name} />
+              <HeadAvatar skinSrc={$skinPath} size={skinAvatarSize} alt={$authState.profile.name} />
               <span class="skin-static-name" style={`font-size: ${skinNameFontPx}px`}>{$authState.profile.name}</span>
             </div>
           {:else}
@@ -575,7 +590,7 @@
             playerName={$authState.profile.name}
             showName={false}
             width={318}
-            height={400}
+            height={skinPreviewHeight}
           />
           {/if}
           <div class="skin-panel-footer">
@@ -653,6 +668,12 @@
           </div>
         {/if}
       </div>
+
+      {#if youtubeBesideSkin}
+        <div class="home-feed-rail">
+          <YoutubeFeed variant="rail" />
+        </div>
+      {/if}
     </aside>
   </div>
 </div>
@@ -710,7 +731,7 @@
   .home-main {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 18px;
     min-width: 0;
     overflow: visible;
   }
@@ -761,13 +782,13 @@
     min-height: 36px;
   }
 
-  .home-feed :global(.youtube-feed.is-collapsed .section-header h2) {
+  .home-feed :global(.youtube-feed.is-collapsed .section-header-main h2) {
     font-size: 13px;
     font-weight: 600;
     color: var(--text-secondary);
   }
 
-  .home-feed :global(.youtube-feed.is-collapsed .section-header svg) {
+  .home-feed :global(.youtube-feed.is-collapsed .section-header-main svg) {
     width: 16px;
     height: 16px;
   }
@@ -785,6 +806,29 @@
     position: sticky;
     top: 20px;
     align-self: start;
+  }
+
+  .home-side.has-feed {
+    position: static;
+  }
+
+  .home-feed-rail {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .home-feed-rail :global(.youtube-feed) {
+    min-width: 0;
+    width: 100%;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    box-shadow:
+      var(--shadow-md),
+      inset 0 1px 0 var(--glass-highlight);
+    border-radius: var(--border-radius-xl);
+    padding: 10px 14px;
   }
 
   .skin-panel {

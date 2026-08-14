@@ -802,6 +802,47 @@ function createSidebarIconsCollapsed() {
 }
 export const sidebarIconsCollapsed = createSidebarIconsCollapsed();
 
+/** Home YouTube strip: under the pack shelf, or in the right column under the skin. */
+export type HomeYoutubePlacement = "below" | "right";
+const HOME_YT_PLACEMENT_KEY = "tuffbox-home-youtube-placement";
+
+function readHomeYoutubePlacement(): HomeYoutubePlacement {
+  try {
+    const raw =
+      typeof localStorage !== "undefined" ? localStorage.getItem(HOME_YT_PLACEMENT_KEY) : null;
+    if (raw === "right" || raw === "below") return raw;
+  } catch {
+    /* ignore */
+  }
+  return "below";
+}
+
+function createHomeYoutubePlacement() {
+  const { subscribe, set, update } = writable<HomeYoutubePlacement>(readHomeYoutubePlacement());
+  const persist = (v: HomeYoutubePlacement) => {
+    try {
+      localStorage.setItem(HOME_YT_PLACEMENT_KEY, v);
+    } catch {
+      /* ignore */
+    }
+  };
+  return {
+    subscribe,
+    set: (v: HomeYoutubePlacement) => {
+      persist(v);
+      set(v);
+    },
+    toggle: () => {
+      update((cur) => {
+        const next: HomeYoutubePlacement = cur === "right" ? "below" : "right";
+        persist(next);
+        return next;
+      });
+    },
+  };
+}
+export const homeYoutubePlacement = createHomeYoutubePlacement();
+
 /** App chrome brand mark: classic amber "T" or creeper-in-a-box. */
 export type BrandIconId = "classic" | "creeper";
 

@@ -23,6 +23,7 @@
   let {
     hasSelection = false,
     emptyZero = false,
+    title = "",
     meta = "",
     launching = false,
     launchMessage = "",
@@ -56,6 +57,7 @@
   }: {
     hasSelection?: boolean;
     emptyZero?: boolean;
+    title?: string;
     meta?: string;
     launching?: boolean;
     launchMessage?: string;
@@ -216,7 +218,7 @@
         <p class="storefront-hint">Create a blank pack, import one you already have, or browse the library.</p>
       {:else}
         <p class="storefront-title">Select an instance</p>
-        <p class="storefront-hint">Choose one from the list on the left, or create a new instance.</p>
+        <p class="storefront-hint">Pick a pack from the shelf below, or create a new instance.</p>
       {/if}
       <div class="storefront-ctas">
         <button type="button" class="storefront-primary" onclick={onCreate}>
@@ -257,6 +259,12 @@
             </button>
           </div>
         </div>
+      {/if}
+
+      {#if title}
+        {#key title}
+          <h1 class="poster-title" in:fade={{ duration: artFadeMs }}>{title}</h1>
+        {/key}
       {/if}
 
       <div class="poster-play-row">
@@ -574,6 +582,20 @@
     align-items: flex-start;
     gap: 10px;
     max-width: calc(100% - 40px);
+  }
+
+  .poster-title {
+    margin: 0;
+    max-width: 100%;
+    font-size: clamp(22px, 4.4cqi, 34px);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.12;
+    color: var(--hero-fg);
+    text-shadow: 0 2px 18px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .poster-play-row {
