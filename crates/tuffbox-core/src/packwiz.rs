@@ -6,7 +6,7 @@ use crate::manifest::{
     ContentType, FileHashes, JavaSpec, LoaderKind, LoaderSpec, MinecraftSpec, ModOption, ModSource,
     ModSpec, ProfileSpec, ProjectManifest, ProjectMetadata, Side, SourceKind,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -39,7 +39,7 @@ pub enum PackwizExportError {
     MissingHash(String),
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackwizExportResult {
     pub path: PathBuf,
@@ -205,12 +205,13 @@ fn mod_has_usable_hash(m: &ModSpec) -> bool {
 
 fn mod_has_packwiz_remote(m: &ModSpec) -> bool {
     match m.source.kind {
-        SourceKind::Curseforge => m
-            .source
-            .project_id
-            .as_deref()
-            .is_some_and(|s| !s.is_empty())
-            && m.source.file_id.as_deref().is_some_and(|s| !s.is_empty()),
+        SourceKind::Curseforge => {
+            m.source
+                .project_id
+                .as_deref()
+                .is_some_and(|s| !s.is_empty())
+                && m.source.file_id.as_deref().is_some_and(|s| !s.is_empty())
+        }
         _ => m
             .source
             .url
@@ -506,21 +507,14 @@ pub fn import_packwiz_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, Pa
     let index: IndexToml = toml::from_str(&fs::read_to_string(&index_path)?)?;
 
     let (loader_kind, loader_version) = detect_loader(&pack.versions)?;
-    let mc_version = pack
-        .versions
-        .get("minecraft")
-        .cloned()
-        .unwrap_or_default();
+    let mc_version = pack.versions.get("minecraft").cloned().unwrap_or_default();
 
     let mut mods = Vec::new();
     for entry in &index.files {
         if !entry.metafile {
             continue;
         }
-        let meta_path = index_path
-            .parent()
-            .unwrap_or(root)
-            .join(&entry.file);
+        let meta_path = index_path.parent().unwrap_or(root).join(&entry.file);
         if !meta_path.is_file() {
             continue;
         }
@@ -584,7 +578,9 @@ pub fn import_packwiz_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, Pa
     })
 }
 
-fn detect_loader(versions: &HashMap<String, String>) -> Result<(LoaderKind, String), PackwizImportError> {
+fn detect_loader(
+    versions: &HashMap<String, String>,
+) -> Result<(LoaderKind, String), PackwizImportError> {
     for (key, kind) in [
         ("fabric", LoaderKind::Fabric),
         ("quilt", LoaderKind::Quilt),
@@ -690,13 +686,10 @@ fn resolve_source(pw: &PwToml) -> (SourceKind, Option<String>, Option<String>) {
             );
         }
         if let Some(gh) = &update.github {
-            let slug = gh
-                .slug
-                .clone()
-                .or_else(|| match (&gh.owner, &gh.repo) {
-                    (Some(o), Some(r)) => Some(format!("{o}/{r}")),
-                    _ => None,
-                });
+            let slug = gh.slug.clone().or_else(|| match (&gh.owner, &gh.repo) {
+                (Some(o), Some(r)) => Some(format!("{o}/{r}")),
+                _ => None,
+            });
             return (SourceKind::Github, slug, gh.tag.clone());
         }
     }
@@ -830,7 +823,10 @@ default = true
                 kind: SourceKind::Github,
                 project_id: Some("owner/custom-lib".into()),
                 file_id: Some("v1.0.0".into()),
-                url: Some("https://github.com/owner/custom-lib/releases/download/v1.0.0/custom-lib.jar".into()),
+                url: Some(
+                    "https://github.com/owner/custom-lib/releases/download/v1.0.0/custom-lib.jar"
+                        .into(),
+                ),
                 path: None,
                 icon_url: None,
                 categories: vec![],
@@ -890,7 +886,9 @@ default = true
             pw.contains("[update.github]"),
             "github mods must emit [update.github], got:\n{pw}"
         );
-        assert!(pw.contains("owner/custom-lib") || (pw.contains("owner") && pw.contains("custom-lib")));
+        assert!(
+            pw.contains("owner/custom-lib") || (pw.contains("owner") && pw.contains("custom-lib"))
+        );
         assert!(pw.contains("v1.0.0") || pw.contains("1.0.0"));
     }
 
@@ -928,7 +926,46 @@ default = true
             .find(|m| m.id == "custom-lib")
             .expect("custom-lib should round-trip");
         assert_eq!(custom.source.kind, SourceKind::Github);
-        assert_eq!(custom.source.project_id.as_deref(), Some("owner/custom-lib"));
+        assert_eq!(
+            custom.source.project_id.as_deref(),
+            Some("owner/custom-lib")
+        );
         assert_eq!(custom.source.file_id.as_deref(), Some("v1.0.0"));
+    }
+
+    #[test]
+    fn export_packwiz_roundtrip_smoke() {
+        let out = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let manifest_path = project.path().join("demo.tuffbox.json");
+        fs::write(&manifest_path, "{}").unwrap();
+        fs::create_dir_all(project.path().join("config")).unwrap();
+        fs::write(project.path().join("config/demo.toml"), "ok = true\n").unwrap();
+
+        let mut remote_mod = github_mod(Some(FileHashes {
+            sha1: None,
+            sha512: Some("abc".into()),
+        }));
+        remote_mod.id = "sodium".into();
+        remote_mod.name = "Sodium".into();
+        remote_mod.source.kind = SourceKind::Modrinth;
+        remote_mod.source.project_id = Some("AANobbMI".into());
+        remote_mod.source.file_id = Some("ver1".into());
+        remote_mod.source.url = Some("https://example.com/sodium.jar".into());
+        remote_mod.version = "0.6.0".into();
+        remote_mod.file_name = Some("sodium.jar".into());
+        remote_mod.side = Side::Client;
+
+        let manifest = demo_manifest(vec![remote_mod]);
+        let result = export_packwiz_pack(&manifest, &manifest_path, out.path()).unwrap();
+        assert!(result.path.join("pack.toml").is_file());
+        assert!(result.path.join("index.toml").is_file());
+        assert!(result.path.join("mods/sodium.pw.toml").is_file());
+        assert!(result.path.join("config/demo.toml").is_file());
+        assert!(result.override_count >= 1);
+
+        let roundtrip = import_packwiz_pack(out.path()).unwrap();
+        assert_eq!(roundtrip.mods.len(), 1);
+        assert_eq!(roundtrip.mods[0].source.kind, SourceKind::Modrinth);
     }
 }

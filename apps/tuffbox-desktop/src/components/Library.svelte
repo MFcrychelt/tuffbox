@@ -134,7 +134,7 @@
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
-        toasts.error("Set a download/instances folder in Discover or Settings first.");
+        toasts.error("Set an instances folder in Settings first.");
         return;
       }
       const result: any = await invoke("install_modpack", {
@@ -435,7 +435,15 @@
           throw new Error(errors.join("; "));
         }
         if (errors.length > 0) {
-          discoverError = errors.join("; ");
+          const mrFailed = settled[0].status === "rejected";
+          const cfFailed = settled[1].status === "rejected";
+          if (mrFailed && !cfFailed) {
+            discoverError = "Modrinth unavailable — showing CurseForge results.";
+          } else if (cfFailed && !mrFailed) {
+            discoverError = "CurseForge unavailable — showing Modrinth results.";
+          } else {
+            discoverError = errors.join("; ");
+          }
         }
         next = interleaveResults(mr, cf);
       }
@@ -545,17 +553,24 @@
 </script>
 
 <div class="library fade-slide-in lib-page">
-  {#if tab === "yours"}
-    <div class="yours-wrap">
-      <LibraryInstancesPane
-        bind:currentView
-        onDiscover={() => switchTab("discover")}
-        onCreate={() => switchTab("create")}
-      />
-    </div>
-  {:else}
   <div class="library-subnav lib-header-enter">
-    <div class="header-actions">
+    <div class="tabs" role="tablist" aria-label="Library">
+      <button type="button" class:active={tab === "yours"} onclick={() => switchTab("yours")}>
+        <LayoutGrid size={15} /> Your packs
+      </button>
+      <button type="button" class:active={tab === "discover"} onclick={() => switchTab("discover")}>
+        <Compass size={15} /> Discover
+      </button>
+      <button
+        type="button"
+        class:active={tab === "create"}
+        onclick={() => switchTab("create")}
+        title="Create a new instance"
+      >
+        <Plus size={15} /> Create
+      </button>
+    </div>
+    {#if tab !== "yours"}
       <div class="import-wrap">
         <button
           type="button"
@@ -585,25 +600,14 @@
           </div>
         {/if}
       </div>
-      <div class="tabs">
-        <button class:active={tab === "yours"} onclick={() => switchTab("yours")}>
-          <LayoutGrid size={15} /> Your packs
-        </button>
-        <button class:active={tab === "discover"} onclick={() => switchTab("discover")}>
-          <Compass size={15} /> Discover
-        </button>
-        <button
-          class:active={tab === "create"}
-          onclick={() => switchTab("create")}
-          title="Create a new modpack"
-        >
-          <Plus size={15} /> Create
-        </button>
-      </div>
-    </div>
+    {/if}
   </div>
 
-  {#if tab === "discover"}
+  {#if tab === "yours"}
+    <div class="yours-wrap">
+      <LibraryInstancesPane bind:currentView />
+    </div>
+  {:else if tab === "discover"}
   <div class="tab-scroll">
     {#if catalogViewResult}
       <CatalogProjectView
@@ -667,7 +671,7 @@
     </div>
 
     {#if discoverError}
-      <div class="error">{discoverError}</div>
+      <div class={results.length > 0 ? "catalog-warn" : "error"}>{discoverError}</div>
     {/if}
 
     {#if loadingDiscover && results.length === 0}
@@ -675,7 +679,7 @@
     {:else if results.length === 0}
       <div class="empty-state">
         <div class="empty-icon"><Compass size={40} /></div>
-        <h3>No modpacks found</h3>
+        <h3>No packs found</h3>
         <p>Try a different search.</p>
       </div>
     {:else}
@@ -827,7 +831,6 @@
     </div>
   </div>
   {/if}
-  {/if}
 </div>
 
 {#if $newProjectOpen}
@@ -894,16 +897,10 @@
   .library-subnav {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     margin-top: 4px;
     margin-bottom: 14px;
     gap: 16px;
-    flex-wrap: wrap;
-  }
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
     flex-wrap: wrap;
   }
   .import-wrap {
@@ -1450,7 +1447,7 @@
     padding: 64px 32px;
     text-align: center;
     background: var(--bg-secondary);
-    border: 2px dashed var(--border-color);
+    border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
     color: var(--text-muted);
   }
@@ -1475,13 +1472,21 @@
     max-width: 320px;
   }
 
-  .error {
+  .error,
+  .catalog-warn {
     padding: 10px 12px;
     border-radius: 10px;
     margin-bottom: 16px;
+  }
+  .error {
     background: rgba(239, 68, 68, 0.12);
     border: 1px solid rgba(239, 68, 68, 0.35);
     color: #fca5a5;
+  }
+  .catalog-warn {
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
+    color: var(--text-secondary);
   }
 
   @keyframes lib-page-header {

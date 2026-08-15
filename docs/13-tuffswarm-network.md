@@ -90,7 +90,10 @@ Flow:
 
 1. User A hits a crash and fixes it (any path — may be inefficient).
 2. Soft-verify: successful relaunch → resolution recorded in History.
-3. **Resolution Distill** (auto, beta): local AI analyzes action history → minimal `ActionPlan`.
+3. **Resolution Distill** (auto, beta):
+   - If Diagnose **group test** verified a covering: share `disable_mod` for each isolated defective (`planSource: group_test`).
+   - If the player fixed the pack without AI / group test: decode the trail as group tests (healthy launch ⇒ enabled mods are clean). Share the remaining disable covering — not every toggle, and not a guessed single root cause.
+   - If built-in AI / KB / network plan was applied: local AI may compress that history into a minimal `ActionPlan`.
 4. UI shows the plan → user **Confirm** (or **Edit** then Confirm) → only then signed `ExperienceCapsule` → global library + **Supabase** (and optional hub/P2P).
 5. User B hits a similar crash → **AI Explain** may **read** network (lookup) → pending ActionPlan → confirm apply.
 
@@ -101,7 +104,7 @@ Flow:
 | Mechanism | When | Network | Purpose |
 |-----------|------|---------|---------|
 | **AI Explain** | Diagnostics button | **Read** (lookup/diagnose) | Diagnose current crash using local history + optional peer capsules |
-| **Resolution Distill** | Auto after verified fix | **Write** only after Confirm | Compress user's fix path into an efficient plan for peers |
+| **Resolution Distill** | Auto after verified fix | **Write** only after Confirm | Group test: disable covering. Player trail: decoded covering (unknown single cause). AI-authored: compress into an efficient plan |
 
 Explain **MUST NOT** persist remote hits into the durable capsule library. Distill **MUST NOT** publish until the user confirms (or edits) the proposed plan.
 
@@ -148,7 +151,11 @@ flowchart LR
 1. **Snapshots / History** — meta: `tags: ["crash_fix"]`, `crashFingerprintKey`, `planSource` (`ai|kb|swarm|manual|distill`), `matchedCaseIds`. UI badges.
 2. **Soft-verify (post-apply)** — after apply, a successful launch alone is **not** enough. Client waits for a healthy `latest.log` **and** a stable window (~3 minutes playtime / no fresh crash markers / no snapshot rollback). Outcome emits `tuffbox:soft-verify-outcome` (`confirm` | `reject`). Signed-in Crash Votes users cast a passive Keep/Discard on matched capsules. Home shows a **Restore snapshot** banner while soft-verify is pending. Explicit thumbs toast is cooldown-limited (≤1/day).
 3. **Trust ranking** — `trust_score = confirm / (confirm + 2×reject + 1)` (rejects weigh 2×). Lookup order stays `trust_score.desc, success_count.desc`. See migration `014_soft_verify_trust.sql` + `vote-capsule`.
-4. **Distill after success** — если swarm on + share prompts: auto distill from user action timeline → review UI → Confirm/Edit → signed `ExperienceCapsule` → Supabase `publish-capsule` (else optional hub `POST /v1/crash/capsules` / local only).
+4. **Distill after success** — если swarm on + share prompts:
+   - **Group test** (Diagnose covering peel): `disable_mod` на изолированных defective после verify.
+   - **Player-driven fix** без group test: decode trail (healthy ⇒ enabled чистые); шарить covering, не все enable/disable.
+   - **AI-authored apply** (ActionPlan / Crash Assistant / network plan): optional LLM compress into a minimal peer plan → Confirm/Edit → signed `ExperienceCapsule`.
+   Then → Supabase `publish-capsule` (else optional hub / local only).
 5. **Peer pending plan** — сильный network/KB match → `.tuffbox/pending_action_plan.json` → Diagnostics **Review & apply** with trust card + ActionPlan diff (confirm обязателен; **MUST NOT** auto-apply). Destructive ops (`disable_mod` / `remove_*`) get an explicit warning.
 6. **Creation co-occurrence** — локальные пары модов + **Supabase** pair tables (Edge `report-cooccurrence` → `mod_cooccurrence_pairs`; hub MPI crawl → `mpi_mod_cooccurrence_pairs`) + optional hub `POST /v1/mods/cooccurrence`. Hot path: hub/`refresh_mod_partner_tops` materializes top-20 into `mod_partner_tops` JSONB; `partners_for_mod` reads cache (live fallback). Сигнал пишется после Confirm install в Create Mode / успешного fix apply; Create Mode AI получает `promptHint` из merge local+network.
 
@@ -306,7 +313,7 @@ flowchart TB
 1. Краш → local parser / Crash Assistant / **AI Explain** → `ActionPlan`.
 2. Пользователь подтверждает → snapshot → apply.
 3. Запуск Minecraft → **soft-verify** (healthy `latest.log` + ~3 min stable / no rollback / no post-fix crash) → positive signal + resolution в History.
-4. **Resolution Distill** (auto, beta): ИИ сжимает историю действий в минимальный план → UI Confirm/Edit.
+4. **Resolution Distill** (auto, beta): group test covering / decoded player-trail covering / AI compress of an AI-authored fix → UI Confirm/Edit.
 5. Только после Confirm узел публикует **ExperienceCapsule** (opt-in), не raw crash-log.
 
 Аналогия: on-device обучение ассистента (как идеи CodeAssist / Gensyn) — локальный опыт; в сеть уходит сжатый опыт.
@@ -581,7 +588,7 @@ Topic `tuffswarm/capsules/v1`: Distill Confirm → local library → optional Su
 3. Не дублировать словарь действий — только `op` из ActionPlan.
 4. Не предлагать отправку raw logs без явного opt-in в спецификации.
 5. Любой apply-path: validate → confirm → snapshot → deterministic apply.
-6. Publish-path: verified launch → Distill → Confirm/Edit → capsule (**MUST NOT** publish during Explain).
+6. Publish-path: verified launch → Distill (group_test covering, decoded player_trail covering, or AI compress) → Confirm/Edit → capsule (**MUST NOT** publish during Explain). Do not share every enable/disable toggle; do not invent a single root cause from a covering.
 7. Отличать **Supabase (B+ start)** / Phase B HTTP hub / Phase C P2P — разные transports; P2P код не удалять.
 8. Publish в Supabase: signed capsule only; service role только на Edge Function.
 9. Обновлять этот документ при смене инвариантов; не держать параллельную «тайную» архитектуру только в чате.
@@ -590,6 +597,7 @@ Topic `tuffswarm/capsules/v1`: Distill Confirm → local library → optional Su
 ## Связанные файлы кода
 
 ```text
+crates/tuffbox-core/src/mod_group_test.rs # covering peel + trail decode
 crates/tuffbox-core/src/action_plan.rs   # executable plan + DISTILL_SYSTEM_PROMPT
 crates/tuffbox-core/src/ai_explanation.rs # Explain + DistillContext prompts
 crates/tuffbox-core/src/crash_kb.rs      # fingerprint, authored cases, export

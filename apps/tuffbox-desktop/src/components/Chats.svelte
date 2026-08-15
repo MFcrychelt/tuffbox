@@ -1118,6 +1118,12 @@
       );
       installPreviewItems = [];
       const unmet = pillarStatus.filter((p) => p.priority === 1 && !p.covered);
+      const score =
+        typeof lastCuration?.launcherScore === "number"
+          ? lastCuration.launcherScore
+          : typeof res.launcherScore === "number"
+            ? res.launcherScore
+            : null;
       messages = [
         ...messages,
         { role: "assistant", content: res.reply },
@@ -1126,9 +1132,7 @@
           content:
             `Curated draft: ${draft.mods.length} mods` +
             (res.tier ? ` · ${res.tier}` : "") +
-            (lastLauncherScore != null
-              ? ` · score ${lastLauncherScore.toFixed(2)}`
-              : "") +
+            (score != null ? ` · score ${score.toFixed(2)}` : "") +
             (lastCurateStop ? ` · stop=${lastCurateStop}` : "") +
             (unmet.length
               ? `\nGameplay pillars incomplete: ${unmet.map((u) => u.label).join(", ")}`

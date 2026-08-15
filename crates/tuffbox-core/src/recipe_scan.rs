@@ -167,6 +167,14 @@ pub fn scan_project_recipes_with_vanilla_roots(
     Ok(result)
 }
 
+/// Last written recipe scan, if any. Does not walk jars or recompute fingerprints.
+pub fn load_cached_recipe_scan(project_dir: &Path) -> Option<RecipeScanResult> {
+    let raw = std::fs::read_to_string(recipe_scan_cache_path(project_dir)).ok()?;
+    serde_json::from_str::<RecipeScanCacheFile>(&raw)
+        .ok()
+        .map(|cached| cached.result)
+}
+
 fn scan_project_recipes_uncached(
     manifest_path: &Path,
     extra_vanilla_roots: &[PathBuf],
@@ -1425,5 +1433,32 @@ mod tests {
         assert!(body.contains("event.add('c:apples', 'minecraft:apple')"));
         assert!(body.contains("event.add('c:apples', '#c:golden_apples')"));
         assert!(body.contains("event.remove('c:apples', 'minecraft:poisonous_potato')"));
+    }
+
+    #[test]
+    fn load_cached_recipe_scan_reads_file_without_jars() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join(".tuffbox").join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let cached = RecipeScanCacheFile {
+            fingerprint: "stale".into(),
+            result: RecipeScanResult {
+                recipes: vec![],
+                jar_count: 3,
+                datapack_files: 0,
+                truncated: false,
+                total_scanned: 3,
+                vanilla_jar_found: true,
+            },
+        };
+        std::fs::write(
+            recipe_scan_cache_path(dir.path()),
+            serde_json::to_string(&cached).unwrap(),
+        )
+        .unwrap();
+        let loaded = load_cached_recipe_scan(dir.path()).expect("cache");
+        assert_eq!(loaded.jar_count, 3);
+        assert!(loaded.vanilla_jar_found);
+        assert!(load_cached_recipe_scan(&dir.path().join("missing")).is_none());
     }
 }

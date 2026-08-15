@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Rocket, RefreshCw, Tag, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen, Save, UploadCloud } from "@lucide/svelte";
+  import { Rocket, RefreshCw, Tag, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen, FolderTree, Save, UploadCloud } from "@lucide/svelte";
   import { api } from "../lib/api";
   import { projectPath, projectInfo, recentProjects } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
@@ -223,7 +223,7 @@
     }
   }
 
-  async function exportArtifact(kind: "mrpack" | "server" | "prism" | "curseforge") {
+  async function exportArtifact(kind: "mrpack" | "server" | "prism" | "curseforge" | "packwiz") {
     if (!$projectPath) return;
     exportLoading = kind;
     error = "";
@@ -233,7 +233,8 @@
       if (kind === "mrpack") result = await api.export.modrinthPack(null, $projectPath);
       else if (kind === "server") result = await api.export.serverPack(null, $projectPath);
       else if (kind === "prism") result = await api.export.prismInstance(null, $projectPath);
-      else result = await api.export.curseforgePack(null, $projectPath);
+      else if (kind === "curseforge") result = await api.export.curseforgePack(null, $projectPath);
+      else result = await api.export.packwizPack(null, $projectPath);
       message = `Exported ${kind}: ${result.path}`;
       await refresh();
     } catch (e) {
@@ -483,6 +484,9 @@
             </button>
             <button class="secondary mini" onclick={() => exportArtifact("prism")} disabled={!!exportLoading}>
               <Package size={12} /> {exportLoading === "prism" ? "…" : "Prism zip"}
+            </button>
+            <button class="secondary mini" onclick={() => exportArtifact("packwiz")} disabled={!!exportLoading}>
+              <FolderTree size={12} /> {exportLoading === "packwiz" ? "…" : "Packwiz"}
             </button>
             <button class="ghost mini" onclick={openProjectFolder}>
               <FolderOpen size={12} /> Open folder

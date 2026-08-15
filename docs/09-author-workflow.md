@@ -173,6 +173,8 @@ Live preview справа: переключатель Modrinth | CurseForge card
 Действия:
 
 - смотреть ленту по времени (launcher ops, AI apply, ручные правки на диске);
+- журнал несёт канонический `modIds` (id манифеста, не stem jar) — trail decode и History не гадают по имени файла;
+- group test layout и disk toggle (`foo.jar` ↔ `foo.jar.disabled`) попадают в ленту как enable/disable, не как пара external add/remove;
 - **Scan now** — delta vs baseline (mtime/size/hash), не dump всех файлов;
 - фильтры по category / actor (`Launcher` / `Disk` / `AI` / `You`);
 - jar drift: jar в `mods/` без записи в манифесте;
@@ -181,7 +183,7 @@ Live preview справа: переключатель Modrinth | CurseForge card
 
 Результат:
 
-- видимые внешние правки;
+- видимые внешние правки, включая group-test layout и disk enable/disable;
 - `recent_changes` для Diagnose/AI из того же журнала;
 - ссылки на snapshot при rollback-safe ops.
 
@@ -196,7 +198,7 @@ Live preview справа: переключатель Modrinth | CurseForge card
 - **Run client 4 RAM** — client с override 4096 MB;
 - Quick Play в мир из `saves/`;
 - sequential **matrix** профилей (stop-on-fail);
-- tail `logs/latest.log` + CPU/RAM meters;
+- tail `logs/latest.log` + live RAM/CPU chart and a player RAM recommendation (GB);
 - Pass / Fail / TimedOut / Crashed + auto-capture логов и crash-reports.
 
 Результат:
@@ -213,7 +215,7 @@ Live preview справа: переключатель Modrinth | CurseForge card
 
 - source picker: crash-report / `latest.log` / `launcher.log` / `hs_err_pid*.log`; empty-state подсказки;
 - Evidence: signal groups + crash sections (клик → jump в лог);
-- Suspected mods + recent snapshots; bisect checklist (disable half);
+- Suspected mods + recent snapshots; group-test pool (adaptive covering peel, not disable-half bisect);
 - Analysis tools: Class finder / Who depends / MCreator list;
 - Failure cards: OOM, cascading (NeoForge mask), mixin, client-only, world coords;
 - graph diagnostics + wrong/dup jars;

@@ -187,6 +187,7 @@
     javaCustomArgs: null,
     defaultMemoryMb: 4096,
     youtubeInlinePlayer: true,
+    showYoutubeOnHome: false,
     ingameOverlay: true,
     autoHideWorkflowRail: false,
     sidebarMode: "full",
@@ -292,6 +293,7 @@
       "blaze",
       "dusk",
       "glacier",
+      "minecraft",
     ];
     if (id === "dark") return "tuffbox";
     if (id === "light") return "tuffbox-light";
@@ -1177,7 +1179,39 @@
 
         <div class="settings-row">
           <div class="settings-row-text">
-            <strong>YouTube on home</strong>
+            <strong>YouTube feed on home</strong>
+            <p>
+              Minecraft YouTube strip on the home screen. Hidden by default — turn it on here.
+            </p>
+          </div>
+          <div class="settings-row-control">
+            <div class="chip-row tight">
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.showYoutubeOnHome === true}
+                disabled={launcherSaving}
+                onclick={() => void persistLauncher({ showYoutubeOnHome: true })}
+              >
+                Shown
+              </button>
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.showYoutubeOnHome !== true}
+                disabled={launcherSaving}
+                onclick={() => void persistLauncher({ showYoutubeOnHome: false })}
+              >
+                Hidden
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {#if launcher.showYoutubeOnHome}
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <strong>YouTube player</strong>
             <p>
               Litube-style in-app player loads a privacy embed only after you click a thumbnail.
               Preview-only keeps static images and opens videos in the system browser.
@@ -1206,6 +1240,7 @@
             </div>
           </div>
         </div>
+        {/if}
 
         <div class="settings-row">
           <div class="settings-row-text">
@@ -1238,17 +1273,6 @@
             </div>
           </div>
         </div>
-
-        <label class="check-row" style="margin-top: 14px;">
-          <input
-            type="checkbox"
-            checked={!!launcher.hideInstanceHome}
-            disabled={launcherSaving}
-            onchange={(e) => void persistLauncher({ hideInstanceHome: e.currentTarget.checked })}
-          />
-          Hide instance preview on home
-        </label>
-        <p class="hint">Hides the mods / resource packs / worlds / servers block under Play on the dashboard.</p>
 
         <div class="settings-row">
           <div class="settings-row-text">

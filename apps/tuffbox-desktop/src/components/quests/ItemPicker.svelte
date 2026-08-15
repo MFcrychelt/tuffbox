@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Search, X } from "@lucide/svelte";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { api } from "../../lib/api";
   import { projectPath } from "../../lib/store";
   import { trapFocus } from "../../lib/focusTrap";
@@ -39,6 +40,23 @@
     if (open && $projectPath && loadedForPath !== $projectPath) {
       void loadCatalog();
     }
+  });
+
+  $effect(() => {
+    if (!open) return;
+    let cancelled = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen("catalog-ready", () => {
+      if (cancelled || !$projectPath) return;
+      void loadCatalog();
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   });
 
   $effect(() => {

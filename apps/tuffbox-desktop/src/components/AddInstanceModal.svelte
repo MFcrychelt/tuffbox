@@ -245,7 +245,7 @@
         { name: "Modpacks", extensions: ["mrpack", "zip"] },
         { name: "All", extensions: ["*"] },
       ],
-      title: "Import modpack (.mrpack / CurseForge zip / Prism zip)",
+      title: "Import pack (.mrpack / CurseForge zip / Prism zip)",
     });
     if (selected && typeof selected === "string") {
       importPath = selected;
@@ -331,7 +331,7 @@
 
   async function installFromFile() {
     if (!importValid) {
-      error = "Pick a modpack file first.";
+      error = "Pick a pack file first.";
       return;
     }
     loading = true;
@@ -373,8 +373,8 @@
   <div class="modal" class:wide={mode === "import"} role="dialog" aria-modal="true" aria-labelledby="add-instance-title" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <div class="modal-hero">
       <div class="hero-copy">
-        <h2 id="add-instance-title">Create modpack</h2>
-        <p>Name it, pick loader + Minecraft, set memory — then build in IDE.</p>
+        <h2 id="add-instance-title">Add instance</h2>
+        <p>Name it, pick a loader and Minecraft version, then install.</p>
       </div>
       <button class="icon-btn hero-close" onclick={() => onclose?.()} aria-label="Close add instance dialog">
         <X size={18} />
@@ -439,8 +439,8 @@
             {/if}
           </button>
           <div class="field grow">
-            <label for="inst-name">Profile name</label>
-            <input id="inst-name" bind:value={name} placeholder="Enter pack name" oninput={() => (location = guessLocation())} />
+            <label for="inst-name">Instance name</label>
+            <input id="inst-name" bind:value={name} placeholder="Enter instance name" oninput={() => (location = guessLocation())} />
             {#if iconSourcePath}
               <button type="button" class="clear-icon" onclick={clearIcon}>Remove icon</button>
             {/if}
@@ -557,7 +557,7 @@
            <label for="inst-pack-file">Pack file</label>
            <div class="input-row">
              <input id="inst-pack-file" bind:value={importPath} placeholder="path/to/pack.mrpack or .zip" />
-             <button class="secondary" onclick={pickImportFile} aria-label="Choose modpack file"><Folder size={16} /></button>
+             <button class="secondary" onclick={pickImportFile} aria-label="Choose pack file"><Folder size={16} /></button>
            </div>
          </div>
          <div class="field">
@@ -569,11 +569,11 @@
        <div class="field">
          <label for="inst-location">{mode === "blank" ? "Instance folder" : "Download folder"}</label>
          <div class="input-row">
-           <input id="inst-location" bind:value={location} placeholder={mode === "blank" ? "Folder for this instance" : "Parent folder for the modpack"} />
+           <input id="inst-location" bind:value={location} placeholder={mode === "blank" ? "Folder for this instance" : "Parent folder for this instance"} />
            <button class="secondary" onclick={selectLocation} aria-label="Choose location"><Folder size={16} /></button>
          </div>
          {#if mode !== "blank"}
-           <span class="path-hint">The modpack will be installed as a new folder inside this path.</span>
+           <span class="path-hint">The pack will be installed as a new folder inside this path.</span>
          {/if}
        </div>
      </div>

@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
@@ -8,7 +9,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunningProcess {
     /// Stable instance key (usually the project manifest path).
     pub id: String,
@@ -34,6 +36,132 @@ pub type OnExit = Box<dyn FnOnce(ProcessExit) + Send + 'static>;
 
 lazy_static::lazy_static! {
     static ref PROCESSES: Mutex<HashMap<u32, RunningProcess>> = Mutex::new(HashMap::new());
+    /// PIDs re-attached from disk that we poll (no Child handle).
+    static ref ORPHAN_WATCHED: Mutex<std::collections::HashSet<u32>> =
+        Mutex::new(std::collections::HashSet::new());
+    /// Processes that exited while an orphan watcher was running.
+    static ref EXITED_QUEUE: Mutex<Vec<RunningProcess>> = Mutex::new(Vec::new());
+}
+
+/// Best-effort: is OS process `pid` still alive?
+pub fn pid_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        // PROCESS_QUERY_LIMITED_INFORMATION + GetExitCodeProcess(STILL_ACTIVE).
+        type Handle = *mut std::ffi::c_void;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
+            fn CloseHandle(h: Handle) -> i32;
+            fn GetExitCodeProcess(h: Handle, code: *mut u32) -> i32;
+        }
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const STILL_ACTIVE: u32 = 259;
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return false;
+            }
+            let mut code = 0u32;
+            let ok = GetExitCodeProcess(h, &mut code);
+            CloseHandle(h);
+            ok != 0 && code == STILL_ACTIVE
+        }
+    }
+    #[cfg(unix)]
+    {
+        // signal 0 = existence check; EPERM also means the process exists.
+        let status = Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        matches!(status, Ok(s) if s.success())
+            || Path::new(&format!("/proc/{pid}")).exists()
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+fn registry_path() -> PathBuf {
+    dirs::data_local_dir()
+        .or_else(dirs::config_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("TuffBox")
+        .join("running-instances.json")
+}
+
+fn persist_registry(map: &HashMap<u32, RunningProcess>) {
+    let path = registry_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let list: Vec<&RunningProcess> = map.values().collect();
+    if let Ok(json) = serde_json::to_string_pretty(&list) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+fn load_registry() -> Vec<RunningProcess> {
+    let path = registry_path();
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn prune_dead_locked(map: &mut HashMap<u32, RunningProcess>) -> Vec<RunningProcess> {
+    let dead: Vec<u32> = map
+        .keys()
+        .copied()
+        .filter(|pid| !pid_is_alive(*pid))
+        .collect();
+    let mut exited = Vec::with_capacity(dead.len());
+    for pid in dead {
+        if let Some(proc) = map.remove(&pid) {
+            exited.push(proc);
+        }
+    }
+    exited
+}
+
+fn ensure_orphan_watcher(proc: RunningProcess) {
+    {
+        let mut watched = ORPHAN_WATCHED.lock().unwrap_or_else(|e| e.into_inner());
+        if !watched.insert(proc.pid) {
+            return;
+        }
+    }
+    std::thread::spawn(move || {
+        while pid_is_alive(proc.pid) {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+        let removed = {
+            let mut map = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
+            let removed = map.remove(&proc.pid);
+            if removed.is_some() {
+                persist_registry(&map);
+            }
+            removed
+        };
+        {
+            let mut watched = ORPHAN_WATCHED.lock().unwrap_or_else(|e| e.into_inner());
+            watched.remove(&proc.pid);
+        }
+        // Only queue if we were first to notice — avoids duplicate process-exited.
+        if let Some(proc) = removed {
+            EXITED_QUEUE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(proc);
+        }
+    });
 }
 
 /// Reads newline-delimited output from a reader, tolerating non-UTF-8 bytes.
@@ -140,6 +268,28 @@ pub fn spawn_and_track_with_cleanup(
         }
     });
 
+    // Stabilize briefly so an instantly-crashing JVM doesn't look "running".
+    let stabilize_until = std::time::Instant::now() + std::time::Duration::from_millis(800);
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "Minecraft exited immediately (code {:?}). Check logs/tuffbox-console.log and logs/latest.log.",
+                        status.code()
+                    ),
+                ));
+            }
+            None => {
+                if std::time::Instant::now() >= stabilize_until {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+
     let started_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -152,19 +302,21 @@ pub fn spawn_and_track_with_cleanup(
         log_path: log_path.clone(),
         started_at,
     };
-    PROCESSES
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(pid, info.clone());
+    {
+        let mut map = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
+        map.insert(pid, info.clone());
+        persist_registry(&map);
+    }
 
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
         let exit = child.wait();
         let duration_secs = started.elapsed().as_secs();
-        PROCESSES
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&pid);
+        {
+            let mut map = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
+            map.remove(&pid);
+            persist_registry(&map);
+        }
         for path in cleanup_paths {
             let _ = std::fs::remove_file(path);
         }
@@ -179,27 +331,66 @@ pub fn spawn_and_track_with_cleanup(
     Ok(info)
 }
 
+/// Alive processes, plus any that exited since the last call (orphan watchers / prune).
+pub fn list_running_detailed() -> (Vec<RunningProcess>, Vec<RunningProcess>) {
+    let mut map = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
+    // Re-attach processes that outlived a previous launcher session.
+    for proc in load_registry() {
+        if pid_is_alive(proc.pid) {
+            map.entry(proc.pid).or_insert_with(|| {
+                ensure_orphan_watcher(proc.clone());
+                proc
+            });
+        }
+    }
+    let mut exited = prune_dead_locked(&mut map);
+    {
+        let mut queued = EXITED_QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+        exited.append(&mut queued);
+    }
+    if !exited.is_empty() {
+        persist_registry(&map);
+    }
+    (map.values().cloned().collect(), exited)
+}
+
 pub fn list_running() -> Vec<RunningProcess> {
-    PROCESSES
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .values()
-        .cloned()
-        .collect()
+    list_running_detailed().0
+}
+
+fn instance_key(id: &str) -> String {
+    id.replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+/// True if any tracked (and still-alive) process belongs to `instance_id`.
+pub fn is_instance_running(instance_id: &str) -> bool {
+    let key = instance_key(instance_id);
+    list_running()
+        .into_iter()
+        .any(|p| instance_key(&p.id) == key)
 }
 
 /// Force-kill every tracked process for `instance_id`. The wait thread still
 /// runs `on_exit` afterward (playtime / crash classification / UI events).
 pub fn kill_instance(instance_id: &str) -> std::io::Result<usize> {
-    let pids: Vec<u32> = PROCESSES
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .filter(|(_, p)| p.id == instance_id)
-        .map(|(pid, _)| *pid)
+    let key = instance_key(instance_id);
+    let pids: Vec<u32> = list_running()
+        .into_iter()
+        .filter(|p| instance_key(&p.id) == key)
+        .map(|p| p.pid)
         .collect();
     for pid in &pids {
         kill_pid(*pid)?;
+    }
+    // Optimistic prune — wait thread will also remove + persist.
+    {
+        let mut map = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
+        for pid in &pids {
+            map.remove(pid);
+        }
+        persist_registry(&map);
     }
     Ok(pids.len())
 }
@@ -424,5 +615,31 @@ mod tests {
     fn leaves_pattern_layout_untouched() {
         let raw = "[12:00:01] [main/INFO]: Hello\n[12:00:02] [Render/WARN]: Slow";
         assert_eq!(format_minecraft_log_for_display(raw), raw);
+    }
+
+    #[test]
+    fn current_pid_is_alive() {
+        assert!(pid_is_alive(std::process::id()));
+        assert!(!pid_is_alive(0));
+        // Extremely unlikely to be a live PID on a developer machine.
+        assert!(!pid_is_alive(u32::MAX - 7));
+    }
+
+    #[test]
+    fn instance_key_normalizes_slashes_and_case() {
+        assert_eq!(
+            instance_key(r"C:\Dev\Pack\tuffbox.json"),
+            instance_key("c:/dev/pack/tuffbox.json/")
+        );
+    }
+
+    #[test]
+    fn process_exit_carries_pid_for_event_correlation() {
+        let exit = ProcessExit {
+            pid: 42,
+            code: Some(1),
+            duration_secs: 3,
+        };
+        assert_eq!(exit.pid, 42);
     }
 }

@@ -497,6 +497,20 @@
   let classResults = $state<{ className: string; modId: string; modName: string }[]>([]);
   let dependentResults = $state<{ className: string; modId: string; modName: string }[]>([]);
   let bisectMods = $state<string[]>([]);
+  type GroupTestSession = {
+    pool: string[];
+    covering: string[];
+    knownClean: string[];
+    defectives: string[];
+    testGroup: string[];
+    phase: string | { verifyOne?: { index: number }; failed?: { reason: string } };
+    snapshotId?: string | null;
+    verified: boolean;
+    step: number;
+  };
+  let groupTest = $state<GroupTestSession | null>(null);
+  let groupTestBusy = $state(false);
+  let groupTestAuto = $state(true);
   let supportBusy = $state(false);
   let importBusy = $state(false);
   let importUrl = $state("");
@@ -544,20 +558,117 @@
     else bisectMods = [...bisectMods, modId];
   }
 
-  async function applyBisectDisableHalf() {
-    if (!$projectPath || bisectMods.length < 2) {
-      message = "Select at least 2 suspected mods for bisect.";
-      return;
+  function groupTestPhaseKey(session: GroupTestSession | null): string {
+    if (!session) return "";
+    const p = session.phase;
+    if (typeof p === "string") return p;
+    if (p && typeof p === "object" && "failed" in p) return "failed";
+    if (p && typeof p === "object" && "verifyOne" in p) return "verifyOne";
+    return "";
+  }
+
+  function groupTestStatus(session: GroupTestSession | null): string {
+    if (!session) return "";
+    const key = groupTestPhaseKey(session);
+    if (key === "needCovering") {
+      return `Disable all ${session.covering.length} suspects, then test launch.`;
     }
-    const half = bisectMods.slice(0, Math.ceil(bisectMods.length / 2));
-    for (const id of half) {
-      await fixDisableMod(id);
+    if (key === "testing") {
+      return `Enable [${session.testGroup.join(", ")}]; keep the rest of the covering disabled.`;
     }
-    message = `Bisect: disabled ${half.join(", ")}. Retest, then toggle the other half if still crashing.`;
+    if (key === "verifyAll") {
+      return `Verify: disable only [${session.defectives.join(", ")}].`;
+    }
+    if (key === "verifyOne") {
+      const idx =
+        typeof session.phase === "object" && session.phase && "verifyOne" in session.phase
+          ? session.phase.verifyOne?.index ?? 0
+          : 0;
+      return `Verify: re-enable ${session.defectives[idx] ?? "?"} (should crash).`;
+    }
+    if (key === "done") {
+      return `Isolated: [${session.defectives.join(", ") || "none"}].`;
+    }
+    if (key === "failed") {
+      const p = session.phase;
+      return typeof p === "object" && p && "failed" in p
+        ? (p.failed?.reason ?? "Group test failed")
+        : "Group test failed";
+    }
+    return "";
+  }
+
+  const groupTestActive = $derived(
+    !!groupTest && !["done", "failed"].includes(groupTestPhaseKey(groupTest)),
+  );
+
+  async function refreshGroupTest() {
+    if (!$projectPath) return;
     try {
-      await invoke("scan_project_changes", { path: $projectPath });
+      groupTest = await invoke<GroupTestSession | null>("get_mod_group_test", {
+        path: $projectPath,
+      });
     } catch {
-      /* ignore */
+      groupTest = null;
+    }
+  }
+
+  async function startGroupTest() {
+    if (!$projectPath || groupTestBusy) return;
+    groupTestBusy = true;
+    error = null;
+    try {
+      const poolIds = [
+        ...new Set([
+          ...bisectMods,
+          ...suspected.filter((s) => s.knownInManifest).map((s) => s.id),
+        ]),
+      ];
+      groupTest = await invoke<GroupTestSession>("start_mod_group_test", {
+        path: $projectPath,
+        suspected: poolIds,
+      });
+      message = groupTestStatus(groupTest);
+      if (groupTestAuto) await runTest();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      groupTestBusy = false;
+    }
+  }
+
+  async function reportGroupTest(outcome: "healthy" | "crash") {
+    if (!$projectPath || !groupTest || groupTestBusy) return;
+    groupTestBusy = true;
+    error = null;
+    try {
+      groupTest = await invoke<GroupTestSession>("report_mod_group_test_outcome", {
+        path: $projectPath,
+        outcome,
+      });
+      message = groupTestStatus(groupTest);
+      const key = groupTestPhaseKey(groupTest);
+      if (groupTestAuto && key !== "done" && key !== "failed") {
+        await runTest();
+      }
+    } catch (e) {
+      error = String(e);
+    } finally {
+      groupTestBusy = false;
+    }
+  }
+
+  async function cancelGroupTest() {
+    if (!$projectPath) return;
+    groupTestBusy = true;
+    try {
+      await invoke("cancel_mod_group_test", { path: $projectPath });
+      groupTest = null;
+      message = "Group test cancelled; snapshot restored.";
+    } catch (e) {
+      error = String(e);
+    } finally {
+      groupTestBusy = false;
     }
   }
 
@@ -916,7 +1027,7 @@
     try {
       // Catch external disk edits before building AI context.
       try {
-        await invoke("scan_project_changes", { path: $projectPath });
+        void invoke("scan_project_changes", { path: $projectPath }).catch(() => {});
         await loadRecentPackEvents();
       } catch {
         // non-fatal
@@ -2333,9 +2444,11 @@
       void load(true);
       void loadPendingPlan();
       void refreshSoftVerifyStatus($projectPath);
+      void refreshGroupTest();
     }
     let unlistenCascade: UnlistenFn | undefined;
     let unlistenSoftVerify: UnlistenFn | undefined;
+    let unlistenCrash: UnlistenFn | undefined;
     void listen<{ stage?: string }>("diagnose-cascade", (ev) => {
       const stage = ev.payload?.stage;
       if (stage) cascadeLiveStage = stage;
@@ -2359,10 +2472,18 @@
     }).then((u) => {
       unlistenSoftVerify = u;
     });
+    void listen("launch-crashed", () => {
+      if (groupTest && !["done", "failed"].includes(groupTestPhaseKey(groupTest))) {
+        void reportGroupTest("crash");
+      }
+    }).then((u) => {
+      unlistenCrash = u;
+    });
     return () => {
       window.removeEventListener("tuffbox:open-diagnostics", reload);
       unlistenCascade?.();
       unlistenSoftVerify?.();
+      unlistenCrash?.();
     };
   });
 </script>
@@ -2580,7 +2701,6 @@
         onApplyTopSuspectUpdate={applyTopSuspectUpdate}
         onApplyAiPlan={applyAiPlan}
         onJumpToFirstError={() => void openEvidence()}
-        onApplyBisectDisableHalf={applyBisectDisableHalf}
         warningCount={unifiedProblems.filter((p) => p.severity === "warning" || p.severity === "info").length}
         onShowWarnings={scrollToPackWarnings}
       />
@@ -2796,10 +2916,49 @@
           onOpenSnapshots={() => ideStageRequest.set("snapshots")}
         />
 
-        {#if bisectMods.length >= 2}
+        {#if groupTest}
+          <div class="notice warning group-test-panel">
+            <strong>Group test</strong>
+            <span>step {groupTest.step} · {groupTestStatus(groupTest)}</span>
+            <small>
+              Covering {groupTest.covering.length}
+              · clean {groupTest.knownClean.length}
+              {#if groupTest.testGroup.length}
+                · testing [{groupTest.testGroup.join(", ")}]
+              {/if}
+            </small>
+            {#if groupTest.defectives.length}
+              <small>Isolated: {groupTest.defectives.join(", ")}</small>
+            {/if}
+            {#if groupTestActive}
+              <label class="group-test-auto">
+                <input type="checkbox" bind:checked={groupTestAuto} />
+                Auto-launch next step
+              </label>
+              <div class="group-test-actions">
+                <button type="button" class="secondary small" disabled={launching || groupTestBusy} onclick={() => void runTest()}>
+                  Test launch
+                </button>
+                <button type="button" class="secondary small" disabled={groupTestBusy} onclick={() => void reportGroupTest("crash")}>
+                  Still crashed
+                </button>
+                <button type="button" class="secondary small" disabled={groupTestBusy} onclick={() => void reportGroupTest("healthy")}>
+                  Launched
+                </button>
+                <button type="button" class="ghost small" disabled={groupTestBusy} onclick={() => void cancelGroupTest()}>
+                  Cancel
+                </button>
+              </div>
+            {:else if groupTestPhaseKey(groupTest) === "done"}
+              <small>Verified covering. Share prompt can use these disables.</small>
+            {/if}
+          </div>
+        {:else}
           <div class="notice warning">
-            Bisect: {bisectMods.join(", ")}
-            <button type="button" class="secondary small" onclick={applyBisectDisableHalf}>Disable first half & retest</button>
+            Group test suspects: {bisectMods.length ? bisectMods.join(", ") : "recent + crash suspects"}
+            <button type="button" class="secondary small" disabled={groupTestBusy || !$projectPath} onclick={() => void startGroupTest()}>
+              Start group test
+            </button>
           </div>
         {/if}
 
@@ -3208,6 +3367,23 @@
     font-weight: 700;
   }
   .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); }
+  .group-test-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: left;
+  }
+  .group-test-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .group-test-auto {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
   .soft-ai-detail {
     display: block;
     margin-top: 4px;

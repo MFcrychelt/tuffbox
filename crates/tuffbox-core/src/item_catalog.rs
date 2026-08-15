@@ -40,10 +40,7 @@ pub fn build_item_catalog(
 ) -> Result<Vec<CatalogItemEntry>, String> {
     let jars = catalog_jar_sources(project_dir, mc_version, extra_vanilla_roots);
     let fingerprint = catalog_fingerprint(mc_version, &jars);
-    let cache_path = project_dir
-        .join(".tuffbox")
-        .join("cache")
-        .join(format!("{CATALOG_CACHE_VERSION}.json"));
+    let cache_path = item_catalog_cache_path(project_dir);
 
     let mut by_id: BTreeMap<String, CatalogItemEntry> = BTreeMap::new();
 
@@ -121,6 +118,24 @@ pub fn build_item_catalog_for_manifest(
         extra_ids,
         extra_vanilla_roots,
     )
+}
+
+fn item_catalog_cache_path(project_dir: &Path) -> PathBuf {
+    project_dir
+        .join(".tuffbox")
+        .join("cache")
+        .join(format!("{CATALOG_CACHE_VERSION}.json"))
+}
+
+/// Last written catalog, if any. Does not open jars or check fingerprints —
+/// click-path callers should treat this as possibly stale until a background warm.
+pub fn load_cached_item_catalog(project_dir: &Path) -> Option<Vec<CatalogItemEntry>> {
+    let raw = std::fs::read_to_string(item_catalog_cache_path(project_dir)).ok()?;
+    let cached: CatalogCache = serde_json::from_str(&raw).ok()?;
+    if cached.items.is_empty() {
+        return None;
+    }
+    Some(cached.items)
 }
 
 fn catalog_cache_is_trustworthy(items: &[CatalogItemEntry], jars: &[PathBuf]) -> bool {
@@ -673,6 +688,30 @@ mod tests {
             mod_ns: "mod".into(),
         }];
         assert!(catalog_cache_is_trustworthy(&items, &[]));
+    }
+
+    #[test]
+    fn load_cached_item_catalog_skips_zip_and_returns_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join(".tuffbox").join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let items = vec![CatalogItemEntry {
+            id: "minecraft:stone".into(),
+            name: "Stone".into(),
+            mod_ns: "minecraft".into(),
+        }];
+        let cached = CatalogCache {
+            fingerprint: "stale".into(),
+            items: items.clone(),
+        };
+        std::fs::write(
+            item_catalog_cache_path(dir.path()),
+            serde_json::to_string(&cached).unwrap(),
+        )
+        .unwrap();
+        let loaded = load_cached_item_catalog(dir.path()).expect("cache");
+        assert_eq!(loaded[0].id, "minecraft:stone");
+        assert!(load_cached_item_catalog(&dir.path().join("missing")).is_none());
     }
 
     // A version id that can never exist in the machine's real launcher roots,

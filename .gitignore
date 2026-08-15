@@ -53,7 +53,22 @@ bridges/cosmetics/**/.gradle/
 bridges/cosmetics/**/build/
 bridges/cosmetics/**/bin/
 bridges/cosmetics/.vscode/
+bridges/cosmetics/**/.eclipse/
 !bridges/cosmetics/gradle/wrapper/gradle-wrapper.jar
+
+# Overlay bridge build output
+bridges/overlay/.gradle/
+bridges/overlay/**/.gradle/
+bridges/overlay/**/build/
+bridges/overlay/**/bin/
+
+# Sidecar binaries (keep overlay-hook DLL for inject; ignore other local builds)
+apps/tuffbox-desktop/src-tauri/binaries/*
+!apps/tuffbox-desktop/src-tauri/binaries/.gitkeep
+!apps/tuffbox-desktop/src-tauri/binaries/tuffbox_overlay_hook.dll
+
+# Local example launcher runtime data
+examples/.tuffbox/
 
 # Vendored external projects (not part of TuffBox)
 ServerPackCreator/

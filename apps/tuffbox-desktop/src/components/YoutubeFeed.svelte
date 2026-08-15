@@ -1,7 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Youtube, ChevronDown, PictureInPicture2, Play } from "@lucide/svelte";
+  import {
+    Youtube,
+    ChevronDown,
+    ChevronsDown,
+    ChevronsUp,
+    PictureInPicture2,
+    Play,
+  } from "@lucide/svelte";
   import { supabase } from "../lib/supabaseAuth";
   import { launcherSettingsLive, openYoutubePlayer } from "../lib/store";
   import HomeYoutubePlacementToggle from "./HomeYoutubePlacementToggle.svelte";
@@ -21,22 +29,22 @@
   let { variant = "row" }: { variant?: "row" | "grid" | "rail" } = $props();
 
   const STORAGE_KEY = "tuffbox-youtube-feed-expanded";
+  const FULL_STORAGE_KEY = "tuffbox-youtube-feed-full";
   /** Horizontal/grid initial strip size. */
   const FEED_LIMIT_ROW = 24;
-  /** Rail: large client pool; reveal in pages (scroll lives on skin+feed column). */
+  /** Rail / fullView: large client pool; reveal in pages. */
   const FEED_POOL_RAIL = 60;
   const FEED_PAGE_RAIL = 16;
+  const FEED_PAGE_FULL = 18;
   const FEED_MORE_RAIL = 12;
   const SKEL_COUNT_ROW = 5;
   const SKEL_COUNT_RAIL = 4;
+  const SKEL_COUNT_FULL = 8;
   /** Cap clips from the same channel so mega-creators don't fill the strip. */
   const MAX_PER_CHANNEL = 2;
   const MAX_PER_CHANNEL_RAIL = 3;
   /** Share of tracked-creator videos in the final strip. */
   const CHANNEL_SHARE = 0.4;
-
-  const poolLimit = $derived(variant === "rail" ? FEED_POOL_RAIL : FEED_LIMIT_ROW);
-  const skelCount = $derived(variant === "rail" ? SKEL_COUNT_RAIL : SKEL_COUNT_ROW);
 
   let videoPool = $state<FeedVideo[]>([]);
   let visibleCount = $state(FEED_PAGE_RAIL);
@@ -45,14 +53,22 @@
   let loadError = $state("");
   /** Default collapsed; localStorage overrides when set. */
   let expanded = $state(false);
+  /** YouTube-like downward grid; only meaningful when expanded. Persist separately. */
+  let fullView = $state(false);
   let feedRequested = $state(false);
-  let inlinePlayer = $state(true);
-  let loadMoreEl = $state<HTMLElement | null>(null);
+
+  const usePagedFeed = $derived(variant === "rail" || fullView);
+  const poolLimit = $derived(usePagedFeed ? FEED_POOL_RAIL : FEED_LIMIT_ROW);
+  const pageSize = $derived(variant === "rail" ? FEED_PAGE_RAIL : FEED_PAGE_FULL);
+  const skelCount = $derived(
+    variant === "rail" ? SKEL_COUNT_RAIL : fullView ? SKEL_COUNT_FULL : SKEL_COUNT_ROW,
+  );
 
   const visibleVideos = $derived(
-    variant === "rail" ? videoPool.slice(0, visibleCount) : videoPool,
+    usePagedFeed ? videoPool.slice(0, visibleCount) : videoPool,
   );
-  const canLoadMore = $derived(variant === "rail" && visibleCount < videoPool.length);
+  const canLoadMore = $derived(usePagedFeed && visibleCount < videoPool.length);
+  const inlinePlayer = $derived($launcherSettingsLive?.youtubeInlinePlayer !== false);
 
   function onCardClick(video: FeedVideo, event: MouseEvent) {
     if (inlinePlayer) {
@@ -153,7 +169,7 @@
 
     function pick(pool: FeedVideo[], n: number): FeedVideo[] {
       const out: FeedVideo[] = [];
-      const counts = new Map<string, number>();
+      const counts = new SvelteMap<string, number>();
       // Native language first, then any remaining (foreign / unknown).
       const passes: Array<(v: FeedVideo) => boolean> =
         preferLang === "en"
@@ -192,8 +208,8 @@
     }
 
     if (mixed.length < limit) {
-      const used = new Set(mixed.map((v) => v.video_id));
-      const counts = new Map<string, number>();
+      const used = new SvelteSet(mixed.map((v) => v.video_id));
+      const counts = new SvelteMap<string, number>();
       for (const v of mixed) counts.set(channelKey(v), (counts.get(channelKey(v)) ?? 0) + 1);
       for (const v of ranked) {
         if (mixed.length >= limit) break;
@@ -215,16 +231,13 @@
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored !== null) expanded = stored !== "false";
+      const fullStored = localStorage.getItem(FULL_STORAGE_KEY);
+      if (fullStored !== null) fullView = fullStored === "true";
     } catch {
       // ignore storage errors
     }
     // Defer network until expanded (opt-in). Restore + load if already open.
     if (expanded) void loadFeed();
-  });
-
-  $effect(() => {
-    const s = $launcherSettingsLive;
-    if (s) inlinePlayer = s.youtubeInlinePlayer !== false;
   });
 
   async function loadFeed() {
@@ -260,7 +273,7 @@
       if (popularRes.error && channelRes.error) {
         loadError = popularRes.error.message || channelRes.error.message || "Failed to load feed";
         videoPool = [];
-        visibleCount = FEED_PAGE_RAIL;
+        visibleCount = pageSize;
         return;
       }
 
@@ -270,19 +283,21 @@
         !channelRes.error && channelRes.data ? (channelRes.data as FeedVideo[]) : [];
 
       // Dedup by video_id (prefer popular row when both match).
-      const byId = new Map<string, FeedVideo>();
+      const byId = new SvelteMap<string, FeedVideo>();
       for (const v of channel) byId.set(v.video_id, v);
       for (const v of popular) byId.set(v.video_id, v);
 
-      const maxPer = variant === "rail" ? MAX_PER_CHANNEL_RAIL : MAX_PER_CHANNEL;
+      const maxPer = usePagedFeed ? MAX_PER_CHANNEL_RAIL : MAX_PER_CHANNEL;
       videoPool = diversifyFeed([...byId.values()], poolLimit, lang, maxPer);
-      visibleCount = variant === "rail" ? Math.min(FEED_PAGE_RAIL, videoPool.length) : videoPool.length;
+      visibleCount = usePagedFeed
+        ? Math.min(pageSize, videoPool.length)
+        : videoPool.length;
       if (videoPool.length === 0) {
         loadError = "";
       }
     } catch (e) {
       videoPool = [];
-      visibleCount = FEED_PAGE_RAIL;
+      visibleCount = pageSize;
       loadError = String(e);
     } finally {
       loading = false;
@@ -294,9 +309,7 @@
     visibleCount = Math.min(visibleCount + FEED_MORE_RAIL, videoPool.length);
   }
 
-  $effect(() => {
-    if (variant !== "rail" || !canLoadMore || !loadMoreEl) return;
-    const el = loadMoreEl;
+  function attachInfiniteScroll(el: HTMLElement) {
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) loadMoreFromPool();
@@ -304,8 +317,10 @@
       { root: null, rootMargin: "120px", threshold: 0 },
     );
     io.observe(el);
-    return () => io.disconnect();
-  });
+    return () => {
+      io.disconnect();
+    };
+  }
 
   function toggleExpanded() {
     expanded = !expanded;
@@ -317,13 +332,48 @@
     if (expanded && !feedRequested) void loadFeed();
   }
 
+  function toggleFullView() {
+    if (fullView && expanded) {
+      fullView = false;
+      try {
+        localStorage.setItem(FULL_STORAGE_KEY, "false");
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    fullView = true;
+    if (!expanded) {
+      expanded = true;
+      try {
+        localStorage.setItem(STORAGE_KEY, "true");
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      localStorage.setItem(FULL_STORAGE_KEY, "true");
+    } catch {
+      // ignore storage errors
+    }
+    visibleCount = Math.min(FEED_PAGE_FULL, videoPool.length || FEED_PAGE_FULL);
+    const needsReload =
+      !feedRequested || videoPool.length < Math.floor(FEED_POOL_RAIL / 2);
+    if (needsReload) void loadFeed();
+    queueMicrotask(() => {
+      document
+        .querySelector(".youtube-feed.is-full")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   async function openVideo(videoId: string) {
     await open(`https://www.youtube.com/watch?v=${videoId}`);
   }
 
   /** Map vertical wheel to horizontal scroll so the strip is usable with a mouse. */
   function onFeedWheel(e: WheelEvent) {
-    if (variant !== "row") return;
+    if (variant !== "row" || fullView) return;
     const el = e.currentTarget as HTMLElement;
     if (el.scrollWidth <= el.clientWidth) return;
     // Prefer horizontal delta; otherwise tilt vertical into horizontal.
@@ -338,13 +388,14 @@
   class="youtube-feed"
   class:rail={variant === "rail"}
   class:grid={variant === "grid"}
+  class:is-full={fullView && expanded}
   class:is-collapsed={!expanded}
   aria-busy={loading && expanded}
 >
-  <div class="section-header">
+  <div class="section-header-row">
     <button
       type="button"
-      class="section-header-main"
+      class="section-header"
       onclick={toggleExpanded}
       aria-expanded={expanded}
     >
@@ -355,6 +406,23 @@
       </span>
     </button>
     <HomeYoutubePlacementToggle compact={variant === "rail"} />
+    <button
+      type="button"
+      class="full-view-btn"
+      class:is-on={fullView && expanded}
+      onclick={toggleFullView}
+      title={fullView && expanded ? "Show compact strip" : "Expand feed to full height"}
+      aria-label={fullView && expanded ? "Show compact strip" : "Expand feed to full height"}
+      aria-pressed={fullView && expanded}
+    >
+      {#if fullView && expanded}
+        <ChevronsUp size={16} />
+        <span>Strip</span>
+      {:else}
+        <ChevronsDown size={16} />
+        <span>Full height</span>
+      {/if}
+    </button>
   </div>
   {#if expanded}
     {#if loading}
@@ -415,7 +483,7 @@
         {/each}
       </div>
       {#if canLoadMore}
-        <div class="load-more-wrap" bind:this={loadMoreEl}>
+        <div class="load-more-wrap" {@attach attachInfiniteScroll}>
           <button type="button" class="load-more-btn" onclick={loadMoreFromPool}>
             Load more ({videoPool.length - visibleCount} left)
           </button>
@@ -430,7 +498,13 @@
     margin-bottom: 0;
   }
 
-  .section-header {
+  .youtube-feed.is-full {
+    display: flex;
+    flex-direction: column;
+    min-height: calc(100dvh - 6.5rem);
+  }
+
+  .section-header-row {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -438,12 +512,17 @@
     margin: 0 0 16px;
   }
 
-  .section-header-main {
+  .youtube-feed.is-collapsed .section-header-row {
+    margin-bottom: 0;
+  }
+
+  .section-header {
     display: flex;
     align-items: center;
     gap: 10px;
     flex: 1;
     min-width: 0;
+    margin: 0;
     padding: 0;
     background: transparent;
     border: none;
@@ -452,16 +531,12 @@
     text-align: left;
   }
 
-  .youtube-feed.is-collapsed .section-header {
-    margin-bottom: 0;
-  }
-
-  .section-header-main :global(svg) {
+  .section-header :global(svg) {
     color: var(--accent-primary);
     flex-shrink: 0;
   }
 
-  .section-header-main h2 {
+  .section-header h2 {
     margin: 0;
     flex: 1;
     font-size: 18px;
@@ -469,8 +544,41 @@
     color: var(--text-primary);
   }
 
-  .rail .section-header-main h2 {
+  .rail .section-header h2 {
     font-size: 14px;
+  }
+
+  .full-view-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex-shrink: 0;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+
+  .full-view-btn:hover {
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+  }
+
+  .full-view-btn.is-on,
+  .full-view-btn[aria-pressed="true"] {
+    color: var(--accent-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+  }
+
+  .full-view-btn :global(svg) {
+    color: inherit;
   }
 
   .chevron {
@@ -537,6 +645,44 @@
     width: 100%;
   }
 
+  /* Full height: mosaic fills remaining viewport below the header. */
+  .is-full .feed-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 20px 18px;
+    overflow: visible;
+    padding-bottom: 12px;
+    touch-action: auto;
+    flex: 1 1 auto;
+    min-height: 16rem;
+    align-content: start;
+  }
+
+  .is-full .video-card-wrap {
+    flex: unset;
+    width: auto;
+    min-width: 0;
+  }
+
+  .is-full .video-card {
+    flex: unset;
+    width: 100%;
+    gap: 10px;
+  }
+
+  .is-full .title {
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .is-full .channel {
+    font-size: 12px;
+  }
+
+  .is-full .skel-card {
+    width: 100%;
+  }
+
   .feed-row::-webkit-scrollbar {
     height: 6px;
   }
@@ -550,7 +696,7 @@
     min-width: 0;
   }
 
-  .rail .section-header {
+  .rail .section-header-row {
     margin-bottom: 10px;
   }
 

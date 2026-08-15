@@ -1,5 +1,8 @@
 use crate::adapters::{FabricAdapter, ForgeAdapter, LoaderAdapter, NeoForgeAdapter};
-use crate::{DependencyGraph, DependencyKind, LoaderKind, ModDependencySpec, ProjectManifest};
+use crate::diagnostics::{Diagnostic, DiagnosticSeverity};
+use crate::{
+    DependencyGraph, DependencyKind, LoaderKind, ModDependencySpec, ProjectManifest, Resolver,
+};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::HashSet;
@@ -19,6 +22,10 @@ pub struct GraphCache {
     pub graph: DependencyGraph,
     #[serde(default)]
     pub cache_version: u32,
+    /// True only after Modrinth/CurseForge enrich (`refresh_graph`). Jar-only
+    /// warm caches stay `false` so the Graph view still background-refreshes.
+    #[serde(default)]
+    pub network_enriched: bool,
 }
 
 impl GraphCache {
@@ -30,7 +37,13 @@ impl GraphCache {
             enriched_manifest,
             graph,
             cache_version: CACHE_VERSION,
+            network_enriched: false,
         }
+    }
+
+    pub fn with_network_enriched(mut self) -> Self {
+        self.network_enriched = true;
+        self
     }
 
     pub fn load_if_current(
@@ -68,6 +81,90 @@ impl GraphCache {
             .map_err(|error| error.error.to_string())?;
         Ok(path)
     }
+}
+
+/// Enriched manifest for UI click-path: GraphCache when current, otherwise the
+/// raw manifest. Never opens installed jars.
+pub fn enriched_manifest_for_click_path(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> (ProjectManifest, bool) {
+    match GraphCache::load_if_current(manifest_path, manifest) {
+        Ok(Some(cache)) => (cache.enriched_manifest, true),
+        _ => (manifest.clone(), false),
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClickPathDiagnostics {
+    pub diagnostics: Vec<Diagnostic>,
+    pub cached: bool,
+}
+
+/// Resolver diagnostics without zip-scanning `mods/*.jar`.
+pub fn diagnostics_for_click_path(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> ClickPathDiagnostics {
+    let (enriched, cached) = enriched_manifest_for_click_path(manifest_path, manifest);
+    let graph = DependencyGraph::from_manifest(&enriched);
+    ClickPathDiagnostics {
+        diagnostics: Resolver::analyze_project(&enriched, &graph),
+        cached,
+    }
+}
+
+/// Graph payload for UI click-path: cached graph as stored, else local
+/// `from_manifest`. Does not attach disk content packs or scan jars.
+pub fn graph_for_click_path(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> (DependencyGraph, &'static str, Option<String>) {
+    match GraphCache::load_if_current(manifest_path, manifest) {
+        Ok(Some(cache)) => {
+            let source = if cache.network_enriched {
+                "cache"
+            } else {
+                "local"
+            };
+            (cache.graph, source, Some(cache.generated_at))
+        }
+        _ => (DependencyGraph::from_manifest(manifest), "local", None),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticCounts {
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub cached: bool,
+}
+
+pub fn diagnostic_counts(diagnostics: &[Diagnostic], cached: bool) -> DiagnosticCounts {
+    DiagnosticCounts {
+        error_count: diagnostics
+            .iter()
+            .filter(|d| d.severity == DiagnosticSeverity::Error)
+            .count(),
+        warning_count: diagnostics
+            .iter()
+            .filter(|d| d.severity == DiagnosticSeverity::Warning)
+            .count(),
+        cached,
+    }
+}
+
+/// Write GraphCache when missing/stale. Jar enrich happens here, not on click.
+/// Returns `true` when a new cache file was written.
+pub fn warm_graph_cache(manifest_path: &Path, manifest: &ProjectManifest) -> Result<bool, String> {
+    if GraphCache::load_if_current(manifest_path, manifest)?.is_some() {
+        return Ok(false);
+    }
+    let mut enriched = manifest.clone();
+    enrich_manifest_from_installed_jars(manifest_path, &mut enriched);
+    GraphCache::new(manifest, enriched).save(manifest_path)?;
+    Ok(true)
 }
 
 pub fn manifest_fingerprint(manifest: &ProjectManifest) -> String {
@@ -218,5 +315,103 @@ mod tests {
                 .is_none(),
             "old-version cache should be rejected"
         );
+    }
+
+    #[test]
+    fn click_path_diagnostics_without_cache_use_manifest_only() {
+        let manifest: ProjectManifest = serde_json::from_str(include_str!(
+            "../../../examples/sample-project.tuffbox.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("project.tuffbox.json");
+        let result = diagnostics_for_click_path(&manifest_path, &manifest);
+        assert!(
+            !result.cached,
+            "missing cache must not pretend the graph was enriched"
+        );
+        let _ = result.diagnostics;
+    }
+
+    #[test]
+    fn click_path_diagnostics_prefer_current_cache() {
+        let manifest: ProjectManifest = serde_json::from_str(include_str!(
+            "../../../examples/sample-project.tuffbox.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("project.tuffbox.json");
+        GraphCache::new(&manifest, manifest.clone())
+            .save(&manifest_path)
+            .unwrap();
+        let result = diagnostics_for_click_path(&manifest_path, &manifest);
+        assert!(result.cached);
+    }
+
+    #[test]
+    fn diagnostic_counts_split_errors_and_warnings() {
+        use crate::{Diagnostic, DiagnosticSeverity, NodeId};
+        let diags = vec![
+            Diagnostic::error("MISSING_DEPENDENCY", "missing", vec![NodeId("mod:a".into())]),
+            Diagnostic::warning("UNKNOWN_SIDE", "side", vec![]),
+            Diagnostic {
+                severity: DiagnosticSeverity::Info,
+                code: "NOTE".into(),
+                message: "info".into(),
+                related_nodes: vec![],
+            },
+        ];
+        let counts = diagnostic_counts(&diags, true);
+        assert_eq!(counts.error_count, 1);
+        assert_eq!(counts.warning_count, 1);
+        assert!(counts.cached);
+    }
+
+    #[test]
+    fn click_path_graph_uses_cached_graph_without_disk_packs() {
+        let manifest: ProjectManifest = serde_json::from_str(include_str!(
+            "../../../examples/sample-project.tuffbox.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("project.tuffbox.json");
+        GraphCache::new(&manifest, manifest.clone())
+            .with_network_enriched()
+            .save(&manifest_path)
+            .unwrap();
+        let (graph, source, generated_at) = graph_for_click_path(&manifest_path, &manifest);
+        assert_eq!(source, "cache");
+        assert!(generated_at.is_some());
+        assert!(!graph.nodes.is_empty());
+    }
+
+    #[test]
+    fn click_path_graph_jar_cache_stays_local_source() {
+        let manifest: ProjectManifest = serde_json::from_str(include_str!(
+            "../../../examples/sample-project.tuffbox.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("project.tuffbox.json");
+        GraphCache::new(&manifest, manifest.clone())
+            .save(&manifest_path)
+            .unwrap();
+        let (_graph, source, _) = graph_for_click_path(&manifest_path, &manifest);
+        assert_eq!(source, "local");
+    }
+
+    #[test]
+    fn warm_graph_cache_writes_when_missing() {
+        let manifest: ProjectManifest = serde_json::from_str(include_str!(
+            "../../../examples/sample-project.tuffbox.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("project.tuffbox.json");
+        assert!(warm_graph_cache(&manifest_path, &manifest).unwrap());
+        assert!(!warm_graph_cache(&manifest_path, &manifest).unwrap());
+        assert!(GraphCache::load_if_current(&manifest_path, &manifest)
+            .unwrap()
+            .is_some());
     }
 }

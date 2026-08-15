@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, type QuestChapter, type QuestChapterGroup, type QuestData, type QuestValidationIssue, type QuestProgressTeamRef, type QuestProgressSnapshot, type QuestProgressStatus, type QuestPlanMergeResult, stripLocaleOverlay, chapterToSnbtJson } from "../lib/api";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map as MapIcon, Sparkles, X, Undo2, Redo2, Keyboard } from "@lucide/svelte";
   import { onDestroy } from "svelte";
   import { projectPath, questDirty, questChatFocusId } from "../lib/store";
@@ -142,6 +143,7 @@
   }
   let selectedChapter = $state("");
   let selectedQuest = $state<QuestData | null>(null);
+  let selectedCanvasEdge = $state<{ questId: string; depId: string } | null>(null);
   let applyNeedsSave = $state(false);
   let inspectorFocusField = $state<string | null>(null);
   let inspectorFocusToken = $state(0);
@@ -324,6 +326,33 @@
       );
     }, 200);
   }
+
+  async function refreshItemCatalog() {
+    if (!$projectPath) return;
+    try {
+      const catalog = await api.quests.itemCatalog($projectPath);
+      itemCatalogCache = new Set(catalog ?? []);
+      scheduleLiveValidate();
+    } catch {
+      /* keep last catalog */
+    }
+  }
+
+  $effect(() => {
+    void $projectPath;
+    let cancelled = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen("catalog-ready", () => {
+      if (!cancelled) void refreshItemCatalog();
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  });
 
   function setAiSidebar(open: boolean) {
     aiSidebarOpen = open;
@@ -1437,7 +1466,7 @@
     if (result.chapterId !== selectedChapter) {
       selectChapter(result.chapterId);
     }
-    selectedQuest = result.quest;
+    selectedQuest = result.quest as QuestData;
     selection = selectSingle(selection, result.quest.id);
     panelTab = "quest";
     fitToken += 1;

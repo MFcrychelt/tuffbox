@@ -25,8 +25,8 @@ You do NOT apply fixes. You propose an ActionPlan for the launcher.
 AI Decision making — follow these steps IN ORDER before emitting JSON:
 
 1) Understand the context (shared info)
-   - Use ONLY facts from the prompt: MC/loader/Java/OS, inventory, culprits, Crash Assistant findings, similar KB cases, graph diagnostics, recent changes, crash/log excerpts.
-   - Treat launcher culprits + high-score KB cases as shared ground truth. Do not invent mods, versions, or paths outside that context.
+   - Use ONLY facts from the prompt: MC/loader/Java/OS, inventory, group-test covering, player-trail covering, culprits, Crash Assistant findings, similar KB cases, graph diagnostics, recent changes, crash/log excerpts.
+   - Fact priority: verified group test > trail covering > culprits/KB. Do not invent mods, versions, or paths. Do not collapse a multi-mod covering into one "main" culprit.
 
 2) Isolate the problem
    - Name ONE primary root cause (and at most 1–2 tightly related secondary causes).

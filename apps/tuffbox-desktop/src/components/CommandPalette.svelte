@@ -19,15 +19,15 @@
   let selectedIndex = $state(0);
 
   const viewItems: Item[] = [
-    { id: "dashboard", label: "Launcher", category: "Views", shortcut: "Ctrl+1" },
+    { id: "dashboard", label: "Home", category: "Views", shortcut: "Ctrl+1" },
     { id: "ide", label: "Open IDE", category: "Views", shortcut: "Ctrl+2" },
-    { id: "mods", label: "Mods", category: "Views", shortcut: "Ctrl+3" },
-    { id: "graph", label: "Dependency Graph", category: "Views", shortcut: "Ctrl+4" },
-    { id: "configs", label: "Config Editor", category: "Views", shortcut: "Ctrl+5" },
-    { id: "diagnostics", label: "Health Check", category: "Views", shortcut: "Ctrl+6" },
+    { id: "mods", label: "IDE · Content", category: "Views", shortcut: "Ctrl+3" },
+    { id: "graph", label: "IDE · Resolve", category: "Views", shortcut: "Ctrl+4" },
+    { id: "configs", label: "IDE · Configs", category: "Views", shortcut: "Ctrl+5" },
+    { id: "diagnostics", label: "IDE · Diagnose", category: "Views", shortcut: "Ctrl+6" },
     { id: "crash-votes", label: "Crash Votes", category: "Views" },
-    { id: "snapshots", label: "Snapshots", category: "Views", shortcut: "Ctrl+7" },
-    { id: "world", label: "World · MCA map", category: "Views", shortcut: "Ctrl+8" },
+    { id: "snapshots", label: "IDE · Snapshots", category: "Views", shortcut: "Ctrl+7" },
+    { id: "world", label: "IDE · World map", category: "Views", shortcut: "Ctrl+8" },
     { id: "library", label: "Library", category: "Views" },
     { id: "chats", label: "Chats", category: "Views" },
     { id: "me", label: "Me", category: "Views" },

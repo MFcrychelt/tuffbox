@@ -605,9 +605,21 @@
     ideStageRequest.set("snapshots");
   }
 
-  function toggleExpanded(entry: ChangeEntry) {
-    expanded = { ...expanded, [entry.id]: !expanded[entry.id] };
+  async function toggleExpanded(entry: ChangeEntry) {
+    const next = !expanded[entry.id];
+    expanded = { ...expanded, [entry.id]: next };
     selectedId = entry.id;
+    if (!next || entry.diff || !$projectPath) return;
+    try {
+      const diff: string = await invoke("get_history_entry_diff", {
+        path: $projectPath,
+        entryId: entry.id,
+      });
+      if (!diff) return;
+      entries = entries.map((e) => (e.id === entry.id ? { ...e, diff } : e));
+    } catch {
+      /* keep preview */
+    }
   }
 
   function toggleEpisodeExpanded(episode: HistoryEpisode) {

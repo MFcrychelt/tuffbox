@@ -130,13 +130,13 @@
                       <ArrowUpCircle size={12} /> Update
                     </button>
                   {/if}
-                  <label class="bisect-check" title="Include in bisect checklist">
+                  <label class="bisect-check" title="Include in group-test pool">
                     <input
                       type="checkbox"
                       checked={bisectMods.includes(m.id)}
                       onchange={() => onToggleBisect?.(m.id)}
                     />
-                    Bisect
+                    Pool
                   </label>
                 </div>
               </li>

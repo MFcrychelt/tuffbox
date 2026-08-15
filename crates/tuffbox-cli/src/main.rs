@@ -570,6 +570,10 @@ fn main() -> anyhow::Result<()> {
             let result = tuffbox_core::LaunchResult {
                 exit_code: status.code(),
                 log_path,
+                pid: None,
+                instance_id: None,
+                profile_id: None,
+                started_at: None,
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
         }

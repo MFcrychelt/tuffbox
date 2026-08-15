@@ -14,7 +14,7 @@ pub struct GameResolution {
 #[serde(rename_all = "camelCase")]
 pub struct LauncherSettings {
     /// Theme id: tuffbox | tuffbox-light | carbon | inferno | aether | frost | pixelato | win95
-    /// | solar | fern | blaze | dusk | glacier
+    /// | solar | fern | blaze | dusk | glacier | minecraft
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]
@@ -52,6 +52,9 @@ pub struct LauncherSettings {
     /// In-app YouTube player (lite nocookie embed). `false` = preview thumbnails only → system browser.
     #[serde(default = "default_youtube_inline_player")]
     pub youtube_inline_player: bool,
+    /// Show the YouTube feed strip on the home dashboard. Off by default; enable in Settings.
+    #[serde(default)]
+    pub show_youtube_on_home: bool,
     /// Hide IDE workflow rail (Content / Setup / …); reveal on bottom-edge hover.
     #[serde(default)]
     pub auto_hide_workflow_rail: bool,
@@ -133,6 +136,7 @@ impl Default for LauncherSettings {
             java_custom_args: None,
             default_memory_mb: default_memory(),
             youtube_inline_player: default_youtube_inline_player(),
+            show_youtube_on_home: false,
             auto_hide_workflow_rail: false,
             sidebar_mode: default_sidebar_mode(),
             ui_scale_percent: default_ui_scale_percent(),
@@ -309,6 +313,59 @@ pub fn split_custom_jvm_args(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+fn jvm_args_contain(args: &[String], needle: &str) -> bool {
+    args.iter().any(|a| a.contains(needle))
+}
+
+/// Append launch-stability / low-end JVM flags without overriding user or
+/// profile args that already set the same option.
+pub fn append_stability_jvm_args(args: &mut Vec<String>, potato_pc: bool) {
+    // Prefer G1 on modern JDKs; harmless if already the default.
+    if !jvm_args_contain(args, "UseG1GC") {
+        args.push("-XX:+UseG1GC".into());
+    }
+    if !jvm_args_contain(args, "MaxGCPauseMillis") {
+        args.push("-XX:MaxGCPauseMillis=50".into());
+    }
+    if potato_pc {
+        if !jvm_args_contain(args, "G1HeapRegionSize") {
+            args.push("-XX:G1HeapRegionSize=16M".into());
+        }
+        if !jvm_args_contain(args, "ParallelGCThreads") {
+            args.push("-XX:ParallelGCThreads=2".into());
+        }
+        if !jvm_args_contain(args, "ConcGCThreads") {
+            args.push("-XX:ConcGCThreads=1".into());
+        }
+        if !jvm_args_contain(args, "ReservedCodeCacheSize") {
+            args.push("-XX:ReservedCodeCacheSize=256m".into());
+        }
+        // Avoid long GC stalls that look like freezes on weak CPUs.
+        if !jvm_args_contain(args, "DisableExplicitGC") {
+            args.push("-XX:+DisableExplicitGC".into());
+        }
+    }
+}
+
+/// Resolve heap size: profile → launcher default, then clamp for potato PCs.
+pub fn resolve_launch_memory_mb(
+    profile_memory_mb: Option<u32>,
+    settings: &LauncherSettings,
+    override_mb: Option<u32>,
+) -> u32 {
+    if let Some(mb) = override_mb {
+        return mb.max(512);
+    }
+    let base = profile_memory_mb
+        .unwrap_or(settings.default_memory_mb)
+        .max(512);
+    if settings.potato_pc {
+        base.min(3072)
+    } else {
+        base
+    }
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_launcher_settings() -> LauncherSettings {
     load_launcher_settings()
@@ -344,4 +401,33 @@ pub fn validate_runtime_path_cmd(path: String) -> Result<bool, String> {
 #[tauri::command(rename_all = "camelCase")]
 pub fn validate_instances_path_cmd(path: String) -> Result<bool, String> {
     validate_instances_path(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn potato_memory_clamps_to_3gb() {
+        let mut settings = LauncherSettings::default();
+        settings.potato_pc = true;
+        settings.default_memory_mb = 8192;
+        assert_eq!(resolve_launch_memory_mb(Some(8192), &settings, None), 3072);
+        assert_eq!(resolve_launch_memory_mb(None, &settings, None), 3072);
+        assert_eq!(resolve_launch_memory_mb(None, &settings, Some(4096)), 4096);
+    }
+
+    #[test]
+    fn stability_args_skip_existing() {
+        let mut args = vec!["-XX:MaxGCPauseMillis=200".into()];
+        append_stability_jvm_args(&mut args, true);
+        assert_eq!(
+            args.iter()
+                .filter(|a| a.contains("MaxGCPauseMillis"))
+                .count(),
+            1
+        );
+        assert!(args.iter().any(|a| a.contains("UseG1GC")));
+        assert!(args.iter().any(|a| a.contains("ParallelGCThreads")));
+    }
 }

@@ -43,6 +43,16 @@ pub struct LaunchOptions {
 pub struct LaunchResult {
     pub exit_code: Option<i32>,
     pub log_path: PathBuf,
+    /// OS pid of the spawned Java process (set when launch returns "started").
+    #[serde(default)]
+    pub pid: Option<u32>,
+    /// Manifest path / instance id used for running-instance tracking.
+    #[serde(default)]
+    pub instance_id: Option<String>,
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

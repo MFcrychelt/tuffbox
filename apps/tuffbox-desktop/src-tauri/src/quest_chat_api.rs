@@ -171,9 +171,11 @@ fn collect_items(path: &str) -> (Vec<String>, Option<String>) {
             Some("item catalog: could not resolve project manifest".into()),
         );
     };
-    match crate::collect_catalog_item_ids(&manifest_path) {
-        Ok(ids) => (ids.into_iter().take(120).collect(), None),
-        Err(e) => (Vec::new(), Some(format!("item catalog unavailable: {e}"))),
+    let ids = crate::collect_catalog_item_ids_click_path(&manifest_path);
+    if ids.is_empty() {
+        (Vec::new(), None)
+    } else {
+        (ids.into_iter().take(120).collect(), None)
     }
 }
 
@@ -723,15 +725,18 @@ pub async fn quest_chat_turn(
     clear_quest_ai_cancel();
     enforce_quest_ai_cooldown()?;
     let project_dir = project_dir(&path)?;
-    let (book, mut session) = {
+    let project_dir_load = project_dir.clone();
+    let chat_id_load = chat_id.clone();
+    let title_src = message.clone();
+    let (book, mut session) = tokio::task::spawn_blocking(move || {
         let _guard = QUEST_IO_LOCK
             .lock()
             .map_err(|_| "quest I/O lock poisoned".to_string())?;
-        let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
-        let session = if let Some(id) = chat_id.filter(|s| !s.is_empty()) {
-            load_quest_chat(&project_dir, &id).unwrap_or_else(|_| QuestChatSession {
+        let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir_load)?;
+        let session = if let Some(id) = chat_id_load.filter(|s| !s.is_empty()) {
+            load_quest_chat(&project_dir_load, &id).unwrap_or_else(|_| QuestChatSession {
                 id: new_quest_chat_id(),
-                title: truncate_title(&message),
+                title: truncate_title(&title_src),
                 messages: vec![],
                 pending_plan: None,
                 updated_at: now_iso(),
@@ -739,14 +744,16 @@ pub async fn quest_chat_turn(
         } else {
             QuestChatSession {
                 id: new_quest_chat_id(),
-                title: truncate_title(&message),
+                title: truncate_title(&title_src),
                 messages: vec![],
                 pending_plan: None,
                 updated_at: now_iso(),
             }
         };
-        (book, session)
-    };
+        Ok::<_, String>((book, session))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let force_ai = force_ai.unwrap_or(false);
     let intent_s = intent.unwrap_or_else(|| "generate".into());
 
@@ -945,12 +952,15 @@ pub async fn generate_quest_line(
     clear_quest_ai_cancel();
     enforce_quest_ai_cooldown()?;
     let project_dir = project_dir(&path)?;
-    let book = {
+    let project_dir_load = project_dir.clone();
+    let book = tokio::task::spawn_blocking(move || {
         let _guard = QUEST_IO_LOCK
             .lock()
             .map_err(|_| "quest I/O lock poisoned".to_string())?;
-        tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?
-    };
+        tuffbox_core::unified::QuestBook::load_from_project(&project_dir_load)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let sink = ProgressSink {
         app: None,
         chat_id: String::new(),

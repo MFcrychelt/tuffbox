@@ -48,14 +48,10 @@
     if (!$projectPath || refreshing) return;
     refreshing = true;
     try {
-      const diags: { severity?: string; code?: string }[] = await invoke("get_diagnostics", {
+      const counts: { errorCount?: number } = await invoke("get_diagnostic_counts", {
         path: $projectPath,
       });
-      const blocking = (diags ?? []).filter((d) => {
-        const sev = String(d.severity ?? "");
-        return sev === "Error" || sev === "error" || sev === "critical";
-      });
-      ideIssueCount.set(blocking.length);
+      ideIssueCount.set(Number(counts?.errorCount ?? 0));
     } catch {
       /* keep last count */
     } finally {

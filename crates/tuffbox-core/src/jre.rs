@@ -1,11 +1,36 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Mutex,
+    time::UNIX_EPOCH,
 };
 use thiserror::Error;
+
+/// How far to search the disk for Java installs.
+///
+/// `Fast` skips listing the Windows drive root (`C:\`), which hitchs the
+/// launcher when Settings asks for a default version. The Java picker uses
+/// `Full` so portable `C:\graalvm*` / `C:\jdk*` installs still appear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JavaScanDepth {
+    Fast,
+    Full,
+}
+
+static RUNTIME_CACHE: Mutex<Option<(JavaScanDepth, Vec<JavaRuntime>)>> = Mutex::new(None);
+
+/// `java -version` is 200–800ms on Windows. Cache by binary size+mtime so
+/// repeated Play clicks do not spawn a JVM just to read the version string.
+struct JavaPathCacheEntry {
+    len: u64,
+    mtime_secs: u64,
+    runtime: JavaRuntime,
+}
+
+static JAVA_PATH_CACHE: Mutex<Option<HashMap<PathBuf, JavaPathCacheEntry>>> = Mutex::new(None);
 
 #[derive(Debug, Error)]
 pub enum JreError {
@@ -89,7 +114,77 @@ pub fn managed_java_root() -> PathBuf {
     std::env::temp_dir().join("tuffbox").join("runtime").join("java")
 }
 
+pub fn invalidate_runtime_cache() {
+    if let Ok(mut guard) = RUNTIME_CACHE.lock() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = JAVA_PATH_CACHE.lock() {
+        *guard = None;
+    }
+}
+
+/// Cached discovery. Settings / auto-detect use Fast; the Java picker uses Full.
 pub fn find_all_runtimes() -> Result<Vec<JavaRuntime>, JreError> {
+    cached_runtimes(JavaScanDepth::Fast)
+}
+
+pub fn find_all_runtimes_full() -> Result<Vec<JavaRuntime>, JreError> {
+    cached_runtimes(JavaScanDepth::Full)
+}
+
+fn cached_runtimes(depth: JavaScanDepth) -> Result<Vec<JavaRuntime>, JreError> {
+    if let Ok(guard) = RUNTIME_CACHE.lock() {
+        if let Some((cached_depth, runtimes)) = guard.as_ref() {
+            if *cached_depth == JavaScanDepth::Full || *cached_depth == depth {
+                return Ok(runtimes.clone());
+            }
+        }
+    }
+    let runtimes = discover_runtimes(depth)?;
+    if let Ok(mut guard) = RUNTIME_CACHE.lock() {
+        *guard = Some((depth, runtimes.clone()));
+    }
+    Ok(runtimes)
+}
+
+/// Directories we `read_dir` while looking for Java `bin` folders.
+/// Exported for tests so Fast never includes the Windows drive root.
+pub fn java_search_roots(depth: JavaScanDepth) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let managed = managed_java_root();
+    if managed.is_dir() {
+        roots.push(managed);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        roots.extend(
+            [
+                r"C:\Program Files\Java",
+                r"C:\Program Files (x86)\Java",
+                r"C:\Program Files\Eclipse Adoptium",
+                r"C:\Program Files (x86)\Eclipse Adoptium",
+                r"C:\Program Files\Microsoft",
+                r"C:\Program Files (x86)\Microsoft",
+                r"C:\Program Files\GraalVM",
+                r"C:\Program Files\Common Files\Oracle\Java",
+            ]
+            .iter()
+            .map(PathBuf::from),
+        );
+        if depth == JavaScanDepth::Full {
+            roots.push(PathBuf::from(r"C:\"));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = depth;
+        roots.push(PathBuf::from("/usr/lib/jvm"));
+        roots.push(PathBuf::from("/Library/Java/JavaVirtualMachines"));
+    }
+    roots
+}
+
+fn discover_runtimes(depth: JavaScanDepth) -> Result<Vec<JavaRuntime>, JreError> {
     let mut paths = HashSet::new();
 
     // PATH entries.
@@ -109,73 +204,29 @@ pub fn find_all_runtimes() -> Result<Vec<JavaRuntime>, JreError> {
         paths.insert(PathBuf::from(java_home).join("bin"));
     }
 
-    // TuffBox-managed GraalVM (downloaded on demand).
-    let managed = managed_java_root();
-    if managed.is_dir() {
-        if let Ok(entries) = fs::read_dir(&managed) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_dir() {
-                    continue;
-                }
-                let name = entry.file_name().to_string_lossy().to_lowercase();
-                if name == "downloads" {
-                    continue;
-                }
-                paths.insert(path.join("bin"));
-                // macOS GraalVM layout: Contents/Home/bin
-                paths.insert(path.join("Contents").join("Home").join("bin"));
+    for root in java_search_roots(depth) {
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
+        let is_drive_root = cfg!(windows) && root == Path::new(r"C:\");
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
             }
-        }
-    }
-
-    // Common install directories.
-    #[cfg(target_os = "windows")]
-    {
-        let common = [
-            r"C:\Program Files\Java",
-            r"C:\Program Files (x86)\Java",
-            r"C:\Program Files\Eclipse Adoptium",
-            r"C:\Program Files (x86)\Eclipse Adoptium",
-            r"C:\Program Files\Microsoft",
-            r"C:\Program Files (x86)\Microsoft",
-            r"C:\Program Files\GraalVM",
-            r"C:\Program Files\Common Files\Oracle\Java",
-        ];
-        for base in &common {
-            if let Ok(entries) = fs::read_dir(base) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    paths.insert(path.join("bin"));
-                }
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if name == "downloads" {
+                continue;
             }
-        }
-        // Portable installs like C:\graalvm-jdk-25.0.3+9.1\
-        if let Ok(entries) = fs::read_dir(r"C:\") {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_lowercase();
-                if name.starts_with("graalvm") || name.starts_with("jdk") || name.starts_with("zulu")
-                {
-                    paths.insert(entry.path().join("bin"));
-                }
+            if is_drive_root
+                && !(name.starts_with("graalvm")
+                    || name.starts_with("jdk")
+                    || name.starts_with("zulu"))
+            {
+                continue;
             }
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        for base in ["/usr/lib/jvm", "/Library/Java/JavaVirtualMachines"] {
-            if let Ok(entries) = fs::read_dir(base) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let bin = path.join("Contents").join("Home").join("bin");
-                    if bin.exists() {
-                        paths.insert(bin);
-                    } else {
-                        paths.insert(path.join("bin"));
-                    }
-                }
-            }
+            paths.insert(path.join("bin"));
+            paths.insert(path.join("Contents").join("Home").join("bin"));
         }
     }
 
@@ -234,12 +285,17 @@ pub fn ensure_java_with_log<F>(mut log: F) -> Result<JavaRuntime, JreError>
 where
     F: FnMut(&str),
 {
-    let runtimes = find_all_runtimes()?;
+    let mut runtimes = find_all_runtimes()?;
+    if runtimes.is_empty() {
+        runtimes = find_all_runtimes_full()?;
+    }
     if let Some(rt) = runtimes.into_iter().next() {
         return Ok(rt);
     }
     log("# No Java found on this PC — downloading latest GraalVM Community JDK…");
-    install_latest_graalvm(&mut log)
+    let installed = install_latest_graalvm(&mut log)?;
+    invalidate_runtime_cache();
+    Ok(installed)
 }
 
 /// Like [`ensure_java`], then picks the best match for `mc_version`.
@@ -256,12 +312,27 @@ where
 {
     let mut runtimes = find_all_runtimes()?;
     if runtimes.is_empty() {
+        runtimes = find_all_runtimes_full()?;
+    }
+    if runtimes.is_empty() {
         log("# No Java found on this PC — downloading latest GraalVM Community JDK…");
         let installed = install_latest_graalvm(&mut log)?;
+        invalidate_runtime_cache();
         runtimes.push(installed);
     }
     let required = required_java_major(mc_version);
     find_runtime_for(&runtimes, required).ok_or(JreError::NotFound)
+}
+
+fn java_bin_fingerprint(path: &Path) -> Option<(u64, u64)> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Some((meta.len(), mtime))
 }
 
 pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
@@ -283,6 +354,16 @@ pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
         )));
     }
 
+    if let Some((len, mtime_secs)) = java_bin_fingerprint(&java_bin) {
+        if let Ok(guard) = JAVA_PATH_CACHE.lock() {
+            if let Some(entry) = guard.as_ref().and_then(|m| m.get(&java_bin)) {
+                if entry.len == len && entry.mtime_secs == mtime_secs {
+                    return Ok(entry.runtime.clone());
+                }
+            }
+        }
+    }
+
     let output = {
         let mut c = Command::new(&java_bin);
         c.arg("-version").stderr(Stdio::piped());
@@ -297,11 +378,26 @@ pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
     let first_line = stderr.lines().next().unwrap_or("").to_string();
     let major = parse_java_major(&first_line).ok_or(JreError::InvalidVersion)?;
 
-    Ok(JavaRuntime {
+    let runtime = JavaRuntime {
         path: java_bin.to_string_lossy().to_string(),
         version: first_line,
         major,
-    })
+    };
+    if let Some((len, mtime_secs)) = java_bin_fingerprint(&java_bin) {
+        if let Ok(mut guard) = JAVA_PATH_CACHE.lock() {
+            guard
+                .get_or_insert_with(HashMap::new)
+                .insert(
+                    java_bin,
+                    JavaPathCacheEntry {
+                        len,
+                        mtime_secs,
+                        runtime: runtime.clone(),
+                    },
+                );
+        }
+    }
+    Ok(runtime)
 }
 
 fn java_binary_name() -> &'static str {
@@ -643,5 +739,38 @@ mod tests {
     #[test]
     fn platform_suffix_is_known() {
         assert_ne!(platform_asset_suffix(), "unsupported");
+    }
+
+    #[test]
+    fn java_bin_fingerprint_reads_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("java.exe");
+        std::fs::write(&bin, b"not-a-real-jvm").unwrap();
+        let (len, _mtime) = java_bin_fingerprint(&bin).expect("fingerprint");
+        assert_eq!(len, 14);
+    }
+
+    #[test]
+    fn check_java_at_path_errors_when_binary_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = check_java_at_path(&dir.path().join("missing-java")).unwrap_err();
+        match err {
+            JreError::Io(e) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound),
+            other => panic!("expected Io, got {other}"),
+        }
+    }
+
+    #[test]
+    fn fast_search_roots_skip_windows_drive_root() {
+        let roots = java_search_roots(JavaScanDepth::Fast);
+        assert!(
+            !roots.iter().any(|p| p == Path::new(r"C:\")),
+            "Fast scan must not list C:\\"
+        );
+        let full = java_search_roots(JavaScanDepth::Full);
+        #[cfg(target_os = "windows")]
+        assert!(full.iter().any(|p| p == Path::new(r"C:\")));
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(roots, full);
     }
 }

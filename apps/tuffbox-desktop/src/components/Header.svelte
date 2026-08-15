@@ -5,11 +5,12 @@
   import { onMount, onDestroy } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, openLaunchLog } from "../lib/store";
+  import { projectPath, projectInfo, openLaunchLog, recentProjects, launcherSettingsLive } from "../lib/store";
+  import { api } from "../lib/api";
 
   import type { View } from "../lib/types";
 
-  let { currentView }: { currentView: View } = $props();
+  let { currentView = $bindable() }: { currentView: View } = $props();
 
   let onlineCount = $state(0);
   let onlineOk = $state(false);
@@ -40,7 +41,7 @@
   });
 
   const titles: Record<View, string> = {
-    dashboard: "Launcher",
+    dashboard: "Home",
     ide: "IDE Workflow",
     mods: "Mods",
     graph: "Dependency Graph",
@@ -60,11 +61,14 @@
   };
 
   /** Inside an instance the pack name IS the page heading. */
-  const pageTitle = $derived(
-    currentView === "dashboard" && $projectInfo
-      ? $projectInfo.name
-      : (titles[currentView] ?? ""),
-  );
+  const pageTitle = $derived.by(() => {
+    const mcHome =
+      $launcherSettingsLive?.theme === "minecraft" &&
+      (currentView === "dashboard" || currentView === "library" || currentView === "me");
+    if (mcHome) return "Minecraft: Java Edition";
+    if (currentView === "dashboard" && $projectInfo) return $projectInfo.name;
+    return titles[currentView] ?? "";
+  });
 
   function prefersReducedMotion(): boolean {
     if (typeof document === "undefined") return true;
@@ -86,15 +90,18 @@
     if (selected && typeof selected === "string") {
       const info = await invoke("validate_project", { path: selected }) as import("../lib/api").ProjectSummary;
       const manifestPath = info.manifestPath || selected;
+      recentProjects.add({ path: manifestPath, info: info as any }, { reorder: false });
       projectPath.set(manifestPath);
       projectInfo.set(info as any);
+      void api.session.setLastOpened(manifestPath).catch(() => {});
     }
   }
 </script>
 
-<header class="header">
+<header class="header" data-view={currentView}>
+  <div class="header-top">
   <div class="left">
-    {#key currentView + ($projectInfo?.name ?? "")}
+    {#key currentView + ($projectInfo?.name ?? "") + ($launcherSettingsLive?.theme ?? "")}
       <div class="title-swap" in:titleIntro>
         <div class="breadcrumb">
           <span class="crumb">TuffBox</span>
@@ -126,16 +133,42 @@
       {$projectPath ? "Switch" : "Open"}
     </button>
 
-    <button
-      class="secondary"
-      disabled={!$projectPath}
-      title="Live logs of the running build"
-      onclick={() => $projectPath && openLaunchLog($projectPath)}
-    >
-      <Terminal size={16} />
-      Logs
-    </button>
+    {#if currentView !== "dashboard" && currentView !== "library" && currentView !== "me"}
+      <button
+        class="secondary"
+        disabled={!$projectPath}
+        title="Live logs of the running build"
+        onclick={() => $projectPath && openLaunchLog($projectPath)}
+      >
+        <Terminal size={16} />
+        Logs
+      </button>
+    {/if}
   </div>
+  </div>
+  <nav class="mc-tabs" aria-label="Launcher sections">
+    <button
+      type="button"
+      class={["mc-tab", { active: currentView === "dashboard" }]}
+      onclick={() => (currentView = "dashboard")}
+    >
+      Play
+    </button>
+    <button
+      type="button"
+      class={["mc-tab", { active: currentView === "library" }]}
+      onclick={() => (currentView = "library")}
+    >
+      Installations
+    </button>
+    <button
+      type="button"
+      class={["mc-tab", { active: currentView === "me" }]}
+      onclick={() => (currentView = "me")}
+    >
+      Skins
+    </button>
+  </nav>
 </header>
 
 <style>
@@ -150,6 +183,19 @@
     -webkit-backdrop-filter: var(--header-backdrop, blur(12px));
     backdrop-filter: var(--header-backdrop, blur(12px));
     flex-shrink: 0;
+  }
+
+  .header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: 1;
+    min-width: 0;
+    gap: 16px;
+  }
+
+  .mc-tabs {
+    display: none;
   }
 
   .left {
@@ -225,7 +271,7 @@
   }
   .online-dot.on {
     background: var(--accent-primary);
-    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.22);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 22%, transparent);
   }
   .online-label {
     font-variant-numeric: tabular-nums;

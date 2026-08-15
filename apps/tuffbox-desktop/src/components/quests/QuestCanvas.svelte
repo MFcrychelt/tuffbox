@@ -447,7 +447,7 @@
     }
   }
 
-  function isValidConnection(connection: Connection | null | undefined): boolean {
+  function isValidConnection(connection: Edge | Connection | null | undefined): boolean {
     if (!connection?.source || !connection?.target) return false;
     if (connection.source === connection.target) return false;
     // Dependent (target) must be a local chapter quest — cannot depend "into" a ghost.

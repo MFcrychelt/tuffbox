@@ -1636,6 +1636,112 @@ async fn rpc_launcher(
     Ok(body)
 }
 
+/// RPC `optimize_mods_for` — custom Optimize list (FO for Fabric; other loaders later).
+#[derive(Debug, Clone)]
+pub struct OptimizeModRow {
+    pub modrinth_slug: String,
+    pub sort_order: i32,
+    pub name: Option<String>,
+    pub source: Option<String>,
+}
+
+pub async fn optimize_mods_for_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    loader: &str,
+    mc_version: &str,
+) -> Result<Vec<OptimizeModRow>, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase is not configured".into());
+    }
+    let endpoint = join_url(url, "rest/v1/rpc/optimize_mods_for");
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let payload = json!({
+        "p_loader": loader.trim().to_ascii_lowercase(),
+        "p_mc_version": mc_version.trim(),
+    });
+    let response = client
+        .post(&endpoint)
+        .headers(supabase_headers(key)?)
+        .header("Accept", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("optimize_mods_for failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!([]));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("optimize_mods_for {status}: {msg}"));
+    }
+    let rows = body.as_array().cloned().unwrap_or_default();
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let slug = row.get("modrinth_slug")?.as_str()?.trim();
+            if slug.is_empty() {
+                return None;
+            }
+            Some(OptimizeModRow {
+                modrinth_slug: slug.to_ascii_lowercase(),
+                sort_order: row
+                    .get("sort_order")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0) as i32,
+                name: row
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                source: row
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            })
+        })
+        .collect())
+}
+
+/// Convert DB rows into local OptimizeModCandidate shape (reason/risk defaults).
+pub fn optimize_rows_to_candidates(rows: &[OptimizeModRow]) -> Vec<crate::optimize_pack::OptimizeModCandidate> {
+    let mut out = Vec::with_capacity(rows.len());
+    let mut seen = std::collections::HashSet::new();
+    for row in rows {
+        let slug = row.modrinth_slug.trim().to_ascii_lowercase();
+        if slug.is_empty() || !seen.insert(slug.clone()) {
+            continue;
+        }
+        let name = row
+            .name
+            .clone()
+            .unwrap_or_else(|| slug.clone());
+        let source = row.source.as_deref().unwrap_or("fabulously-optimized");
+        out.push(crate::optimize_pack::OptimizeModCandidate {
+            slug: slug.clone(),
+            name,
+            reason: format!("From {source} catalog for this Minecraft version"),
+            risk: "low".into(),
+            category: "performance".into(),
+            modrinth_slug: Some(slug),
+            curseforge_slug: None,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1643,6 +1749,28 @@ mod tests {
     #[test]
     fn urlencoding_encodes_pipe() {
         assert_eq!(urlencoding_minimal("a|b"), "a%7Cb");
+    }
+
+    #[test]
+    fn optimize_rows_to_candidates_dedupes() {
+        let rows = vec![
+            OptimizeModRow {
+                modrinth_slug: "sodium".into(),
+                sort_order: 0,
+                name: Some("Sodium".into()),
+                source: Some("fabulously-optimized".into()),
+            },
+            OptimizeModRow {
+                modrinth_slug: "sodium".into(),
+                sort_order: 1,
+                name: None,
+                source: None,
+            },
+        ];
+        let c = optimize_rows_to_candidates(&rows);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].slug, "sodium");
+        assert_eq!(c[0].modrinth_slug.as_deref(), Some("sodium"));
     }
 
     /// Smoke: `mod_partner_tops.partners` JSONB matches PartnerStat / RPC columns.
