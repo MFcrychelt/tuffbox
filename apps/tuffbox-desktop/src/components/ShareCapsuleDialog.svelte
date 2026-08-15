@@ -28,6 +28,8 @@
     distillSource?: string;
     resolutionId?: string;
     beta?: boolean;
+    playerTrail?: boolean;
+    source?: string;
     validation?: DistillValidation;
     groundingNotes?: string[];
   };
@@ -78,6 +80,12 @@
   const validationWarnings = $derived(plan?.validation?.warnings ?? []);
   const canConfirm = $derived(
     !!plan && !confirmBusy && !shareBusy && !loading && validationOk && !error,
+  );
+  const isPlayerTrail = $derived(
+    plan?.playerTrail === true || plan?.distillSource === "player_trail",
+  );
+  const isGroupTest = $derived(
+    plan?.distillSource === "group_test" || plan?.source === "group_test",
   );
 
   onMount(() => {
@@ -198,13 +206,27 @@
   >
     <div class="sc-icon"><Share2 size={28} /></div>
     <h3 id="share-capsule-title">Share efficient fix with TuffSwarm?</h3>
-    <p class="sc-lead">
-      Beta: AI distilled your fix path into a minimal plan. Confirm if it looks right, or edit so peers
-      do not repeat mistakes.
-    </p>
+    {#if !loading && plan}
+      <p class="sc-lead">
+        {#if isGroupTest}
+          Group testing isolated the mods that must stay disabled. Confirm the covering, or edit
+          before share.
+        {:else if isPlayerTrail}
+          We logged launcher actions between the crash and the successful launch, then dropped
+          cancelled toggles. Remaining disables are a covering — not proof of a single root cause.
+        {:else}
+          Beta: AI distilled your fix path into a minimal plan. Confirm if it looks right, or edit so
+          peers do not repeat mistakes.
+        {/if}
+      </p>
+    {:else if !loading}
+      <p class="sc-lead">
+        Review the recorded fix before sharing with TuffSwarm.
+      </p>
+    {/if}
 
     {#if loading}
-      <p class="sc-status">AI analyzing your fix history…</p>
+      <p class="sc-status">Preparing share plan…</p>
     {:else if error && !plan}
       <p class="sc-error">{error}</p>
       <div class="sc-actions">

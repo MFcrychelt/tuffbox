@@ -55,7 +55,12 @@
   let warnings = $state<string[]>([]);
   let applyConfigs = $state(true);
   let useAiConfigs = $state(false);
+  /** True only after a successful curated preview (not merely listed in JSON). */
   let curatedAvailable = $state(false);
+  let curatedUnavailableMessage = $state<string | null>(null);
+  let projectLoader = $state("");
+  let projectMcVersion = $state("");
+  let curatedMappedVersions = $state<string[]>([]);
   let curatedMeta = $state<{
     name: string;
     slug: string;
@@ -65,10 +70,54 @@
   } | null>(null);
   let curatedMods = $state<CuratedMod[]>([]);
   let customMods = $state<CustomMod[]>([]);
+  let catalogSource = $state<"bundled" | "supabase" | string>("bundled");
   let configRows = $state<ConfigRow[]>([]);
   let findings = $state<Record<string, unknown>[]>([]);
   let doneMessage = $state<string | null>(null);
   let sessionOpen = $state(false);
+  /** Non-reactive generation counter — must not be $state (close path would retrigger $effect). */
+  let loadGen = 0;
+
+  const selectedCustomCount = $derived(
+    customMods.filter((m) => m.selected && !m.alreadyInstalled).length,
+  );
+  const selectedConfigCount = $derived(
+    applyConfigs ? configRows.filter((r) => r.selected).length : 0,
+  );
+  const curatedInstallCount = $derived(
+    curatedMods.filter((m) => !m.alreadyInstalled).length,
+  );
+  const contextLabel = $derived.by(() => {
+    const loader = curatedMeta?.loader || projectLoader || "—";
+    const mc = curatedMeta?.minecraftVersion || projectMcVersion || "—";
+    return `${loader} · MC ${mc}`;
+  });
+  const applyDisabled = $derived.by(() => {
+    if (applying || loading) return true;
+    if (mode === "curated") return !curatedAvailable;
+    return selectedCustomCount === 0 && selectedConfigCount === 0;
+  });
+  const applyLabel = $derived.by(() => {
+    if (mode === "curated") {
+      if (!curatedAvailable) return "Apply";
+      const parts: string[] = [];
+      if (curatedInstallCount > 0) {
+        parts.push(`${curatedInstallCount} mod${curatedInstallCount === 1 ? "" : "s"}`);
+      }
+      if (selectedConfigCount > 0) {
+        parts.push(`${selectedConfigCount} config${selectedConfigCount === 1 ? "" : "s"}`);
+      }
+      return parts.length ? `Apply (${parts.join(", ")})` : "Apply (already installed)";
+    }
+    const parts: string[] = [];
+    if (selectedCustomCount > 0) {
+      parts.push(`${selectedCustomCount} mod${selectedCustomCount === 1 ? "" : "s"}`);
+    }
+    if (selectedConfigCount > 0) {
+      parts.push(`${selectedConfigCount} config${selectedConfigCount === 1 ? "" : "s"}`);
+    }
+    return parts.length ? `Apply (${parts.join(", ")})` : "Apply";
+  });
 
   function loaderIsFabricFamily(loader: string | undefined | null): boolean {
     const l = (loader ?? "").toLowerCase();
@@ -91,8 +140,29 @@
     };
   }
 
-  async function bootstrap() {
+  function beginLoad(): number {
+    const gen = loadGen + 1;
+    loadGen = gen;
     loading = true;
+    return gen;
+  }
+
+  function endLoad(gen: number) {
+    if (gen === loadGen) loading = false;
+  }
+
+  function curatedEmptyCopy(): string {
+    if (curatedUnavailableMessage) return curatedUnavailableMessage;
+    const loader = projectLoader || "this loader";
+    const mc = projectMcVersion || "this Minecraft version";
+    if (curatedMappedVersions.length) {
+      return `No curated pack for ${loader} · MC ${mc}. Mapped versions: ${curatedMappedVersions.join(", ")}. Switch to Custom for performance mods.`;
+    }
+    return `No curated pack for ${loader} · MC ${mc}. Switch to Custom, or publish a Modrinth project and add a row in optimize-packs.json.`;
+  }
+
+  async function bootstrap() {
+    const gen = beginLoad();
     error = null;
     doneMessage = null;
     warnings = [];
@@ -103,58 +173,77 @@
     curatedMeta = null;
     useAiConfigs = false;
     curatedAvailable = false;
+    curatedUnavailableMessage = null;
+    curatedMappedVersions = [];
 
     const path = get(projectPath);
     if (!path) {
       error = "No project open.";
-      loading = false;
+      endLoad(gen);
       return;
     }
 
     try {
       const listed = await api.mods.listCuratedOptimizePacks(path);
-      curatedAvailable = !!listed.available;
-      const info = get(projectInfo);
+      if (gen !== loadGen) return;
+
+      projectLoader = listed.loader || get(projectInfo)?.loaderKind || "";
+      projectMcVersion = listed.minecraftVersion || "";
+      curatedMappedVersions = (listed.entries ?? [])
+        .map((e) => e.minecraftVersion)
+        .filter(Boolean);
+      curatedUnavailableMessage = listed.unavailableMessage ?? null;
+      const listedAvailable = !!listed.available;
+      curatedAvailable = false;
+
       const preferCurated =
-        curatedAvailable && loaderIsFabricFamily(listed.loader || info?.loaderKind);
+        listedAvailable && loaderIsFabricFamily(listed.loader || projectLoader);
       mode = preferCurated ? "curated" : "custom";
 
       if (preferCurated) {
         try {
           await loadCurated(path);
+          if (gen !== loadGen) return;
         } catch (curatedErr) {
-          // Unpublished / missing Modrinth pack — fall through to Custom without a sticky error.
+          if (gen !== loadGen) return;
+          // Mapped in JSON but unpublished / missing on Modrinth — keep Custom usable.
           curatedAvailable = false;
           mode = "custom";
           const curatedMsg =
             curatedErr instanceof Error ? curatedErr.message : String(curatedErr);
+          curatedUnavailableMessage = curatedMsg;
           await loadCustom(path, false);
+          if (gen !== loadGen) return;
           warnings = [
             curatedMsg,
-            "Opened Custom optimize instead.",
+            "Opened Custom optimize instead — pick performance mods below.",
             ...warnings,
           ];
         }
       } else {
         await loadCustom(path, false);
+        if (gen !== loadGen) return;
+        if (!listedAvailable && curatedUnavailableMessage) {
+          warnings = [curatedUnavailableMessage, ...warnings];
+        }
       }
       error = null;
     } catch (e) {
+      if (gen !== loadGen) return;
       mode = "custom";
       curatedAvailable = false;
       try {
         await loadCustom(path, false);
+        if (gen !== loadGen) return;
         error = null;
-      } catch (e2) {
-        error = e2 instanceof Error ? e2.message : String(e2);
-      }
-      if (error == null && e) {
-        // custom recovered; keep a soft warning only
         const msg = e instanceof Error ? e.message : String(e);
         if (msg && !warnings.includes(msg)) warnings = [...warnings, msg];
+      } catch (e2) {
+        if (gen !== loadGen) return;
+        error = e2 instanceof Error ? e2.message : String(e2);
       }
     } finally {
-      loading = false;
+      endLoad(gen);
     }
   }
 
@@ -167,17 +256,22 @@
       minecraftVersion: preview.minecraftVersion,
       loader: preview.loader,
     };
+    projectLoader = preview.loader || projectLoader;
+    projectMcVersion = preview.minecraftVersion || projectMcVersion;
     curatedMods = preview.mods.filter((m) => m.role !== "conflicts" && m.role !== "breaks_with");
     warnings = preview.warnings ?? [];
     configRows = (preview.configActions ?? []).map((a, i) =>
       actionToRow(a as Record<string, unknown>, i),
     );
     curatedAvailable = true;
+    curatedUnavailableMessage = null;
   }
 
   async function loadCustom(path: string, ai: boolean) {
     const plan = await api.mods.buildOptimizePlan(ai, path);
-    curatedAvailable = plan.curatedAvailable;
+    // Do not overwrite curatedAvailable from plan.curatedAvailable — that only
+    // means a JSON mapping exists, not that Modrinth preview succeeded.
+    catalogSource = plan.catalogSource || "bundled";
     customMods = (plan.mods ?? []).map((m) => ({
       ...m,
       selected: !m.alreadyInstalled,
@@ -186,9 +280,8 @@
     findings = plan.findings ?? [];
     const actions = (plan.plan?.actions as Record<string, unknown>[] | undefined) ?? [];
     configRows = actions.map((a, i) => actionToRow(a, i));
-    const aiDiffs = (plan as any).aiDiffs as
-      | { path: string; ok: boolean; afterExcerpt?: string }[]
-      | undefined;
+    const aiDiffs = (plan as { aiDiffs?: { path: string; ok: boolean; afterExcerpt?: string }[] })
+      .aiDiffs;
     if (ai && Array.isArray(aiDiffs) && aiDiffs.length > 0) {
       const ok = aiDiffs.filter((d) => d.ok).length;
       warnings = [
@@ -202,6 +295,8 @@
       minecraftVersion: plan.minecraftVersion,
       loader: plan.loader,
     };
+    projectLoader = plan.loader || projectLoader;
+    projectMcVersion = plan.minecraftVersion || projectMcVersion;
   }
 
   async function switchMode(next: Mode) {
@@ -209,52 +304,65 @@
     mode = next;
     error = null;
     doneMessage = null;
-    loading = true;
+
+    // Unavailable curated: stay on the tab and show an empty-state explanation.
+    if (next === "curated" && !curatedAvailable) {
+      return;
+    }
+
+    const gen = beginLoad();
     const path = get(projectPath);
     if (!path) {
-      loading = false;
+      error = "No project open.";
+      endLoad(gen);
       return;
     }
     try {
       if (next === "curated") {
-        if (!curatedAvailable) {
-          error = `No curated pack for this Minecraft version — use Custom or publish a pack and update optimize-packs.json.`;
-          mode = "custom";
-          loading = false;
-          return;
-        }
         try {
           await loadCurated(path);
+          if (gen !== loadGen) return;
           error = null;
         } catch (e) {
+          if (gen !== loadGen) return;
           curatedAvailable = false;
+          curatedUnavailableMessage = e instanceof Error ? e.message : String(e);
           mode = "custom";
-          error = e instanceof Error ? e.message : String(e);
           await loadCustom(path, useAiConfigs);
-          // Keep curated failure visible but stay on a usable Custom plan.
+          if (gen !== loadGen) return;
+          warnings = [
+            curatedUnavailableMessage,
+            "Opened Custom optimize instead — pick performance mods below.",
+            ...warnings,
+          ];
+          error = null;
         }
       } else {
         await loadCustom(path, useAiConfigs);
+        if (gen !== loadGen) return;
         error = null;
       }
     } catch (e) {
+      if (gen !== loadGen) return;
       error = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      endLoad(gen);
     }
   }
 
   async function refreshCustomWithAi() {
     const path = get(projectPath);
     if (!path || mode !== "custom") return;
-    loading = true;
+    const gen = beginLoad();
     error = null;
     try {
       await loadCustom(path, useAiConfigs);
+      if (gen !== loadGen) return;
     } catch (e) {
+      if (gen !== loadGen) return;
       error = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      endLoad(gen);
     }
   }
 
@@ -278,7 +386,7 @@
 
   async function apply() {
     const path = get(projectPath);
-    if (!path || applying) return;
+    if (!path || applying || applyDisabled) return;
     applying = true;
     error = null;
     doneMessage = null;
@@ -344,6 +452,9 @@
   $effect(() => {
     if (!open) {
       sessionOpen = false;
+      // Invalidate in-flight loads so finally cannot leave loading stuck.
+      loadGen += 1;
+      loading = false;
       return;
     }
     if (sessionOpen) return;
@@ -413,21 +524,26 @@
         <div class="opt-done"><Check size={14} /> {doneMessage}</div>
       {/if}
 
-      {#if curatedMeta && !loading}
+      {#if !loading && (projectLoader || projectMcVersion || curatedMeta)}
         <p class="opt-meta">
-          {curatedMeta.loader} · MC {curatedMeta.minecraftVersion}
-          {#if mode === "curated" && curatedMeta.name}
+          {contextLabel}
+          {#if mode === "curated" && curatedAvailable && curatedMeta?.name}
             · {curatedMeta.name}
             {#if curatedMeta.versionNumber}
               <code>v{curatedMeta.versionNumber}</code>
+            {/if}
+          {:else if mode === "custom"}
+            · Custom performance list
+            {#if catalogSource === "supabase"}
+              · FO catalog (DB)
             {/if}
           {/if}
         </p>
       {/if}
 
-      {#if warnings.length}
+      {#if warnings.length && !loading}
         <ul class="opt-warnings">
-          {#each warnings as w (w)}
+          {#each warnings as w, i (`${i}-${w}`)}
             <li>{w}</li>
           {/each}
         </ul>
@@ -435,43 +551,68 @@
 
       {#if mode === "curated" && !loading}
         {#if !curatedAvailable}
-          <p class="opt-empty">
-            No curated Fabric pack mapped for this Minecraft version. Switch to Custom, or publish
-            a Modrinth project and add a row in <code>optimize-packs.json</code>.
-          </p>
+          <div class="opt-empty-block">
+            <p class="opt-empty">{curatedEmptyCopy()}</p>
+            <button
+              type="button"
+              class="secondary opt-empty-cta"
+              disabled={applying}
+              onclick={() => switchMode("custom")}
+            >
+              Open Custom optimize
+            </button>
+          </div>
         {:else}
           <div class="opt-section">
-            <h3>Mods in pack</h3>
-            <div class="opt-list">
-              {#each curatedMods as m (m.slug + m.role)}
-                <div class="opt-row">
-                  <div class="opt-meta-col">
-                    <strong>{m.name || m.slug}</strong>
-                    <code>{m.slug}</code>
-                    <span class="role">{m.role}</span>
+            <h3>
+              Mods in pack
+              <span class="count">{curatedInstallCount} to install · {curatedMods.length} total</span>
+            </h3>
+            {#if !curatedMods.length}
+              <p class="opt-empty">Pack preview returned no installable mods.</p>
+            {:else}
+              <div class="opt-list">
+                {#each curatedMods as m (m.slug + m.role)}
+                  <div class="opt-row">
+                    <div class="opt-meta-col">
+                      <strong>{m.name || m.slug}</strong>
+                      <code>{m.slug}</code>
+                      <span class="role">{m.role}</span>
+                    </div>
+                    {#if m.alreadyInstalled}
+                      <span class="pill ok">installed</span>
+                    {:else}
+                      <span class="pill add">will install</span>
+                    {/if}
                   </div>
-                  {#if m.alreadyInstalled}
-                    <span class="pill ok">installed</span>
-                  {:else}
-                    <span class="pill add">will install</span>
-                  {/if}
-                </div>
-              {/each}
-            </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         {/if}
       {/if}
 
       {#if mode === "custom" && !loading}
         <div class="opt-section">
-          <h3>Missing performance mods</h3>
+          <h3>
+            Missing performance mods
+            {#if customMods.length}
+              <span class="count">{selectedCustomCount} selected · {customMods.length} available</span>
+            {/if}
+          </h3>
           {#if !customMods.length}
-            <p class="opt-empty">All whitelist performance mods are already present (or none resolve for this version).</p>
+            <p class="opt-empty">
+              All whitelist performance mods are already present (or none resolve for {contextLabel}).
+            </p>
           {:else}
             <div class="opt-list">
-              {#each customMods as m (m.provider + m.projectId)}
+              {#each customMods as m (m.provider + m.projectId + m.slug)}
                 <label class="opt-row selectable">
-                  <input type="checkbox" bind:checked={m.selected} disabled={m.alreadyInstalled || applying} />
+                  <input
+                    type="checkbox"
+                    bind:checked={m.selected}
+                    disabled={m.alreadyInstalled || applying}
+                  />
                   <div class="opt-meta-col">
                     <strong>{m.name}</strong>
                     <code>{m.slug}</code>
@@ -495,13 +636,20 @@
         </label>
       {/if}
 
-      {#if !loading && configRows.length}
+      {#if !loading && configRows.length && (mode === "custom" || curatedAvailable)}
         <div class="opt-section">
-          <h3>Config patches</h3>
+          <h3>
+            Config patches
+            <span class="count">{selectedConfigCount} selected · {configRows.length} total</span>
+          </h3>
           <div class="opt-list">
             {#each configRows as row (row.key)}
               <label class="opt-row selectable">
-                <input type="checkbox" bind:checked={row.selected} disabled={applying || !applyConfigs} />
+                <input
+                  type="checkbox"
+                  bind:checked={row.selected}
+                  disabled={applying || !applyConfigs}
+                />
                 <div class="opt-meta-col">
                   <strong>{row.path ?? row.op}</strong>
                   {#if row.reason}<span class="muted">{row.reason}</span>{/if}
@@ -524,10 +672,12 @@
         </details>
       {/if}
 
-      <label class="opt-check">
-        <input type="checkbox" bind:checked={applyConfigs} disabled={applying} />
-        Apply safe config templates after installing mods
-      </label>
+      {#if !loading && (mode === "custom" || curatedAvailable)}
+        <label class="opt-check">
+          <input type="checkbox" bind:checked={applyConfigs} disabled={applying} />
+          Apply safe config templates after installing mods
+        </label>
+      {/if}
       </div>
 
       <div class="opt-footer">
@@ -539,13 +689,13 @@
         {/if}
         <button
           type="button"
-          disabled={applying || loading || (mode === "curated" && !curatedAvailable)}
+          disabled={applyDisabled}
           onclick={apply}
         >
           {#if applying}
             <Loader2 size={14} class="spin" /> Applying…
           {:else}
-            Apply
+            {applyLabel}
           {/if}
         </button>
       </div>
@@ -573,7 +723,7 @@
     flex-direction: column;
     overflow: hidden;
     padding: 18px 20px 16px;
-    border-radius: var(--border-radius-lg, 16px);
+    border-radius: var(--border-radius-lg);
     border: 1px solid var(--border-color);
     background: var(--bg-secondary);
     box-shadow: 0 30px 100px rgba(0, 0, 0, 0.45);
@@ -711,6 +861,15 @@
     margin: 0 0 8px;
     font-size: 13px;
     font-weight: 600;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .opt-section h3 .count {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
   }
   .opt-list {
     display: flex;
@@ -781,6 +940,21 @@
     margin: 0;
     font-size: 13px;
     color: var(--text-muted);
+    line-height: 1.45;
+  }
+  .opt-empty-block {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0 0 14px;
+    padding: 12px;
+    border-radius: var(--border-radius-md);
+    border: 1px dashed var(--border-color);
+    background: var(--bg-tertiary);
+  }
+  .opt-empty-cta {
+    margin: 0;
   }
   .opt-findings {
     margin: 0 0 12px;

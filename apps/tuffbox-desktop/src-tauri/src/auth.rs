@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -622,8 +622,15 @@ async fn fetch_cape_tlauncher(username: &str) -> Option<String> {
         }
         return Some(url);
     }
-    let direct = format!(
+    let mut direct = format!(
         "https://auth.tlauncher.org/skin/fileservice/cloaks/cloak_{}.png",
+        username.to_lowercase()
+    );
+    if let Some(url) = probe_image_url(&direct).await {
+        return Some(url);
+    }
+    direct = format!(
+        "https://auth.tlauncher.org/skin/fileservice/capes/cape_{}.png",
         username.to_lowercase()
     );
     probe_image_url(&direct).await
@@ -736,6 +743,15 @@ async fn build_cape_catalog(
         });
     }
 
+    offers.push(CapeOffer {
+        provider: CapeProvider::None,
+        id: "none".into(),
+        label: "No cape".into(),
+        url: String::new(),
+        can_activate: true,
+        active: selected == CapeProvider::None,
+    });
+
     let display_url = resolve_display_cape(username, uuid, &selected, mojang_owned).await;
 
     CapeCatalog {
@@ -759,6 +775,9 @@ fn base64_decode(input: &str) -> Option<String> {
 pub struct DeviceCodeInfo {
     pub user_code: String,
     pub verification_uri: String,
+    /// One-click login URL (`verification_uri?otc=user_code`) — same trick MinecraftAuth uses.
+    /// Uses Mojang-approved public client IDs; no Azure app registration required.
+    pub login_url: String,
     pub message: String,
     pub expires_in: u64,
     /// Suggested poll interval in seconds (from Microsoft).
@@ -787,16 +806,40 @@ pub async fn start_device_code_flow() -> Result<(DeviceCodeInfo, String, u64), S
         .json()
         .await
         .map_err(|e| format!("device code parse failed: {e}"))?;
-    // Prefer the short microsoft.com/link page + separate user code UI (not the huge
-    // verification_uri_complete deep-link, which confuses copy/paste flows).
-    let verification_uri = data.verification_uri.clone();
+    let verification_uri = data
+        .verification_uri_complete
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| data.verification_uri.clone());
+    // Prefer Microsoft's complete URI when present; otherwise append ?otc= (MinecraftAuth style).
+    let login_url = if data
+        .verification_uri_complete
+        .as_deref()
+        .map(|u| !u.is_empty())
+        .unwrap_or(false)
+    {
+        verification_uri.clone()
+    } else {
+        format!(
+            "{}{}otc={}",
+            data.verification_uri,
+            if data.verification_uri.contains('?') {
+                "&"
+            } else {
+                "?"
+            },
+            urlencoding_encode(&data.user_code)
+        )
+    };
     let info = DeviceCodeInfo {
         user_code: data.user_code.clone(),
-        verification_uri: verification_uri.clone(),
+        verification_uri: data.verification_uri.clone(),
+        login_url: login_url.clone(),
         message: data.message.unwrap_or_else(|| {
             format!(
-                "Go to {} and enter code: {}",
-                data.verification_uri, data.user_code
+                "Open {} to sign in (code {})",
+                login_url, data.user_code
             )
         }),
         expires_in: data.expires_in,
@@ -1531,18 +1574,37 @@ pub fn cached_skin_path(uuid: &str) -> PathBuf {
     skin_cache_dir().join(format!("{uuid}.png"))
 }
 
+const SKIN_CACHE_TTL: Duration = Duration::from_secs(86400);
+
+fn cache_file_fresh(path: &Path) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    let Ok(elapsed) = modified.elapsed() else {
+        return false;
+    };
+    elapsed < SKIN_CACHE_TTL
+}
+
+fn cached_skin_path_for_url(url: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(url.as_bytes());
+    skin_cache_dir().join(format!("url-{}.png", hex::encode(&hash[..16])))
+}
+
+fn encode_png_data_url(bytes: &[u8]) -> String {
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+    format!("data:image/png;base64,{}", engine.encode(bytes))
+}
+
 pub async fn download_and_cache_skin(skin_url: &str, uuid: &str) -> Result<PathBuf, String> {
     let path = cached_skin_path(uuid);
-    if path.exists() {
-        if let Ok(meta) = fs::metadata(&path) {
-            if let Ok(modified) = meta.modified() {
-                if let Ok(elapsed) = modified.elapsed() {
-                    if elapsed < Duration::from_secs(86400) {
-                        return Ok(path);
-                    }
-                }
-            }
-        }
+    if path.exists() && cache_file_fresh(&path) {
+        return Ok(path);
     }
 
     let c = client()?;
@@ -1558,6 +1620,8 @@ pub async fn download_and_cache_skin(skin_url: &str, uuid: &str) -> Result<PathB
     let dir = skin_cache_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    let url_path = cached_skin_path_for_url(skin_url);
+    let _ = fs::write(&url_path, &bytes);
     Ok(path)
 }
 
@@ -1578,6 +1642,15 @@ pub fn load_mc_access_token() -> Result<String, String> {
 // ─── Skin as base64 for 3D viewer ───────────────────────────────
 
 pub async fn fetch_skin_as_base64(url: &str) -> Result<String, String> {
+    let path = cached_skin_path_for_url(url);
+    if path.exists() && cache_file_fresh(&path) {
+        if let Ok(bytes) = fs::read(&path) {
+            if !bytes.is_empty() {
+                return Ok(encode_png_data_url(&bytes));
+            }
+        }
+    }
+
     let c = client()?;
     let bytes = c
         .get(url)
@@ -1588,9 +1661,10 @@ pub async fn fetch_skin_as_base64(url: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("skin fetch body failed: {e}"))?;
 
-    use base64::Engine;
-    let engine = base64::engine::general_purpose::STANDARD;
-    Ok(format!("data:image/png;base64,{}", engine.encode(&bytes)))
+    let dir = skin_cache_dir();
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(&path, &bytes);
+    Ok(encode_png_data_url(&bytes))
 }
 
 // ─── Multi-account helpers ───────────────────────────────────────
@@ -2689,6 +2763,19 @@ mod tests {
         let a = cached_skin_path("abc123");
         let b = cached_skin_path("abc123");
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn skin_url_cache_path_is_deterministic() {
+        let a = cached_skin_path_for_url("https://textures.minecraft.net/texture/abc");
+        let b = cached_skin_path_for_url("https://textures.minecraft.net/texture/abc");
+        let c = cached_skin_path_for_url("https://textures.minecraft.net/texture/xyz");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert!(a
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("url-") && n.ends_with(".png")));
     }
 
     #[test]

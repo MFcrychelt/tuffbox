@@ -749,6 +749,17 @@ fn humanize_local_ai_err(raw: &str) -> String {
 
 fn fog_job_to_ai_context(job: &Value) -> tuffbox_core::ai_explanation::CrashAiContext {
     let ctx = job.get("context").cloned().unwrap_or(Value::Null);
+    if let Ok(parsed) =
+        serde_json::from_value::<tuffbox_core::ai_explanation::CrashAiContext>(ctx.clone())
+    {
+        if !parsed.mc_version.is_empty()
+            || parsed.group_test.is_some()
+            || parsed.trail_covering.is_some()
+            || !parsed.fingerprint_key.is_empty()
+        {
+            return parsed;
+        }
+    }
     let fingerprint = job.get("fingerprint").cloned().unwrap_or(Value::Null);
     let mc = ctx
         .get("mcVersion")
@@ -802,6 +813,8 @@ fn fog_job_to_ai_context(job: &Value) -> tuffbox_core::ai_explanation::CrashAiCo
         fingerprint_key: fp_key,
         report_id: None,
         inventory: None,
+        group_test: None,
+        trail_covering: None,
     }
 }
 

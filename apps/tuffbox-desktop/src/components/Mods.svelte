@@ -42,6 +42,7 @@
     Users,
     FilePlus,
     MoreHorizontal,
+    Columns2,
   } from "@lucide/svelte";
   import { projectPath, projectInfo, ideStageRequest, pushWorkTrail, requestIdeIssuesRefresh, modsFocusId, modsFocusFileName } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
@@ -141,6 +142,29 @@ import { trapFocus } from "../lib/focusTrap";
   let error = $state<string | null>(null);
   let lastLoadedPath = $state<string | null>(null);
   let brokenIcons = $state<string[]>([]);
+  /** Per-mod icon recovery attempts (CDN hang / transient onerror). */
+  let iconRetryCount = $state<Record<string, number>>({});
+  let iconRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let catalogIconRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Remount download spinner so CSS animation resumes after UI freezes. */
+  let downloadSpinEpoch = $state(0);
+  const CONTENT_LAYOUT_KEY = "tuffbox.mods.contentLayout";
+  let contentLayout = $state<"list" | "dual">(
+    typeof localStorage === "undefined"
+      ? "list"
+      : localStorage.getItem(CONTENT_LAYOUT_KEY) === "dual"
+        ? "dual"
+        : "list",
+  );
+
+  function setContentLayout(mode: "list" | "dual") {
+    contentLayout = mode;
+    try {
+      localStorage.setItem(CONTENT_LAYOUT_KEY, mode);
+    } catch {
+      /* ignore */
+    }
+  }
   let savedMods = $state<SearchResult[]>([]);
   let savedModsLoading = $state(false);
   let renameTarget = $state("");
@@ -303,6 +327,7 @@ import { trapFocus } from "../lib/focusTrap";
         if (payload.phase === "start") {
           downloadOpen = true;
           downloadDone = false;
+          downloadSpinEpoch += 1;
           downloadStageMessage = "Preparing downloads…";
           downloadStagePercent = 0;
           const scoped = payload.scopeModIds?.length ? new Set(payload.scopeModIds) : null;
@@ -370,6 +395,7 @@ import { trapFocus } from "../lib/focusTrap";
       const payload = event.payload;
       downloadStageMessage = payload.message;
       downloadStagePercent = Math.max(0, Math.min(100, payload.percent));
+      downloadSpinEpoch += 1;
       if (!downloadOpen) {
         downloadOpen = true;
         downloadDone = payload.phase === "done";
@@ -381,6 +407,9 @@ import { trapFocus } from "../lib/focusTrap";
         return;
       }
       upsertDownloadItem(event.payload);
+      if (event.payload.status === "downloading" || event.payload.status === "queued") {
+        downloadSpinEpoch += 1;
+      }
       if (!downloadOpen) {
         downloadOpen = true;
         downloadDone = false;
@@ -403,6 +432,20 @@ import { trapFocus } from "../lib/focusTrap";
     unlistenUpdateProgress?.();
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
     infiniteObserver?.disconnect();
+    for (const t of iconRetryTimers.values()) clearTimeout(t);
+    iconRetryTimers.clear();
+    for (const t of catalogIconRetryTimers.values()) clearTimeout(t);
+    catalogIconRetryTimers.clear();
+  });
+
+  // WebView sometimes freezes CSS animations during heavy download I/O —
+  // remount the spinner on a short interval while transfers are active.
+  $effect(() => {
+    if (!downloadOpen || downloadDone) return;
+    const id = setInterval(() => {
+      downloadSpinEpoch += 1;
+    }, 1600);
+    return () => clearInterval(id);
   });
 
   let addOpen = $state(false);
@@ -508,10 +551,41 @@ import { trapFocus } from "../lib/focusTrap";
     searchMods(1);
   }
 
+  function clearIconRetryTimer(id: string) {
+    const t = iconRetryTimers.get(id);
+    if (t != null) {
+      clearTimeout(t);
+      iconRetryTimers.delete(id);
+    }
+  }
+
+  function clearCatalogIconRetryTimer(id: string) {
+    const t = catalogIconRetryTimers.get(id);
+    if (t != null) {
+      clearTimeout(t);
+      catalogIconRetryTimers.delete(id);
+    }
+  }
+
+  function cacheBustIconUrl(url: string): string {
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}tb_icon=${Date.now()}`;
+  }
+
   function markCatalogIconBroken(id: string) {
     if (!brokenCatalogIcons.includes(id)) {
       brokenCatalogIcons = [...brokenCatalogIcons, id];
     }
+    // Transient CDN / hang: retry the same URL after a short delay so the icon
+    // can reappear instead of staying as a letter forever.
+    clearCatalogIconRetryTimer(id);
+    catalogIconRetryTimers.set(
+      id,
+      setTimeout(() => {
+        catalogIconRetryTimers.delete(id);
+        brokenCatalogIcons = brokenCatalogIcons.filter((x) => x !== id);
+      }, 2500),
+    );
   }
 
   function catalogIconOk(result: { id: string; iconUrl?: string | null }) {
@@ -623,19 +697,52 @@ import { trapFocus } from "../lib/focusTrap";
     try {
       const url: string | null = await invoke("get_modrinth_project_icon", { projectId: key });
       if (url) {
-        mods = mods.map((x) => (x.id === mod.id ? { ...x, iconUrl: url } : x));
+        const busted = cacheBustIconUrl(url);
+        mods = mods.map((x) => (x.id === mod.id ? { ...x, iconUrl: busted } : x));
         brokenIcons = brokenIcons.filter((id) => id !== mod.id);
+        clearIconRetryTimer(mod.id);
       }
     } catch {
-      // keep letter-avatar fallback
+      // keep letter-avatar fallback; scheduleRecoverIcon may retry
     }
   }
 
+  function scheduleRecoverIcon(mod: ModRow, failedUrl: string | null | undefined) {
+    clearIconRetryTimer(mod.id);
+    const attempt = iconRetryCount[mod.id] ?? 0;
+    if (attempt >= 4) return;
+    const delayMs = 1500 * Math.max(1, attempt);
+    iconRetryTimers.set(
+      mod.id,
+      setTimeout(() => {
+        iconRetryTimers.delete(mod.id);
+        // Allow the <img> to remount — either with a fresh Modrinth URL or a
+        // cache-busted copy of the previous one after a hang/CDN blip.
+        brokenIcons = brokenIcons.filter((id) => id !== mod.id);
+        if (failedUrl) {
+          const busted = cacheBustIconUrl(failedUrl.split("?")[0] ?? failedUrl);
+          mods = mods.map((x) =>
+            x.id === mod.id && (!x.iconUrl || x.iconUrl === failedUrl)
+              ? { ...x, iconUrl: busted }
+              : x,
+          );
+        }
+        void resolveIconForMod(mod);
+      }, delayMs),
+    );
+  }
+
   async function handleIconError(mod: ModRow) {
+    const failedUrl = mod.iconUrl;
     if (!brokenIcons.includes(mod.id)) {
       brokenIcons = [...brokenIcons, mod.id];
     }
+    const attempt = (iconRetryCount[mod.id] ?? 0) + 1;
+    iconRetryCount = { ...iconRetryCount, [mod.id]: attempt };
     await resolveIconForMod(mod);
+    if (brokenIcons.includes(mod.id)) {
+      scheduleRecoverIcon(mod, failedUrl);
+    }
   }
 
   function humanize(s: string): string {
@@ -1960,7 +2067,10 @@ import { trapFocus } from "../lib/focusTrap";
       if ($projectPath !== path) return;
       mods = listed;
       lastLoadedPath = path;
+      for (const t of iconRetryTimers.values()) clearTimeout(t);
+      iconRetryTimers.clear();
       brokenIcons = [];
+      iconRetryCount = {};
       await loadUserState();
       void detectDuplicateModJars();
       void detectWrongLoaderMods();
@@ -2208,7 +2318,11 @@ import { trapFocus } from "../lib/focusTrap";
       searchLoading = true;
     }
     error = null;
-    if (!appendLoad) brokenCatalogIcons = [];
+    if (!appendLoad) {
+      for (const t of catalogIconRetryTimers.values()) clearTimeout(t);
+      catalogIconRetryTimers.clear();
+      brokenCatalogIcons = [];
+    }
     try {
       const loader =
         contentFilter === "mod" && filterLoader ? filterLoader.toLowerCase() : null;
@@ -2460,7 +2574,10 @@ import { trapFocus } from "../lib/focusTrap";
     try {
       const synced: ModRow[] = (await api.mods.syncFolder($projectPath)) as unknown as ModRow[];
       mods = synced;
+      for (const t of iconRetryTimers.values()) clearTimeout(t);
+      iconRetryTimers.clear();
       brokenIcons = [];
+      iconRetryCount = {};
       hydrateMissingIcons().catch(() => {});
       refreshUpdateDots().catch(() => {});
       await detectDuplicateModJars();
@@ -2542,15 +2659,35 @@ import { trapFocus } from "../lib/focusTrap";
     ? []
     : mods.filter((m) => (m.contentType ?? "mod") === contentFilter));
 
-  const filtered = $derived(isSavedViewFilter(contentFilter)
-    ? []
-    : contentScopedMods.filter((m) => {
-        const q = filter.trim().toLowerCase();
-        const matchesText = matchesInstalledQuery(m, q);
-        const matchesSide =
-          contentFilter !== "mod" || sideFilter === "all" || m.side === sideFilter;
-        return matchesText && matchesSide;
-      }));
+  const layoutBase = $derived(
+    isSavedViewFilter(contentFilter)
+      ? []
+      : contentScopedMods.filter((m) => matchesInstalledQuery(m, filter.trim().toLowerCase())),
+  );
+
+  const filtered = $derived(
+    contentFilter !== "mod" || sideFilter === "all" || contentLayout === "dual"
+      ? layoutBase
+      : layoutBase.filter((m) => m.side === sideFilter),
+  );
+
+  /** Dual pane: Client(+Both) | Server(+Both) for mods; Enabled | Disabled otherwise. */
+  const dualLeftMods = $derived(
+    contentFilter === "mod"
+      ? layoutBase.filter(
+          (m) => m.side === "client" || m.side === "both" || m.side === "optional" || m.side === "unknown",
+        )
+      : layoutBase.filter((m) => !m.disabled),
+  );
+  const dualRightMods = $derived(
+    contentFilter === "mod"
+      ? layoutBase.filter(
+          (m) => m.side === "server" || m.side === "both" || m.side === "optional" || m.side === "unknown",
+        )
+      : layoutBase.filter((m) => !!m.disabled),
+  );
+  const dualLeftTitle = $derived(contentFilter === "mod" ? "Client" : "Enabled");
+  const dualRightTitle = $derived(contentFilter === "mod" ? "Server" : "Disabled");
 
   const selectedMods = $derived(filtered.filter((m) => selectedModIds[m.id]));
   const selectedCount = $derived(selectedMods.length);
@@ -2752,7 +2889,7 @@ import { trapFocus } from "../lib/focusTrap";
   </div>
 
   <div class="control-row">
-    {#if contentFilter === "mod"}
+    {#if contentFilter === "mod" && contentLayout !== "dual"}
       <div class="side-segment" role="group" aria-label="Side filters">
         <button type="button" class:active={sideFilter === "all"} onclick={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
         <button type="button" class:active={sideFilter === "both"} onclick={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
@@ -2760,6 +2897,24 @@ import { trapFocus } from "../lib/focusTrap";
         <button type="button" class:active={sideFilter === "server"} onclick={() => (sideFilter = "server")}>Server <span>{counts.server}</span></button>
       </div>
     {/if}
+    <div class="layout-segment" role="group" aria-label="Content layout">
+      <button
+        type="button"
+        class:active={contentLayout === "list"}
+        onclick={() => setContentLayout("list")}
+        title="Single list"
+      >
+        <List size={14} />
+      </button>
+      <button
+        type="button"
+        class:active={contentLayout === "dual"}
+        onclick={() => setContentLayout("dual")}
+        title={contentFilter === "mod" ? "Split: Client | Server" : "Split: Enabled | Disabled"}
+      >
+        <Columns2 size={14} />
+      </button>
+    </div>
     <div class="toolbar-search-cluster">
       <div class="search toolbar-search">
         <span class="search-glyph"><Search size={18} /></span>
@@ -2776,6 +2931,7 @@ import { trapFocus } from "../lib/focusTrap";
           onchange={(e) => setIdeasEnabled(e.currentTarget.checked)}
         />
         <Sparkles size={14} />
+        <span class="ideas-toggle-label">Often together</span>
       </label>
     </div>
     <button
@@ -3038,11 +3194,53 @@ import { trapFocus } from "../lib/focusTrap";
       actionLabel="Retry"
       onaction={() => void load()}
     />
-  {:else if filtered.length === 0}
+  {:else if filtered.length === 0 && contentLayout !== "dual"}
     <EmptyState icon={Package} title={`No ${contentNoun} found`} description="Try Sync, adjust filters, or add content from Modrinth." actionLabel={`Add ${contentFilter}`} onaction={openAddModal} />
+  {:else if contentLayout === "dual" && dualLeftMods.length === 0 && dualRightMods.length === 0}
+    <EmptyState icon={Package} title={`No ${contentNoun} found`} description="Try Sync, adjust filters, or add content from Modrinth." actionLabel={`Add ${contentFilter}`} onaction={openAddModal} />
+  {:else if contentLayout === "dual"}
+    <div class="installed-dual" class:selecting={selectionMode}>
+      <section class="installed-pane" aria-label={dualLeftTitle}>
+        <header class="installed-pane-header">
+          <strong>{dualLeftTitle}</strong>
+          <span class="tab-count">{dualLeftMods.length}</span>
+        </header>
+        {#if dualLeftMods.length === 0}
+          <p class="installed-pane-empty">Nothing here</p>
+        {:else}
+          <div class="installed-list">
+            {#each dualLeftMods as mod, i (mod.id)}
+              {@render installedModCard(mod, i)}
+            {/each}
+          </div>
+        {/if}
+      </section>
+      <section class="installed-pane" aria-label={dualRightTitle}>
+        <header class="installed-pane-header">
+          <strong>{dualRightTitle}</strong>
+          <span class="tab-count">{dualRightMods.length}</span>
+        </header>
+        {#if dualRightMods.length === 0}
+          <p class="installed-pane-empty">Nothing here</p>
+        {:else}
+          <div class="installed-list">
+            {#each dualRightMods as mod, i (mod.id)}
+              {@render installedModCard(mod, i)}
+            {/each}
+          </div>
+        {/if}
+      </section>
+    </div>
   {:else}
     <div class="installed-list tb-stagger" class:selecting={selectionMode}>
       {#each filtered as mod, i (mod.id)}
+        {@render installedModCard(mod, i)}
+      {/each}
+    </div>
+  {/if}
+  </div>
+
+  {#snippet installedModCard(mod: ModRow, i: number)}
         <article
           class="installed-card tb-card"
           class:has-update={mod.updateAvailable}
@@ -3080,7 +3278,9 @@ import { trapFocus } from "../lib/focusTrap";
               <span class="update-dot" title="Update available"></span>
             {/if}
             {#if mod.iconUrl && !brokenIcons.includes(mod.id)}
-              <img class="tb-cover-media" src={mod.iconUrl} alt="" loading="lazy" onerror={() => handleIconError(mod)} />
+              {#key mod.iconUrl}
+                <img class="tb-cover-media" src={mod.iconUrl} alt="" loading="lazy" onerror={() => handleIconError(mod)} />
+              {/key}
             {:else}
               <span class="tb-cover-media">{iconFallback(mod.name)}</span>
             {/if}
@@ -3155,10 +3355,7 @@ import { trapFocus } from "../lib/focusTrap";
             </button>
           </div>
         </article>
-      {/each}
-    </div>
-  {/if}
-  </div>
+  {/snippet}
 
   {#if selectionMode}
     <aside class="selection-inspector" aria-label="Bulk selection">
@@ -3250,7 +3447,9 @@ import { trapFocus } from "../lib/focusTrap";
         {#if downloadDone}
           <button class="icon-btn" onclick={closeDownloadOverlay} title="Close"><X size={18} /></button>
         {:else}
-          <span class="spin-wrap"><Loader2 size={22} /></span>
+          {#key downloadSpinEpoch}
+            <span class="spin-wrap download-spin" aria-hidden="true"><Loader2 size={22} class="spin" /></span>
+          {/key}
         {/if}
       </div>
 
@@ -4582,6 +4781,89 @@ import { trapFocus } from "../lib/focusTrap";
     opacity: 0.75;
   }
 
+  .layout-segment {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .layout-segment button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .layout-segment button + button {
+    border-left: 1px solid var(--border-color);
+  }
+  .layout-segment button:hover {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-tertiary));
+  }
+  .layout-segment button.active {
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  }
+
+  .installed-dual {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 14px;
+    min-height: 0;
+    align-items: start;
+  }
+  .installed-pane {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    background: color-mix(in srgb, var(--bg-tertiary) 55%, transparent);
+    max-height: min(70vh, 820px);
+    overflow: auto;
+  }
+  .installed-pane-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 2px 2px 8px;
+    background: color-mix(in srgb, var(--bg-tertiary) 92%, transparent);
+    border-bottom: 1px solid var(--border-color);
+  }
+  .installed-pane-header strong {
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+  .installed-pane-empty {
+    margin: 0;
+    padding: 18px 8px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  @media (max-width: 980px) {
+    .installed-dual {
+      grid-template-columns: 1fr;
+    }
+  }
+
   .toolbar-search-cluster {
     display: flex;
     align-items: center;
@@ -4724,10 +5006,10 @@ import { trapFocus } from "../lib/focusTrap";
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0;
-    width: 36px;
+    gap: 6px;
+    min-width: 36px;
     height: 36px;
-    padding: 0;
+    padding: 0 10px;
     border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
     background: transparent;
@@ -4736,6 +5018,20 @@ import { trapFocus } from "../lib/focusTrap";
     user-select: none;
     flex-shrink: 0;
     position: relative;
+  }
+  .ideas-toggle-label {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  @media (max-width: 1100px) {
+    .ideas-toggle-label {
+      display: none;
+    }
+    .ideas-toggle {
+      width: 36px;
+      padding: 0;
+    }
   }
   .ideas-toggle.often-together input {
     position: absolute;
@@ -5217,8 +5513,24 @@ import { trapFocus } from "../lib/focusTrap";
 
   .download-modal-header .spin-wrap {
     display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--accent-primary);
-    animation: spin 0.9s linear infinite;
+    flex-shrink: 0;
+  }
+  .download-modal-header .spin-wrap :global(svg.spin),
+  .download-modal-header .spin-wrap :global(.spin),
+  .download-modal-header .download-spin :global(svg) {
+    animation: download-spin 0.85s linear infinite !important;
+    transform-origin: center center;
+    will-change: transform;
+    /* Promote to own layer — survives some Chromium compositor stalls. */
+    translate: 0 0;
+  }
+
+  @keyframes download-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
   }
 
   .download-error {

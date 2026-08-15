@@ -15,10 +15,15 @@
     launchProgress,
     brandIcon,
     BRAND_ICON_CREEPER_SRC_SM,
+    authState,
+    skinPath,
+    loginModalOpen,
+    loginTypeLabel,
   } from "../lib/store";
   import { api } from "../lib/api";
   import { homeIcons } from "../lib/homeBootstrap";
   import { launchWithFeedback, killWithFeedback } from "../lib/launch";
+  import HeadAvatar from "./HeadAvatar.svelte";
 
   import type { View } from "../lib/types";
   let { currentView = $bindable() }: { currentView: View } = $props();
@@ -35,6 +40,21 @@
     if (selectedRunning) return "Stop";
     return "Play";
   });
+  const profileName = $derived($authState.profile?.name ?? "Sign in");
+  const profileKind = $derived.by(() => {
+    if (!$authState.loggedIn) return "Minecraft account";
+    if ($authState.loginType === "microsoft") return "Microsoft Account";
+    if ($authState.loginType === "offline") return "Offline account";
+    return loginTypeLabel(
+      $authState.loginType,
+      $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority,
+    );
+  });
+
+  function openProfile() {
+    if ($authState.loggedIn) currentView = "me";
+    else loginModalOpen.set(true);
+  }
   const iconRequested = new SvelteSet<string>();
 
   async function loadInstanceIcon(path: string) {
@@ -164,6 +184,25 @@
 </script>
 
 <aside class="rail">
+  <button
+    type="button"
+    class="rail-profile"
+    onclick={openProfile}
+    title={profileName}
+  >
+    <span class="rail-profile-avatar">
+      {#if $authState.loggedIn && $skinPath}
+        <HeadAvatar skinSrc={$skinPath} size={36} alt="" />
+      {:else}
+        <User size={18} />
+      {/if}
+    </span>
+    <span class="rail-profile-text">
+      <span class="rail-profile-name">{profileName}</span>
+      <span class="rail-profile-kind">{profileKind}</span>
+    </span>
+  </button>
+
   <!-- Brand mark — constant identity, not a nav button. -->
   <div class="rail-brand" title="TuffBox">
     {#if $brandIcon === "creeper"}
@@ -185,11 +224,12 @@
         type="button"
         class="rail-btn ghost"
         class:active={currentView === "dashboard"}
-        title="Home — Launcher"
-        aria-label="Home — Launcher"
+        title="Home"
+        aria-label="Home"
         onclick={openHome}
       >
         <Home size={21} />
+        <span class="rail-label">Java Edition</span>
       </button>
     </div>
     <div class="rail-item">
@@ -202,6 +242,7 @@
         onclick={() => (currentView = "library")}
       >
         <Library size={21} />
+        <span class="rail-label">Library</span>
       </button>
     </div>
     <div class="rail-item">
@@ -214,6 +255,7 @@
         onclick={openIde}
       >
         <Workflow size={21} />
+        <span class="rail-label">IDE</span>
       </button>
     </div>
     <div class="rail-item">
@@ -225,6 +267,7 @@
         onclick={openNewProject}
       >
         <Plus size={22} />
+        <span class="rail-label">New instance</span>
       </button>
     </div>
   </nav>
@@ -255,13 +298,28 @@
           {#if running}
             <span class="running-dot" title="Running"></span>
           {/if}
+          <span class="rail-label">{instance.info.name}</span>
         </button>
       </div>
     {/each}
+    {#if $recentProjects.length === 0}
+      <div class="rail-item">
+        <button
+          type="button"
+          class="rail-btn add rail-empty-add"
+          title="Add instance"
+          aria-label="Add instance"
+          onclick={openNewProject}
+        >
+          <Plus size={18} />
+          <span class="rail-label">New instance</span>
+        </button>
+      </div>
+    {/if}
   </nav>
 
   <nav class="rail-zone rail-bottom" aria-label="Launcher">
-    <div class="rail-item">
+    <div class="rail-item rail-compact">
       <button
         type="button"
         class="rail-btn ghost"
@@ -280,9 +338,10 @@
         {:else}
           <Play size={21} />
         {/if}
+        <span class="rail-label">{playTitle}</span>
       </button>
     </div>
-    <div class="rail-item">
+    <div class="rail-item rail-compact">
       <button
         type="button"
         class="rail-btn ghost"
@@ -292,6 +351,7 @@
         onclick={openLogs}
       >
         <Terminal size={21} />
+        <span class="rail-label">Logs</span>
       </button>
     </div>
     <div class="rail-item">
@@ -304,9 +364,10 @@
         onclick={() => (currentView = "settings")}
       >
         <Settings size={21} />
+        <span class="rail-label">Settings</span>
       </button>
     </div>
-    <div class="rail-item">
+    <div class="rail-item rail-compact">
       <button
         type="button"
         class="rail-btn ghost"
@@ -316,6 +377,7 @@
         onclick={() => (currentView = "me")}
       >
         <User size={21} />
+        <span class="rail-label">Profile</span>
       </button>
     </div>
   </nav>
@@ -553,6 +615,11 @@
     color: var(--accent-primary);
   }
 
+  .rail .rail-btn.rail-empty-add {
+    border: 1px dashed color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    opacity: 0.85;
+  }
+
   /* Instance avatars: theme-token gradient (inline) or the real pack icon.
      `position: relative` on `.rail-btn` makes the abspos icon/running-dot
      clip to the same circle → squircle mask as the letter fallback. */
@@ -603,5 +670,10 @@
     border: 3px solid var(--bg-primary);
     box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 60%, transparent);
     pointer-events: none;
+  }
+
+  .rail-label,
+  .rail-profile {
+    display: none;
   }
 </style>

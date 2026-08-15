@@ -680,6 +680,12 @@ export interface Diagnostic {
   relatedNodes: string[];
 }
 
+export interface DiagnosticCounts {
+  errorCount: number;
+  warningCount: number;
+  cached: boolean;
+}
+
 export interface ChangePlan {
   summary: string;
   risk: string;
@@ -850,11 +856,18 @@ export interface TestRunRecord {
   durationSeconds: number | null;
   verdictReason?: string | null;
   capturedPaths?: string[];
+  peakProcMb?: number | null;
+  peakHostMb?: number | null;
+  recommendedRamGb?: number | null;
 }
 
 export interface LaunchResult {
   exitCode: number | null;
   logPath: string;
+  pid?: number | null;
+  instanceId?: string | null;
+  profileId?: string | null;
+  startedAt?: number | null;
 }
 
 /// Structured launch error returned by the launch Tauri commands
@@ -1043,6 +1056,23 @@ export interface WorldListItem {
   size: number;
   sizeFormatted: string;
   hasLevelDat: boolean;
+  hasIcon?: boolean;
+  displayName?: string | null;
+  gameType?: string | null;
+  difficulty?: string | null;
+  hardcore?: boolean | null;
+  cheatsEnabled?: boolean | null;
+  /** Unix epoch milliseconds, from level.dat LastPlayed. */
+  lastPlayed?: number | null;
+}
+
+export interface WorldBackupEntry {
+  file: string;
+  worldName: string | null;
+  size: number;
+  sizeFormatted: string;
+  /** Unix epoch seconds (file mtime). */
+  createdAt: number;
 }
 
 export interface ContentPackEntry {
@@ -1073,7 +1103,8 @@ export interface WorldDetail {
   seed: number;
   gameType: string | number;
   difficulty: string | number;
-  lastPlayed: string | null;
+  /** Unix epoch milliseconds, from level.dat LastPlayed. */
+  lastPlayed: number | null;
   time: number;
   spawnX: number;
   spawnY: number;
@@ -1378,6 +1409,7 @@ export const api = {
     getManifestSchema(p?: string) { return cmd<Record<string, unknown>>("get_manifest_schema", pathArg(p)); },
     runValidation(p?: string) { return cmd<Record<string, unknown>>("run_project_validation", pathArg(p)); },
     getDiagnostics(p?: string) { return cmd<Diagnostic[]>("get_diagnostics", pathArg(p)); },
+    getDiagnosticCounts(p?: string) { return cmd<DiagnosticCounts>("get_diagnostic_counts", pathArg(p)); },
     repair(p?: string) { return cmd<ModSyncReport>("repair_project", pathArg(p)); },
     cleanup(p?: string) { return cmd<Record<string, unknown>>("cleanup_project", pathArg(p)); },
     listProfiles(p?: string) { return cmd<ProfileSummary[]>("list_profiles", pathArg(p)); },
@@ -1461,6 +1493,7 @@ export const api = {
         loader: string;
         minecraftVersion: string;
         available: boolean;
+        unavailableMessage?: string | null;
         current: { projectId: string; slug?: string | null; name?: string | null } | null;
         entries: Array<{ minecraftVersion: string; projectId: string; slug?: string | null; name?: string | null }>;
       }>("list_curated_optimize_packs", pathArg(p));
@@ -1505,6 +1538,7 @@ export const api = {
         minecraftVersion: string;
         loader: string;
         curatedAvailable: boolean;
+        catalogSource?: string;
       }>("build_optimize_plan", { ...pathArg(p), useAiConfigs });
     },
     applyOptimizeCustomPlan(
@@ -1807,6 +1841,9 @@ export const api = {
     getSettings(p?: string) { return cmd<HistorySettings>("get_history_settings", pathArg(p)); },
     updateSettings(settings: HistorySettings, p?: string) { return cmd<HistorySettings>("update_history_settings", { ...pathArg(p), settings }); },
     list(p?: string) { return cmd<HistoryListResult>("list_project_change_history", pathArg(p)); },
+    getEntryDiff(entryId: string, p?: string) {
+      return cmd<string>("get_history_entry_diff", { ...pathArg(p), entryId });
+    },
     readFile(relativePath: string, p?: string) { return cmd<HistoryFileContent>("read_project_history_file", { ...pathArg(p), relativePath }); },
     createSnapshot(roots: string[], p?: string) { return cmd<Snapshot>("create_tracked_history_snapshot", { ...pathArg(p), roots }); },
     rollbackFile(snapshotId: string, relativePath: string, p?: string) { return cmd<void>("rollback_history_file", { ...pathArg(p), snapshotId, relativePath }); },
@@ -1847,6 +1884,19 @@ export const api = {
     list(p?: string) { return cmd<WorldListItem[]>("list_worlds", pathArg(p)); },
     readInfo(worldName: string, p?: string) { return cmd<WorldDetail>("read_world_info", { ...pathArg(p), worldName }); },
     backup(worldName: string, p?: string) { return cmd<string>("backup_world", { ...pathArg(p), worldName }); },
+    restore(backupFile: string, overwrite?: boolean, p?: string) {
+      return cmd<string>("restore_world_backup", { ...pathArg(p), backupFile, overwrite: overwrite ?? false });
+    },
+    delete(worldName: string, backupFirst?: boolean, p?: string) {
+      return cmd<void>("delete_world", { ...pathArg(p), worldName, backupFirst: backupFirst ?? false });
+    },
+    listBackups(p?: string) { return cmd<WorldBackupEntry[]>("list_world_backups", pathArg(p)); },
+    deleteBackup(backupFile: string, p?: string) {
+      return cmd<void>("delete_world_backup", { ...pathArg(p), backupFile });
+    },
+    readIcon(worldName: string, p?: string) {
+      return cmd<string | null>("read_world_icon", { ...pathArg(p), worldName });
+    },
     /** Open bundled Querz MCA Selector for this world (File → Open Recent). No download. */
     openMcaSelector(worldName: string, p?: string) {
       return cmd<void>("open_mca_selector", { ...pathArg(p), worldName });
@@ -2404,9 +2454,11 @@ export const api = {
     serverPack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_server_pack", { ...pathArg(p), targetPath }); },
     prismInstance(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_prism_instance", { ...pathArg(p), targetPath }); },
     curseforgePack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_curseforge_pack", { ...pathArg(p), targetPath }); },
+    packwizPack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_packwiz_pack", { ...pathArg(p), targetPath }); },
     batchAll(p?: string) { return cmd<Record<string, unknown>[]>("batch_export_all", pathArg(p)); },
     projectReport(p?: string) { return cmd<Record<string, unknown>>("export_project_report", pathArg(p)); },
     validateModrinth(p?: string) { return cmd<ExportIssue[]>("validate_modrinth_export", pathArg(p)); },
+    validateCurseforge(p?: string) { return cmd<ExportIssue[]>("validate_curseforge_export", pathArg(p)); },
   },
 
   // ── Modpack library (remote browse + import) ─────────────────────
@@ -2516,7 +2568,14 @@ export const api = {
     finalize(
       runId: string,
       status: string,
-      opts?: { durationSeconds?: number | null; verdictReason?: string | null },
+      opts?: {
+        durationSeconds?: number | null;
+        verdictReason?: string | null;
+        peakProcMb?: number | null;
+        peakHostMb?: number | null;
+        hostTotalMb?: number | null;
+        xmxMb?: number | null;
+      },
       p?: string,
     ) {
       return cmd<TestRunRecord>("finalize_test_run", {
@@ -2525,6 +2584,10 @@ export const api = {
         status,
         durationSeconds: opts?.durationSeconds ?? null,
         verdictReason: opts?.verdictReason ?? null,
+        peakProcMb: opts?.peakProcMb ?? null,
+        peakHostMb: opts?.peakHostMb ?? null,
+        hostTotalMb: opts?.hostTotalMb ?? null,
+        xmxMb: opts?.xmxMb ?? null,
       });
     },
   },
@@ -2558,9 +2621,9 @@ export const api = {
     setLastOpened(p?: string) { return cmd<void>("set_last_opened_project", pathArg(p)); },
     getLastOpened() { return cmd<string | null>("get_last_opened_project"); },
     loadRecentProjects() {
-      return cmd<Array<{ path: string; info: Record<string, unknown> }>>("load_recent_projects");
+      return cmd<Array<{ path: string; info: object }>>("load_recent_projects");
     },
-    saveRecentProjects(projects: Array<{ path: string; info: Record<string, unknown> }>) {
+    saveRecentProjects(projects: Array<{ path: string; info: object }>) {
       return cmd<void>("save_recent_projects", { projects });
     },
   },

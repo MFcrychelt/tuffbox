@@ -11,7 +11,6 @@
     RefreshCw,
     Play,
     Square,
-    Pencil,
     Tags,
     Share2,
     Copy,
@@ -39,6 +38,7 @@
     authState,
     skinPath,
     loginTypeLabel,
+    loginModalOpen,
     type RecentProject,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
@@ -247,6 +247,11 @@
 
   async function launchInstance(project: RecentProject) {
     closeMenus();
+    if (
+      isProjectRunning(project.path, $runningInstances)
+    ) {
+      return;
+    }
     launching = project.path;
     try {
       const path = await selectInstance(project);
@@ -254,8 +259,6 @@
         isProjectRunning(path, $runningInstances) ||
         isProjectRunning(project.path, $runningInstances)
       ) {
-        await killWithFeedback(path);
-        if (path !== project.path) await killWithFeedback(project.path);
         return;
       }
       await invoke("set_last_opened_project", { path });
@@ -920,8 +923,8 @@
           </span>
         </button>
       {:else}
-        <button type="button" class="tb-btn" onclick={() => (currentView = "me")}>
-          Account
+        <button type="button" class="tb-btn" onclick={() => loginModalOpen.set(true)}>
+          Sign in
         </button>
       {/if}
     </div>
@@ -1048,27 +1051,21 @@
             <div class="side-actions">
               <button
                 type="button"
-                class="side-btn launch"
-                disabled={actionBusy || launching === selected.path || selectedRunning}
-                onclick={() => void runAction("launch", selected)}
+                class={["side-btn", "launch", { stop: selectedRunning }]}
+                disabled={actionBusy || launching === selected.path}
+                onclick={() => void runAction(selectedRunning ? "stop" : "launch", selected)}
               >
                 {#if launching === selected.path}
                   <span class="mini-spinner"></span> Launching…
+                {:else if selectedRunning}
+                  <Square size={14} /> Stop
                 {:else}
-                  <Play size={16} fill="currentColor" /> Launch
+                  <Play size={16} fill="currentColor" /> Play
                 {/if}
               </button>
-              <button
-                type="button"
-                class="side-btn"
-                disabled={!selectedRunning || actionBusy}
-                onclick={() => void runAction("stop", selected)}
-              >
-                <Square size={14} /> Stop
-              </button>
               <div class="side-sep" aria-hidden="true"></div>
-              <button type="button" class="side-btn" disabled={actionBusy} onclick={() => runAction("edit", selected)}>
-                <Pencil size={14} /> Edit
+              <button type="button" class="side-btn" disabled={actionBusy} onclick={() => runAction("open-ide", selected)}>
+                <Package size={14} /> Open IDE
               </button>
               <button
                 type="button"
@@ -1162,15 +1159,24 @@
     style={`position:fixed; left:${ctxMenu.x}px; top:${ctxMenu.y}px; z-index:10000`}
     role="menu"
   >
-    <button type="button" role="menuitem" onclick={() => void runAction("launch", menuProject)} disabled={actionBusy}>
+    <button
+      type="button"
+      role="menuitem"
+      onclick={() =>
+        void runAction(
+          isProjectRunning(menuProject.path, $runningInstances) ? "stop" : "launch",
+          menuProject,
+        )}
+      disabled={actionBusy}
+    >
       {#if isProjectRunning(menuProject.path, $runningInstances)}
         <Square size={14} /> Stop
       {:else}
-        <Play size={14} /> Launch
+        <Play size={14} /> Play
       {/if}
     </button>
-    <button type="button" role="menuitem" onclick={() => runAction("edit", menuProject)}>
-      <Pencil size={14} /> Edit
+    <button type="button" role="menuitem" onclick={() => runAction("open-ide", menuProject)}>
+      <Package size={14} /> Open IDE
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("change-group", menuProject)}>
       <Tags size={14} /> Change Group
@@ -1185,9 +1191,6 @@
       <Link2 size={14} /> Create Shortcut
     </button>
     <div class="menu-sep"></div>
-    <button type="button" role="menuitem" onclick={() => runAction("open-ide", menuProject)}>
-      <Package size={14} /> Open in IDE → Mods
-    </button>
     <button type="button" role="menuitem" onclick={() => void runAction("copy-path", menuProject)}>
       <Copy size={14} /> Copy path
     </button>
@@ -1688,7 +1691,7 @@
     overflow: auto;
   }
   .side-panel { display: flex; flex-direction: column; gap: 12px; }
-  .side-hero { text-align: center; }
+  .side-hero { text-align: center; min-width: 0; }
   .side-icon {
     width: 64px;
     height: 64px;
@@ -1707,6 +1710,10 @@
     font-weight: 700;
     color: var(--text-primary);
     margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
   }
   .side-meta {
     font-size: 11px;
@@ -1751,6 +1758,14 @@
   }
   .side-btn.launch:hover:not(:disabled) {
     box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  }
+  .side-btn.launch.stop {
+    background: color-mix(in srgb, var(--accent-danger, #ef4444) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger, #ef4444) 30%, transparent);
+    color: var(--accent-danger, #f87171);
+  }
+  .side-btn.launch.stop:hover:not(:disabled) {
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-danger, #ef4444) 18%, transparent);
   }
   .side-btn.danger:hover:not(:disabled) {
     background: rgba(239, 68, 68, 0.12);

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Loader2, Copy, Check, LogIn, X, User, Monitor, Globe, Shield } from "@lucide/svelte";
+  import { Loader2, Copy, Check, LogIn, X, User, Monitor, Globe, Shield, ExternalLink, Link2, ChevronRight } from "@lucide/svelte";
   import { api } from "../lib/api";
   import { authState, skinPath, loginTypeLabel, type SkinSource, type YggdrasilPreset } from "../lib/store";
   import { toasts } from "../lib/toast";
@@ -9,10 +9,16 @@
   let { onclose }: { onclose?: () => void } = $props();
 
   let mode = $state<"select" | "microsoft-webview" | "microsoft-code" | "microsoft-polling" | "microsoft-url" | "offline-form" | "yggdrasil-form">("select");
-  let deviceCode = $state<{ userCode: string; verificationUri: string; interval?: number } | null>(null);
+  let deviceCode = $state<{
+    userCode: string;
+    verificationUri: string;
+    loginUrl: string;
+    interval?: number;
+  } | null>(null);
   let polling = $state(false);
   let errorMsg = $state("");
   let copied = $state(false);
+  let copiedLink = $state(false);
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let authUrlPaste = $state("");
   let msAuthorizeUrl = $state("");
@@ -91,13 +97,36 @@
     errorMsg = "";
     try {
       const info = await api.mcAuth.startDeviceCode();
-      deviceCode = info;
+      deviceCode = {
+        userCode: info.userCode,
+        verificationUri: info.verificationUri,
+        loginUrl: info.loginUrl || `${info.verificationUri}?otc=${encodeURIComponent(info.userCode)}`,
+        interval: info.interval,
+      };
       mode = "microsoft-polling";
       startPolling();
-      try { await open(info.verificationUri); } catch {}
+      try {
+        await open(deviceCode.loginUrl);
+      } catch {
+        try {
+          await open(deviceCode.verificationUri);
+        } catch {
+          /* ignore */
+        }
+      }
     } catch (e) {
       errorMsg = String(e);
       mode = "select";
+    }
+  }
+
+  async function reopenLoginLink() {
+    const url = deviceCode?.loginUrl || deviceCode?.verificationUri;
+    if (!url) return;
+    try {
+      await open(url);
+    } catch {
+      /* ignore */
     }
   }
 
@@ -319,6 +348,17 @@
     setTimeout(() => (copied = false), 2000);
   }
 
+  async function copyLoginLink() {
+    if (!deviceCode?.loginUrl) return;
+    try {
+      await navigator.clipboard.writeText(deviceCode.loginUrl);
+      copiedLink = true;
+      setTimeout(() => (copiedLink = false), 2000);
+    } catch {
+      /* ignore */
+    }
+  }
+
   function clearPollTimer() {
     if (pollTimer) {
       clearTimeout(pollTimer);
@@ -337,9 +377,14 @@
   });
 </script>
 
-<!-- svelte-ignore a11y-click-events-have-key-events -->
-<!-- svelte-ignore a11y-no-static-element-interactions -->
-<div class="overlay" onclick={(e) => e.target === e.currentTarget && close()}>
+<div
+  class="overlay"
+  role="button"
+  tabindex="-1"
+  aria-label="Close sign-in dialog"
+  onclick={(e) => e.target === e.currentTarget && close()}
+  onkeydown={(e) => e.key === "Enter" && close()}
+>
   <div class="modal">
     <div class="modal-header">
       <div class="modal-title">
@@ -348,7 +393,7 @@
           {#if mode === "offline-form"}Offline Login
           {:else if mode === "yggdrasil-form"}Yggdrasil Login
           {:else if mode === "microsoft-webview"}Microsoft Login
-          {:else if mode === "microsoft-polling"}Microsoft Login
+          {:else if mode === "microsoft-polling"}Microsoft — link
           {:else if mode === "microsoft-url"}Microsoft Login (URL)
           {:else}Sign In{/if}
         </h3>
@@ -400,15 +445,26 @@
         {/if}
 
         <div class="login-options">
+          <button class="login-option" onclick={startDeviceCodeLogin} disabled={loggingIn}>
+            <div class="option-icon ms">
+              <Link2 size={20} />
+            </div>
+            <div class="option-info">
+              <span class="option-title">Microsoft — open link</span>
+              <span class="option-desc">Opens microsoft.com with your code — no Azure app needed</span>
+            </div>
+            <ExternalLink size={16} class="option-arrow" />
+          </button>
+
           <button class="login-option" onclick={startMicrosoftLogin} disabled={loggingIn}>
             <div class="option-icon ms">
               <Globe size={20} />
             </div>
             <div class="option-info">
-              <span class="option-title">Microsoft / Mojang</span>
-              <span class="option-desc">Sign in in a popup — online play, skins, Realms, capes</span>
+              <span class="option-title">Microsoft — popup</span>
+              <span class="option-desc">Sign in in a popup window</span>
             </div>
-            <Check size={16} class="option-arrow" />
+            <ChevronRight size={16} class="option-arrow" />
           </button>
 
           <button class="login-option" onclick={() => (mode = "offline-form")}>
@@ -419,7 +475,7 @@
               <span class="option-title">Offline Mode</span>
               <span class="option-desc">Play with custom username</span>
             </div>
-            <Check size={16} class="option-arrow" />
+            <ChevronRight size={16} class="option-arrow" />
           </button>
 
           <button class="login-option" onclick={openYggdrasilForm}>
@@ -430,13 +486,12 @@
               <span class="option-title">Ely.by / LittleSkin / Custom</span>
               <span class="option-desc">authlib-injector Yggdrasil providers</span>
             </div>
-            <Check size={16} class="option-arrow" />
+            <ChevronRight size={16} class="option-arrow" />
           </button>
         </div>
 
         <div class="ms-other">
           <span class="ms-other-label">Other Microsoft methods</span>
-          <button class="link-btn" type="button" onclick={startDeviceCodeLogin}>Device code</button>
           <button class="link-btn" type="button" onclick={openMicrosoftUrlLogin}>Paste redirect URL</button>
         </div>
 
@@ -465,19 +520,41 @@
 
       {:else if mode === "microsoft-polling" && deviceCode}
         <div class="code-content">
-          <div class="code-display">
-            <span class="code">{deviceCode.userCode}</span>
-            <button class="copy-btn" onclick={copyCode} title="Copy code">
-              {#if copied}<Check size={16} />{:else}<Copy size={16} />{/if}
+          <p class="instruction">
+            A browser tab should open with your login code already filled in.
+            Finish signing in there — this window waits automatically.
+          </p>
+          <button class="primary-btn" type="button" onclick={reopenLoginLink}>
+            <ExternalLink size={16} /> Open login link
+          </button>
+          <div class="link-row">
+            <code class="login-link" title={deviceCode.loginUrl}>{deviceCode.loginUrl}</code>
+            <button class="copy-btn" onclick={copyLoginLink} title="Copy login link">
+              {#if copiedLink}<Check size={16} />{:else}<Copy size={16} />{/if}
             </button>
           </div>
-          <p class="instruction">
-            Go to <a href={deviceCode?.verificationUri ?? "#"} onclick={(e) => { e.preventDefault(); deviceCode && open(deviceCode.verificationUri); }}>{deviceCode?.verificationUri}</a>
-            <br />and enter the code above.
+          <div class="manual-code">
+            <span class="code-label">Or enter code manually at microsoft.com/link</span>
+            <div class="code-display">
+              <span class="code">{deviceCode.userCode}</span>
+              <button class="copy-btn" onclick={copyCode} title="Copy code">
+                {#if copied}<Check size={16} />{:else}<Copy size={16} />{/if}
+              </button>
+            </div>
+          </div>
+          <p class="instruction muted">
+            Manual page: <a
+              href={deviceCode.verificationUri}
+              onclick={(e) => {
+                e.preventDefault();
+                const uri = deviceCode?.verificationUri;
+                if (uri) void open(uri);
+              }}>{deviceCode.verificationUri}</a
+            >
           </p>
           <div class="polling-indicator">
             <Loader2 size={16} class="spin" />
-            <span>Waiting for authentication...</span>
+            <span>Waiting for authentication…</span>
           </div>
           <button class="link-btn" type="button" onclick={openMicrosoftUrlLogin}>
             Prefer paste URL instead?
@@ -746,7 +823,6 @@
     display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
   .option-icon.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
-  .option-icon.ms-url { background: linear-gradient(135deg, #0ea5e9, #2563eb); color: #fff; }
   .option-icon.offline { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-color); }
   .option-icon.ygg {
     background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.2));
@@ -783,6 +859,48 @@
   .instruction a { color: var(--accent-primary); text-decoration: none; font-weight: 600; }
   .instruction a:hover { text-decoration: underline; }
   .instruction.url-steps { text-align: left; margin: 0; }
+  .instruction.muted { font-size: 12px; color: var(--text-muted); }
+  .link-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    max-width: 100%;
+  }
+  .login-link {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .code-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-align: center;
+  }
+  .manual-code {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+  .code-content .primary-btn {
+    width: auto;
+    min-width: 200px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
 
   .polling-indicator { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
 

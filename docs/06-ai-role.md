@@ -54,6 +54,8 @@ Crash logs
 → validate → UI confirm → snapshot → apply
 ```
 
+L3 Explain prompt includes Diagnose **group-test covering** and decoded **player-trail covering** as launcher facts (not raw enable/disable journal). Priority: verified group test > trail covering > culprits/KB.
+
 API (ваш сервер):
 
 - `POST /v1/crash/lookup` — fingerprint → hits (`solution`, `actions`, score); без `notes` / полного корпуса
@@ -90,7 +92,7 @@ API (ваш сервер):
 
 **AI Decision making** (порядок рассуждения перед JSON):
 
-1. **Understand the context** — только shared info из промпта (MC/loader/Java, inventory, culprits, findings, KB, graph, excerpts).
+1. **Understand the context** — только shared info из промпта (MC/loader/Java, inventory, **group-test covering**, **player-trail covering**, culprits, findings, KB, graph, excerpts). Приоритет фактов: verified group test > trail covering > culprits/KB. Не сжимать covering из нескольких модов в один «главный».
 2. **Isolate the problem** — одна primary root cause; ранний hard failure важнее cascading noise.
 3. **Accept the risk** — у каждого action явный `risk`; `needsUserReview` / `confidence` честные.
 4. **Map decision** — минимальный набор `actions` с `op`, reason ↔ isolated cause.
@@ -225,7 +227,7 @@ Fingerprint подставляется автоматически из теку�
 | Контур | Роль |
 |--------|------|
 | **AI Explain** | Диагностика текущего краша; может **читать** сеть (lookup/diagnose); **не** публикует капсулы |
-| **Resolution Distill** | После verified fix: сжать историю действий пользователя → показать план → **Confirm/Edit** → только тогда publish |
+| **Resolution Distill** | После verified fix: **group test** — `disable_mod` на isolated covering; **player trail** — decode (healthy ⇒ enabled чистые), шарить covering без выдуманного корня; **встроенный ИИ** — можно сжать в минимальный план → **Confirm/Edit** → только тогда publish |
 
 Authored export из Diagnostics («Save KB case») — прямой вход в capsule format для будущей сети.
 

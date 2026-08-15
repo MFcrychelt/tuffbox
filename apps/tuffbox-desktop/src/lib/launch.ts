@@ -15,6 +15,7 @@ import {
   authState,
   loginModalOpen,
   openLauncherSettings,
+  isProjectRunning,
 } from "./store";
 import { shareCrashLogWithFeedback } from "./mclogs";
 import { get } from "svelte/store";
@@ -83,6 +84,9 @@ type LaunchProgressPayload = {
 
 async function pollDownloadOverlay() {
   try {
+    const phase = get(launchProgress)?.phase ?? "";
+    // Skip host work while not downloading assets/mods.
+    if (phase && !/mod|asset|download|install|java|librar/i.test(phase)) return;
     const items = await api.system.getDownloadProgress();
     if (!Array.isArray(items) || items.length === 0) return;
     let downloaded = 0;
@@ -159,7 +163,25 @@ export async function launchWithFeedback(
   lastOnStarted = opts?.onStarted ?? null;
   lastOpts = opts ?? null;
 
+  if (get(isLaunching)) {
+    toasts.info("Launch already in progress…");
+    return null;
+  }
+
+  // Soft-block double client launch when UI already knows the game is up.
   const profile = params.profile ?? "client";
+  if (profile !== "server" && isProjectRunning(params.path, get(runningInstances))) {
+    toasts.info("This instance is already running", 6000, [
+      {
+        label: "Stop",
+        run: () => {
+          void killWithFeedback(params.path);
+        },
+      },
+    ]);
+    return null;
+  }
+
   if (profile !== "server" && !opts?.skipAuthGate) {
     const auth = get(authState);
     if (!auth.loggedIn || !auth.profile) {
@@ -184,28 +206,30 @@ export async function launchWithFeedback(
   }
 
   const showLog = opts?.openLog !== false;
-  if (showLog) openLaunchLog(opts?.logPath ?? params.path, opts?.logTitle ?? null);
   isLaunching.set(true);
   launchProgress.set({ phase: "preparing", message: "Preparing…", percent: 0 });
+  void invoke("set_last_opened_project", { path: params.path }).catch(() => {});
 
-  let unlistenProgress: UnlistenFn | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   try {
-    unlistenProgress = await listen<LaunchProgressPayload>("launch-progress", (ev) => {
-      const p = ev.payload ?? {};
-      const phase = String(p.phase || "preparing");
-      const message = String(p.message || "Launching…");
-      const percent =
-        typeof p.percent === "number" && Number.isFinite(p.percent)
-          ? Math.max(0, Math.min(100, Math.round(p.percent)))
-          : null;
-      launchProgress.set({ phase, message, percent });
-    });
+    void ensureLaunchProgressListener();
     pollTimer = setInterval(() => {
       void pollDownloadOverlay();
     }, 450);
 
     const result = await doLaunch(params);
+    if (showLog) openLaunchLog(opts?.logPath ?? params.path, opts?.logTitle ?? null);
+    // Mark running immediately (don't wait for the process-started event race).
+    if (result.pid != null && result.instanceId) {
+      upsertRunning({
+        id: result.instanceId,
+        pid: result.pid,
+        profile: result.profileId ?? params.profile ?? "client",
+        startedAt: result.startedAt ?? Math.floor(Date.now() / 1000),
+      });
+    } else {
+      void refreshRunningInstances();
+    }
     if (opts?.showSuccess) toasts.success("Launch started");
     opts?.onStarted?.(result);
     // After a successful start, confirm any pending crash-fix as resolved when
@@ -221,10 +245,10 @@ export async function launchWithFeedback(
     return result;
   } catch (e) {
     showLaunchError(e, () => launchWithFeedback(params, opts));
+    if (showLog) openLaunchLog(opts?.logPath ?? params.path, opts?.logTitle ?? null);
     return null;
   } finally {
     if (pollTimer) clearInterval(pollTimer);
-    void unlistenProgress?.();
     isLaunching.set(false);
     launchProgress.set(null);
   }
@@ -257,6 +281,38 @@ export async function refreshRunningInstances(): Promise<void> {
   } catch {
     // backend not ready / optional
   }
+}
+
+/** Keep running state truthful: prune dead PIDs on an adaptive interval + focus. */
+export function startRunningInstancesWatch(): () => void {
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const tick = () => {
+    void refreshRunningInstances();
+  };
+
+  const schedule = () => {
+    if (timer) clearInterval(timer);
+    const busy = get(isLaunching) || get(runningInstances).length > 0;
+    // Hot while launching / game open; cool when idle (less CPU for the launcher UI).
+    timer = setInterval(tick, busy ? 2500 : 12000);
+  };
+
+  schedule();
+  const unsubLaunch = isLaunching.subscribe(() => schedule());
+  const unsubRun = runningInstances.subscribe(() => schedule());
+  const onFocus = () => tick();
+  window.addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") tick();
+  });
+
+  return () => {
+    if (timer) clearInterval(timer);
+    unsubLaunch();
+    unsubRun();
+    window.removeEventListener("focus", onFocus);
+  };
 }
 
 /// Display a launch error as a toast with Retry / View log actions when
@@ -309,11 +365,30 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
 
 let crashListener: Promise<UnlistenFn> | null = null;
 let processListeners: Promise<UnlistenFn[]> | null = null;
+let progressListener: Promise<UnlistenFn> | null = null;
+
+function ensureLaunchProgressListener(): Promise<UnlistenFn> {
+  if (!progressListener) {
+    progressListener = listen<LaunchProgressPayload>("launch-progress", (ev) => {
+      if (!get(isLaunching)) return;
+      const p = ev.payload ?? {};
+      const phase = String(p.phase || "preparing");
+      const message = String(p.message || "Launching…");
+      const percent =
+        typeof p.percent === "number" && Number.isFinite(p.percent)
+          ? Math.max(0, Math.min(100, Math.round(p.percent)))
+          : null;
+      launchProgress.set({ phase, message, percent });
+    });
+  }
+  return progressListener;
+}
 
 /// Register the global `launch-crashed` handler exactly once. The JVM can exit
 /// non-zero after the launch command has already returned "started", so the
 /// backend emits this event from the process-exit callback.
 export function registerLaunchCrashListener(): Promise<UnlistenFn> {
+  void ensureLaunchProgressListener();
   if (!crashListener) {
     crashListener = listen<LaunchErrorInfo>("launch-crashed", (event) => {
       const info = event.payload;

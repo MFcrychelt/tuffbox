@@ -4,14 +4,17 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
     PlayCircle, RefreshCw, Terminal, TimerReset, XCircle,
-    Shield, Server, Square, Cpu, HardDrive, Activity, Stethoscope, Zap,
+    Shield, Server, Square, Stethoscope, Zap,
     Camera, FolderOpen,
   } from "@lucide/svelte";
   import { onDestroy, onMount, tick } from "svelte";
   import { ideStageRequest, openLaunchLog, projectPath, projectInfo } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
+  import TestHardwareCard from "./test/TestHardwareCard.svelte";
+  import TestLoadChart from "./test/TestLoadChart.svelte";
   import { launchWithFeedback } from "../lib/launch";
   import type { TestRunRecord } from "../lib/api";
+  import { gb1, peaksFromSamples, pushLoadSample, type LoadSample } from "../lib/testLoad";
 
   type Profile = {
     id: string;
@@ -117,13 +120,13 @@
   let runs: TestRunRecord[] = [];
   let capturedRunIds: Record<string, boolean> = {};
 
+  let loadSamples = $state<LoadSample[]>([]);
+  let activeXmxMb = $state(4096);
+  const potatoPc = typeof document !== "undefined"
+    && document.documentElement.classList.contains("potato-pc");
+
   const selected = $derived(profiles.find((p) => p.id === selectedProfile));
   const elapsed = $derived(startedAt ? Math.floor((now - startedAt) / 1000) : 0);
-  const hostRamPct = $derived(live && live.hostMemoryTotalMb > 0
-    ? pct(live.hostMemoryUsedMb, live.hostMemoryTotalMb)
-    : 0);
-  const procRamCap = $derived(selected?.memoryMb ?? 4096);
-  const procRamPct = $derived(live?.instance ? pct(live.instance.memoryMb, procRamCap) : 0);
   const validationCritical = $derived(!!validationReport && (
     !validationReport.passed
     || (validationReport.graphErrors ?? 0) > 0
@@ -198,17 +201,6 @@
     // Early Stopping! before any pass is fail-ish
     if (slice.includes("Stopping!") && !detectPass(text)) return "Stopping!";
     return null;
-  }
-
-  function pct(n: number | null | undefined, max = 100) {
-    if (!Number.isFinite(n as number)) return 0;
-    return Math.max(0, Math.min(100, ((n as number) / max) * 100));
-  }
-
-  function fmtMb(n: number | null | undefined) {
-    if (!Number.isFinite(n as number)) return "—";
-    const v = n as number;
-    return v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`;
   }
 
   function formatRunTime(value: string) {
@@ -388,6 +380,9 @@
     sawProcess = false;
     finalizeInFlight = false;
     startedAt = Date.now();
+    loadSamples = [];
+    const profile = profiles.find((p) => p.id === opts.profile);
+    activeXmxMb = opts.memoryMbOverride ?? profile?.memoryMb ?? 4096;
     error = null;
     message = null;
     log = "";
@@ -421,7 +416,7 @@
           onlineMode: onlineModeOff ? false : true,
         },
         {
-          openLog: true,
+          openLog: false,
           logPath: activeLogRoot,
           logTitle: opts.openServerConsole ? "Server console" : null,
         },
@@ -520,12 +515,19 @@
     running = false;
     if ($projectPath && runId) {
       try {
+        const peaks = peaksFromSamples(loadSamples);
         await invoke("finalize_test_run", {
           path: $projectPath,
           runId,
           status: verdict,
           durationSeconds: duration,
           verdictReason: reason,
+          peakProcMb: peaks ? Math.round(peaks.peakProcMb) : null,
+          peakHostMb: peaks ? Math.round(peaks.peakHostMb) : null,
+          hostTotalMb: peaks
+            ? Math.round(peaks.lastHostTotalMb)
+            : (live?.hostMemoryTotalMb ?? null),
+          xmxMb: Math.round(activeXmxMb),
         });
       } catch {
         // ignore
@@ -804,7 +806,16 @@
     if (!watching || !documentVisible) return;
     now = Date.now();
     refreshLog();
-    refreshLive();
+    void refreshLive().then(() => {
+      if (!watching || startedAt == null || !live) return;
+      pushLoadSample(loadSamples, {
+        tSec: (Date.now() - startedAt) / 1000,
+        hostUsedMb: live.hostMemoryUsedMb,
+        hostTotalMb: live.hostMemoryTotalMb,
+        procRssMb: live.instance?.memoryMb ?? 0,
+        hostCpuPct: live.hostCpuPercent,
+      });
+    });
   }
 
   function stopWatching() {
@@ -834,28 +845,6 @@
 <div class="test-runs">
   <div class="toolbar">
     <div class="title"><PlayCircle size={18} /> Test · launch lab</div>
-    <div class="actions">
-      <button class="ghost" onclick={() => loadProfiles(true)} disabled={!$projectPath || loading}>
-        <RefreshCw size={16} class={loading ? "spin" : ""} />
-        Refresh
-      </button>
-      <button class="secondary" onclick={refreshLog} disabled={!$projectPath}>
-        <Terminal size={16} /> Tail log
-      </button>
-      <button class="secondary" onclick={runValidation} disabled={!$projectPath || validationLoading}>
-        <Shield size={16} />
-        {validationLoading ? "Checking…" : "Validate"}
-      </button>
-      {#if validationBadge}
-        <span class="val-badge" class:ok={validationBadge.ok} class:bad={!validationBadge.ok}>
-          {validationBadge.label}
-        </span>
-      {/if}
-      <button class="danger" onclick={killInstance} disabled={!$projectPath || !live?.instance || killing} title="Kill game/server process">
-        <Square size={16} />
-        {killing ? "Stopping…" : "Kill"}
-      </button>
-    </div>
   </div>
 
   {#if error}<div class="notice error">{error}</div>{/if}
@@ -866,6 +855,18 @@
     <EmptyState icon={PlayCircle} title="No project selected" description="Open a project to run test profiles." />
   {:else}
     <div class="terminal-body">
+      <div class="status-strip">
+        <div class="status" class:running={!!live?.instance || running} class:pass={livePhase === "pass"} class:fail={livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut"}>
+          <TimerReset size={16} />
+          {statusLabel}
+        </div>
+        {#if live?.instance}
+          <button class="danger" onclick={killInstance} disabled={killing} title="Kill game/server process">
+            <Square size={16} />
+            {killing ? "Stopping…" : "Kill"}
+          </button>
+        {/if}
+      </div>
       <div class="launch-bar">
         <label class="profile-select">
           Profile
@@ -886,50 +887,61 @@
             <Zap size={16} /> Run client 4 RAM
           </button>
         </div>
-        <div class="status" class:running={!!live?.instance || running} class:pass={livePhase === "pass"} class:fail={livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut"}>
-          <TimerReset size={16} />
-          {statusLabel}
-        </div>
       </div>
 
-      <div class="log-panel">
-        <div class="log-tools">
-          <label class="auto-scroll">
-            <input type="checkbox" bind:checked={autoScroll} /> Auto-scroll
-          </label>
-          <div class="log-tools-right">
-            {#if activeLogRoot && activeLogRoot !== $projectPath}
-              <span class="log-trunc-hint">Server console</span>
-              <button class="ghost mini" onclick={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}>
-                <Terminal size={12} /> Open server console
-              </button>
-            {/if}
-            {#if logTruncated}
-              <span class="log-trunc-hint">Showing last {LOG_TAIL_LINES} of {logLineCount} lines</span>
-            {/if}
-            {#if !documentVisible && watching}
-              <span class="log-paused-hint">Poll paused (tab hidden)</span>
-            {/if}
-            <button class="ghost mini" onclick={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
-            {#if watching}
-              <button class="ghost mini" onclick={stopWatching}>Stop watching</button>
-            {:else if running || live?.instance}
-              <button class="ghost mini" onclick={startPolling}>Watch log</button>
-            {/if}
-          </div>
+      <div class="work">
+        <div class="load-panel">
+          <h3>Load</h3>
+          <TestLoadChart samples={loadSamples} xmxMb={activeXmxMb} potato={potatoPc} />
+          <TestHardwareCard samples={loadSamples} xmxMb={activeXmxMb} />
         </div>
-        <pre class="log" bind:this={logEl}>{displayLog || "latest.log will appear here after the first run."}</pre>
-        {#if live?.instance}
-          <button class="secondary stop danger-outline" onclick={killInstance} disabled={killing}>
-            <Square size={16} /> {killing ? "Stopping…" : "Kill process"}
-          </button>
-        {/if}
+        <div class="log-panel">
+          <div class="log-tools">
+            <label class="auto-scroll">
+              <input type="checkbox" bind:checked={autoScroll} /> Auto-scroll
+            </label>
+            <div class="log-tools-right">
+              {#if activeLogRoot && activeLogRoot !== $projectPath}
+                <span class="log-trunc-hint">Server console</span>
+                <button class="ghost mini" onclick={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}>
+                  <Terminal size={12} /> Open server console
+                </button>
+              {/if}
+              {#if logTruncated}
+                <span class="log-trunc-hint">Showing last {LOG_TAIL_LINES} of {logLineCount} lines</span>
+              {/if}
+              {#if !documentVisible && watching}
+                <span class="log-paused-hint">Poll paused (tab hidden)</span>
+              {/if}
+              <button class="ghost mini" onclick={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
+              {#if watching}
+                <button class="ghost mini" onclick={stopWatching}>Stop watching</button>
+              {:else if running || live?.instance}
+                <button class="ghost mini" onclick={startPolling}>Watch log</button>
+              {/if}
+            </div>
+          </div>
+          <pre class="log" bind:this={logEl}>{displayLog || "latest.log will appear here after the first run."}</pre>
+        </div>
       </div>
 
       <details class="secondary-panel" ontoggle={onSecondaryToggle}>
-        <summary>Preflight &amp; options</summary>
+        <summary>Options</summary>
         <div class="secondary-body">
           <div class="preflight">
+            <button class="ghost" onclick={() => loadProfiles(true)} disabled={!$projectPath || loading}>
+              <RefreshCw size={16} class={loading ? "spin" : ""} />
+              Refresh
+            </button>
+            <button class="secondary" onclick={runValidation} disabled={!$projectPath || validationLoading}>
+              <Shield size={16} />
+              {validationLoading ? "Checking…" : "Validate"}
+            </button>
+            {#if validationBadge}
+              <span class="val-badge" class:ok={validationBadge.ok} class:bad={!validationBadge.ok}>
+                {validationBadge.label}
+              </span>
+            {/if}
             <label class="chk" title="Allow launch even when validation has errors">
               <input type="checkbox" bind:checked={forceRun} /> Force run
             </label>
@@ -1018,40 +1030,6 @@
                 </div>
               </div>
               <button class="ghost" onclick={() => (validationReport = null)}>Hide</button>
-            </div>
-          {/if}
-        </div>
-      </details>
-
-      <details class="secondary-panel" ontoggle={onSecondaryToggle}>
-        <summary>Live stats</summary>
-        <div class="secondary-body">
-          <div class="meters">
-            <div class="meter">
-              <div class="meter-head"><Cpu size={14} /> Host CPU <strong>{live ? live.hostCpuPercent.toFixed(0) : "—"}%</strong></div>
-              <div class="bar"><i style="width: {live ? pct(live.hostCpuPercent) : 0}%"></i></div>
-            </div>
-            <div class="meter">
-              <div class="meter-head"><HardDrive size={14} /> Host RAM <strong>{live ? `${fmtMb(live.hostMemoryUsedMb)} / ${fmtMb(live.hostMemoryTotalMb)}` : "—"}</strong></div>
-              <div class="bar"><i style="width: {hostRamPct}%"></i></div>
-            </div>
-            <div class="meter" class:dim={!live?.instance}>
-              <div class="meter-head"><Activity size={14} /> Process CPU <strong>{live?.instance ? `${live.instance.cpuPercent.toFixed(0)}%` : "—"}</strong></div>
-              <div class="bar proc"><i style="width: {live?.instance ? pct(live.instance.cpuPercent) : 0}%"></i></div>
-            </div>
-            <div class="meter" class:dim={!live?.instance}>
-              <div class="meter-head"><HardDrive size={14} /> Process RAM <strong>{live?.instance ? `${fmtMb(live.instance.memoryMb)} / ${fmtMb(procRamCap)}` : "—"}</strong></div>
-              <div class="bar proc"><i style="width: {procRamPct}%"></i></div>
-            </div>
-          </div>
-          {#if live?.instance}
-            <div class="live-meta">
-              <span>RSS {fmtMb(live.instance.memoryMb)}</span>
-              <span>Virt {fmtMb(live.instance.virtualMemoryMb)}</span>
-              <span>cap {fmtMb(procRamCap)}</span>
-              {#if !watching}
-                <button class="ghost mini" onclick={startPolling}>Resume poll</button>
-              {/if}
             </div>
           {/if}
         </div>
@@ -1147,6 +1125,14 @@
                   <span>{formatRunTime(run.startedAt)}</span>
                   <small>
                     {run.durationSeconds != null ? `${run.durationSeconds}s` : "—"}
+                    {#if run.peakProcMb}
+                      · <span
+                        class="peak-badge"
+                        title={run.recommendedRamGb
+                          ? `Players need ${run.recommendedRamGb} GB RAM`
+                          : undefined}
+                      >{gb1(run.peakProcMb)} GB peak</span>
+                    {/if}
                     {#if run.verdictReason} · {run.verdictReason}{/if}
                   </small>
                   <div class="run-actions">
@@ -1179,10 +1165,9 @@
     max-width: none;
     width: 100%;
   }
-  .toolbar, .actions, .title, .status, .meter-head, .log-tools, .live-meta, .preflight, .opts-row, .matrix-head, .run-top, .run-actions, .history-head, .filters, .log-tools-right, .launch-bar, .launch-actions { display: flex; align-items: center; }
+  .toolbar, .title, .status, .status-strip, .log-tools, .preflight, .opts-row, .matrix-head, .run-top, .run-actions, .history-head, .filters, .log-tools-right, .launch-bar, .launch-actions { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 8px; flex-shrink: 0; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
-  .actions { gap: 10px; flex-wrap: wrap; }
   .terminal-body {
     flex: 1;
     min-height: 0;
@@ -1192,6 +1177,7 @@
     overflow-y: auto;
     gap: 8px;
   }
+  .status-strip { flex-shrink: 0; gap: 10px; flex-wrap: wrap; }
   .launch-bar {
     flex-shrink: 0;
     gap: 12px;
@@ -1212,16 +1198,35 @@
   .launch-actions { gap: 8px; flex-wrap: wrap; flex: 1; }
   .preset { display: inline-flex; align-items: center; gap: 8px; }
   .preset.primary { background: color-mix(in srgb, var(--accent-primary) 18%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); color: var(--accent-primary); font-weight: 700; }
-  .log-panel {
-    /* Fill free space; allow shrink so the stage scroll chain never clips the log. */
+  .work {
     flex: 1 1 auto;
-    min-height: min(240px, 40vh);
+    min-height: 0;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.1fr);
+    gap: 8px;
+  }
+  .load-panel,
+  .log-panel {
+    min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
+  }
+  .load-panel {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .load-panel h3 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    flex-shrink: 0;
   }
   .secondary-panel {
     flex: 0 0 auto;
@@ -1297,20 +1302,11 @@
   .vbadge.started, .vbadge.running { color: #93c5fd; }
   .vbadge.skipped { color: var(--text-muted); }
   .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
-  .status { gap: 8px; color: var(--text-muted); background: var(--bg-tertiary); border-radius: 999px; padding: 8px 12px; margin-left: auto; }
+  .peak-badge { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .status { gap: 8px; color: var(--text-muted); background: var(--bg-tertiary); border-radius: 999px; padding: 8px 12px; }
   .status.running { color: var(--accent-primary); }
   .status.pass { color: var(--accent-primary); }
   .status.fail { color: #fca5a5; }
-  .meters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .meter { display: grid; gap: 6px; }
-  .meter.dim { opacity: 0.45; }
-  .meter-head { justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: 11px; }
-  .meter-head :global(svg) { flex-shrink: 0; }
-  .meter-head strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
-  .bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
-  .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent-primary), var(--accent-hover)); transition: width 280ms ease; }
-  .bar.proc i { background: linear-gradient(90deg, #60a5fa, #a78bfa); }
-  .live-meta { gap: 12px; margin-top: 10px; color: var(--text-muted); font-size: 11px; flex-wrap: wrap; }
   .log-tools { justify-content: space-between; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
   .log-tools-right { gap: 6px; flex-wrap: wrap; }
   .log-trunc-hint, .log-paused-hint { font-size: 11px; color: var(--text-muted); }
@@ -1318,10 +1314,8 @@
   .auto-scroll { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
   .auto-scroll input { width: auto; }
   .log { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 18px; background: #09090b; color: #d4d4d8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
-  .stop { margin: 12px; flex-shrink: 0; }
   .danger { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
   .danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
-  .danger-outline { border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
   .launch-stats-card { padding: 12px; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); background: var(--bg-tertiary); margin-bottom: 14px; display: grid; gap: 6px; }
   .launch-stats-card h3 { color: var(--text-secondary); font-size: 12px; margin: 0 0 4px; text-transform: uppercase; letter-spacing: .04em; }
   .ls-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
@@ -1332,10 +1326,12 @@
 
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @media (max-width: 920px) {
-    .meters { grid-template-columns: 1fr; }
+  @media (max-width: 1099px) {
+    .work {
+      grid-template-columns: 1fr;
+      grid-template-rows: minmax(160px, 32vh) minmax(0, 1fr);
+    }
     .launch-bar { flex-direction: column; align-items: stretch; }
-    .status { margin-left: 0; align-self: flex-start; }
   }
 
   .validation-report { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 14px; }

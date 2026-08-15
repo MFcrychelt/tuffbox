@@ -23,7 +23,7 @@
   import { toasts } from "./lib/toast";
   import LaunchLogModal from "./components/LaunchLogModal.svelte";
   import MinecraftLogin from "./components/MinecraftLogin.svelte";
-  import { launchWithFeedback, registerLaunchCrashListener, registerProcessListeners, refreshRunningInstances } from "./lib/launch";
+  import { launchWithFeedback, registerLaunchCrashListener, registerProcessListeners, refreshRunningInstances, startRunningInstancesWatch } from "./lib/launch";
   import { registerSoftVerifyListeners } from "./lib/softVerify";
 
   const SWARM_ONBOARD_KEY = "tuffbox.swarm.onboarding.done";
@@ -113,8 +113,8 @@
   }
 
   function retryLoad() {
-    const key = currentView as LazyView;
-    if (key === "dashboard") return;
+    if (currentView === "dashboard") return;
+    const key = currentView;
     delete loadedViews[key];
     loadedViews = { ...loadedViews };
     viewLoadError = null;
@@ -137,13 +137,9 @@
     let cancelled = false;
     void (async () => {
       try {
-        const diags: { severity?: string }[] = await invoke("get_diagnostics", { path });
+        const counts: { errorCount?: number } = await invoke("get_diagnostic_counts", { path });
         if (cancelled) return;
-        const blocking = (diags ?? []).filter((d) => {
-          const sev = String(d.severity ?? "");
-          return sev === "Error" || sev === "error" || sev === "critical";
-        });
-        ideIssueCount.set(blocking.length);
+        ideIssueCount.set(Number(counts?.errorCount ?? 0));
       } catch {
         /* keep last */
       }
@@ -252,6 +248,7 @@
     void registerLaunchCrashListener();
     void registerProcessListeners();
     void refreshRunningInstances();
+    const stopRunningWatch = startRunningInstancesWatch();
     const unlistenSoftVerify = registerSoftVerifyListeners();
     let stopHomeEnrich: (() => void) | null = null;
     void ensureHomeEnrichListener().then((stop) => {
@@ -325,7 +322,7 @@
 
     const onOpenDiagnostics = () => {
       // Prefer IDE Diagnose stage when already in workspace; else standalone Diagnose view.
-      if (currentView === "ide" || currentView === "library" || currentView === "home") {
+      if (currentView === "ide" || currentView === "library" || currentView === "dashboard") {
         currentView = "ide";
         ideStageRequest.set("diagnose");
       } else {
@@ -472,6 +469,7 @@
       clearTimeout(scaleResizeTimer);
       unlistenDistill?.();
       unlistenSoftVerify();
+      stopRunningWatch();
     };
   });
 
@@ -664,7 +662,7 @@
   <Sidebar bind:currentView />
   <div class="main">
     {#if currentView !== "ide"}
-      <Header {currentView} />
+      <Header bind:currentView />
     {/if}
     <main
       class="content"
@@ -680,6 +678,7 @@
         currentView === "diagnostics" ||
         currentView === "snapshots"
       }
+      data-view={currentView}
       bind:this={contentEl}
     >
       {#key currentView}

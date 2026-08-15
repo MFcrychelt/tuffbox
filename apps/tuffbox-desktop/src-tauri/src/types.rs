@@ -302,6 +302,35 @@ pub struct TestRunRecord {
     pub verdict_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub captured_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_proc_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_host_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_ram_gb: Option<u32>,
+}
+
+#[cfg(test)]
+mod test_run_record_tests {
+    use super::TestRunRecord;
+
+    #[test]
+    fn old_test_runs_json_deserializes_without_peak_fields() {
+        let raw = r#"{
+            "id": "run-client-1",
+            "profile": "client",
+            "startedAt": "1",
+            "status": "pass",
+            "logPath": "logs/latest.log",
+            "durationSeconds": 40
+        }"#;
+        let run: TestRunRecord = serde_json::from_str(raw).expect("legacy json");
+        assert_eq!(run.id, "run-client-1");
+        assert!(run.peak_proc_mb.is_none());
+        assert!(run.peak_host_mb.is_none());
+        assert!(run.recommended_ram_gb.is_none());
+        assert!(run.captured_paths.is_empty());
+    }
 }
 
 // ── Crash types ──────────────────────────────────────────────────

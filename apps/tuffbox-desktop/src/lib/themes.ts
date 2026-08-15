@@ -14,6 +14,7 @@ export type ThemeId =
   | "blaze"
   | "dusk"
   | "glacier"
+  | "minecraft"
   | "overworld"
   | "nether"
   | "deepdark"
@@ -42,6 +43,7 @@ export const THEMES: ThemeMeta[] = [
   { id: "blaze", label: "Blaze", shades: ["#140000", "#ff2d2d", "#ff7a45"], badge: "Minimal" },
   { id: "dusk", label: "Dusk", shades: ["#180310", "#ff6b9c", "#c084fc"], badge: "Minimal" },
   { id: "glacier", label: "Glacier", shades: ["#000c18", "#a8e6ff", "#5b9fff"], badge: "Minimal" },
+  { id: "minecraft", label: "Minecraft", shades: ["#212121", "#313131", "#3fad32"] },
   { id: "overworld", label: "Overworld", shades: ["#0d100c", "#1a2416", "#52d465"] },
   { id: "nether", label: "Nether", shades: ["#140608", "#241012", "#ff6a2b"] },
   { id: "deepdark", label: "Deep Dark", shades: ["#05090e", "#0a141c", "#2fd6c8"] },

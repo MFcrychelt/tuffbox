@@ -157,10 +157,10 @@ export function layoutCircle(
   return result;
 }
 
-export function applyLayout(
-  quests: QuestData[],
+export function applyLayout<T extends { id: string; x: number; y: number }>(
+  quests: T[],
   positions: Map<string, { x: number; y: number }>,
-): QuestData[] {
+): T[] {
   return quests.map((q) => {
     const pos = positions.get(q.id);
     if (pos) {

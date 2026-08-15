@@ -632,4 +632,14 @@ mod tests {
             instance_key("c:/dev/pack/tuffbox.json/")
         );
     }
+
+    #[test]
+    fn process_exit_carries_pid_for_event_correlation() {
+        let exit = ProcessExit {
+            pid: 42,
+            code: Some(1),
+            duration_secs: 3,
+        };
+        assert_eq!(exit.pid, 42);
+    }
 }

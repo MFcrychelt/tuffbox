@@ -33,7 +33,21 @@ bridges/cosmetics/**/.gradle/
 bridges/cosmetics/**/build/
 bridges/cosmetics/**/bin/
 bridges/cosmetics/.vscode/
+bridges/cosmetics/**/.eclipse/
 !bridges/cosmetics/gradle/wrapper/gradle-wrapper.jar
+
+# Overlay bridge build output
+bridges/overlay/.gradle/
+bridges/overlay/**/.gradle/
+bridges/overlay/**/build/
+bridges/overlay/**/bin/
+
+# Sidecar binaries built locally (keep .gitkeep only)
+apps/tuffbox-desktop/src-tauri/binaries/*
+!apps/tuffbox-desktop/src-tauri/binaries/.gitkeep
+
+# Local example launcher runtime data
+examples/.tuffbox/
 
 # Vendored external projects (not part of TuffBox)
 ServerPackCreator/

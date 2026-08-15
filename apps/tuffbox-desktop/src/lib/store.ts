@@ -101,18 +101,19 @@ function createRecentProjects() {
         const disk = await api.session.loadRecentProjects();
         if (!disk?.length) return;
         update((projects) => {
+          const fromDisk = disk as RecentProject[];
           if (projects.length > 0) {
             // Keep local order; fill gaps from disk.
             const have = new Set(projects.map((p) => p.path));
             const merged = [...projects];
-            for (const p of disk) {
+            for (const p of fromDisk) {
               if (!have.has(p.path)) merged.push(p);
             }
             const next = merged.slice(0, 20);
             persistRecent(next);
             return next;
           }
-          const next = disk.slice(0, 20);
+          const next = fromDisk.slice(0, 20);
           persistRecent(next);
           return next;
         });
@@ -193,6 +194,8 @@ export interface LauncherSettings {
   defaultMemoryMb: number;
   /** Litube-style in-app player (default on). false = thumbnail preview → system browser. */
   youtubeInlinePlayer: boolean;
+  /** Show the YouTube feed on the home dashboard. Off by default; enable in Settings. */
+  showYoutubeOnHome: boolean;
   /** Inject the in-game overlay bridge (YouTube player + friends/chat) on launch. */
   ingameOverlay: boolean;
   /** Hide IDE bottom workflow rail until cursor hits the window bottom edge. */
@@ -213,6 +216,7 @@ export type SidebarMode = "full" | "icons" | "autoHide";
 export type UiScaleMode = "auto" | "manual";
 
 export const UI_SCALE_STEPS = [75, 90, 100, 110, 125, 150] as const;
+export type UiScaleStep = (typeof UI_SCALE_STEPS)[number];
 
 /** Live applied UI zoom percent — App binds `data-ui-scaled` / zoom from this. */
 export const uiScalePercentLive = writable(100);
@@ -242,8 +246,8 @@ export function resolveUiScaleMode(settings: {
   return normalizeUiScalePercent(settings.uiScalePercent) !== 100 ? "manual" : "auto";
 }
 
-function snapUiScalePercent(raw: number): number {
-  let best = UI_SCALE_STEPS[0];
+function snapUiScalePercent(raw: number): UiScaleStep {
+  let best: UiScaleStep = UI_SCALE_STEPS[0];
   let bestDist = Math.abs(raw - best);
   for (const step of UI_SCALE_STEPS) {
     const d = Math.abs(raw - step);
@@ -428,6 +432,8 @@ export interface AuthState {
 export interface DeviceCodeInfo {
   userCode: string;
   verificationUri: string;
+  /** One-click browser login URL (`…?otc=CODE`). */
+  loginUrl: string;
   message: string;
   expiresIn: number;
   /** Suggested poll interval in seconds (from Microsoft). */
@@ -508,20 +514,27 @@ export const launchProgress = writable<LaunchProgressState | null>(null);
 /** Currently running Minecraft processes, keyed by project manifest path (`id`). */
 export const runningInstances = writable<RunningInstance[]>([]);
 
+export function normalizeInstancePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
 export function isProjectRunning(path: string | null | undefined, list: RunningInstance[]): boolean {
   if (!path) return false;
-  return list.some((r) => r.id === path);
+  const key = normalizeInstancePath(path);
+  return list.some((r) => normalizeInstancePath(r.id) === key);
 }
 
 export function upsertRunning(inst: RunningInstance) {
   runningInstances.update((list) => {
-    const without = list.filter((r) => r.id !== inst.id);
+    const key = normalizeInstancePath(inst.id);
+    const without = list.filter((r) => normalizeInstancePath(r.id) !== key);
     return [...without, inst];
   });
 }
 
 export function removeRunning(id: string) {
-  runningInstances.update((list) => list.filter((r) => r.id !== id));
+  const key = normalizeInstancePath(id);
+  runningInstances.update((list) => list.filter((r) => normalizeInstancePath(r.id) !== key));
 }
 
 /** Opens the live launch-log modal for the given project manifest path. */

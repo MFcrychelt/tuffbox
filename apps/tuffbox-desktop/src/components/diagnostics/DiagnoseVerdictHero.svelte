@@ -41,7 +41,6 @@
     onApplyTopSuspectUpdate,
     onApplyAiPlan,
     onJumpToFirstError,
-    onApplyBisectDisableHalf,
     onShowWarnings,
   }: {
     sessionOk?: boolean;
@@ -71,7 +70,6 @@
     onApplyTopSuspectUpdate?: () => void;
     onApplyAiPlan?: () => void;
     onJumpToFirstError?: () => void;
-    onApplyBisectDisableHalf?: () => void;
     onShowWarnings?: () => void;
   } = $props();
 
