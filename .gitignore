@@ -42,9 +42,10 @@ bridges/overlay/**/.gradle/
 bridges/overlay/**/build/
 bridges/overlay/**/bin/
 
-# Sidecar binaries built locally (keep .gitkeep only)
+# Sidecar binaries (keep overlay-hook DLL for inject; ignore other local builds)
 apps/tuffbox-desktop/src-tauri/binaries/*
 !apps/tuffbox-desktop/src-tauri/binaries/.gitkeep
+!apps/tuffbox-desktop/src-tauri/binaries/tuffbox_overlay_hook.dll
 
 # Local example launcher runtime data
 examples/.tuffbox/
