@@ -45,8 +45,7 @@ impl Ed25519KeyPair {
     }
 
     pub fn public_key_b64(&self) -> String {
-        base64::engine::general_purpose::STANDARD
-            .encode(self.signing.verifying_key().as_bytes())
+        base64::engine::general_purpose::STANDARD.encode(self.signing.verifying_key().as_bytes())
     }
 
     pub fn to_seed_b64(&self) -> String {
@@ -84,8 +83,7 @@ pub fn verify_payload(
         .as_slice()
         .try_into()
         .map_err(|_| SignatureError::BadPublicKey)?;
-    let verifying =
-        VerifyingKey::from_bytes(&pk_arr).map_err(|_| SignatureError::BadPublicKey)?;
+    let verifying = VerifyingKey::from_bytes(&pk_arr).map_err(|_| SignatureError::BadPublicKey)?;
     let sig_bytes = base64::engine::general_purpose::STANDARD
         .decode(signature_b64)
         .map_err(|_| SignatureError::BadSignature)?;
@@ -99,10 +97,7 @@ pub fn verify_payload(
 }
 
 /// TOFU: pin the first signer; later updates must keep the same public key.
-pub fn pin_or_check_signer(
-    pinned: Option<&str>,
-    incoming: &str,
-) -> Result<String, SignatureError> {
+pub fn pin_or_check_signer(pinned: Option<&str>, incoming: &str) -> Result<String, SignatureError> {
     match pinned {
         None | Some("") => Ok(incoming.to_string()),
         Some(existing) if existing == incoming => Ok(existing.to_string()),

@@ -4,6 +4,8 @@ use thiserror::Error;
 pub enum GitHubSourceError {
     #[error("not a GitHub repository reference: {0}")]
     Invalid(String),
+    #[error("unsafe GitHub ref or tag: {0}")]
+    UnsafeRef(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,6 +13,34 @@ pub struct GitHubSource {
     pub owner: String,
     pub repo: String,
     pub git_ref: Option<String>,
+}
+
+/// Allowlist branch/tag/commit-ish values used in GitHub API path segments.
+/// Rejects path traversal (`..`), absolute paths, and characters outside a safe set.
+pub fn validate_github_ref(value: &str) -> Result<(), GitHubSourceError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('/')
+        || trimmed.ends_with('/')
+        || trimmed.contains('\\')
+        || trimmed.contains('\0')
+        || trimmed.contains("..")
+    {
+        return Err(GitHubSourceError::UnsafeRef(value.to_string()));
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+    {
+        return Err(GitHubSourceError::UnsafeRef(value.to_string()));
+    }
+    if trimmed
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return Err(GitHubSourceError::UnsafeRef(value.to_string()));
+    }
+    Ok(())
 }
 
 /// Parse `owner/repo`, `gh:owner/repo[:ref]`, or `https://github.com/owner/repo[/...]`.
@@ -58,6 +88,9 @@ pub fn parse_github_source(input: &str) -> Result<GitHubSource, GitHubSourceErro
         ["tree", r] | ["commit", r] | ["releases", "tag", r] => Some((*r).to_string()),
         _ => None,
     });
+    if let Some(git_ref) = git_ref.as_deref() {
+        validate_github_ref(git_ref)?;
+    }
 
     Ok(GitHubSource {
         owner: owner.to_string(),
@@ -99,5 +132,16 @@ mod tests {
     fn rejects_garbage() {
         assert!(parse_github_source("not a repo").is_err());
         assert!(parse_github_source("").is_err());
+    }
+
+    #[test]
+    fn rejects_path_traversal_ref() {
+        assert!(matches!(
+            parse_github_source("gh:acme/cool-pack:../../../victim/private"),
+            Err(GitHubSourceError::UnsafeRef(_))
+        ));
+        assert!(validate_github_ref("../../other/releases/tags/v1").is_err());
+        assert!(validate_github_ref("heads/main").is_ok());
+        assert!(validate_github_ref("v1.2.3").is_ok());
     }
 }

@@ -41,6 +41,7 @@ bridges/overlay/**/bin/
 bridges/overlay/**/.classpath
 bridges/overlay/**/.project
 bridges/overlay/**/.settings/
+bridges/overlay/**/.eclipse/
 !bridges/overlay/gradle/wrapper/gradle-wrapper.jar
 
 # MCA Selector + OpenJFX (fetched via bridges/mca-selector/fetch-prebuilt.ps1)

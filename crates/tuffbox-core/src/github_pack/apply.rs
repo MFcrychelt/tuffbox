@@ -1,7 +1,7 @@
 //! Stage → validate → apply helpers for anonymous GitHub pack consume.
 
 use crate::github_pack::staging::StagedFile;
-use crate::github_pack::types::RepoTransportMeta;
+use crate::github_pack::types::{RepoTransportMeta, TransportMetaError};
 use sha2::{Digest, Sha512};
 use std::{
     fs,
@@ -19,6 +19,36 @@ pub enum ApplyError {
         expected: String,
         actual: String,
     },
+    #[error("required content file is missing: {0}")]
+    MissingFile(String),
+    #[error("unsafe managed path: {0}")]
+    UnsafePath(String),
+}
+
+#[derive(Debug, Error)]
+pub enum ReleaseAssetError {
+    #[error("transport metadata: {0}")]
+    InvalidTransport(#[from] TransportMetaError),
+    #[error("release tag is missing")]
+    MissingReleaseTag,
+    #[error("unsafe release asset path: {0}")]
+    UnsafePath(String),
+    #[error("release asset {path} has size {actual}, expected {expected}")]
+    SizeMismatch {
+        path: String,
+        expected: u64,
+        actual: u64,
+    },
+    #[error("release asset hash mismatch for {path}: expected {expected}, got {actual}")]
+    HashMismatch {
+        path: String,
+        expected: String,
+        actual: String,
+    },
+    #[error("GitHub: {0}")]
+    GitHub(#[from] crate::github_pack::client::GitHubError),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Verify SHA-512 of staged jar files against the extracted tree.
@@ -54,11 +84,13 @@ pub fn apply_managed_files(
     fs::create_dir_all(to)?;
     let mut copied = Vec::new();
     for rel in new_managed {
-        let src = from.join(rel);
+        let safe = crate::github_pack::import::safe_relative_path(rel)
+            .map_err(|_| ApplyError::UnsafePath(rel.clone()))?;
+        let src = from.join(&safe);
         if !src.is_file() {
             continue;
         }
-        let dest = to.join(rel);
+        let dest = to.join(&safe);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -66,10 +98,12 @@ pub fn apply_managed_files(
         copied.push(PathBuf::from(rel));
     }
     for rel in previous_managed {
+        let safe = crate::github_pack::import::safe_relative_path(rel)
+            .map_err(|_| ApplyError::UnsafePath(rel.clone()))?;
         if new_managed.iter().any(|n| n == rel) {
             continue;
         }
-        let dest = to.join(rel);
+        let dest = to.join(safe);
         if dest.is_file() {
             fs::remove_file(dest)?;
         }
@@ -96,6 +130,12 @@ pub fn verify_manifest_local_hashes(
             .join(module.content_type.folder_name())
             .join(name);
         if !path.is_file() {
+            if matches!(
+                module.source.kind,
+                crate::manifest::SourceKind::Local | crate::manifest::SourceKind::Github
+            ) {
+                return Err(ApplyError::MissingFile(path.to_string_lossy().into_owned()));
+            }
             continue;
         }
         let bytes = fs::read(&path)?;
@@ -116,6 +156,59 @@ pub fn verify_manifest_local_hashes(
         }
     }
     Ok(())
+}
+
+pub fn materialize_release_assets(
+    api: &dyn crate::github_pack::client::GitHubApi,
+    owner: &str,
+    repo: &str,
+    destination: &Path,
+    transport: &RepoTransportMeta,
+) -> Result<Vec<PathBuf>, ReleaseAssetError> {
+    transport.validate()?;
+    if transport.release_assets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tag = transport
+        .release_tag
+        .as_deref()
+        .filter(|tag| !tag.trim().is_empty())
+        .ok_or(ReleaseAssetError::MissingReleaseTag)?;
+    let mut verified = Vec::with_capacity(transport.release_assets.len());
+    for asset in &transport.release_assets {
+        let relative = crate::github_pack::import::safe_relative_path(&asset.relative_path)
+            .map_err(|_| ReleaseAssetError::UnsafePath(asset.relative_path.clone()))?;
+        let bytes = api.download_release_asset(owner, repo, tag, &asset.file_name)?;
+        let actual_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if actual_size != asset.size {
+            return Err(ReleaseAssetError::SizeMismatch {
+                path: relative,
+                expected: asset.size,
+                actual: actual_size,
+            });
+        }
+        let actual_hash = hex::encode(Sha512::digest(&bytes));
+        if !actual_hash.eq_ignore_ascii_case(&asset.sha512) {
+            return Err(ReleaseAssetError::HashMismatch {
+                path: relative,
+                expected: asset.sha512.clone(),
+                actual: actual_hash,
+            });
+        }
+        verified.push((relative, bytes));
+    }
+    let mut written = Vec::with_capacity(verified.len());
+    for (relative, bytes) in verified {
+        let path = destination.join(&relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let part = path.with_extension("tuffbox-part");
+        fs::write(&part, &bytes)?;
+        fs::rename(&part, &path)?;
+        written.push(PathBuf::from(relative));
+    }
+    Ok(written)
 }
 
 /// Drop provider jars from the previous pack that are not in the incoming
@@ -190,10 +283,19 @@ mod tests {
             &["keep.txt".into(), "added.txt".into()],
         )
         .unwrap();
-        assert_eq!(fs::read_to_string(to.path().join("keep.txt")).unwrap(), "new");
-        assert_eq!(fs::read_to_string(to.path().join("added.txt")).unwrap(), "add");
+        assert_eq!(
+            fs::read_to_string(to.path().join("keep.txt")).unwrap(),
+            "new"
+        );
+        assert_eq!(
+            fs::read_to_string(to.path().join("added.txt")).unwrap(),
+            "add"
+        );
         assert!(!to.path().join("gone.txt").exists());
-        assert_eq!(fs::read_to_string(to.path().join("user.txt")).unwrap(), "mine");
+        assert_eq!(
+            fs::read_to_string(to.path().join("user.txt")).unwrap(),
+            "mine"
+        );
     }
 
     #[test]
@@ -296,7 +398,11 @@ mod tests {
         fs::write(author.path().join("mods/custom-lib.jar"), b"custom-v1").unwrap();
         let v1 = pack(
             "1.0.0",
-            vec![spec("sodium", "0.6.0"), spec("extra-mod", "1.0.0"), custom("1.0.0")],
+            vec![
+                spec("sodium", "0.6.0"),
+                spec("extra-mod", "1.0.0"),
+                custom("1.0.0"),
+            ],
         );
         let manifest_path = author.path().join("demo.tuffbox.json");
         fs::write(&manifest_path, "{}").unwrap();
@@ -325,7 +431,11 @@ mod tests {
         fs::write(author.path().join("mods/custom-lib.jar"), b"custom-v2").unwrap();
         let v2 = pack(
             "2.0.0",
-            vec![spec("sodium", "0.6.1"), spec("iris", "1.0.0"), custom("1.1.0")],
+            vec![
+                spec("sodium", "0.6.1"),
+                spec("iris", "1.0.0"),
+                custom("1.1.0"),
+            ],
         );
         let staged2 = stage_repo_tree(
             &v2,
@@ -394,7 +504,12 @@ mod tests {
         assert!(after.mods.iter().any(|m| m.id == "iris"));
         assert!(!after.mods.iter().any(|m| m.id == "extra-mod"));
         assert_eq!(
-            after.mods.iter().find(|m| m.id == "custom-lib").unwrap().version,
+            after
+                .mods
+                .iter()
+                .find(|m| m.id == "custom-lib")
+                .unwrap()
+                .version,
             "1.1.0"
         );
         store.rollback(&snap.id).unwrap();
@@ -420,7 +535,11 @@ mod tests {
             "mods": []
         });
         let manifest_path = instance.path().join("demo.tuffbox.json");
-        fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
         let store = SnapshotStore::new(instance.path());
         let snap = store
             .create_with_meta(
@@ -519,12 +638,18 @@ mod tests {
         fs::write(dir.path().join("mods/old-loader.jar"), b"old").unwrap();
         fs::write(dir.path().join("mods/kept.jar"), b"keep").unwrap();
         fs::write(dir.path().join("mods/user-extra.jar"), b"mine").unwrap();
-        let old = pack(vec![provider("sodium", "old-loader.jar"), provider("iris", "kept.jar")]);
+        let old = pack(vec![
+            provider("sodium", "old-loader.jar"),
+            provider("iris", "kept.jar"),
+        ]);
         let new = pack(vec![provider("iris", "kept.jar")]);
         let removed = remove_obsolete_content_files(dir.path(), &old, &new).unwrap();
         assert!(removed.iter().any(|p| p.ends_with("old-loader.jar")));
         assert!(!dir.path().join("mods/old-loader.jar").exists());
         assert_eq!(fs::read(dir.path().join("mods/kept.jar")).unwrap(), b"keep");
-        assert_eq!(fs::read(dir.path().join("mods/user-extra.jar")).unwrap(), b"mine");
+        assert_eq!(
+            fs::read(dir.path().join("mods/user-extra.jar")).unwrap(),
+            b"mine"
+        );
     }
 }

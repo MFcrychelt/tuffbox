@@ -50,7 +50,9 @@ pub struct StagedFile {
 
 #[derive(Debug, Clone)]
 pub struct PendingReleaseAsset {
+    pub mod_id: String,
     pub file_name: String,
+    pub relative_path: String,
     pub abs_path: PathBuf,
     pub sha512: String,
     pub size: u64,
@@ -106,7 +108,7 @@ pub fn stage_repo_tree(
     fs::write(staging_root.join("README.md"), readme)?;
 
     let limit = opts.custom_jar_git_limit.unwrap_or(CUSTOM_JAR_GIT_LIMIT);
-    let pending = extract_oversized_jars(staging_root, limit, &owner, &repo, &tag)?;
+    let pending = extract_oversized_jars(manifest, staging_root, limit, &owner, &repo, &tag)?;
     if !pending.is_empty() {
         rebuild_packwiz_index(staging_root)?;
     }
@@ -119,10 +121,16 @@ pub fn stage_repo_tree(
 
     let mut release_assets = opts.release_assets.clone();
     for asset in &pending {
-        if !release_assets.iter().any(|a| a.file_name == asset.file_name) {
+        if !release_assets
+            .iter()
+            .any(|a| a.file_name == asset.file_name)
+        {
             release_assets.push(ReleaseAssetRef {
-                mod_id: asset.file_name.clone(),
+                mod_id: asset.mod_id.clone(),
                 file_name: asset.file_name.clone(),
+                relative_path: asset.relative_path.clone(),
+                sha512: asset.sha512.clone(),
+                size: asset.size,
             });
         }
     }
@@ -136,15 +144,6 @@ pub fn stage_repo_tree(
         }
     });
 
-    let (signer_public_key, signature) = if let Some(key) = &opts.signer {
-        (
-            Some(key.public_key_b64()),
-            Some(sign_payload(key, &manifest_bytes)),
-        )
-    } else {
-        (None, None)
-    };
-
     let mut transport = RepoTransportMeta {
         schema_version: TRANSPORT_SCHEMA_VERSION,
         manifest_file,
@@ -153,11 +152,31 @@ pub fn stage_repo_tree(
         release_tag: Some(tag),
         status,
         release_assets,
-        managed_files: managed_files.clone(),
+        managed_files,
         content_digest: digest,
-        signer_public_key,
-        signature,
+        signer_public_key: opts.signer.as_ref().map(Ed25519KeyPair::public_key_b64),
+        signature: None,
     };
+    for asset in &transport.release_assets {
+        if !transport
+            .managed_files
+            .iter()
+            .any(|path| path == &asset.relative_path)
+        {
+            transport.managed_files.push(asset.relative_path.clone());
+        }
+    }
+    transport
+        .managed_files
+        .push(REPO_TRANSPORT_FILE.replace('\\', "/"));
+    if let Some(key) = &opts.signer {
+        let mut signed_transport = transport.clone();
+        if !pending.is_empty() && signed_transport.status == "publishing" {
+            signed_transport.status = "ready".into();
+        }
+        let payload = signed_transport.signing_payload(&manifest_bytes)?;
+        transport.signature = Some(sign_payload(key, &payload));
+    }
     let transport_path = staging_root.join(REPO_TRANSPORT_FILE);
     if let Some(parent) = transport_path.parent() {
         fs::create_dir_all(parent)?;
@@ -167,9 +186,6 @@ pub fn stage_repo_tree(
         relative_path: REPO_TRANSPORT_FILE.replace('\\', "/"),
         sha512: None,
     });
-    transport
-        .managed_files
-        .push(REPO_TRANSPORT_FILE.replace('\\', "/"));
 
     Ok(StagedRepo {
         root: staging_root.to_path_buf(),
@@ -195,6 +211,7 @@ pub fn content_digest(root: &Path, files: &[StagedFile]) -> Result<String, Stage
 }
 
 fn extract_oversized_jars(
+    manifest: &ProjectManifest,
     staging_root: &Path,
     limit: u64,
     owner: &str,
@@ -219,18 +236,40 @@ fn extract_oversized_jars(
             .and_then(|n| n.to_str())
             .unwrap_or("asset.jar")
             .to_string();
+        let mod_id = manifest
+            .mods
+            .iter()
+            .find(|module| module.file_name.as_deref() == Some(file_name.as_str()))
+            .map(|module| module.id.clone())
+            .unwrap_or_else(|| file_name.clone());
+        let safe_mod_id: String = mod_id
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                    ch
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let release_file_name = format!("{safe_mod_id}-{file_name}");
         let sidecar = abs.with_extension("pw.toml");
         let body = format!(
-            "name = \"{file_name}\"\nfilename = \"{file_name}\"\nside = \"both\"\n\n[download]\nurl = \"https://github.com/{owner}/{repo}/releases/download/{tag}/{file_name}\"\nhash-format = \"sha512\"\nhash = \"{sha512}\"\n"
+            "name = \"{file_name}\"\nfilename = \"{file_name}\"\nside = \"both\"\n\n[download]\nurl = \"https://github.com/{owner}/{repo}/releases/download/{tag}/{release_file_name}\"\nhash-format = \"sha512\"\nhash = \"{sha512}\"\n"
         );
         fs::write(&sidecar, body)?;
-        let dest = staging_root.join(".tuffbox").join("release-assets").join(&file_name);
+        let dest = staging_root
+            .join(".tuffbox")
+            .join("release-assets")
+            .join(&release_file_name);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::rename(&abs, &dest)?;
         pending.push(PendingReleaseAsset {
-            file_name,
+            mod_id,
+            file_name: release_file_name,
+            relative_path: file.relative_path,
             abs_path: dest,
             sha512,
             size,
@@ -441,7 +480,10 @@ mod tests {
         assert!(staging.path().join("demo.tuffbox.json").is_file());
         assert!(staging.path().join("demo.tuffbox.lock.json").is_file());
         assert!(staging.path().join("mods/sodium.pw.toml").is_file());
-        assert!(staging.path().join(".tuffbox/repo-transport.json").is_file());
+        assert!(staging
+            .path()
+            .join(".tuffbox/repo-transport.json")
+            .is_file());
         assert!(staged.transport.is_ready());
         assert_eq!(staged.transport.pack_version, "1.2.3");
         assert!(staged

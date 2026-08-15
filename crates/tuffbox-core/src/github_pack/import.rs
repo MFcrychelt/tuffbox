@@ -1,4 +1,4 @@
-use crate::github_pack::types::{RepoTransportMeta, REPO_TRANSPORT_FILE};
+use crate::github_pack::types::{RepoTransportMeta, TransportMetaError, REPO_TRANSPORT_FILE};
 use crate::manifest::ProjectManifest;
 use crate::packwiz::{import_packwiz_pack, PackwizImportError};
 use std::{fs, path::Path};
@@ -20,19 +20,39 @@ pub enum ImportError {
     NotReady(String),
     #[error("signature: {0}")]
     BadSignature(String),
+    #[error("transport metadata: {0}")]
+    InvalidTransport(#[from] TransportMetaError),
+    #[error("signed manifest sidecar missing: {0}")]
+    MissingSignedManifest(String),
+    #[error("unsupported tar entry type: {0}")]
+    UnsupportedEntry(String),
+    #[error("managed file is missing: {0}")]
+    MissingManagedFile(String),
+    #[error("content digest mismatch: expected {expected}, got {actual}")]
+    ContentDigestMismatch { expected: String, actual: String },
 }
 
-pub fn import_repo_tree(root: &Path) -> Result<(ProjectManifest, Option<RepoTransportMeta>), ImportError> {
+pub fn import_repo_tree(
+    root: &Path,
+) -> Result<(ProjectManifest, Option<RepoTransportMeta>), ImportError> {
     let transport = load_repo_transport(root)?;
     if let Some(meta) = &transport {
+        meta.validate()?;
         if !meta.is_ready() {
             return Err(ImportError::NotReady(meta.status.clone()));
         }
         let sidecar = root.join(&meta.manifest_file);
+        if !sidecar.is_file() && meta.signer_public_key.is_some() {
+            return Err(ImportError::MissingSignedManifest(
+                meta.manifest_file.clone(),
+            ));
+        }
+        verify_transport_content(root, meta)?;
         if sidecar.is_file() {
             let bytes = fs::read(&sidecar)?;
             if let (Some(pk), Some(sig)) = (&meta.signer_public_key, &meta.signature) {
-                crate::github_pack::integrity::verify_payload(pk, sig, &bytes)
+                let payload = meta.signing_payload(&bytes)?;
+                crate::github_pack::integrity::verify_payload(pk, sig, &payload)
                     .map_err(|e| ImportError::BadSignature(e.to_string()))?;
             }
             return Ok((ProjectManifest::load_from_path(sidecar)?, transport));
@@ -42,6 +62,51 @@ pub fn import_repo_tree(root: &Path) -> Result<(ProjectManifest, Option<RepoTran
         return Ok((ProjectManifest::load_from_path(path)?, transport));
     }
     Ok((import_packwiz_pack(root)?, transport))
+}
+
+fn verify_transport_content(root: &Path, meta: &RepoTransportMeta) -> Result<(), ImportError> {
+    if meta.content_digest.is_empty() {
+        if meta.signer_public_key.is_some() {
+            return Err(ImportError::ContentDigestMismatch {
+                expected: "non-empty signed content digest".into(),
+                actual: String::new(),
+            });
+        }
+        return Ok(());
+    }
+    let transport_path = REPO_TRANSPORT_FILE.replace('\\', "/");
+    let release_paths: std::collections::HashSet<&str> = meta
+        .release_assets
+        .iter()
+        .map(|asset| asset.relative_path.as_str())
+        .collect();
+    let files = meta
+        .managed_files
+        .iter()
+        .filter(|path| path.as_str() != transport_path && !release_paths.contains(path.as_str()))
+        .map(|path| {
+            if !root.join(path).is_file() {
+                return Err(ImportError::MissingManagedFile(path.clone()));
+            }
+            Ok(crate::github_pack::staging::StagedFile {
+                relative_path: path.clone(),
+                sha512: None,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let actual = crate::github_pack::staging::content_digest(root, &files).map_err(|error| {
+        ImportError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            error.to_string(),
+        ))
+    })?;
+    if !actual.eq_ignore_ascii_case(&meta.content_digest) {
+        return Err(ImportError::ContentDigestMismatch {
+            expected: meta.content_digest.clone(),
+            actual,
+        });
+    }
+    Ok(())
 }
 
 fn load_repo_transport(root: &Path) -> Result<Option<RepoTransportMeta>, ImportError> {
@@ -54,12 +119,16 @@ fn load_repo_transport(root: &Path) -> Result<Option<RepoTransportMeta>, ImportE
 }
 
 fn find_sidecar_manifest(root: &Path) -> Option<std::path::PathBuf> {
-    fs::read_dir(root).ok()?.filter_map(Result::ok).map(|e| e.path()).find(|p| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.ends_with(".tuffbox.json"))
-            .unwrap_or(false)
-    })
+    fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.ends_with(".tuffbox.json"))
+                .unwrap_or(false)
+        })
 }
 
 /// Reject absolute paths, `..`, and Windows prefixes. Returns a safe relative path.
@@ -107,6 +176,9 @@ pub fn extract_github_tarball(archive: &[u8], dest: &Path) -> Result<(), ImportE
         if entry.header().entry_type().is_dir() {
             fs::create_dir_all(&out)?;
             continue;
+        }
+        if !entry.header().entry_type().is_file() {
+            return Err(ImportError::UnsupportedEntry(rel_str));
         }
         if let Some(parent) = out.parent() {
             fs::create_dir_all(parent)?;
@@ -183,8 +255,14 @@ mod tests {
         };
         let manifest_path = project.path().join("demo.tuffbox.json");
         fs::write(&manifest_path, "{}").unwrap();
-        stage_repo_tree(&manifest, &manifest_path, staging.path(), None, StageOptions::default())
-            .unwrap();
+        stage_repo_tree(
+            &manifest,
+            &manifest_path,
+            staging.path(),
+            None,
+            StageOptions::default(),
+        )
+        .unwrap();
         // pack.toml still says Demo Pack-style name from export; sidecar must win.
         manifest.project.name = "Sidecar Name".into();
         fs::write(

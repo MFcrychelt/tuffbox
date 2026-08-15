@@ -3,10 +3,15 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::io::Read;
 use std::sync::Mutex;
 use thiserror::Error;
 
+use crate::github_pack::source::validate_github_ref;
+
 const APP_USER_AGENT: &str = "TuffBox-IDE/0.1";
+const MAX_GITHUB_BYTES: u64 = 512 * 1024 * 1024;
+const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
 pub enum GitHubError {
@@ -38,6 +43,14 @@ pub trait GitHubApi: Send + Sync {
         name: &str,
         bytes: &[u8],
     ) -> Result<Value, GitHubError>;
+
+    fn download_release_asset(
+        &self,
+        owner: &str,
+        repo: &str,
+        tag: &str,
+        name: &str,
+    ) -> Result<Vec<u8>, GitHubError>;
 }
 
 fn map_status(status: u16, path: &str, body: &Value) -> Result<(), GitHubError> {
@@ -76,6 +89,7 @@ impl LiveGitHubApi {
     pub fn with_base(api_base: &str, token: Option<String>) -> Result<Self, GitHubError> {
         let http = reqwest::blocking::Client::builder()
             .user_agent(APP_USER_AGENT)
+            .timeout(std::time::Duration::from_secs(90))
             .build()
             .map_err(|e| GitHubError::Request(e.to_string()))?;
         Ok(Self {
@@ -106,22 +120,41 @@ impl GitHubApi for LiveGitHubApi {
         if let Some(body) = body {
             req = req.json(body);
         }
-        let resp = req.send().map_err(|e| GitHubError::Request(e.to_string()))?;
+        let resp = req
+            .send()
+            .map_err(|e| GitHubError::Request(e.to_string()))?;
         let status = resp.status().as_u16();
         let value = resp.json::<Value>().unwrap_or(Value::Null);
         Ok((status, value))
     }
 
     fn get_bytes(&self, path: &str) -> Result<Vec<u8>, GitHubError> {
-        let url = format!("{}{path}", self.api_base);
+        let url = if path.starts_with("https://") {
+            path.to_string()
+        } else {
+            format!("{}{path}", self.api_base)
+        };
+        let parsed = reqwest::Url::parse(&url).map_err(|e| GitHubError::Request(e.to_string()))?;
+        if path.starts_with("https://")
+            && !allowed_github_download_host(parsed.host_str(), &self.api_base)
+        {
+            return Err(GitHubError::Request(format!(
+                "blocked non-GitHub download host: {}",
+                parsed.host_str().unwrap_or("<none>")
+            )));
+        }
         let mut req = self
             .http
-            .get(&url)
-            .header("Accept", "application/vnd.github+json");
-        if let Some(token) = &self.token {
-            req = req.bearer_auth(token);
+            .get(parsed.clone())
+            .header("Accept", "application/octet-stream");
+        if should_attach_author_token(parsed.host_str(), &self.api_base) {
+            if let Some(token) = &self.token {
+                req = req.bearer_auth(token);
+            }
         }
-        let resp = req.send().map_err(|e| GitHubError::Request(e.to_string()))?;
+        let resp = req
+            .send()
+            .map_err(|e| GitHubError::Request(e.to_string()))?;
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
             return Err(GitHubError::Http {
@@ -129,10 +162,15 @@ impl GitHubApi for LiveGitHubApi {
                 message: format!("GET {path}"),
             });
         }
-        Ok(resp
-            .bytes()
-            .map_err(|e| GitHubError::Request(e.to_string()))?
-            .to_vec())
+        if resp
+            .content_length()
+            .is_some_and(|size| size > MAX_GITHUB_BYTES)
+        {
+            return Err(GitHubError::Request(
+                "GitHub download exceeds 512 MiB limit".into(),
+            ));
+        }
+        read_response_with_limit(resp, MAX_GITHUB_BYTES)
     }
 
     fn upload_release_asset(
@@ -155,12 +193,113 @@ impl GitHubApi for LiveGitHubApi {
         if let Some(token) = &self.token {
             req = req.bearer_auth(token);
         }
-        let resp = req.send().map_err(|e| GitHubError::Request(e.to_string()))?;
+        let resp = req
+            .send()
+            .map_err(|e| GitHubError::Request(e.to_string()))?;
         let status = resp.status().as_u16();
         let value = resp.json::<Value>().unwrap_or(Value::Null);
         map_status(status, &url, &value)?;
         Ok(value)
     }
+
+    fn download_release_asset(
+        &self,
+        owner: &str,
+        repo: &str,
+        tag: &str,
+        name: &str,
+    ) -> Result<Vec<u8>, GitHubError> {
+        validate_github_ref(tag).map_err(|e| GitHubError::Request(e.to_string()))?;
+        let encoded_tag = encode_path_segment(tag);
+        let release = get_json(
+            self,
+            &format!("/repos/{owner}/{repo}/releases/tags/{encoded_tag}"),
+        )?;
+        let asset_url = release
+            .get("assets")
+            .and_then(Value::as_array)
+            .and_then(|assets| {
+                assets.iter().find_map(|asset| {
+                    (asset.get("name").and_then(Value::as_str) == Some(name))
+                        .then(|| asset.get("url").and_then(Value::as_str))
+                        .flatten()
+                })
+            })
+            .ok_or_else(|| {
+                GitHubError::NotFound(format!("release asset {owner}/{repo}@{tag}/{name}"))
+            })?;
+        self.get_bytes(asset_url)
+    }
+}
+
+fn encode_path_segment(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(char::from(byte));
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+fn allowed_github_download_host(host: Option<&str>, api_base: &str) -> bool {
+    let Some(host) = host else {
+        return false;
+    };
+    if matches!(
+        host,
+        "api.github.com"
+            | "uploads.github.com"
+            | "objects.githubusercontent.com"
+            | "github.com"
+            | "codeload.github.com"
+    ) {
+        return true;
+    }
+    reqwest::Url::parse(api_base)
+        .ok()
+        .and_then(|url| url.host_str().map(|api_host| api_host == host))
+        .unwrap_or(false)
+}
+
+fn should_attach_author_token(host: Option<&str>, api_base: &str) -> bool {
+    let Some(host) = host else {
+        return false;
+    };
+    if host == "api.github.com" {
+        return true;
+    }
+    reqwest::Url::parse(api_base)
+        .ok()
+        .and_then(|url| url.host_str().map(|api_host| api_host == host))
+        .unwrap_or(false)
+}
+
+fn read_response_with_limit(
+    mut resp: reqwest::blocking::Response,
+    limit: u64,
+) -> Result<Vec<u8>, GitHubError> {
+    let mut bytes = Vec::new();
+    let mut chunk = vec![0_u8; DOWNLOAD_CHUNK_BYTES];
+    loop {
+        let read = resp
+            .read(&mut chunk)
+            .map_err(|e| GitHubError::Request(e.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        let next_len = u64::try_from(bytes.len().saturating_add(read)).unwrap_or(u64::MAX);
+        if next_len > limit {
+            return Err(GitHubError::Request(
+                "GitHub download exceeds 512 MiB limit".into(),
+            ));
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    Ok(bytes)
 }
 
 fn urlencoding_name(name: &str) -> String {
@@ -200,7 +339,9 @@ pub fn ref_sha(
     repo: &str,
     git_ref: &str,
 ) -> Result<Option<String>, GitHubError> {
-    match get_json(api, &format!("/repos/{owner}/{repo}/git/ref/{git_ref}")) {
+    validate_github_ref(git_ref).map_err(|e| GitHubError::Request(e.to_string()))?;
+    let encoded = encode_path_segment(git_ref);
+    match get_json(api, &format!("/repos/{owner}/{repo}/git/ref/{encoded}")) {
         Ok(body) => Ok(body
             .pointer("/object/sha")
             .and_then(|v| v.as_str())
@@ -265,7 +406,9 @@ pub fn commit_sha(
     repo: &str,
     git_ref: &str,
 ) -> Result<String, GitHubError> {
-    let body = get_json(api, &format!("/repos/{owner}/{repo}/commits/{git_ref}"))?;
+    validate_github_ref(git_ref).map_err(|e| GitHubError::Request(e.to_string()))?;
+    let encoded = encode_path_segment(git_ref);
+    let body = get_json(api, &format!("/repos/{owner}/{repo}/commits/{encoded}"))?;
     body.get("sha")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
@@ -411,6 +554,8 @@ pub fn update_ref(
     sha: &str,
     create: bool,
 ) -> Result<(), GitHubError> {
+    validate_github_ref(git_ref).map_err(|e| GitHubError::Request(e.to_string()))?;
+    let encoded = encode_path_segment(git_ref);
     if create {
         post_json(
             api,
@@ -421,7 +566,7 @@ pub fn update_ref(
     }
     patch_json(
         api,
-        &format!("/repos/{owner}/{repo}/git/refs/{git_ref}"),
+        &format!("/repos/{owner}/{repo}/git/refs/{encoded}"),
         &json!({ "sha": sha, "force": false }),
     )?;
     Ok(())
@@ -637,7 +782,10 @@ impl GitHubApi for MockGitHub {
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            if let Some(base) = body.and_then(|b| b.get("base_tree")).and_then(|v| v.as_str()) {
+            if let Some(base) = body
+                .and_then(|b| b.get("base_tree"))
+                .and_then(|v| v.as_str())
+            {
                 let base = g
                     .commits
                     .get(base)
@@ -651,7 +799,8 @@ impl GitHubApi for MockGitHub {
                         .unwrap_or("")
                         .to_string();
                     let sha_null = entry.get("sha").map(|v| v.is_null()).unwrap_or(false);
-                    merged.retain(|e| e.get("path").and_then(|v| v.as_str()) != Some(path.as_str()));
+                    merged
+                        .retain(|e| e.get("path").and_then(|v| v.as_str()) != Some(path.as_str()));
                     if !sha_null {
                         merged.push(entry);
                     }
@@ -714,10 +863,7 @@ impl GitHubApi for MockGitHub {
         if method == "PATCH" && path_only.starts_with(&format!("{prefix}/git/refs/")) {
             if g.conflict_next_ref {
                 g.conflict_next_ref = false;
-                return Ok((
-                    422,
-                    json!({ "message": "Update is not a fast forward" }),
-                ));
+                return Ok((422, json!({ "message": "Update is not a fast forward" })));
             }
             let git_ref = path_only.trim_start_matches(&format!("{prefix}/git/refs/"));
             let sha = body
@@ -729,10 +875,7 @@ impl GitHubApi for MockGitHub {
             if let Some(cur) = &current {
                 if let Some(commit) = g.commits.get(&sha) {
                     if !commit.parents.iter().any(|p| p == cur) && cur != &sha {
-                        return Ok((
-                            422,
-                            json!({ "message": "Update is not a fast forward" }),
-                        ));
+                        return Ok((422, json!({ "message": "Update is not a fast forward" })));
                     }
                 }
             }
@@ -765,7 +908,11 @@ impl GitHubApi for MockGitHub {
                 .trim_start_matches(&format!("{prefix}/releases/"))
                 .parse()
                 .unwrap_or(0);
-            if let Some(rel) = g.releases.iter_mut().find(|r| r.get("id").and_then(|v| v.as_u64()) == Some(id)) {
+            if let Some(rel) = g
+                .releases
+                .iter_mut()
+                .find(|r| r.get("id").and_then(|v| v.as_u64()) == Some(id))
+            {
                 if let Some(draft) = body.and_then(|b| b.get("draft")) {
                     rel["draft"] = draft.clone();
                 }
@@ -773,7 +920,10 @@ impl GitHubApi for MockGitHub {
             }
             return Ok((404, json!({ "message": "Not Found" })));
         }
-        Ok((404, json!({ "message": format!("unhandled {method} {path}") })))
+        Ok((
+            404,
+            json!({ "message": format!("unhandled {method} {path}") }),
+        ))
     }
 
     fn get_bytes(&self, path: &str) -> Result<Vec<u8>, GitHubError> {
@@ -822,5 +972,21 @@ impl GitHubApi for MockGitHub {
         let mut g = self.inner.lock().unwrap();
         g.assets.insert(name.to_string(), bytes.to_vec());
         Ok(json!({ "name": name, "size": bytes.len() }))
+    }
+
+    fn download_release_asset(
+        &self,
+        _owner: &str,
+        _repo: &str,
+        _tag: &str,
+        name: &str,
+    ) -> Result<Vec<u8>, GitHubError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .assets
+            .get(name)
+            .cloned()
+            .ok_or_else(|| GitHubError::NotFound(format!("release asset {name}")))
     }
 }

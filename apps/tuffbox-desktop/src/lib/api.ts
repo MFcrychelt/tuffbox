@@ -2538,13 +2538,16 @@ export const api = {
           changes: Array<Record<string, unknown>>;
         }>("github_pack_preview_update", pathArg(p));
       },
-      applyUpdate(p?: string) {
+      applyUpdate(expectedCommitSha: string, p?: string) {
         return cmd<{
           ok: boolean;
           snapshotId: string;
           version: string;
           changes: Array<Record<string, unknown>>;
-        }>("github_pack_apply_update", pathArg(p));
+        }>("github_pack_apply_update", {
+          ...pathArg(p),
+          expectedCommitSha,
+        });
       },
     },
   },

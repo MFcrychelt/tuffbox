@@ -178,7 +178,11 @@ fn commit_tree(
     staged: &StagedRepo,
     message: &str,
 ) -> Result<String, GitHubError> {
-    let paths: Vec<String> = staged.files.iter().map(|f| f.relative_path.clone()).collect();
+    let paths: Vec<String> = staged
+        .files
+        .iter()
+        .map(|f| f.relative_path.clone())
+        .collect();
     commit_files(
         api,
         owner,
@@ -192,10 +196,17 @@ fn commit_tree(
 }
 
 fn reread_files_for_ready_marker(staged: &StagedRepo) -> Result<Vec<String>, PublishError> {
-    Ok(staged.files.iter().map(|f| f.relative_path.clone()).collect())
+    Ok(staged
+        .files
+        .iter()
+        .map(|f| f.relative_path.clone())
+        .collect())
 }
 
-fn mark_transport_ready(root: &std::path::Path, current: &RepoTransportMeta) -> Result<(), PublishError> {
+fn mark_transport_ready(
+    root: &std::path::Path,
+    current: &RepoTransportMeta,
+) -> Result<(), PublishError> {
     let path = root.join(REPO_TRANSPORT_FILE);
     let mut meta: RepoTransportMeta = if path.is_file() {
         serde_json::from_slice(&fs::read(&path)?)?
@@ -251,13 +262,7 @@ fn commit_files(
         None
     };
 
-    let tree_sha = create_tree(
-        api,
-        owner,
-        repo,
-        base_tree.as_deref(),
-        &tree_entries,
-    )?;
+    let tree_sha = create_tree(api, owner, repo, base_tree.as_deref(), &tree_entries)?;
     let parents: Vec<String> = parent.into_iter().map(|s| s.to_string()).collect();
     let commit_sha = create_commit(api, owner, repo, message, &tree_sha, &parents)?;
     update_ref(api, owner, repo, git_ref, &commit_sha, parent.is_none())?;
@@ -442,7 +447,11 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let staging = tempfile::tempdir().unwrap();
         fs::create_dir_all(project.path().join("mods")).unwrap();
-        fs::write(project.path().join("mods/custom-lib.jar"), b"oversized-bytes").unwrap();
+        fs::write(
+            project.path().join("mods/custom-lib.jar"),
+            b"oversized-bytes",
+        )
+        .unwrap();
         let manifest = sample_manifest("2.0.0", vec![custom_jar_mod()]);
         let manifest_path = project.path().join("demo.tuffbox.json");
         fs::write(&manifest_path, "{}").unwrap();
@@ -466,10 +475,9 @@ mod tests {
         assert!(api
             .uploaded_assets()
             .iter()
-            .any(|n| n == "custom-lib.jar"));
+            .any(|n| n == "custom-lib-custom-lib.jar"));
         let files = api.head_files();
-        let meta: RepoTransportMeta =
-            serde_json::from_slice(&files[REPO_TRANSPORT_FILE]).unwrap();
+        let meta: RepoTransportMeta = serde_json::from_slice(&files[REPO_TRANSPORT_FILE]).unwrap();
         assert_eq!(meta.status, "ready");
         assert_eq!(meta.schema_version, TRANSPORT_SCHEMA_VERSION);
         assert!(!files.contains_key("mods/custom-lib.jar"));

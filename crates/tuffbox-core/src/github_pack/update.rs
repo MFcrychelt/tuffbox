@@ -175,9 +175,7 @@ mod tests {
                 description: None,
                 authors: vec![],
             },
-            minecraft: MinecraftSpec {
-                version: mc.into(),
-            },
+            minecraft: MinecraftSpec { version: mc.into() },
             loader: LoaderSpec {
                 kind: LoaderKind::Fabric,
                 version: loader.into(),

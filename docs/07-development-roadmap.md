@@ -631,6 +631,8 @@ AI explanation появляется в crash screen, но любые дейст�
 
 GitHub Pack Transport (friend-server packs over public GitHub repos) is a **separate** increment: [`15-github-pack-transport.md`](15-github-pack-transport.md). Do not fold it into TuffSwarm.
 
+Stabilization status (branch `feat/github-pack-transport`): transport schema v2, signed envelope, release-asset materialize/verify, atomic install, pinned-signer rules, reviewed-commit apply, OAuth/publish/update UI hardening. Integration target: `feat/svelte-5-migration`.
+
 ## Цель
 
 Федеративная сеть узлов TuffBox: обмен опытом крашей и marketplace генерации за полезную работу.
