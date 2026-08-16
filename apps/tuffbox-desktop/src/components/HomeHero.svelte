@@ -239,7 +239,7 @@
     <div class="poster-bottom">
       {#if crashBanner}
         <div class="crash-fix-banner" role="status">
-          <ShieldAlert size={16} />
+          <ShieldAlert size={18} />
           <div class="crash-fix-banner-body">
             <strong>Fix applied</strong>
             <span>
@@ -254,7 +254,7 @@
             <button class="crash-restore" type="button" disabled={crashFixBusy} onclick={onRollback}>
               Restore
             </button>
-            <button class="ghost crash-fix-diag" type="button" onclick={onDiagnostics}>
+            <button class="crash-fix-diag" type="button" onclick={onDiagnostics}>
               Diagnostics
             </button>
           </div>
@@ -274,6 +274,14 @@
 {#if !showStorefront}
   <div class="poster-action-bar">
     <div class="poster-play-row">
+      <div class="play-side play-side-start">
+        {#if meta}
+          <p class="poster-meta">
+            {meta}
+            <span class="meta-chevron" aria-hidden="true"></span>
+          </p>
+        {/if}
+      </div>
       <button
         class={["play-btn", { stop: playStop }]}
         onclick={onPlayClick}
@@ -295,20 +303,16 @@
           <span class="play-text">Play</span>
         {/if}
       </button>
-      {#if meta}
-        <p class="poster-meta">
-          {meta}
-          <span class="meta-chevron" aria-hidden="true"></span>
-        </p>
-      {/if}
-      {#if playerName}
-        <span class="poster-player">{playerName}</span>
-      {/if}
-      {#if !signedIn && onSignIn && !launching}
-        <button type="button" class="poster-signin" onclick={onSignIn}>
-          Sign in
-        </button>
-      {/if}
+      <div class="play-side play-side-end">
+        {#if playerName}
+          <span class="poster-player">{playerName}</span>
+        {/if}
+        {#if !signedIn && onSignIn && !launching}
+          <button type="button" class="poster-signin" onclick={onSignIn}>
+            Sign in
+          </button>
+        {/if}
+      </div>
     </div>
   </div>
 {/if}
@@ -609,10 +613,10 @@
   }
 
   .poster-play-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
     gap: 16px;
-    flex-wrap: wrap;
     min-width: 0;
     width: 100%;
     padding: 12px 16px;
@@ -620,6 +624,21 @@
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     box-shadow: var(--shadow-sm);
+  }
+
+  .play-side {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .play-side-start {
+    justify-self: start;
+  }
+
+  .play-side-end {
+    justify-self: end;
   }
 
   .play-btn {
@@ -712,7 +731,16 @@
   }
 
   .poster-player {
-    display: none;
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--hero-fg-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .meta-chevron {
@@ -730,6 +758,7 @@
     font-weight: 600;
     text-decoration: underline;
     text-underline-offset: 3px;
+    flex-shrink: 0;
   }
 
   .poster-signin:hover:not(:disabled) {
@@ -790,16 +819,28 @@
   .crash-fix-banner {
     display: flex;
     flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 8px 10px;
+    align-items: center;
+    gap: 10px 12px;
+    padding: 10px 12px;
     border-radius: var(--border-radius-md);
-    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, var(--glass-border));
-    background: var(--glass-bg);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 32%, var(--glass-border));
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 9%, transparent), transparent 72%),
+      var(--glass-bg);
     -webkit-backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-saturate, 100%));
     backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-saturate, 100%));
-    box-shadow: inset 0 1px 0 var(--glass-highlight);
+    box-shadow:
+      inset 0 1px 0 var(--glass-highlight),
+      0 4px 16px rgba(0, 0, 0, 0.18);
     max-width: 560px;
+    color: var(--hero-fg);
+  }
+
+  .crash-fix-banner > svg {
+    flex-shrink: 0;
+    align-self: flex-start;
+    margin-top: 1px;
+    color: color-mix(in srgb, var(--accent-primary) 72%, var(--hero-fg));
   }
 
   .crash-fix-banner-body {
@@ -807,7 +848,7 @@
     flex-direction: column;
     gap: 2px;
     flex: 1;
-    min-width: 160px;
+    min-width: 140px;
     font-size: 12px;
     color: var(--hero-fg-muted);
   }
@@ -819,28 +860,50 @@
 
   .crash-fix-banner-actions {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .crash-restore,
+  .crash-fix-diag {
+    height: 30px;
+    padding: 0 12px;
+    border-radius: var(--border-radius-sm);
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .crash-restore:hover:not(:disabled),
+  .crash-fix-diag:hover {
+    transform: none;
   }
 
   .crash-restore {
-    padding: 6px 10px;
-    font-size: 12px;
-    height: auto;
+    background: var(--accent-primary);
+    color: var(--on-accent, #000);
+  }
+
+  .crash-restore:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+
+  .crash-restore:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
 
   .crash-fix-diag {
-    padding: 6px 8px;
-    font-size: 11px;
-    font-weight: 500;
-    border-radius: var(--border-radius-sm);
-    color: var(--hero-fg-muted);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
   }
 
   .crash-fix-diag:hover {
-    color: var(--hero-fg);
-    background: color-mix(in srgb, #fff 10%, transparent);
+    background: var(--bg-hover);
+    color: var(--text-primary);
   }
 
   .spinner {
@@ -875,6 +938,24 @@
 
     .poster-toolbar span {
       display: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .poster-play-row {
+      grid-template-columns: minmax(0, 1fr);
+      justify-items: center;
+      row-gap: 10px;
+      text-align: center;
+    }
+
+    .play-side-start,
+    .play-side-end {
+      justify-self: center;
+    }
+
+    .play-side-start {
+      justify-content: center;
     }
   }
 

@@ -13,6 +13,8 @@ const DEFAULT_GITHUB_REPOSITORY: &str = "MFcrychelt/tuffbox";
 const APP_USER_AGENT: &str = "TuffBox-IDE/0.1";
 /// Default Ollama tag for crash plans (smarter; user still must pull once).
 pub const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:7b";
+/// Default cloud model (DeepSeek via OpenRouter).
+pub const DEFAULT_CLOUD_MODEL: &str = "deepseek/deepseek-chat";
 const OLLAMA_PULL_PROGRESS_EVENT: &str = "ollama-pull-progress";
 const OLLAMA_PULL_FINISHED_EVENT: &str = "ollama-pull-finished";
 /// Distinct error returned when the user pauses an in-flight model pull.
@@ -377,9 +379,9 @@ fn default_draft_model() -> String {
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
-            provider: "ollama".to_string(),
-            endpoint: "http://127.0.0.1:11434".to_string(),
-            model: DEFAULT_OLLAMA_MODEL.to_string(),
+            provider: "openai-compatible".to_string(),
+            endpoint: "https://openrouter.ai/api/v1".to_string(),
+            model: DEFAULT_CLOUD_MODEL.to_string(),
             diagnose_mode: default_diagnose_mode(),
             crash_kb_endpoint: String::new(),
             ollama_binary_path: String::new(),
@@ -3869,5 +3871,127 @@ mod tests {
             "{\"ok\":1}"
         );
         assert_eq!(strip_ai_fences("```\n{}\n```"), "{}");
+    }
+
+    // ------------------------------------------------------------------
+    // End-to-end local LLM error behaviour — a throwaway TCP server that
+    // pretends to be an OpenAI-compatible endpoint, exercised through the
+    // exact same code path the app uses (`call_ai_messages`).
+    // ------------------------------------------------------------------
+
+    fn spawn_mock_llm(responses: Vec<(u16, String)>) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock bind");
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for (status, body) in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let mut buf = [0u8; 8192];
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+                let _ = stream.read(&mut buf);
+                let reason = match status {
+                    200 => "OK",
+                    401 => "Unauthorized",
+                    429 => "Too Many Requests",
+                    500 => "Internal Server Error",
+                    503 => "Service Unavailable",
+                    _ => "Error",
+                };
+                let out = format!(
+                    "HTTP/1.1 {status} {reason}\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(out.as_bytes());
+            }
+        });
+        format!("http://{addr}/v1")
+    }
+
+    fn mock_llm_settings(endpoint: String) -> AiSettings {
+        let mut s = AiSettings::default();
+        s.provider = "openai-compatible".into();
+        s.endpoint = endpoint;
+        s
+    }
+
+    fn run_llm_call(
+        settings: &AiSettings,
+        json_mode: bool,
+    ) -> Result<Value, String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(call_ai_messages(
+            settings,
+            "system",
+            &[json!({"role": "user", "content": "hi"})],
+            json_mode,
+        ))
+    }
+
+    fn ok_body(content: &str) -> String {
+        json!({"choices": [{"message": {"content": content}}]}).to_string()
+    }
+
+    #[test]
+    fn llm_ok_returns_content() {
+        let endpoint = spawn_mock_llm(vec![(200, ok_body("{\"ok\":true}"))]);
+        let res = run_llm_call(&mock_llm_settings(endpoint), true).unwrap();
+        assert_eq!(res["ok"], json!(true));
+    }
+
+    #[test]
+    fn llm_200_but_no_choices_is_explicit() {
+        let endpoint = spawn_mock_llm(vec![(200, json!({"foo": 1}).to_string())]);
+        let err = run_llm_call(&mock_llm_settings(endpoint), true).unwrap_err();
+        assert!(
+            err.contains("did not contain choices[0].message.content"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn llm_content_not_json_reports_invalid_json() {
+        let endpoint = spawn_mock_llm(vec![(200, ok_body("this is not json"))]);
+        let err = run_llm_call(&mock_llm_settings(endpoint), true).unwrap_err();
+        assert!(err.contains("AI returned invalid JSON"), "{err}");
+    }
+
+    #[test]
+    fn llm_401_hints_api_key() {
+        let body = json!({"error": {"message": "Invalid API key provided"}}).to_string();
+        let endpoint = spawn_mock_llm(vec![(401, body)]);
+        let err = run_llm_call(&mock_llm_settings(endpoint), true).unwrap_err();
+        assert!(err.contains("401"), "{err}");
+        assert!(err.contains("API key"), "{err}");
+    }
+
+    #[test]
+    fn llm_malformed_body_becomes_dirty_json_error() {
+        let endpoint = spawn_mock_llm(vec![(200, "<!DOCTYPE html><html>edge</html>".into())]);
+        let err = run_llm_call(&mock_llm_settings(endpoint), false).unwrap_err();
+        assert!(
+            err.contains("did not contain choices[0].message.content"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn llm_503_reports_provider_error() {
+        let endpoint = spawn_mock_llm(vec![
+            (503, json!({"error":"overloaded"}).to_string()),
+            (503, json!({"error":"overloaded"}).to_string()),
+            (503, json!({"error":"overloaded"}).to_string()),
+            (503, json!({"error":"overloaded"}).to_string()),
+        ]);
+        let err = run_llm_call(&mock_llm_settings(endpoint), true).unwrap_err();
+        assert!(err.contains("503"), "{err}");
     }
 }

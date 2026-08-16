@@ -447,7 +447,10 @@ pub async fn run_generate_quest_line(
             })
         });
         let aq = found.ok_or_else(|| {
-            format!("Branch anchor quest id `{aid}` was not found in the loaded quest book.")
+            format!(
+                "Branch anchor quest id `{aid}` was not found in the loaded quest book. \
+                 If the quest is new or uncommitted, save the chapter first, then retry."
+            )
         })?;
         progress.push(
             &mut log,

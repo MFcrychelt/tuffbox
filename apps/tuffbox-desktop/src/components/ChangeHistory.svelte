@@ -411,13 +411,14 @@
   }
 
   async function openFullFile(entry: ChangeEntry) {
-    if (!$projectPath || !entry.canOpen) return;
+    const relPath = normalizeEntryPath(entry);
+    if (!$projectPath || !relPath) return;
     loading = true;
     error = null;
     try {
       const result: { path: string; content: string } = await invoke("read_project_history_file", {
         path: $projectPath,
-        relativePath: entry.path,
+        relativePath: relPath,
       });
       editorPath = result.path;
       editorContent = result.content;
@@ -454,52 +455,88 @@
     );
   }
 
+  /** Strip scan/disk prefixes and return a clean relative path, or "" if none. */
+  function normalizeEntryPath(entry: ChangeEntry): string {
+    const p = (entry.path || "").trim().replace(/\\/g, "/");
+    const stripped = p
+      .replace(/^(added|removed|changed)\s+on\s+disk:\s+/i, "")
+      .replace(/^file(?::\/\/)?\s*/i, "")
+      .trim();
+    if (!stripped || stripped.startsWith("crash://")) return "";
+    if (stripped.includes("/") || stripped.includes("\\") || /\.\w+$/.test(stripped)) return stripped;
+    return p;
+  }
+
   function resolveModFocus(entry: ChangeEntry): { id?: string; fileName?: string } | null {
     const idMatch = entry.id.match(/:mod-(?:added|removed|updated):(.+)$/i);
     if (idMatch?.[1]) return { id: idMatch[1] };
-    const path = (entry.path || "").replace(/\\/g, "/");
+    const path = normalizeEntryPath(entry);
     const jar = path.match(/^mods\/(.+\.jar(?:\.disabled)?)$/i)?.[1];
     if (jar) return { fileName: jar.replace(/\.disabled$/i, "") };
-    // Operation lines like "Install Sodium 0.5.8" — no id; Content stage still useful
+    // Operation lines like "Install Sodium 0.5.8" — pull the jar name out as the
+    // strongest affordance we have, so Open still focuses the Content list.
+    const opText = `${entry.operation ?? ""} ${entry.preview ?? ""}`;
+    const jarInOp = opText.match(/([^\s]+\.jar(?:\.disabled)?)\b/i)?.[1];
+    if (jarInOp) return { fileName: jarInOp.replace(/\.disabled$/i, "") };
     if (isModHistoryEntry(entry)) return {};
     return null;
   }
 
   function canOpenEntryTarget(entry: ChangeEntry) {
     if (isModHistoryEntry(entry) && resolveModFocus(entry)) return true;
-    const path = (entry.path || "").trim();
-    if (entry.canOpen && path && !path.startsWith("crash://")) return true;
-    if (path && isConfigHistoryPath(path)) return true;
+    const path = normalizeEntryPath(entry);
+    if (!path) return false;
+    if (entry.canOpen || isConfigHistoryPath(path)) return true;
+    // Any real relative file path is at least readable in the built-in editor.
+    if (/[\\/]/.test(path) || /^mods\//i.test(path) || /^config\//i.test(path)) return true;
     return false;
   }
 
   function openTargetLabel(entry: ChangeEntry) {
     if (isModHistoryEntry(entry)) return "Open in Mods";
-    const path = (entry.path || "").trim();
-    if ((entry.canOpen || isConfigHistoryPath(path)) && path && !path.startsWith("crash://")) {
-      return "Open in Configs";
-    }
+    const path = normalizeEntryPath(entry);
+    if (isConfigHistoryPath(path)) return "Open in Tune";
+    if (path && entry.canOpen) return "Open file";
+    if (path) return "Quick view";
     return "Quick view";
   }
 
   async function openEntryTarget(entry: ChangeEntry) {
     selectedId = entry.id;
+    message = null;
+    error = null;
     if (isModHistoryEntry(entry)) {
       const focus = resolveModFocus(entry);
       if (focus) {
         modsFocusId.set(focus.id ?? null);
         modsFocusFileName.set(focus.fileName ?? null);
         ideStageRequest.set("content");
+        const name = focus.id ?? focus.fileName ?? entryTitle(entry);
+        message = `Opened ${name} in Content.`;
         return;
       }
-    }
-    const path = (entry.path || "").trim();
-    if (path && !path.startsWith("crash://") && (entry.canOpen || isConfigHistoryPath(path))) {
-      configFocusPath.set(path.replace(/\\/g, "/"));
-      ideStageRequest.set("configs");
+      ideStageRequest.set("content");
+      message = `Opened Content — locate the mod manually.`;
       return;
     }
-    if (entry.canOpen) await openFullFile(entry);
+    const path = normalizeEntryPath(entry);
+    if (isConfigHistoryPath(path)) {
+      configFocusPath.set(path);
+      ideStageRequest.set("configs");
+      message = `Opened ${path} in Tune.`;
+      return;
+    }
+    if (entry.canOpen && path) {
+      await openFullFile(entry);
+      if (!editorOpen) message = `Opened ${path} in the built-in editor.`;
+      return;
+    }
+    if (path) {
+      await openFullFile(entry);
+      if (!editorOpen) message = `Opened ${path} in the built-in editor.`;
+      return;
+    }
+    message = "Nothing to open — this entry has no saved file.";
   }
 
   async function saveEditor() {

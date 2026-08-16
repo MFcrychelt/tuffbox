@@ -3,8 +3,35 @@ use crate::{
     diagnostics::{Diagnostic, DiagnosticSeverity},
     graph::{DependencyGraph, EdgeKind, NodeId, NodeKind},
     manifest::{ProjectManifest, Side},
+    mod_category,
+    resolve::dependents_count,
 };
 use std::collections::{HashMap, HashSet};
+
+/// Pick which mod node of a conflict pair is safest to disable: prefer a
+/// higher replaceability category (optimization / bridge / legacy / duplicate)
+/// and fewer dependents, falling back to the last node (legacy behaviour).
+fn pick_conflict_removable(
+    graph: &DependencyGraph,
+    related_nodes: &[NodeId],
+) -> Option<NodeId> {
+    let score = |nid: &NodeId| -> f32 {
+        let slug = nid.0.strip_prefix("mod:").unwrap_or(&nid.0);
+        let cat = mod_category::classify(slug, "");
+        let repl = mod_category::replaceability(cat) as f32;
+        let lost = dependents_count(graph, nid) as f32 * 14.0;
+        repl - lost
+    };
+    related_nodes
+        .iter()
+        .filter(|nid| nid.0.starts_with("mod:"))
+        .max_by(|a, b| {
+            score(a)
+                .partial_cmp(&score(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .cloned()
+}
 
 pub struct Resolver;
 
@@ -57,6 +84,7 @@ impl Resolver {
                 risk: ChangeRisk::Low,
                 actions,
                 requires_snapshot: true,
+        options: Vec::new(),
             });
         }
 
@@ -64,7 +92,13 @@ impl Resolver {
             .iter()
             .find(|d| d.severity == DiagnosticSeverity::Error && d.code == "MOD_CONFLICT")
         {
-            let removable = conflict.related_nodes.last()?.clone();
+            // Choose the more *replaceable* / less-coupled side as the disable
+            // target (category-aware), instead of blindly disabling the last
+            // related node. Disabling optimization / bridge / legacy mods is
+            // safe & reversible; disabling content or libraries is not.
+            let Some(removable) = pick_conflict_removable(graph, &conflict.related_nodes) else {
+                return None;
+            };
             let label = graph
                 .node(&removable)
                 .map(|n| n.label.clone())
@@ -74,6 +108,7 @@ impl Resolver {
                 risk: ChangeRisk::Medium,
                 actions: vec![ChangeAction::DisableMod { node_id: removable }],
                 requires_snapshot: true,
+                options: Vec::new(),
             });
         }
 
@@ -89,6 +124,7 @@ impl Resolver {
                 risk: ChangeRisk::Medium,
                 actions: vec![],
                 requires_snapshot: true,
+        options: Vec::new(),
             });
         }
 

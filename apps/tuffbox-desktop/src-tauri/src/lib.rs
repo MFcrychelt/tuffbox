@@ -6649,14 +6649,26 @@ async fn ai_plan_with_fallback(
     String,
 > {
     let (prompt, compact) = integrations::crash_explain_prompt_for(settings, ctx);
-    match integrations::call_ai_crash_explain_detailed(settings, &prompt).await {
+    // Hard overall deadline so a stuck local/remote AI (or its HTTP client)
+    // can never leave the Diagnose IPC pending forever.
+    let ai_call = tokio::time::timeout(
+        std::time::Duration::from_secs(150),
+        integrations::call_ai_crash_explain_detailed(settings, &prompt),
+    )
+    .await
+    .map_err(|_| {
+        "AI call timed out after 150s — the local/remote model did not respond. Check Settings → AI and retry.".to_string()
+    })?;
+    match ai_call {
         Ok(detailed) => {
             let raw = serde_json::to_string(&detailed.value).unwrap_or_default();
-            let plan = tuffbox_core::action_plan::parse_action_plan(&raw)?;
+            let mut plan = tuffbox_core::action_plan::parse_action_plan(&raw)?;
+            tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
             Ok((plan, compact, None, detailed.speculative))
         }
         Err(ai_err) => {
-            if let Some(plan) = strong_plan_from_similar(ctx) {
+            if let Some(mut plan) = strong_plan_from_similar(ctx) {
+                tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
                 return Ok((
                     plan,
                     compact,
@@ -6664,7 +6676,8 @@ async fn ai_plan_with_fallback(
                     speculative::SpeculativeMeta::default(),
                 ));
             }
-            if let Some(plan) = heuristic_plan_from_context(ctx) {
+            if let Some(mut plan) = heuristic_plan_from_context(ctx) {
+                tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
                 return Ok((
                     plan,
                     compact,
@@ -9352,8 +9365,9 @@ fn export_project_report(path: String) -> Result<serde_json::Value, String> {
 /// Batch export: generates .mrpack, server pack, Prism, CurseForge
 /// and GitHub release all at once.
 #[tauri::command(rename_all = "camelCase")]
-fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+async fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
     let base = project_dir.join("export");
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
@@ -9433,6 +9447,9 @@ fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String> {
     }
 
     Ok(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -9978,6 +9995,7 @@ fn create_crash_fix_plan(
 async fn apply_crash_fix_plan(
     path: String,
     report_id: Option<String>,
+    option_index: Option<usize>,
 ) -> Result<Vec<String>, String> {
     let result = tokio::task::spawn_blocking(move || {
         let manifest_path = resolve_manifest_path(&path)?;
@@ -9986,7 +10004,19 @@ async fn apply_crash_fix_plan(
         let diagnosis = get_crash_diagnosis(path_str.clone(), report_id.clone())?;
         let plan = diagnosis.fix_plan;
 
-        if plan.actions.is_empty() {
+        // When the user picked a radio option, apply exactly that option's
+        // actions instead of the whole default plan.
+        let actions_to_apply = match option_index {
+            Some(idx) => plan
+                .options
+                .get(idx)
+                .filter(|o| !o.actions.is_empty())
+                .map(|o| o.actions.clone())
+                .unwrap_or_else(|| plan.actions.clone()),
+            None => plan.actions.clone(),
+        };
+
+        if actions_to_apply.is_empty() {
             return Ok((path_str, Vec::new()));
         }
 
@@ -9999,7 +10029,7 @@ async fn apply_crash_fix_plan(
             &loader,
         );
 
-        let launcher_actions = swarm_api::change_actions_to_launcher(&plan.actions);
+        let launcher_actions = swarm_api::change_actions_to_launcher(&actions_to_apply);
 
         if plan.requires_snapshot {
             swarm_api::auto_snapshot_crash_fix_heuristic(
@@ -10013,7 +10043,7 @@ async fn apply_crash_fix_plan(
 
         let mut manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
         let mut applied = Vec::new();
-        for action in plan.actions {
+        for action in actions_to_apply {
             apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
@@ -16485,6 +16515,7 @@ pub fn run() {
             tune_config_api::delete_tune_chat_session,
             tune_config_api::new_tune_chat_session,
             tune_config_api::tune_chat_turn,
+            web_research::minecraft_wiki_rag_search,
             get_manifest_schema,
             record_launch,
             record_crash,

@@ -294,6 +294,10 @@
       "dusk",
       "glacier",
       "minecraft",
+      "overworld",
+      "nether",
+      "deepdark",
+      "amethyst",
     ];
     if (id === "dark") return "tuffbox";
     if (id === "light") return "tuffbox-light";

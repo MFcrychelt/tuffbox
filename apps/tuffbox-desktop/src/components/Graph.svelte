@@ -1983,7 +1983,7 @@
       .on("end", () => {
         finalizeLayoutAfterSim();
       });
-    positioned = simNodes.map((n) => ({ ...n }));
+    positioned = simNodes.map((n) => ({ ...n, x: Math.round(n.x), y: Math.round(n.y) }));
     updateGraphDom();
     if (lowPerf) {
       simulation.stop();
@@ -2031,7 +2031,7 @@
   function registerNode(el: Element, node: PositionedNode) {
     const g = el as SVGGElement;
     nodeEls.set(node.id, g);
-    g.style.transform = `translate(${node.x}px, ${node.y}px)`;
+    g.style.transform = `translate(${Math.round(node.x)}px, ${Math.round(node.y)}px)`;
   }
 
   function registerEdge(el: Element, edge: GraphEdge) {
@@ -2044,7 +2044,7 @@
   function updateGraphDom() {
     for (const node of simNodes) {
       const el = nodeEls.get(node.id);
-      if (el) el.style.transform = `translate(${node.x}px, ${node.y}px)`;
+      if (el) el.style.transform = `translate(${Math.round(node.x)}px, ${Math.round(node.y)}px)`;
     }
     for (const edge of renderedEdges) {
       const el = edgeEls.get(edgeKey(edge));
@@ -2218,8 +2218,8 @@
     viewScale = Math.min(4, Math.max(0.2, scale));
     const vbW = canvasWidth / viewScale;
     const vbH = canvasHeight / viewScale;
-    viewX = (minX + maxX) / 2 - vbW / 2;
-    viewY = (minY + maxY) / 2 - vbH / 2;
+    viewX = Math.round((minX + maxX) / 2 - vbW / 2);
+    viewY = Math.round((minY + maxY) / 2 - vbH / 2);
   }
 
   function resetView() {

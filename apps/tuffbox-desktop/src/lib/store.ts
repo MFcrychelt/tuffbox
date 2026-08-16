@@ -1,6 +1,12 @@
 import { get, writable } from "svelte/store";
 import type { RunningInstance } from "./api";
 import { api } from "./api";
+export {
+  changeOptionKey,
+  fixPreferenceByFingerprint,
+  getFixPreference,
+  setFixPreference,
+} from "./fixPreferences";
 
 export interface ProjectInfo {
   id: string;
@@ -909,4 +915,156 @@ export function openYoutubePlayer(session: YoutubePlayerSession) {
 
 export function closeYoutubePlayer() {
   youtubePlayerSession.set(null);
+}
+
+/** Personal YouTube queue (playlist) — survives restarts. */
+export type YoutubeQueueItem = {
+  videoId: string;
+  title: string;
+  thumbnailUrl: string | null;
+};
+
+const YT_QUEUE_STORAGE_KEY = "tuffbox-youtube-queue";
+type YoutubeQueuePersisted = { items: YoutubeQueueItem[]; index: number };
+
+function readYoutubeQueuePersisted(): YoutubeQueuePersisted {
+  if (typeof localStorage === "undefined") return { items: [], index: 0 };
+  try {
+    const raw = localStorage.getItem(YT_QUEUE_STORAGE_KEY);
+    if (!raw) return { items: [], index: 0 };
+    const parsed = JSON.parse(raw) as Partial<YoutubeQueuePersisted>;
+    if (!parsed || !Array.isArray(parsed.items)) return { items: [], index: 0 };
+    const items: YoutubeQueueItem[] = parsed.items
+      .filter((v) => !!v && typeof v?.videoId === "string" && v.videoId.length > 0)
+      .map((v) => ({
+        videoId: v.videoId as string,
+        title: typeof v.title === "string" ? v.title : "",
+        thumbnailUrl: typeof v.thumbnailUrl === "string" ? v.thumbnailUrl : null,
+      }));
+    const index =
+      typeof parsed.index === "number" && Number.isFinite(parsed.index)
+        ? Math.min(Math.max(0, Math.round(parsed.index)), Math.max(0, items.length - 1))
+        : 0;
+    return { items, index };
+  } catch {
+    return { items: [], index: 0 };
+  }
+}
+
+const _queueStorage = readYoutubeQueuePersisted();
+
+export const youtubeQueueItems = writable<YoutubeQueueItem[]>(_queueStorage.items);
+export const youtubeQueueIndex = writable<number>(_queueStorage.index);
+export const youtubeQueueOpen = writable(false);
+
+function persistYoutubeQueue() {
+  try {
+    localStorage.setItem(
+      YT_QUEUE_STORAGE_KEY,
+      JSON.stringify({ items: get(youtubeQueueItems), index: get(youtubeQueueIndex) }),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Append to the end; no-op if the video is already queued. */
+export function youtubeQueueAdd(item: YoutubeQueueItem) {
+  youtubeQueueItems.update((list) => {
+    if (list.some((v) => v.videoId === item.videoId)) return list;
+    return [...list, item];
+  });
+  persistYoutubeQueue();
+}
+
+/** Add and start playing it right away. */
+export function youtubeQueueAddAndPlay(item: YoutubeQueueItem) {
+  youtubeQueueItems.update((list) => {
+    const existing = list.findIndex((v) => v.videoId === item.videoId);
+    if (existing >= 0) {
+      youtubeQueueIndex.set(existing);
+      return list;
+    }
+    const next = [...list, item];
+    youtubeQueueIndex.set(next.length - 1);
+    return next;
+  });
+  persistYoutubeQueue();
+}
+
+export function youtubeQueuePlayAt(i: number) {
+  const list = get(youtubeQueueItems);
+  if (i >= 0 && i < list.length) {
+    youtubeQueueIndex.set(i);
+    persistYoutubeQueue();
+  }
+}
+
+export function youtubeQueueNext() {
+  const list = get(youtubeQueueItems);
+  if (list.length === 0) return;
+  youtubeQueueIndex.set((get(youtubeQueueIndex) + 1) % list.length);
+  persistYoutubeQueue();
+}
+
+export function youtubeQueuePrevious() {
+  const list = get(youtubeQueueItems);
+  if (list.length === 0) return;
+  youtubeQueueIndex.set((get(youtubeQueueIndex) - 1 + list.length) % list.length);
+  persistYoutubeQueue();
+}
+
+export function youtubeQueueRemoveAt(i: number) {
+  const cur = get(youtubeQueueIndex);
+  youtubeQueueItems.update((list) => {
+    if (i < 0 || i >= list.length) return list;
+    const next = list.filter((_, k) => k !== i);
+    let newIndex = cur;
+    if (i < cur) newIndex = cur - 1;
+    else if (i === cur) newIndex = Math.min(cur, next.length - 1);
+    youtubeQueueIndex.set(newIndex);
+    return next;
+  });
+  persistYoutubeQueue();
+}
+
+export function youtubeQueueMoveUp(i: number) {
+  if (i <= 0) return;
+  const cur = get(youtubeQueueIndex);
+  youtubeQueueItems.update((list) => {
+    const next = [...list];
+    [next[i - 1], next[i]] = [next[i], next[i - 1]];
+    if (cur === i) youtubeQueueIndex.set(i - 1);
+    else if (cur === i - 1) youtubeQueueIndex.set(i);
+    return next;
+  });
+  persistYoutubeQueue();
+}
+
+export function youtubeQueueMoveDown(i: number) {
+  const list = get(youtubeQueueItems);
+  if (i >= list.length - 1) return;
+  const cur = get(youtubeQueueIndex);
+  youtubeQueueItems.update((l) => {
+    const next = [...l];
+    [next[i], next[i + 1]] = [next[i + 1], next[i]];
+    if (cur === i) youtubeQueueIndex.set(i + 1);
+    else if (cur === i + 1) youtubeQueueIndex.set(i);
+    return next;
+  });
+  persistYoutubeQueue();
+}
+
+export function youtubeQueueClear() {
+  youtubeQueueItems.set([]);
+  youtubeQueueIndex.set(0);
+  persistYoutubeQueue();
+}
+
+export function openYoutubeQueue() {
+  youtubeQueueOpen.set(true);
+}
+
+export function closeYoutubeQueue() {
+  youtubeQueueOpen.set(false);
 }

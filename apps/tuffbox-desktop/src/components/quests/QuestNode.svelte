@@ -53,19 +53,6 @@
   class:issue={data.isIssue}
   class:external
 >
-  <Handle
-    type="target"
-    position={Position.Top}
-    class="conn-handle"
-    title={external ? undefined : "Drop here: this quest depends on the source"}
-  />
-  <Handle
-    type="source"
-    position={Position.Bottom}
-    class="conn-handle"
-    title={external ? undefined : "Drag to another quest’s top handle to create a dependency"}
-  />
-
   <div
     class="node-wrap"
     class:sel={data.isSelected}
@@ -91,6 +78,18 @@
         revision={data.iconRevision}
       />
     </div>
+    <Handle
+      type="target"
+      position={Position.Top}
+      class="conn-handle"
+      title={external ? undefined : "Drop here: this quest depends on the source"}
+    />
+    <Handle
+      type="source"
+      position={Position.Bottom}
+      class="conn-handle"
+      title={external ? undefined : "Drag to another quest’s top handle to create a dependency"}
+    />
     {#if q.optional}<span class="opt">?</span>{/if}
     {#if prog === "completed"}<span class="check" title="Completed">✓</span>{/if}
   </div>

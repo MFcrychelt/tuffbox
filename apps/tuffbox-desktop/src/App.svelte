@@ -14,8 +14,9 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, youtubeQueueOpen, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
+  import YoutubeQueueWindow from "./components/YoutubeQueueWindow.svelte";
   import { api } from "./lib/api";
   import { applyHomeSnapshot, ensureHomeEnrichListener } from "./lib/homeBootstrap";
   import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -775,6 +776,10 @@
       onclose={closeYoutubePlayer}
     />
   {/key}
+{/if}
+
+{#if $youtubeQueueOpen}
+  <YoutubeQueueWindow />
 {/if}
 
 <svelte:window

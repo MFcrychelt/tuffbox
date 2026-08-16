@@ -334,6 +334,59 @@ pub struct GroundingResult {
     pub notes: Vec<String>,
 }
 
+/// Dedupe actions that target the same mod with the same op (LLMs / KB merges
+/// often repeat e.g. `install_mod:indium`). Only exact op+target collisions
+/// collapse; keep the first entry, borrow reason/risk from the duplicate when
+/// the first lacks them.
+fn dedupe_actions(actions: Vec<LauncherAction>) -> Vec<LauncherAction> {
+    let mut out: Vec<LauncherAction> = Vec::with_capacity(actions.len());
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut idx = 0;
+    for a in actions {
+        let key = action_dedupe_key(&a);
+        let Some(key) = key else {
+            out.push(a);
+            idx += 1;
+            continue;
+        };
+        if let Some(&first) = seen.get(&key) {
+            if out[first].reason.is_none() && a.reason.is_some() {
+                out[first].reason = a.reason.clone();
+            }
+            if out[first].risk.is_empty() && !a.risk.is_empty() {
+                out[first].risk = a.risk.clone();
+            }
+            continue;
+        }
+        seen.insert(key, idx);
+        out.push(a);
+        idx += 1;
+    }
+    out
+}
+
+/// Stable identity for an action within a plan: op + mod/project id (or path).
+fn action_dedupe_key(a: &LauncherAction) -> Option<String> {
+    let op = a
+        .op
+        .trim()
+        .to_ascii_lowercase();
+    let id = a
+        .mod_id
+        .as_deref()
+        .or(a.project_id.as_deref())
+        .map(str::trim)
+        .map(|s| s.to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+    match id {
+        Some(id) => Some(format!("{op}:{id}")),
+        None => {
+            let path = a.path.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            path.map(|p| format!("{op}:path:{p}"))
+        }
+    }
+}
+
 /// Normalize placeholders / polarity, then ground against inventory + missing deps.
 pub fn ground_action_plan(
     plan: ActionPlan,
@@ -587,7 +640,7 @@ fn ground_action_plan_core(
 
         kept.push(a);
     }
-    plan.actions = kept;
+    plan.actions = dedupe_actions(kept);
 
     // Distill: never keep install targets in suspectedMods (they are the fix, not culprits).
     if is_distill {
@@ -1099,6 +1152,7 @@ pub fn action_plan_to_change_plan(plan: &ActionPlan) -> ChangePlan {
         risk: max_risk,
         actions,
         requires_snapshot: true,
+        options: Vec::new(),
     }
 }
 
@@ -1110,6 +1164,70 @@ pub fn encode_edit_config_patch(action: &LauncherAction) -> String {
         "reason": action.reason,
     });
     envelope.to_string()
+}
+
+/// Policy veto: NEVER auto-apply remove/disable/update of content or library
+/// mods when a replaceable (optimization / bridge / legacy / duplicate) side is
+/// a plausible candidate in the same crash. Removes such risky actions from the
+/// plan and flips the plan to `needs_user_review` so the choice stays with the
+/// user. Returns true when a veto fired.
+pub fn veto_content_vs_optimization(plan: &mut ActionPlan) -> bool {
+    let is_action_on_mod = |a: &LauncherAction| -> bool {
+        matches!(a.op.as_str(), "remove_mod" | "disable_mod" | "update_mod")
+            && a.mod_id.is_some()
+    };
+    let risky = |a: &LauncherAction| -> bool {
+        let Some(id) = a.mod_id.as_deref() else {
+            return false;
+        };
+        let cat = crate::mod_category::classify(id, "");
+        // Content / library / tech-magic are "keep" sides; only vetoed when a
+        // safe-to-disable alternative exists somewhere in the plan/suspects.
+        !crate::mod_category::is_safe_to_disable(cat)
+    };
+    let has_replaceable = plan.actions.iter().any(|a| {
+        a.mod_id
+            .as_deref()
+            .map(|id| crate::mod_category::is_safe_to_disable(crate::mod_category::classify(id, "")))
+            .unwrap_or(false)
+    }) || plan
+        .suspected_mods
+        .iter()
+        .any(|id| crate::mod_category::is_safe_to_disable(crate::mod_category::classify(id, "")));
+    if !has_replaceable {
+        return false;
+    }
+    let affected: Vec<LauncherAction> = plan
+        .actions
+        .iter()
+        .filter(|a| is_action_on_mod(a) && risky(a))
+        .cloned()
+        .collect();
+    if affected.is_empty() {
+        return false;
+    }
+    plan.actions
+        .retain(|a| !(is_action_on_mod(a) && risky(a)));
+    plan.needs_user_review = true;
+    let note = affected
+        .iter()
+        .map(|a| {
+            format!(
+                "{} {}",
+                a.op,
+                a.mod_id.as_deref().unwrap_or("?")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let extra = plan.additional_context.get_or_insert_with(String::new);
+    if !extra.is_empty() {
+        extra.push('\n');
+    }
+    extra.push_str(&format!(
+        "POLICY_VETO: dropped auto-action(s) against content/library mods ({note}) because a replaceable optimization/bridge alternative exists — left for the user to choose."
+    ));
+    true
 }
 
 /// Apply a config patch to file contents. Pure function for EditConfig apply.
@@ -1415,6 +1533,57 @@ mod tests {
         let plan = parse_action_plan(json).unwrap();
         assert_eq!(plan.actions[0].op, "install_mod");
         assert_eq!(plan.actions[0].mod_id.as_deref(), Some("indium"));
+    }
+
+    #[test]
+    fn dedupes_repeated_actions_for_same_mod() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Missing Indium",
+          "confidence": 0.9,
+          "suspectedMods": ["sodium"],
+          "needsUserReview": true,
+          "actions": [
+            {"op":"install_mod","modId":"indium","risk":"low"},
+            {"op":"install_mod","modId":"Indium","reason":"Indium is required by Sodium"}
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        assert_eq!(plan.actions.len(), 1, "duplicate install_mod:indium must collapse");
+        let a = &plan.actions[0];
+        assert_eq!(a.op, "install_mod");
+        assert_eq!(a.mod_id.as_deref(), Some("indium"));
+        assert_eq!(
+            a.reason.as_deref(),
+            Some("Indium is required by Sodium"),
+            "missing reason should be borrowed from the duplicate"
+        );
+        assert_eq!(a.risk, "low", "risk from the kept entry stays");
+    }
+
+    #[test]
+    fn keeps_distinct_ops_on_same_mod_and_distinct_paths() {
+        let plan = parse_action_plan(
+            r#"{
+              "schemaVersion": 1,
+              "humanExplanation": "Mix",
+              "confidence": 0.6,
+              "suspectedMods": ["sodium"],
+              "needsUserReview": true,
+              "actions": [
+                {"op":"update_mod","modId":"sodium","reason":"update"},
+                {"op":"disable_mod","modId":"sodium","reason":"disable"},
+                {"op":"edit_config","path":"config/example.toml"},
+                {"op":"edit_config","path":"config/other.toml"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.actions.len(),
+            4,
+            "different ops on the same mod and different config paths must stay"
+        );
     }
 
     #[test]
@@ -1874,5 +2043,58 @@ mod tests {
             .notes
             .iter()
             .any(|n| n.contains("downgraded: conflict claim was speculative")));
+    }
+
+    #[test]
+    fn vetoes_content_removal_when_optimization_alternative_exists() {
+        let plan = parse_action_plan(
+            r#"{
+              "schemaVersion": 1,
+              "humanExplanation": "spb-revamped breaks the renderer.",
+              "confidence": 0.85,
+              "suspectedMods": ["spb-revamped", "sodium"],
+              "needsUserReview": false,
+              "actions": [
+                {"op":"remove_mod","modId":"spb-revamped","reason":"AI: replace spb","risk":"medium"},
+                {"op":"disable_mod","modId":"sodium","reason":"AI: disable render mod","risk":"low"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let mut plan = plan;
+        let fired = veto_content_vs_optimization(&mut plan);
+        assert!(fired, "veto should fire for content removal with optimisation alternative");
+        // Content removal dropped; optimisation disable kept.
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].op, "disable_mod");
+        assert_eq!(plan.actions[0].mod_id.as_deref(), Some("sodium"));
+        assert!(plan.needs_user_review);
+        assert!(
+            plan.additional_context
+                .as_deref()
+                .unwrap_or("")
+                .contains("POLICY_VETO")
+        );
+    }
+
+    #[test]
+    fn no_veto_without_replaceable_alternative() {
+        let plan = parse_action_plan(
+            r#"{
+              "schemaVersion": 1,
+              "humanExplanation": "sodium no longer needed.",
+              "confidence": 0.6,
+              "suspectedMods": ["sodium"],
+              "needsUserReview": false,
+              "actions": [
+                {"op":"disable_mod","modId":"sodium","reason":"AI choice","risk":"low"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let mut plan = plan;
+        // Disabling the optimisation mod itself is fine — no content side threatened.
+        assert!(!veto_content_vs_optimization(&mut plan));
+        assert_eq!(plan.actions.len(), 1);
     }
 }

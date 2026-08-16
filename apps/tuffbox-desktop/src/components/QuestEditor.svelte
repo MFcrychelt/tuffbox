@@ -875,6 +875,17 @@
     }
   }
 
+  /** Save a chapter before AI branch generation so the anchor quest exists on disk
+   *  (backend loads the book from disk). Returns the save outcome. */
+  async function saveChapterForAi(
+    chapterId: string,
+  ): Promise<"saved" | "notdirty" | "cancelled" | "error"> {
+    if (!$projectPath) return "error";
+    if (!dirtyChapters.has(chapterId)) return "notdirty";
+    const r = await saveChapter(chapterId);
+    return r;
+  }
+
   async function saveAll() {
     const dirtyIds = [...dirtyChapters];
     const localeCount = dirtyLocales.size;
@@ -2533,6 +2544,7 @@
         open={aiSidebarOpen}
         onclose={() => setAiSidebar(false)}
         onapply={applyMergeResult}
+        onsavechapter={saveChapterForAi}
         anchorQuest={selectedQuest}
         anchorChapterTitle={selectedChapterObj?.title ?? null}
         targetChapterId={selectedChapter}

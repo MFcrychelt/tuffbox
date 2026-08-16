@@ -28,7 +28,7 @@
     "security": {
       "csp": {
         "default-src": "'self' ipc: http://ipc.localhost",
-        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* https://api.mclo.gs https://mclo.gs https://*.supabase.co wss://*.supabase.co https://vsoqnwknpueuubiovyjd.supabase.co wss://vsoqnwknpueuubiovyjd.supabase.co https://api.github.com https://github.com https://codeload.github.com",
+        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* https://api.mclo.gs https://mclo.gs https://*.supabase.co wss://*.supabase.co https://vsoqnwknpueuubiovyjd.supabase.co wss://vsoqnwknpueuubiovyjd.supabase.co https://api.github.com https://github.com https://codeload.github.com https://www.youtube.com https://i.ytimg.com",
         "img-src": "'self' asset: http://asset.localhost https: http: data: blob:",
         "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",

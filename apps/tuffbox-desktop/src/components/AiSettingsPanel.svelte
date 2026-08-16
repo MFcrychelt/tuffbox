@@ -84,7 +84,7 @@
       id: "openrouter",
       label: "OpenRouter",
       endpoint: "https://openrouter.ai/api/v1",
-      model: "openai/gpt-4o-mini",
+      model: "deepseek/deepseek-chat",
       needsKey: true,
     },
     {
@@ -104,7 +104,7 @@
   ];
 
   let surface = $state<Surface>("local");
-  let preset = $state<PresetId>("gemini");
+  let preset = $state<PresetId>("openrouter");
   let provider = $state<AiProvider>("ollama");
   let endpoint = $state("http://127.0.0.1:11434");
   let model = $state("");
@@ -928,7 +928,7 @@
 
         <label>
           Model
-          <input bind:value={model} placeholder="gemini-flash-latest" autocomplete="off" />
+          <input bind:value={model} placeholder="deepseek/deepseek-chat" autocomplete="off" />
         </label>
 
         {#if preset === "custom" || preset === "hermes"}

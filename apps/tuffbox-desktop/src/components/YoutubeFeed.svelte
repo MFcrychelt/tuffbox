@@ -5,13 +5,12 @@
   import {
     Youtube,
     ChevronDown,
-    ChevronsDown,
-    ChevronsUp,
     PictureInPicture2,
     Play,
+    MoreHorizontal,
   } from "@lucide/svelte";
   import { supabase } from "../lib/supabaseAuth";
-  import { launcherSettingsLive, openYoutubePlayer } from "../lib/store";
+  import { launcherSettingsLive, openYoutubePlayer, openYoutubeQueue } from "../lib/store";
   import HomeYoutubePlacementToggle from "./HomeYoutubePlacementToggle.svelte";
 
   type FeedVideo = {
@@ -29,17 +28,14 @@
   let { variant = "row" }: { variant?: "row" | "grid" | "rail" } = $props();
 
   const STORAGE_KEY = "tuffbox-youtube-feed-expanded";
-  const FULL_STORAGE_KEY = "tuffbox-youtube-feed-full";
   /** Horizontal/grid initial strip size. */
   const FEED_LIMIT_ROW = 24;
-  /** Rail / fullView: large client pool; reveal in pages. */
+  /** Rail: large client pool; reveal in pages. */
   const FEED_POOL_RAIL = 60;
   const FEED_PAGE_RAIL = 16;
-  const FEED_PAGE_FULL = 18;
   const FEED_MORE_RAIL = 12;
   const SKEL_COUNT_ROW = 5;
   const SKEL_COUNT_RAIL = 4;
-  const SKEL_COUNT_FULL = 8;
   /** Cap clips from the same channel so mega-creators don't fill the strip. */
   const MAX_PER_CHANNEL = 2;
   const MAX_PER_CHANNEL_RAIL = 3;
@@ -53,16 +49,12 @@
   let loadError = $state("");
   /** Default collapsed; localStorage overrides when set. */
   let expanded = $state(false);
-  /** YouTube-like downward grid; only meaningful when expanded. Persist separately. */
-  let fullView = $state(false);
   let feedRequested = $state(false);
 
-  const usePagedFeed = $derived(variant === "rail" || fullView);
+  const usePagedFeed = $derived(variant === "rail");
   const poolLimit = $derived(usePagedFeed ? FEED_POOL_RAIL : FEED_LIMIT_ROW);
-  const pageSize = $derived(variant === "rail" ? FEED_PAGE_RAIL : FEED_PAGE_FULL);
-  const skelCount = $derived(
-    variant === "rail" ? SKEL_COUNT_RAIL : fullView ? SKEL_COUNT_FULL : SKEL_COUNT_ROW,
-  );
+  const pageSize = FEED_PAGE_RAIL;
+  const skelCount = $derived(variant === "rail" ? SKEL_COUNT_RAIL : SKEL_COUNT_ROW);
 
   const visibleVideos = $derived(
     usePagedFeed ? videoPool.slice(0, visibleCount) : videoPool,
@@ -231,8 +223,6 @@
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored !== null) expanded = stored !== "false";
-      const fullStored = localStorage.getItem(FULL_STORAGE_KEY);
-      if (fullStored !== null) fullView = fullStored === "true";
     } catch {
       // ignore storage errors
     }
@@ -332,48 +322,13 @@
     if (expanded && !feedRequested) void loadFeed();
   }
 
-  function toggleFullView() {
-    if (fullView && expanded) {
-      fullView = false;
-      try {
-        localStorage.setItem(FULL_STORAGE_KEY, "false");
-      } catch {
-        // ignore
-      }
-      return;
-    }
-    fullView = true;
-    if (!expanded) {
-      expanded = true;
-      try {
-        localStorage.setItem(STORAGE_KEY, "true");
-      } catch {
-        // ignore
-      }
-    }
-    try {
-      localStorage.setItem(FULL_STORAGE_KEY, "true");
-    } catch {
-      // ignore storage errors
-    }
-    visibleCount = Math.min(FEED_PAGE_FULL, videoPool.length || FEED_PAGE_FULL);
-    const needsReload =
-      !feedRequested || videoPool.length < Math.floor(FEED_POOL_RAIL / 2);
-    if (needsReload) void loadFeed();
-    queueMicrotask(() => {
-      document
-        .querySelector(".youtube-feed.is-full")
-        ?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }
-
   async function openVideo(videoId: string) {
     await open(`https://www.youtube.com/watch?v=${videoId}`);
   }
 
   /** Map vertical wheel to horizontal scroll so the strip is usable with a mouse. */
   function onFeedWheel(e: WheelEvent) {
-    if (variant !== "row" || fullView) return;
+    if (variant !== "row") return;
     const el = e.currentTarget as HTMLElement;
     if (el.scrollWidth <= el.clientWidth) return;
     // Prefer horizontal delta; otherwise tilt vertical into horizontal.
@@ -388,7 +343,6 @@
   class="youtube-feed"
   class:rail={variant === "rail"}
   class:grid={variant === "grid"}
-  class:is-full={fullView && expanded}
   class:is-collapsed={!expanded}
   aria-busy={loading && expanded}
 >
@@ -408,20 +362,13 @@
     <HomeYoutubePlacementToggle compact={variant === "rail"} />
     <button
       type="button"
-      class="full-view-btn"
-      class:is-on={fullView && expanded}
-      onclick={toggleFullView}
-      title={fullView && expanded ? "Show compact strip" : "Expand feed to full height"}
-      aria-label={fullView && expanded ? "Show compact strip" : "Expand feed to full height"}
-      aria-pressed={fullView && expanded}
+      class="yt-more-btn"
+      onclick={openYoutubeQueue}
+      title="Open the YouTube player and queue"
+      aria-label="Open the YouTube player and queue"
     >
-      {#if fullView && expanded}
-        <ChevronsUp size={16} />
-        <span>Strip</span>
-      {:else}
-        <ChevronsDown size={16} />
-        <span>Full height</span>
-      {/if}
+      <MoreHorizontal size={16} />
+      <span>More</span>
     </button>
   </div>
   {#if expanded}
@@ -498,13 +445,6 @@
     margin-bottom: 0;
   }
 
-  .youtube-feed.is-full {
-    display: flex;
-    flex-direction: column;
-    height: calc(100dvh - 6.5rem);
-    overflow: hidden;
-  }
-
   .section-header-row {
     display: flex;
     align-items: center;
@@ -549,38 +489,29 @@
     font-size: 14px;
   }
 
-  .full-view-btn {
+  .yt-more-btn {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    gap: 6px;
+    gap: 5px;
     flex-shrink: 0;
-    height: 32px;
-    padding: 0 10px;
-    border: 1px solid var(--border-color);
+    padding: 5px 8px;
+    border: 1px solid transparent;
     border-radius: var(--border-radius-sm);
-    background: var(--bg-secondary);
+    background: transparent;
     color: var(--text-muted);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
   }
 
-  .full-view-btn:hover {
+  .yt-more-btn:hover {
     color: var(--text-primary);
-    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    background: var(--bg-hover);
   }
 
-  .full-view-btn.is-on,
-  .full-view-btn[aria-pressed="true"] {
-    color: var(--accent-primary);
-    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
-  }
+  
 
-  .full-view-btn :global(svg) {
-    color: inherit;
-  }
+  
 
   .chevron {
     display: flex;
@@ -643,48 +574,6 @@
 
   .grid .video-card {
     flex: unset;
-    width: 100%;
-  }
-
-  /* Full height: mosaic fills remaining viewport below the header. The row
-     owns the scroll so wheeling inside the feed scrolls the feed, not the
-     page (overscroll-behavior contains the scroll chain at the edges). */
-  .is-full .feed-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 20px 18px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    overscroll-behavior: contain;
-    padding-bottom: 12px;
-    touch-action: auto;
-    flex: 1 1 auto;
-    min-height: 16rem;
-    align-content: start;
-  }
-
-  .is-full .video-card-wrap {
-    flex: unset;
-    width: auto;
-    min-width: 0;
-  }
-
-  .is-full .video-card {
-    flex: unset;
-    width: 100%;
-    gap: 10px;
-  }
-
-  .is-full .title {
-    font-size: 13px;
-    line-height: 1.35;
-  }
-
-  .is-full .channel {
-    font-size: 12px;
-  }
-
-  .is-full .skel-card {
     width: 100%;
   }
 

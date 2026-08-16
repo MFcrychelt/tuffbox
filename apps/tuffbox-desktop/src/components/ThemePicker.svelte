@@ -23,7 +23,33 @@
     THEMES.filter((t) => t.badge === "Minimal").map((t) => t.id),
   );
 
+  /** Preview applies only after the pointer rests on a swatch — a fast sweep
+      across the grid no longer re-themes the whole app (layout shift → leave →
+      restore → re-enter → apply → flicker loop). */
+  const PREVIEW_DELAY = 200;
+  let previewTimer: ReturnType<typeof setTimeout> | undefined;
+  let previewed: ThemeId | null = null;
+
+  function schedulePreview(id: ThemeId) {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => {
+      if (previewed !== id) {
+        previewed = id;
+        previewTheme(id);
+      }
+    }, PREVIEW_DELAY);
+  }
+
+  function outPreview() {
+    clearTimeout(previewTimer);
+    if (previewed !== null) {
+      previewed = null;
+      restoreCommittedTheme();
+    }
+  }
+
   function select(id: ThemeId) {
+    outPreview();
     commitTheme(id);
     onChange(id);
   }
@@ -56,10 +82,10 @@
             background-color: ${theme.shades[0]}`
           : `background: ${theme.shades[0]}`}
       onclick={() => select(theme.id)}
-      onmouseenter={() => previewTheme(theme.id)}
-      onmouseleave={() => restoreCommittedTheme()}
-      onfocus={() => previewTheme(theme.id)}
-      onblur={() => restoreCommittedTheme()}
+      onmouseenter={() => schedulePreview(theme.id)}
+      onmouseleave={outPreview}
+      onfocus={() => schedulePreview(theme.id)}
+      onblur={outPreview}
     >
       <div class="mini-ui" aria-hidden="true">
         <div

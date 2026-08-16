@@ -2042,6 +2042,12 @@ html[data-theme] {
   --ftbq-text-strong: var(--text-primary);
   --ftbq-focus-border: color-mix(in srgb, var(--accent-primary) 55%, var(--border-color));
   --ftbq-focus-ring: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  /* Solid surface shades — opaque so textures never bleed through panels */
+  --ftbq-bg-inset: var(--bg-tertiary);
+  --ftbq-bg-raised: var(--bg-elevated);
+  --ftbq-scrim: color-mix(in srgb, var(--bg-primary) 88%, #000);
+  --ftbq-tint-soft: color-mix(in srgb, var(--accent-secondary) 10%, var(--bg-secondary));
+  --ftbq-tint-strong: color-mix(in srgb, var(--accent-secondary) 22%, var(--bg-tertiary));
 }
 
 .qe.ftbq {

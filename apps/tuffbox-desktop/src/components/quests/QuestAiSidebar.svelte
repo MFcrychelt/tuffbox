@@ -41,6 +41,7 @@
     open = true,
     onclose,
     onapply,
+    onsavechapter,
     anchorQuest = null,
     anchorChapterTitle = null,
     targetChapterId = null,
@@ -48,6 +49,10 @@
     open?: boolean;
     onclose?: () => void;
     onapply?: (result: QuestPlanMergeResult) => void;
+    /** Persist the anchor quest's chapter to disk before a branch turn. */
+    onsavechapter?: (
+      chapterId: string,
+    ) => Promise<"saved" | "notdirty" | "cancelled" | "error">;
     anchorQuest?: QuestData | null;
     anchorChapterTitle?: string | null;
     /** Current editor chapter — generate/extend upsert target. */
@@ -399,6 +404,31 @@
           progressLog = ["Checking AI…"];
           const ok = await preflightAi();
           if (!ok) return;
+        }
+        if (useIntent === "branch" && anchorQuest && targetChapterId) {
+          if (!onsavechapter) {
+            progressLog = [...progressLog, "Error: anchor chapter save callback missing"];
+            error = "Unable to save the anchor chapter — close and reopen the AI panel, then retry.";
+            return;
+          }
+          progressLog = [...progressLog, "Saving anchor chapter…"];
+          const saveOutcome = await onsavechapter(targetChapterId);
+          if (saveOutcome === "cancelled") {
+            progressLog = [...progressLog, "Branch aborted — anchor chapter not saved"];
+            composerHint = "Branch aborted: the anchor quest chapter was not saved. Save it first, then retry.";
+            return;
+          }
+          if (saveOutcome === "error") {
+            progressLog = [...progressLog, "Error: anchor chapter save failed"];
+            error = "Failed to save the anchor quest chapter. Check the editor for details, then retry.";
+            return;
+          }
+          progressLog = [
+            ...progressLog,
+            saveOutcome === "saved"
+              ? "Anchor chapter saved"
+              : "Anchor chapter already up to date",
+          ];
         }
         const msg =
           useIntent === "lore"

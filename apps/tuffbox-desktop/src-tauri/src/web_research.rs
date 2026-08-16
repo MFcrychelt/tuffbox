@@ -492,9 +492,156 @@ pub async fn lookup_modrinth_mod(
     Ok(snip)
 }
 
+const MINECRAFT_WIKI_API: &str = "https://minecraft.wiki/api.php";
+
+/// Maximum chars of plaintext extract returned per page.
+const MINECRAFT_WIKI_EXTRACT_CHARS: u32 = 6_000;
+
+/// TextExtracts response fields (subset).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MinecraftWikiExtract {
+    pub title: String,
+    pub page_id: u64,
+    pub url: String,
+    pub extract: String,
+}
+
+/// MediaWiki API base for building the query URL (unit-testable).
+fn minecraft_wiki_search_url(query: &str, limit: usize) -> String {
+    let limit = limit.clamp(1, 10);
+    format!(
+        "{MINECRAFT_WIKI_API}?action=query&format=json&formatversion=2&redirects=1&generator=search&gsrnamespace=0&gsrlimit={limit}&gsrsearch={}&prop=extracts&exintro=0&explaintext=1&exlimit=max&exchars={MINECRAFT_WIKI_EXTRACT_CHARS}&exsectionformat=plain",
+        urlencoding_encode(query),
+    )
+}
+
+/// Search minecraft.wiki (MediaWiki Action API) and return plaintext extracts.
+///
+/// Single round-trip via `generator=search` + `prop=extracts`. Use the result
+/// as grounding context for a (local) LLM so it can answer about Minecraft.
+pub async fn search_minecraft_wiki(
+    query: &str,
+    limit: usize,
+    budget: &mut ResearchBudget,
+    log: &mut Vec<ResearchLogEntry>,
+) -> Result<Vec<MinecraftWikiExtract>, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !budget.use_tool() {
+        let msg = "research tool budget exhausted".to_string();
+        log.push(ResearchLogEntry {
+            step: "minecraft_wiki".into(),
+            detail: msg.clone(),
+            ok: false,
+            url: None,
+        });
+        return Err(msg);
+    }
+    let url = minecraft_wiki_search_url(q, limit);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(SEARCH_TIMEOUT_SECS))
+        .user_agent("TuffBox-TuneConfigResearch/1.0 (contact: local)")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let msg = format!("minecraft.wiki HTTP {}", resp.status());
+        log.push(ResearchLogEntry {
+            step: "minecraft_wiki".into(),
+            detail: msg.clone(),
+            ok: false,
+            url: Some(url.clone()),
+        });
+        return Err(msg);
+    }
+    let v: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let Some(pages) = v
+        .pointer("/query/pages")
+        .and_then(|p| p.as_array())
+    else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for p in pages {
+        let title = p.get("title").and_then(|x| x.as_str()).unwrap_or("");
+        if title.is_empty() {
+            continue;
+        }
+        let page_id = p.get("pageid").and_then(|x| x.as_u64()).unwrap_or(0);
+        let extract = p
+            .get("extract")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if extract.is_empty() {
+            continue;
+        }
+        let url = format!(
+            "https://minecraft.wiki/?curid={page_id}"
+        );
+        out.push(MinecraftWikiExtract {
+            title: title.to_string(),
+            page_id,
+            url,
+            extract,
+        });
+    }
+    out.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    log.push(ResearchLogEntry {
+        step: "minecraft_wiki".into(),
+        detail: format!("query={q:?} hits={}", out.len()),
+        ok: true,
+        url: Some(url),
+    });
+    Ok(out)
+}
+
+/// RAG-style lookup: search minecraft.wiki and return a rendered context block
+/// suitable for injection into a local model prompt.
+pub fn render_minecraft_wiki_context(query: &str, hits: &[MinecraftWikiExtract]) -> String {
+    if hits.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("Minecraft Wiki results for {query:?}:\n");
+    for h in hits {
+        out.push_str(&format!("\n=== {} ===\n{} ({})\n", h.title, h.extract, h.url));
+    }
+    out
+}
+
+/// Tauri command: grounds a local model prompt with minecraft.wiki content.
+#[tauri::command]
+pub async fn minecraft_wiki_rag_search(
+    query: String,
+    limit: Option<usize>,
+) -> Result<String, String> {
+    let mut budget = ResearchBudget::new(1, 0);
+    let mut log: Vec<ResearchLogEntry> = Vec::new();
+    let hits = search_minecraft_wiki(&query, limit.unwrap_or(3), &mut budget, &mut log).await?;
+    Ok(render_minecraft_wiki_context(&query, &hits))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minecraft_wiki_url_encodes_query() {
+        let u = minecraft_wiki_search_url("nether portal", 3);
+        assert!(u.starts_with("https://minecraft.wiki/api.php?"));
+        assert!(u.contains("generator=search"));
+        assert!(u.contains("gsrsearch=nether%2Bportal") || u.contains("gsrsearch=nether+portal"));
+        assert!(u.contains("prop=extracts"));
+        assert!(u.contains("explaintext=1"));
+    }
 
     #[test]
     fn allowlist_accepts_known_hosts() {

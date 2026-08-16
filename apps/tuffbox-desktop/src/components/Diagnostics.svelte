@@ -34,6 +34,9 @@
     ideNeedsHealth,
     requestIdeIssuesRefresh,
     historyFocusFingerprintKey,
+    changeOptionKey,
+    getFixPreference,
+    setFixPreference,
     type DiagnoseFocus,
   } from "../lib/store";
   import { shareCrashLogWithFeedback } from "../lib/mclogs";
@@ -200,6 +203,8 @@
   let error = $state<string | null>(null);
   let message = $state<string | null>(null);
   let plan = $state<any | null>(null);
+  /** Radio choice for plans that carry `options` (conflict resolutions). */
+  let selectedFixOption = $state<number | null>(null);
   let lastLoadedPath = $state<string | null>(null);
 
   function onSourceChange(e: Event) {
@@ -210,6 +215,63 @@
     else if (el.value.startsWith("session/")) chooseArchivedSession(el.value);
     else chooseReport(el.value);
   }
+
+  // Diagnose can appear to hang forever when an IPC never settles (stuck
+  // Ollama/endpoint, p2p swarm lookup). Watchdog: after a hard cap, clear the
+  // busy flags so the Health view stops spinning and tells the user what was stuck.
+  const DIAGNOSE_BUSY_CAP_S = 180;
+  const DIAGNOSE_BUSY_CAP_MS = DIAGNOSE_BUSY_CAP_S * 1000;
+  let diagnoseWatch: ReturnType<typeof setInterval> | undefined;
+  let diagnoseBusySince = 0;
+
+  function syncDiagnoseWatchdog() {
+    const busy = loading || analysisBusy || crashLoading || aiLoading;
+    if (!busy) {
+      if (diagnoseWatch) {
+        clearInterval(diagnoseWatch);
+        diagnoseWatch = undefined;
+      }
+      diagnoseBusySince = 0;
+      return;
+    }
+    if (!diagnoseBusySince) diagnoseBusySince = Date.now();
+    if (diagnoseWatch) return;
+    diagnoseWatch = setInterval(() => {
+      if (Date.now() - diagnoseBusySince <= DIAGNOSE_BUSY_CAP_MS) return;
+      const stage =
+        cascadeLiveStage ||
+        (aiLoading
+          ? "AI analysis (Ollama / endpoint)"
+          : crashLoading
+            ? "crash rules"
+            : loading
+              ? "reading logs"
+              : "pack scan");
+      analysisBusy = false;
+      crashLoading = false;
+      aiLoading = false;
+      loading = false;
+      cascadeLiveStage = null;
+      clearInterval(diagnoseWatch);
+      diagnoseWatch = undefined;
+      diagnoseBusySince = 0;
+      error = `Diagnose stayed in "${stage}" for ${Math.round(DIAGNOSE_BUSY_CAP_MS / 1000)}s and was stopped. Check Settings → AI / Ollama, then Refresh.`;
+    }, 500);
+  }
+
+  $effect(() => {
+    void loading;
+    void analysisBusy;
+    void crashLoading;
+    void aiLoading;
+    syncDiagnoseWatchdog();
+    return () => {
+      if (diagnoseWatch) {
+        clearInterval(diagnoseWatch);
+        diagnoseWatch = undefined;
+      }
+    };
+  });
 
   async function chooseArchivedSession(reportId: string) {
     preferLatestLog = false;
@@ -260,6 +322,7 @@
         selectedReportId = data.selectedReport?.summary.id ?? selectedReportId;
       }
       plan = data.fixPlan ?? null;
+      preselectFixOption();
       detectWrongLoaderMods();
       detectDuplicateModJars();
       if (data.sessionHealthy && preferLatestLog) {
@@ -1915,6 +1978,30 @@
     topSuspect?.evidence?.find((item) => item.text.toLowerCase().includes("provided by")) ?? null,
   );
 
+  /// Remember/restore the radio "which side to fix" choice for a conflict plan.
+  /// Prefers a saved crash-fingerprint preference; else the recommended option.
+  function preselectFixOption() {
+    selectedFixOption = null;
+    const opts = plan?.options ?? [];
+    if (opts.length <= 1) return;
+    type OptionLike = {
+      label?: string;
+      keepMod?: string | null;
+      preferred?: boolean;
+      actions?: { action?: string; nodeId?: string; modId?: string }[] | null;
+    };
+    const isOption = (o: unknown): o is OptionLike =>
+      !!o && typeof o === "object";
+    const fp = aiContext?.fingerprintKey ?? activeReportId() ?? null;
+    const saved = fp ? getFixPreference(fp) : null;
+    let idx = -1;
+    if (saved != null) {
+      idx = opts.findIndex((o: unknown) => isOption(o) && changeOptionKey(o) === saved);
+    }
+    if (idx < 0) idx = opts.findIndex((o: unknown) => isOption(o) && o.preferred === true);
+    selectedFixOption = idx >= 0 ? idx : 0;
+  }
+
   /// Actually applies the crash-diagnosis fix plan on the backend (snapshot
   /// + update/disable suspected mod / install missing dependency) and
   /// reports what really happened. Previously this only faked a success
@@ -1926,10 +2013,18 @@
     error = null;
     message = null;
     try {
+      const hasOptions = (plan?.options?.length ?? 0) > 0;
+      const optIdx = hasOptions ? selectedFixOption : null;
       const applied: string[] = await invoke("apply_crash_fix_plan", {
         path: $projectPath,
         reportId: activeReportId(),
+        optionIndex: optIdx,
       });
+      if (optIdx != null && optIdx >= 0) {
+        const opt = plan?.options?.[optIdx];
+        const fp = aiAnalysis?.fingerprintKey ?? aiContext?.fingerprintKey ?? activeReportId();
+        if (opt && fp) setFixPreference(fp, changeOptionKey(opt));
+      }
       message = applied.length
         ? `Applied: ${applied.join(", ")}`
         : "No deterministic action was available for this plan. Review the notes manually.";
@@ -2986,6 +3081,21 @@
               <div class="plan-card">
                 <h3>Heuristic Fix plan</h3>
                 <p>{plan.summary}</p>
+                {#if (plan?.options?.length ?? 0) > 1}
+                  <div class="plan-options">
+                    <div class="plan-options-title">Which side to fix?</div>
+                    {#each plan.options as opt, i (i)}
+                      <label class="plan-option" class:preferred={opt?.preferred}>
+                        <input type="radio" name="fix-option" value={i} bind:group={selectedFixOption} />
+                        <span class="plan-option-label">
+                          {opt?.label ?? `Option ${i + 1}`}
+                          {#if opt?.preferred}<small class="muted-inline">recommended</small>{/if}
+                        </span>
+                        {#if opt?.reason}<small class="plan-option-reason">{opt.reason}</small>{/if}
+                      </label>
+                    {/each}
+                  </div>
+                {/if}
                 <button class="primary" onclick={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply heuristic fix plan"}</button>
               </div>
             {/if}
@@ -3427,6 +3537,22 @@
     overflow: auto;
   }
   .plan-card, .author-form { margin-top: 12px; padding: 12px; border-top: 1px solid var(--border-color); }
+  .plan-options { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+  .plan-options-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .plan-option {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 8px;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    cursor: pointer;
+  }
+  .plan-option.preferred { border-color: var(--accent, #f6a821); }
+  .plan-option-label { font-size: 13px; color: var(--text-primary); }
+  .plan-option-reason { grid-column: 2; font-size: 12px; color: var(--text-muted); }
   .author-form label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; font-size: 12px; color: var(--text-muted); }
   .author-form textarea, .author-form input {
     padding: 8px 10px;

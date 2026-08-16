@@ -1,10 +1,13 @@
 use crate::{
     action_plan::is_invented_vanilla_resource_mod_id,
-    change_plan::{ChangeAction, ChangePlan, ChangeRisk},
+    change_plan::{ChangeAction, ChangeOption, ChangePlan, ChangeRisk},
     diagnostics::{Diagnostic, DiagnosticSeverity},
     graph::{DependencyGraph, NodeId},
     launch_history::{self, LaunchHistoryEntry},
     manifest::{ModSpec, ProjectManifest},
+    mod_category,
+    mod_conflict::{self, Conflict},
+    resolve::{self, ResolveCtx},
     resolver::Resolver,
     snapshot::Snapshot,
 };
@@ -268,6 +271,10 @@ pub struct CrashDiagnosis {
     pub recent_snapshots: Vec<Snapshot>,
     pub graph_diagnostics: Vec<Diagnostic>,
     pub fix_plan: ChangePlan,
+    /// Conflict pairs parsed from logs (victim/keeper + kind), the input to
+    /// the policy-based resolver. Empty when the log names no explicit pair.
+    #[serde(default)]
+    pub conflicts: Vec<Conflict>,
     /// `latest_log` when a newer successful `logs/latest.log` supersedes crash-reports;
     /// otherwise `crash_report` when a report is selected/auto-picked.
     #[serde(default = "default_analysis_source")]
@@ -690,12 +697,14 @@ pub fn build_crash_diagnosis(
 
     let graph = DependencyGraph::from_manifest(manifest);
     let graph_diagnostics = Resolver::analyze_project(manifest, &graph);
+    let conflicts = build_conflicts_from_signals(&combined_signals);
     let fix_plan = if session_healthy && !has_archived_crash_context {
         ChangePlan {
             summary: "Minecraft launched successfully — no crash-log fixes needed. Remaining items below are dependency-graph checks only.".to_string(),
             risk: ChangeRisk::Low,
             actions: Vec::new(),
             requires_snapshot: false,
+        options: Vec::new(),
         }
     } else {
         create_crash_fix_plan(
@@ -765,6 +774,7 @@ pub fn build_crash_diagnosis(
         recent_snapshots,
         graph_diagnostics,
         fix_plan,
+        conflicts,
         analysis_source,
         crash_report_stale: stale && explicit.is_none(),
         session_healthy,
@@ -1842,6 +1852,20 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
 
     if kinds.contains(&CrashSignalKind::ModVersionMismatch) {
         let names: Vec<String> = suspects.iter().map(|s| s.id.clone()).collect();
+        let mut mix_fixes = Vec::new();
+        for s in suspects.iter().filter(|s| s.known_in_manifest).take(3) {
+            let safe = mod_category::is_safe_to_disable(mod_category::classify(&s.id, &s.name));
+            let (kind, verb) = if safe {
+                ("disableMod", "Disable")
+            } else {
+                ("updateMod", "Update")
+            };
+            mix_fixes.push(FixAction {
+                kind: kind.into(),
+                label: format!("{verb} {}", s.name),
+                mod_id: Some(s.id.clone()),
+            });
+        }
         push(DiagnosisHint {
             id: "version-mismatch".into(),
             title: "Mod / version conflict".into(),
@@ -1850,21 +1874,13 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 mixin conflicts or libraries at incompatible versions."
                 .into(),
             steps: vec![
-                "Update the conflicting mod(s) to versions compatible with your Minecraft + loader.".into(),
+                "Choose which side to keep — the recommended option disables the replaceable (optimization / bridge / legacy) mod and keeps your content.".into(),
                 "If two mods edit the same feature, keep only one or use a compatibility patch.".into(),
                 "Check the mod's issue tracker for known incompatibilities.".into(),
             ],
             related_mods: names.clone(),
-            fix: if names.is_empty() {
-                None
-            } else {
-                Some(FixAction {
-                    kind: "updateMod".into(),
-                    label: "Update suspected mod(s)".into(),
-                    mod_id: names.into_iter().next(),
-                })
-            },
-            fixes: vec![],
+            fix: mix_fixes.first().cloned(),
+            fixes: mix_fixes,
         });
     }
 
@@ -2069,12 +2085,96 @@ fn fix_verb(kind: &str) -> &'static str {
     }
 }
 
+/// Parse conflict pairs from crash signals (any signal whose text looks like a
+/// "mod A is incompatible / breaks / conflicts with mod B" loader line).
+fn build_conflicts_from_signals(signals: &[CrashSignal]) -> Vec<Conflict> {
+    mod_conflict::parse_conflicts_from_lines(
+        &signals
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<&str>>(),
+    )
+}
+
+/// Represent a ranked resolution as a selectable ChangeOption (one radio row in
+/// the diagnostics "how to fix" panel).
+fn ranked_fix_to_option(c: &resolve::RankedFix) -> ChangeOption {
+    let base = match &c.action {
+        ChangeAction::DisableMod { node_id } => format!("Disable {}", mod_node_label(node_id)),
+        ChangeAction::UpdateMod { node_id, .. } => format!("Update {}", mod_node_label(node_id)),
+        ChangeAction::InstallMod { project_id, .. } => format!("Install {project_id}"),
+        ChangeAction::RemoveMod { node_id } => format!("Remove {}", mod_node_label(node_id)),
+        ChangeAction::EditConfig { path, .. } => format!("Edit {path}"),
+    };
+    ChangeOption {
+        label: if c.preferred {
+            format!("{base} (recommended)")
+        } else {
+            base
+        },
+        keep_mod: (!c.keep_mod.is_empty()).then(|| c.keep_mod.clone()),
+        reason: c.reason.clone(),
+        preferred: c.preferred,
+        actions: vec![c.action.clone()],
+    }
+}
+
+fn build_conflict_summary(conflicts: &[Conflict], option_count: usize) -> String {
+    let pairs: Vec<String> = conflicts
+        .iter()
+        .map(|c| format!("{} ↔ {}", c.a, c.b))
+        .collect();
+    format!(
+        "Mod conflict detected: {}. {option_count} resolution choice(s) are offered — pick a side below. The recommended default disables the safest (most replaceable) side and keeps your content; it is reversible (jar → .disabled).",
+        pairs.join(", ")
+    )
+}
+
+fn mod_node_label(node_id: &NodeId) -> String {
+    node_id
+        .0
+        .strip_prefix("mod:")
+        .unwrap_or(&node_id.0)
+        .to_string()
+}
+
 pub fn create_crash_fix_plan(
     graph: &DependencyGraph,
     diagnostics: &[Diagnostic],
     suspected_mods: &[SuspectedMod],
     signals: &[CrashSignal],
 ) -> ChangePlan {
+    // Category-aware conflict resolution. Parse conflict pairs from the log,
+    // rank *both* sides by replaceability, and offer every side as a selectable
+    // option with a category-aware preferred default. Always reversible
+    // (.disabled), never deletes content or libraries.
+    let conflicts = build_conflicts_from_signals(signals);
+    if !conflicts.is_empty() {
+        let ctx = ResolveCtx {
+            graph,
+            manifest: None,
+        };
+        let ranked = resolve::ranked_candidates(&conflicts, suspected_mods, &ctx);
+        if !ranked.is_empty() {
+            let preferred: Vec<&resolve::RankedFix> =
+                ranked.iter().filter(|c| c.preferred).collect();
+            let chosen: Vec<&resolve::RankedFix> = if preferred.is_empty() {
+                vec![&ranked[0]]
+            } else {
+                preferred
+            };
+            let actions: Vec<ChangeAction> = chosen.iter().map(|c| c.action.clone()).collect();
+            let options: Vec<ChangeOption> = ranked.iter().map(ranked_fix_to_option).collect();
+            return ChangePlan {
+                summary: build_conflict_summary(&conflicts, options.len()),
+                risk: ChangeRisk::Medium,
+                actions,
+                requires_snapshot: true,
+                options,
+            };
+        }
+    }
+
     if let Some(top) = suspected_mods.first() {
         let node_id = NodeId::module(&top.id);
         let mut actions = Vec::new();
@@ -2102,6 +2202,7 @@ pub fn create_crash_fix_plan(
             risk: ChangeRisk::Medium,
             actions,
             requires_snapshot: true,
+        options: Vec::new(),
         };
     }
 
@@ -2114,6 +2215,7 @@ pub fn create_crash_fix_plan(
             risk: ChangeRisk::Medium,
             actions: Vec::new(),
             requires_snapshot: true,
+        options: Vec::new(),
         };
     }
 
@@ -2126,6 +2228,7 @@ pub fn create_crash_fix_plan(
             risk: ChangeRisk::Low,
             actions: Vec::new(),
             requires_snapshot: false,
+        options: Vec::new(),
         };
     }
 
@@ -2146,6 +2249,7 @@ pub fn create_crash_fix_plan(
         risk: ChangeRisk::Low,
         actions: Vec::new(),
         requires_snapshot: false,
+        options: Vec::new(),
     }
 }
 
@@ -3659,6 +3763,102 @@ mod tests {
             analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest());
         assert_eq!(suspects[0].id, "sodium");
         assert!(suspects[0].confidence >= 88);
+    }
+
+    #[test]
+    fn prefers_disable_optimization_mods_on_version_conflict() {
+        let mut m = manifest();
+        let base = m.mods[0].clone();
+        let mut mk = |id: &str, name: &str| {
+            let mut s = base.clone();
+            s.id = id.to_string();
+            s.name = name.to_string();
+            s
+        };
+        m.mods.push(mk("indium", "Indium"));
+        m.mods.push(mk("spb-revamped", "SP-Backrooms Revamped"));
+        let graph = crate::graph::DependencyGraph::from_manifest(&m);
+        let suspects = vec![
+            SuspectedMod {
+                id: "spb-revamped".to_string(),
+                name: "SP-Backrooms Revamped".to_string(),
+                version: Some("1.2.0".to_string()),
+                file_name: None,
+                known_in_manifest: true,
+                confidence: 95,
+                evidence: Vec::new(),
+                authors: Vec::new(),
+                blame_role: BlameRole::Primary,
+                match_sources: vec!["log_line".into()],
+            },
+            SuspectedMod {
+                id: "sodium".to_string(),
+                name: "Sodium".to_string(),
+                version: Some("0.5.13".to_string()),
+                file_name: None,
+                known_in_manifest: true,
+                confidence: 90,
+                evidence: Vec::new(),
+                authors: Vec::new(),
+                blame_role: BlameRole::Secondary,
+                match_sources: vec!["log_line".into()],
+            },
+            SuspectedMod {
+                id: "indium".to_string(),
+                name: "Indium".to_string(),
+                version: Some("1.0.36".to_string()),
+                file_name: None,
+                known_in_manifest: true,
+                confidence: 90,
+                evidence: Vec::new(),
+                authors: Vec::new(),
+                blame_role: BlameRole::Secondary,
+                match_sources: vec!["log_line".into()],
+            },
+        ];
+        let signals = vec![
+            CrashSignal {
+                source: "logs/latest.log".into(),
+                line_number: 3,
+                kind: CrashSignalKind::ModVersionMismatch,
+                text: "Mod 'SP-Backrooms Revamped' (spb-revamped) 1.2.0 is incompatible with any version of mod 'Sodium'".into(),
+            },
+            CrashSignal {
+                source: "logs/latest.log".into(),
+                line_number: 4,
+                kind: CrashSignalKind::ModVersionMismatch,
+                text: "Mod 'SP-Backrooms Revamped' (spb-revamped) 1.2.0 is incompatible with any version of mod 'Indium'".into(),
+            },
+        ];
+        let plan = create_crash_fix_plan(&graph, &[], &suspects, &signals);
+        assert!(
+            plan.options.len() >= 3,
+            "expected ~3 options, got {}",
+            plan.options.len()
+        );
+        let preferred: Vec<&ChangeOption> = plan.options.iter().filter(|o| o.preferred).collect();
+        // Preferred first moves = the optimisation / bridge sides, not the content.
+        assert!(preferred.iter().any(|o| o.label.to_lowercase().contains("sodium")));
+        assert!(preferred.iter().any(|o| o.label.to_lowercase().contains("indium")));
+        assert!(!preferred.iter().any(|o| o.label.to_lowercase().contains("backrooms")));
+        // The content side must be present as a (non-preferred) alternative.
+        assert!(plan.options.iter().any(|o| {
+            o.label.to_lowercase().contains("spb-revamped") && !o.preferred
+        }));
+        // Default (applied) actions disable the replaceable sides, never content.
+        assert!(
+            plan.actions
+                .iter()
+                .any(|a| matches!(a, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:sodium"))
+        );
+        assert!(
+            plan.actions
+                .iter()
+                .any(|a| matches!(a, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:indium"))
+        );
+        assert!(!plan.actions.iter().any(
+            |a| matches!(a, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:spb-revamped")
+        ));
     }
 
     #[test]

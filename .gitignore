@@ -74,3 +74,12 @@ examples/.tuffbox/
 # Vendored external projects (not part of TuffBox)
 ServerPackCreator/
 packwiz/
+
+# Local agent tooling state (not part of the repo)
+.cursor/
+.engram/
+.opencode/
+.playwright-mcp/
+
+# Windows accidental NUL redirect artifact
+/NUL

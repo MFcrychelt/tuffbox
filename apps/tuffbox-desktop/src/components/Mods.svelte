@@ -810,6 +810,7 @@ import { trapFocus } from "../lib/focusTrap";
     const target = Math.min(totalPages, Math.max(1, p));
     if (target === page && searchResults.length > 0) return;
     searchMods(target);
+    browserResultsEl?.scrollTo({ top: 0 });
   }
 
   let previews = $state<Record<string, InstallPreview | null>>({});
