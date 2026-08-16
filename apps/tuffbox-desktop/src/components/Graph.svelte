@@ -697,6 +697,7 @@
           path: $projectPath,
           modId: depPreviewSlug,
           side: "auto",
+          dependencyTargets: null,
         });
       } else {
         await invoke("add_modrinth_mod", {

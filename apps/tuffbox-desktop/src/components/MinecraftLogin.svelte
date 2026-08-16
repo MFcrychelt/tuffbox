@@ -115,7 +115,23 @@
         }
       }
     } catch (e) {
-      errorMsg = String(e);
+      const msg = String(e);
+      // The Azure device-code public client (89484d4e-…) is blocked in some
+      // tenants/regions and fails with AADSTS700016 (unauthorized_client).
+      // Fall back to the working Live authorization-code (URL/paste) flow.
+      if (
+        msg.includes("unauthorized_client") ||
+        msg.includes("AADSTS700016") ||
+        msg.includes("700016")
+      ) {
+        try {
+          await openMicrosoftUrlLogin();
+          return;
+        } catch {
+          /* fall through to the error below */
+        }
+      }
+      errorMsg = msg;
       mode = "select";
     }
   }

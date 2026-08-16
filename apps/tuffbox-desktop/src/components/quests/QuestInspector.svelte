@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Trash2, Link2, AlertTriangle, Copy, Check } from "@lucide/svelte";
+  import { Trash2, Link2, AlertTriangle, Copy, Check, ChevronDown, ChevronRight } from "@lucide/svelte";
+  import QuestItemIcon from "./QuestItemIcon.svelte";
   import type { QuestChapter, QuestData, QuestValidationIssue } from "../../lib/api";
   import { DEP_REQUIREMENT_OPTIONS, SHAPE_OPTIONS } from "../../lib/questTypeLabels";
   import {
@@ -76,6 +77,7 @@
   }
   let extraVal = $state("");
   let showAdvanced = $state(false);
+  let depsOpen = $state(true);
   let cmpTitle = $state("");
   let cmpSubtitle = $state("");
   let cmpDesc = $state("");
@@ -351,6 +353,7 @@
 
 <aside class="insp ftbq-view">
   <div class="insp-h">
+    <QuestItemIcon itemId={typeof quest.icon === "string" ? quest.icon : null} fallback={quest.title?.charAt(0) ?? "?"} size={26} />
     <h3 title={quest.id}>{quest.title || "Untitled quest"}</h3>
     <button
       type="button"
@@ -449,8 +452,19 @@
 
   <!-- 4. What unlocks it -->
   <section class="block">
-    <h4 class="block-h"><Link2 size={12} /> What unlocks it</h4>
-    <div class="deps">
+    <button
+      type="button"
+      class="block-h tog"
+      aria-expanded={depsOpen}
+      aria-controls="quest-deps"
+      onclick={() => (depsOpen = !depsOpen)}
+    >
+      {#if depsOpen}<ChevronDown size={12} class="flex-shrink-0" />{:else}<ChevronRight size={12} class="flex-shrink-0" />{/if}
+      <Link2 size={12} class="flex-shrink-0" /> What unlocks it
+      {#if quest.dependencies.length > 0}<span class="sec-count">{quest.dependencies.length}</span>{/if}
+    </button>
+    {#if depsOpen}
+      <div class="deps" id="quest-deps">
       {#each quest.dependencies as dep (dep)}
         <span class="dep-tag" title={dep}>
           {titleOf(dep)}
@@ -487,6 +501,7 @@
         onclick={applyDepFromFilter}>Add</button
       >
     </div>
+    {/if}
   </section>
 
   <!-- More: appearance, flags, locale -->
@@ -497,7 +512,8 @@
     aria-controls="quest-more"
     onclick={() => (showAdvanced = !showAdvanced)}
   >
-    {showAdvanced ? "▾" : "▸"} More
+    {#if showAdvanced}<ChevronDown size={12} class="flex-shrink-0" />{:else}<ChevronRight size={12} class="flex-shrink-0" />{/if}
+    More
   </button>
   {#if showAdvanced}
     <div class="fields flags" id="quest-more">
@@ -736,7 +752,7 @@
     margin: 0;
     font-size: 15px;
     font-weight: 700;
-    color: var(--text-primary, var(--ftbq-text, #1a1a2e));
+    color: var(--text-primary, var(--ftbq-text));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -753,17 +769,17 @@
     font-size: 11px;
     font-weight: 500;
     font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-    color: var(--ftbq-text-muted, #6b7280);
+    color: var(--ftbq-text-muted);
     padding: 4px 8px;
     border: 1px solid var(--ftbq-frame);
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     background: rgba(0, 0, 0, 0.15);
     cursor: pointer;
     transition: all 0.15s ease;
     letter-spacing: 0.02em;
   }
   .qid-mini:hover {
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     background: rgba(0, 0, 0, 0.25);
   }
   .qid-mini code {
@@ -783,7 +799,7 @@
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -824,7 +840,7 @@
     gap: 5px;
     font-size: 12px;
     font-weight: 500;
-    color: var(--ftbq-text-muted, #6b7280);
+    color: var(--ftbq-text-muted);
     letter-spacing: 0;
     line-height: 1.4;
   }
@@ -839,7 +855,7 @@
     font-weight: 400;
     background: var(--ftbq-input-bg) !important;
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #1a1a2e);
+    color: var(--ftbq-text);
     border-radius: var(--border-radius-sm);
     padding: 9px 12px;
     outline: none;
@@ -849,7 +865,7 @@
   }
   .fields input::placeholder,
   .fields textarea::placeholder {
-    color: var(--ftbq-text-muted, #9ca3af);
+    color: var(--ftbq-text-muted);
     opacity: 0.7;
   }
   .fields input:hover,
@@ -860,9 +876,9 @@
   .fields input:focus,
   .fields textarea:focus,
   .fields select:focus {
-    border-color: var(--ftbq-accent-teal, #3db8a8);
+    border-color: var(--ftbq-accent-teal);
     box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 20%, transparent),
+      0 0 0 3px color-mix(in srgb, var(--ftbq-accent-teal) 20%, transparent),
       inset 0 1px 2px rgba(0, 0, 0, 0.04);
   }
 
@@ -879,14 +895,14 @@
     flex-direction: row !important;
     align-items: center;
     gap: 10px;
-    color: var(--ftbq-text, #374151);
+    color: var(--ftbq-text);
     font-weight: 500;
     padding: 4px 0;
   }
   .checkbox input[type="checkbox"] {
     width: 17px;
     height: 17px;
-    accent-color: var(--ftbq-accent-teal, #3db8a8);
+    accent-color: var(--ftbq-accent-teal);
     cursor: pointer;
     border-radius: 4px;
   }
@@ -899,7 +915,7 @@
     list-style: none;
     font-size: 11px;
     font-weight: 600;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     padding: 4px 0;
@@ -931,21 +947,21 @@
     font-weight: 600;
     padding: 6px 12px;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     background: transparent;
-    color: var(--ftbq-text, #374151);
+    color: var(--ftbq-text);
     cursor: pointer;
     transition: all 0.15s ease;
   }
   .fmt-bar button:hover {
-    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 15%, transparent);
-    color: var(--ftbq-accent-teal, #3db8a8);
+    background: color-mix(in srgb, var(--ftbq-accent-teal) 15%, transparent);
+    color: var(--ftbq-accent-teal);
   }
   .fmt-bar button:active {
     transform: scale(0.97);
   }
   .fmt-bar button:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: 1px;
   }
 
@@ -963,7 +979,7 @@
   }
   .deps-empty {
     font-size: 12px;
-    color: var(--ftbq-text-muted, #9ca3af);
+    color: var(--ftbq-text-muted);
     font-style: italic;
     padding: 4px 0;
   }
@@ -977,21 +993,21 @@
     border: 1px solid var(--ftbq-frame);
     font-size: 12px;
     font-weight: 500;
-    color: var(--ftbq-text, #374151);
+    color: var(--ftbq-text);
     transition: all 0.15s ease;
   }
   .dep-tag:hover {
-    border-color: var(--ftbq-accent-teal, #3db8a8);
-    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 8%, transparent);
-    color: var(--ftbq-accent-teal, #3db8a8);
+    border-color: var(--ftbq-accent-teal);
+    background: color-mix(in srgb, var(--ftbq-accent-teal) 8%, transparent);
+    color: var(--ftbq-accent-teal);
   }
   .dep-rm {
     border: none;
     background: transparent;
-    color: var(--ftbq-text-muted, #9ca3af);
+    color: var(--ftbq-text-muted);
     cursor: pointer;
     padding: 2px 4px;
-    border-radius: 4px;
+    border-radius: var(--ftbq-radius-control);
     font-size: 14px;
     font-weight: 400;
     transition: all 0.15s ease;
@@ -1015,15 +1031,15 @@
     padding: 9px 12px;
     background: var(--ftbq-input-bg) !important;
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #1a1a2e);
-    border-radius: var(--border-radius-sm);
+    color: var(--ftbq-text);
+    border-radius: var(--ftbq-radius-control);
     box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
     outline: none;
     transition: all 0.15s ease;
   }
   .dep-filter:focus {
-    border-color: var(--ftbq-accent-teal, #3db8a8);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 20%, transparent);
+    border-color: var(--ftbq-accent-teal);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ftbq-accent-teal) 20%, transparent);
   }
   .dep-add select {
     width: 100%;
@@ -1031,16 +1047,16 @@
     font-size: 12px;
     background: var(--ftbq-input-bg) !important;
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #1a1a2e);
-    border-radius: var(--border-radius-sm);
+    color: var(--ftbq-text);
+    border-radius: var(--ftbq-radius-control);
     padding: 9px 12px;
     box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
     outline: none;
     transition: all 0.15s ease;
   }
   .dep-add select:focus {
-    border-color: var(--ftbq-accent-teal, #3db8a8);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 20%, transparent);
+    border-color: var(--ftbq-accent-teal);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ftbq-accent-teal) 20%, transparent);
   }
 
   .add-btn {
@@ -1049,16 +1065,16 @@
     font-size: 12px;
     font-weight: 600;
     padding: 9px 18px;
-    border-radius: var(--border-radius-sm);
+    border-radius: var(--ftbq-radius-control);
     border: none;
-    background: var(--ftbq-accent-teal, #3db8a8);
+    background: var(--ftbq-accent-teal);
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
     color: #fff;
     cursor: pointer;
     transition: all 0.15s ease;
   }
   .add-btn:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 85%, #000);
+    background: color-mix(in srgb, var(--ftbq-accent-teal) 85%, #000);
     transform: translateY(-1px);
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
   }
@@ -1067,7 +1083,7 @@
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
   }
   .add-btn:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: 2px;
   }
   .add-btn:disabled {
@@ -1079,26 +1095,27 @@
     width: 100%;
     display: flex;
     align-items: center;
-    justify-content: flex-start;
     gap: 8px;
     background: transparent;
     border: none;
-    border-top: 1px solid var(--ftbq-border);
-    color: var(--ftbq-text-muted, #6b7280);
+    border-top: 1px solid var(--ftbq-frame);
+    color: var(--ftbq-text-muted);
     font-family: inherit;
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
     text-align: left;
     padding: 12px 14px;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background 0.15s ease, color 0.15s ease;
   }
   .adv-tog:hover {
     background: var(--bg-hover, var(--ftbq-btn-hover-top));
-    color: var(--ftbq-text, #1a1a2e);
+    color: var(--ftbq-text);
   }
   .adv-tog:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: -2px;
   }
 
@@ -1114,7 +1131,7 @@
     font-weight: 700 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.06em !important;
-    color: var(--ftbq-accent-teal, #3db8a8) !important;
+    color: var(--ftbq-text-muted) !important;
     border: none !important;
     background: transparent !important;
   }
@@ -1131,7 +1148,7 @@
   .extra-row code {
     font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
     font-size: 11px;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     background: rgba(61, 184, 168, 0.1);
     padding: 2px 6px;
     border-radius: 4px;
@@ -1150,13 +1167,50 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-text-muted);
     display: flex;
     align-items: center;
     gap: 8px;
     background: color-mix(in srgb, var(--ftbq-bg) 40%, transparent);
     border-top: 1px solid var(--ftbq-frame);
     border-bottom: 1px solid var(--ftbq-frame);
+  }
+  .block-h.tog {
+    width: 100%;
+    margin: 0;
+    padding: 12px 14px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ftbq-text-muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: color-mix(in srgb, var(--ftbq-bg) 40%, transparent);
+    border-top: 1px solid var(--ftbq-frame);
+    border-bottom: 1px solid var(--ftbq-frame);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .block-h.tog:hover {
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--ftbq-text);
+  }
+  .block-h.tog .sec-count {
+    margin-left: auto;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--ftbq-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .insp :global(.flex-shrink-0) {
+    flex-shrink: 0;
   }
 
   .locale-cols {
@@ -1175,7 +1229,7 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-text-muted);
     padding-bottom: 4px;
     border-bottom: 1px solid var(--ftbq-border);
   }
@@ -1209,10 +1263,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--border-radius-sm);
+    border-radius: var(--ftbq-radius-control);
     border: 1px solid var(--ftbq-frame);
     background: var(--ftbq-input-bg);
-    color: var(--ftbq-text-muted, #6b7280);
+    color: var(--ftbq-text-muted);
     cursor: pointer;
     transition: all 0.15s ease;
   }
@@ -1226,7 +1280,7 @@
     transform: scale(0.95);
   }
   .ico:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: 1px;
   }
 

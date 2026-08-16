@@ -297,7 +297,7 @@
     border-radius: 2px;
     background: var(--ftbq-bg-panel);
     padding: 0 10px 10px;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
   }
   summary {
     cursor: pointer;
@@ -306,7 +306,7 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .rt-body {
     display: grid;
@@ -324,22 +324,22 @@
     border-radius: 2px;
     border: 1px solid var(--ftbq-border);
     background: rgba(0, 0, 0, 0.25);
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     font-size: 11px;
     cursor: pointer;
   }
   .rt-side button.sel,
   .rt-side button:hover {
     background: rgba(61, 184, 168, 0.1);
-    border-color: var(--ftbq-accent-teal, #3db8a8);
-    color: var(--ftbq-text, #e8e8e8);
+    border-color: var(--ftbq-accent-teal);
+    color: var(--ftbq-text);
   }
   .rt-side .add {
-    color: var(--ftbq-accent-green, #55c95a);
+    color: var(--ftbq-accent-green);
   }
   .rt-side .add.primary {
     background: rgba(85, 201, 90, 0.12);
-    border-color: var(--ftbq-accent-green, #55c95a);
+    border-color: var(--ftbq-accent-green);
     font-weight: 700;
   }
   .rt-empty {
@@ -351,7 +351,7 @@
   .rt-empty p {
     margin: 0;
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .rt-edit {
     display: grid;
@@ -362,7 +362,7 @@
     gap: 3px;
     font-size: 10px;
     text-transform: uppercase;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .rt-edit input,
   .rt-edit select,
@@ -380,7 +380,7 @@
     justify-content: space-between;
     align-items: center;
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .entry-card {
     display: grid;
@@ -405,12 +405,12 @@
     border-radius: 2px;
     border: 1px solid var(--ftbq-border);
     background: transparent;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     cursor: pointer;
   }
   .save {
     padding: 8px;
-    color: var(--ftbq-accent-green, #55c95a);
+    color: var(--ftbq-accent-green);
     border-color: rgba(85, 201, 90, 0.35);
     background: rgba(85, 201, 90, 0.08);
     font-weight: 700;
@@ -422,11 +422,11 @@
   }
   .muted {
     font-size: 12px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .extra {
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .extra textarea {
     width: 100%;

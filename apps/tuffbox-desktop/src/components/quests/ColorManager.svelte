@@ -309,7 +309,7 @@
     height: 100%;
     overflow: hidden;
     background: var(--bg-secondary, var(--ftbq-bg-panel));
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-primary, var(--ftbq-text));
   }
   .cm-header {
     display: flex;
@@ -324,11 +324,11 @@
     margin: 0;
     font-size: 14px;
     font-weight: 600;
-    color: var(--text-primary, var(--ftbq-text, #212529));
+    color: var(--text-primary, var(--ftbq-text));
   }
   .cm-count {
     font-size: 10px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     padding: 2px 6px;
     border: 1px solid var(--ftbq-frame);
     border-radius: 4px;
@@ -348,8 +348,8 @@
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
     box-shadow: none;
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
-    border-radius: 6px;
+    color: var(--text-primary, var(--ftbq-text));
+    border-radius: var(--ftbq-radius-control);
     outline: none;
   }
   .search-input:focus {
@@ -367,7 +367,7 @@
     align-items: center;
     gap: 4px;
     font-size: 11px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     cursor: pointer;
   }
   .filter input { width: 12px; height: 12px; }
@@ -375,9 +375,9 @@
   .cm-message {
     padding: 6px 12px;
     font-size: 11px;
-    color: var(--ftbq-accent-green, #55c95a);
-    background: color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 10%, transparent);
-    border-bottom: 1px solid color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 28%, var(--ftbq-frame));
+    color: var(--ftbq-accent-green);
+    background: color-mix(in srgb, var(--ftbq-accent-green) 10%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--ftbq-accent-green) 28%, var(--ftbq-frame));
     flex-shrink: 0;
   }
 
@@ -388,7 +388,7 @@
   }
   .palette-label {
     font-size: 11px;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     font-weight: 600;
     margin-bottom: 6px;
   }
@@ -403,11 +403,11 @@
     gap: 4px;
     padding: 3px 7px;
     border: 1px solid var(--ftbq-frame);
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     background: color-mix(in srgb, var(--ftbq-bg) 45%, transparent);
     cursor: pointer;
     font-size: 10px;
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-primary, var(--ftbq-text));
     transition: border-color 0.15s, background 0.15s;
   }
   .color-chip:hover {
@@ -426,7 +426,7 @@
     font-weight: 600;
   }
   .chip-count {
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
   }
 
   .cm-empty {
@@ -434,7 +434,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     font-size: 12px;
     padding: 24px;
     text-align: center;
@@ -454,13 +454,13 @@
     gap: 4px;
     padding: 7px 8px;
     border: 1px solid var(--ftbq-frame);
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     background: color-mix(in srgb, var(--ftbq-bg) 40%, transparent);
     cursor: pointer;
     text-align: left;
     transition: border-color 0.15s, background 0.15s;
     font-size: 11px;
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-primary, var(--ftbq-text));
     width: 100%;
   }
   .hit-item:hover {
@@ -478,14 +478,14 @@
   }
   .hit-chapter {
     font-weight: 600;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
   }
   .hit-quest {
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-primary, var(--ftbq-text));
   }
   .hit-field {
     font-size: 10px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     font-family: monospace;
   }
   .hit-color {
@@ -505,7 +505,7 @@
   }
   .hit-segment {
     font-size: 11px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -523,7 +523,7 @@
     position: fixed;
     background: var(--bg-elevated, var(--ftbq-bg-panel));
     border: 1px solid var(--ftbq-frame);
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     padding: 12px;
     box-shadow: 0 10px 28px rgba(0,0,0,0.28);
     z-index: 201;
@@ -532,7 +532,7 @@
   .popup-title {
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-primary, var(--ftbq-text));
     margin-bottom: 8px;
   }
   .popup-colors {
@@ -551,7 +551,7 @@
   }
   .popup-swatch:hover { transform: scale(1.1); }
   .popup-swatch.active {
-    border-color: var(--ftbq-accent-teal, #3db8a8);
+    border-color: var(--ftbq-accent-teal);
     transform: scale(1.1);
   }
   .popup-preview {
@@ -559,7 +559,7 @@
     padding: 6px 8px;
     background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
     border: 1px solid var(--ftbq-frame);
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     margin-bottom: 8px;
     min-height: 28px;
   }
@@ -572,10 +572,10 @@
     padding: 6px 10px;
     border: 1px solid var(--ftbq-frame);
     background: var(--bg-secondary, var(--ftbq-bg-panel));
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-primary, var(--ftbq-text));
     font-size: 12px;
     font-weight: 600;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     cursor: pointer;
   }
   .btn:hover:not(:disabled) {
@@ -584,9 +584,9 @@
   }
   .btn:disabled { opacity: 0.4; cursor: default; }
   .btn.primary {
-    border-color: color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 55%, var(--ftbq-frame));
-    background: color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 14%, transparent);
-    color: var(--ftbq-accent-green, #55c95a);
+    border-color: color-mix(in srgb, var(--ftbq-accent-green) 55%, var(--ftbq-frame));
+    background: color-mix(in srgb, var(--ftbq-accent-green) 14%, transparent);
+    color: var(--ftbq-accent-green);
   }
   .btn.ghost { background: transparent; }
   .btn.small { padding: 4px 8px; font-size: 11px; }

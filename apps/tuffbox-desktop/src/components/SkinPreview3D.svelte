@@ -9,6 +9,7 @@
     accountKey = "",
     playerName = "",
     showName = true,
+    showSecondLayer = true,
     width = 300,
     height = 400,
   }: {
@@ -18,6 +19,7 @@
     accountKey?: string;
     playerName?: string;
     showName?: boolean;
+    showSecondLayer?: boolean;
     width?: number;
     height?: number;
   } = $props();
@@ -384,6 +386,7 @@
         await viewer.loadSkin(skinData, { model: "auto-detect" });
         lastSkin = skin!;
         skinShown = true;
+        applySecondLayer();
       }
 
       if (nextCape && capeChanged) {
@@ -416,6 +419,25 @@
     skinShown = false;
     loadError = "";
     void initViewer();
+  }
+
+  /** Show/hide the Minecraft skin overlay (hat, jacket, sleeves, pants). */
+  function applySecondLayer() {
+    if (!viewer) return;
+    const skin = viewer.playerObject?.skin;
+    if (!skin) return;
+    const parts = [
+      "head",
+      "body",
+      "rightArm",
+      "leftArm",
+      "rightLeg",
+      "leftLeg",
+    ] as const;
+    for (const part of parts) {
+      const p: any = skin[part];
+      if (p && p.layer2) p.layer2.visible = showSecondLayer;
+    }
   }
 
   // Track texture props; apply when viewer already exists (init also applies).
@@ -459,6 +481,13 @@
     } catch {
       /* ignore */
     }
+  });
+
+  // Re-apply overlay visibility whenever the toggle changes.
+  $effect(() => {
+    const _ = showSecondLayer;
+    if (!viewer || !skinShown) return;
+    applySecondLayer();
   });
 
   // Init when canvas binds (Svelte 5: onMount can race bind:this on $state).
@@ -533,34 +562,17 @@
     touch-action: none;
     overscroll-behavior: contain;
     width: 100%;
-    /* Vitrine speckle palette (deepslate-ish), consumed by .skin-bg. */
-    --tex-speck-a: rgba(255, 255, 255, 0.045);
-    --tex-speck-b: rgba(0, 0, 0, 0.20);
-    --tex-speck-c: rgba(0, 0, 0, 0.05);
   }
 
   .skin-bg {
     position: absolute;
     inset: 0;
+    /* Smooth studio backdrop — no blocky/rough Minecraft texture. */
     background:
-      radial-gradient(ellipse 55% 42% at 50% 38%, rgba(210, 195, 170, 0.14), transparent 62%),
-      radial-gradient(ellipse 80% 50% at 50% 100%, rgba(0, 0, 0, 0.55), transparent 58%),
-      radial-gradient(ellipse 100% 80% at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.45) 100%),
-      radial-gradient(circle at 22% 30%, var(--tex-speck-a) 0 10%, transparent 11%),
-      radial-gradient(circle at 68% 12%, var(--tex-speck-b) 0 12%, transparent 13%),
-      radial-gradient(circle at 82% 64%, var(--tex-speck-a) 0 9%, transparent 10%),
-      radial-gradient(circle at 38% 78%, var(--tex-speck-b) 0 13%, transparent 14%),
-      repeating-conic-gradient(var(--tex-speck-c) 0% 25%, transparent 0% 50%),
-      linear-gradient(180deg, #2a2c30 0%, #1a1c1f 52%, #121314 100%);
-    background-size:
-      auto, auto, auto,
-      var(--tex-size) var(--tex-size),
-      var(--tex-size) var(--tex-size),
-      var(--tex-size) var(--tex-size),
-      var(--tex-size) var(--tex-size),
-      calc(var(--tex-size) / 2) calc(var(--tex-size) / 2),
-      auto;
-    image-rendering: pixelated;
+      radial-gradient(ellipse 70% 55% at 50% 30%, rgba(255, 255, 255, 0.08), transparent 60%),
+      radial-gradient(ellipse 90% 70% at 50% 100%, rgba(0, 0, 0, 0.55), transparent 62%),
+      radial-gradient(ellipse 110% 90% at 50% 50%, transparent 35%, rgba(0, 0, 0, 0.5) 100%),
+      linear-gradient(180deg, #2a2c30 0%, #191b1e 52%, #101113 100%);
     pointer-events: none;
   }
 
@@ -702,22 +714,14 @@
     box-shadow:
       inset 0 -36px 52px color-mix(in srgb, var(--accent-primary) 6%, transparent),
       0 10px 24px color-mix(in srgb, var(--text-primary) 8%, transparent);
-    --tex-speck-a: rgba(255, 255, 255, 0.35);
-    --tex-speck-b: rgba(60, 70, 60, 0.08);
-    --tex-speck-c: rgba(60, 70, 60, 0.04);
   }
 
   :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .skin-bg {
     background:
-      radial-gradient(ellipse 50% 40% at 50% 36%, rgba(255, 255, 255, 0.8), transparent 58%),
-      radial-gradient(ellipse 70% 45% at 50% 100%, color-mix(in srgb, var(--accent-primary) 10%, transparent), transparent 60%),
-      radial-gradient(ellipse 100% 80% at 50% 50%, transparent 42%, color-mix(in srgb, var(--bg-tertiary) 55%, transparent) 100%),
-      radial-gradient(circle at 22% 30%, var(--tex-speck-a) 0 10%, transparent 11%),
-      radial-gradient(circle at 68% 12%, var(--tex-speck-b) 0 12%, transparent 13%),
-      radial-gradient(circle at 82% 64%, var(--tex-speck-a) 0 9%, transparent 10%),
-      radial-gradient(circle at 38% 78%, var(--tex-speck-b) 0 13%, transparent 14%),
-      repeating-conic-gradient(var(--tex-speck-c) 0% 25%, transparent 0% 50%),
-      linear-gradient(180deg, #eef2ec 0%, #e0e7de 48%, #d4ddd2 100%);
+      radial-gradient(ellipse 70% 55% at 50% 28%, rgba(255, 255, 255, 0.85), transparent 58%),
+      radial-gradient(ellipse 80% 60% at 50% 100%, color-mix(in srgb, var(--accent-primary) 12%, transparent), transparent 62%),
+      radial-gradient(ellipse 110% 90% at 50% 50%, transparent 38%, color-mix(in srgb, var(--bg-tertiary) 60%, transparent) 100%),
+      linear-gradient(180deg, #eef2ec 0%, #e1e8df 48%, #d3dcd2 100%);
   }
 
   :global(html.potato-pc:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"]))

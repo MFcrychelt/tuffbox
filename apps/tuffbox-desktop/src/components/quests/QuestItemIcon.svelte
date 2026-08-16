@@ -87,7 +87,7 @@
     justify-content: center;
     flex-shrink: 0;
     font-weight: 800;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     line-height: 1;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
     pointer-events: none;

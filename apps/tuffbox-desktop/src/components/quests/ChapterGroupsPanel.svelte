@@ -93,7 +93,7 @@
   .drawer-hint {
     margin: 0;
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .group-row {
     display: flex;

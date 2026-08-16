@@ -501,7 +501,8 @@
   .youtube-feed.is-full {
     display: flex;
     flex-direction: column;
-    min-height: calc(100dvh - 6.5rem);
+    height: calc(100dvh - 6.5rem);
+    overflow: hidden;
   }
 
   .section-header-row {
@@ -645,12 +646,16 @@
     width: 100%;
   }
 
-  /* Full height: mosaic fills remaining viewport below the header. */
+  /* Full height: mosaic fills remaining viewport below the header. The row
+     owns the scroll so wheeling inside the feed scrolls the feed, not the
+     page (overscroll-behavior contains the scroll chain at the edges). */
   .is-full .feed-row {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 20px 18px;
-    overflow: visible;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
     padding-bottom: 12px;
     touch-action: auto;
     flex: 1 1 auto;

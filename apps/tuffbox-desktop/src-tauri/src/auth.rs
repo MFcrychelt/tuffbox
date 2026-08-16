@@ -1197,9 +1197,13 @@ pub async fn upload_minecraft_skin_bytes(
 
 pub async fn apply_minecraft_cape(mc_token: &str, cape_id: &str) -> Result<(), String> {
     let c = client()?;
+    // Modern Mojang Capes API: PUT /minecraft/profile/capes/active with a
+    // JSON body selecting the cape by id. The legacy
+    // `/capes/{id}/activate` path now returns 404 NOT_FOUND.
     let resp = c
-        .put(format!("{MC_PROFILE_URL}/capes/{cape_id}/activate"))
+        .put(format!("{MC_PROFILE_URL}/capes/active"))
         .bearer_auth(mc_token)
+        .json(&serde_json::json!({ "capeId": cape_id }))
         .send()
         .await
         .map_err(|e| format!("cape activate failed: {e}"))?;
@@ -1207,7 +1211,29 @@ pub async fn apply_minecraft_cape(mc_token: &str, cape_id: &str) -> Result<(), S
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
+        // 400 means the authenticated account does not own the requested cape.
+        if status.as_u16() == 400 {
+            return Err("This Minecraft account does not own that cape.".into());
+        }
         return Err(format!("cape activate error ({status}): {body}"));
+    }
+    Ok(())
+}
+
+/// Hide the currently active Mojang cape (DELETE /minecraft/profile/capes/active).
+pub async fn hide_minecraft_cape(mc_token: &str) -> Result<(), String> {
+    let c = client()?;
+    let resp = c
+        .delete(format!("{MC_PROFILE_URL}/capes/active"))
+        .bearer_auth(mc_token)
+        .send()
+        .await
+        .map_err(|e| format!("cape hide failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("cape hide error ({status}): {body}"));
     }
     Ok(())
 }
@@ -2612,6 +2638,14 @@ pub async fn mc_list_capes() -> Result<CapeCatalog, String> {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn mc_set_cape_provider(provider: CapeProvider) -> Result<AuthState, String> {
     let mut state = load_auth_state();
+
+    // "None" deactivates the active Mojang cape so it is truly hidden in-game.
+    if provider == CapeProvider::None {
+        if let Ok(token) = load_mc_access_token() {
+            let _ = hide_minecraft_cape(&token).await;
+        }
+    }
+
     state.cape_provider = provider.clone();
     if let Some(ref mut profile) = state.profile {
         profile.cape_url = resolve_display_cape(

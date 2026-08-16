@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api, type QuestChapter, type QuestChapterGroup, type QuestData, type QuestValidationIssue, type QuestProgressTeamRef, type QuestProgressSnapshot, type QuestProgressStatus, type QuestPlanMergeResult, stripLocaleOverlay, chapterToSnbtJson } from "../lib/api";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map as MapIcon, Sparkles, X, Undo2, Redo2, Keyboard } from "@lucide/svelte";
+  import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map as MapIcon, Sparkles, X, Undo2, Redo2, Keyboard, MoreHorizontal, Globe } from "@lucide/svelte";
   import { onDestroy } from "svelte";
   import { projectPath, questDirty, questChatFocusId } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
@@ -193,7 +193,7 @@
   let clipboard = $state<QuestData[]>([]);
   let showShortcuts = $state(false);
   let panelTab = $state<"quest" | "info" | "batch" | "colors" | "raw">("info");
-  let railWidth = $state(180);
+  let railWidth = $state(200);
   let inspWidth = $state(300);
   let validateTimer: ReturnType<typeof setTimeout> | null = null;
   let itemCatalogCache = $state<Set<string> | null>(null);
@@ -1950,30 +1950,38 @@
             type="button"
             class="issues-btn"
             class:warn={validationIssues.length > 0}
-            disabled={validationIssues.length === 0}
             aria-haspopup="true"
             aria-expanded={issuesOpen}
             aria-controls="quest-issues-pop"
             onclick={() => (issuesOpen = !issuesOpen)}
           >
-            {validationIssues.length === 0 ? "✓ Live" : `${validationIssues.length} live`}
+            {#if validationIssues.length === 0}
+              <CheckCircle2 size={12} /> Live
+            {:else}
+              <AlertTriangle size={12} /> {validationIssues.length} live
+            {/if}
           </button>
-          <button
-            type="button"
-            class="issues-btn"
-            title="Re-run Rust validate_quest_book on disk (saved SNBT)"
-            onclick={() => void revalidateFromDisk()}
-          >
-            On disk
-          </button>
-          {#if issuesOpen && validationIssues.length > 0}
+          {#if issuesOpen}
             <div class="issues-pop" id="quest-issues-pop" role="listbox" aria-label="Validation issues">
-              {#each validationIssues as iss, i (`${iss.questId}-${i}`)}
-                <button type="button" class="issue-row" onclick={() => jumpToIssue(iss)}>
-                  <code>{iss.questId.slice(0, 8)}</code>
-                  <span>{iss.message}</span>
-                </button>
-              {/each}
+              {#if validationIssues.length > 0}
+                {#each validationIssues as iss, i (`${iss.questId}-${i}`)}
+                  <button type="button" class="issue-row" onclick={() => jumpToIssue(iss)}>
+                    <code>{iss.questId.slice(0, 8)}</code>
+                    <span>{iss.message}</span>
+                  </button>
+                {/each}
+              {:else}
+                <div class="issues-ok"><CheckCircle2 size={12} /> No issues found</div>
+              {/if}
+              <div class="issues-pop-sep"></div>
+              <button
+                type="button"
+                class="issue-row action"
+                title="Re-run Rust validate_quest_book on disk (saved SNBT)"
+                onclick={() => void revalidateFromDisk()}
+              >
+                <RefreshCw size={12} /> Re-run validation on disk
+              </button>
             </div>
           {/if}
         </div>
@@ -1985,134 +1993,149 @@
       {/if}
     </div>
     <div class="qe-actions">
-      {#if availableLocales.length > 1}
-        <div class="locale-controls">
-          <select
-            class="locale-select"
-            value={activeLocale ?? ""}
-            title="Language overlay (lang/*.snbt)"
-            onchange={(e) => {
-              const v = (e.currentTarget as HTMLSelectElement).value;
-              if (v) switchLocale(v);
-            }}
-          >
-            {#each availableLocales as code (code)}
-              <option value={code}>{code}{#if dirtyLocales.has(code)} ●{/if}</option>
-            {/each}
-          </select>
-        </div>
-      {/if}
-      <div class="tb-pop">
+      <div class="tb-btn-group">
         <button
           type="button"
           class="ghost"
-          class:active={bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel}
-          class:has-dirty={bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}
-          title="Book, groups, reward tables, locales, KubeJS"
-          aria-haspopup="menu"
-          aria-expanded={bookMenuOpen}
-          aria-controls="quest-book-menu"
-          onclick={() => {
-            const chromeOpen =
-              bookMenuOpen ||
-              showBookPanel ||
-              showGroupsPanel ||
-              showTablesPanel ||
-              showLocalePanel ||
-              showKubeJsPanel;
-            if (chromeOpen) {
-              closeBookChrome();
-            } else {
-              bookMenuOpen = true;
-            }
-          }}
+          class:active={aiSidebarOpen}
+          title="Quest AI sidebar"
+          aria-label="Quest AI sidebar"
+          onclick={() => setAiSidebar(!aiSidebarOpen)}
         >
-          Book{#if bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
+          <Sparkles size={16} /> AI
         </button>
-        {#if bookMenuOpen && $projectPath}
-          <div class="book-menu" id="quest-book-menu" role="menu">
-            <button
-              type="button"
-              role="menuitem"
-              class:active={showBookPanel}
-              onclick={() => openBookDrawer("book")}
-            >
-              Book settings{#if bookDirty}<span class="dot-mini">●</span>{/if}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              class:active={showGroupsPanel}
-              onclick={() => openBookDrawer("groups")}
-            >
-              Chapter groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              class:active={showTablesPanel}
-              onclick={() => openBookDrawer("tables")}
-            >
-              Reward tables{#if rewardTablesDirty}<span class="dot-mini">●</span>{/if}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              class:active={showLocalePanel}
-              onclick={() => openBookDrawer("locales")}
-            >
-              Locales{#if dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              class:active={showKubeJsPanel}
-              onclick={() => openBookDrawer("kubejs")}
-            >
-              KubeJS
-            </button>
-          </div>
-        {/if}
+        <button
+          type="button"
+          class="ghost"
+          disabled={!canUndo(history)}
+          title="Undo (Ctrl+Z)"
+          aria-label="Undo (Ctrl+Z)"
+          onclick={handleUndo}
+        >
+          <Undo2 size={16} />
+        </button>
+        <button
+          type="button"
+          class="ghost"
+          disabled={!canRedo(history)}
+          title="Redo (Ctrl+Y)"
+          aria-label="Redo (Ctrl+Y)"
+          onclick={handleRedo}
+        >
+          <Redo2 size={16} />
+        </button>
+        <button
+          type="button"
+          class="ghost"
+          title="Shortcuts (Ctrl+/)"
+          aria-label="Shortcuts (Ctrl+/)"
+          onclick={() => (showShortcuts = !showShortcuts)}
+        >
+          <Keyboard size={16} />
+        </button>
+        <button
+          type="button"
+          class="ghost"
+          onclick={requestReload}
+          disabled={!$projectPath || loading}
+          title="Reload from disk"
+          aria-label="Reload from disk"
+        >
+          <RefreshCw size={16} class={loading ? "spin" : ""} />
+        </button>
+        <div class="tb-pop">
+          <button
+            type="button"
+            class="ghost"
+            class:active={bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel}
+            class:has-dirty={bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}
+            title="Book, groups, reward tables, locales, KubeJS"
+            aria-haspopup="menu"
+            aria-expanded={bookMenuOpen}
+            aria-controls="quest-book-menu"
+            onclick={() => {
+              const chromeOpen =
+                bookMenuOpen ||
+                showBookPanel ||
+                showGroupsPanel ||
+                showTablesPanel ||
+                showLocalePanel ||
+                showKubeJsPanel;
+              if (chromeOpen) {
+                closeBookChrome();
+              } else {
+                bookMenuOpen = true;
+              }
+            }}
+          >
+            <MoreHorizontal size={16} />
+            {#if bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
+          </button>
+          {#if bookMenuOpen && $projectPath}
+            <div class="book-menu" id="quest-book-menu" role="menu">
+              {#if availableLocales.length > 1}
+                <label class="menu-locale">
+                  <Globe size={14} />
+                  <select
+                    class="locale-select"
+                    value={activeLocale ?? ""}
+                    title="Language overlay (lang/*.snbt)"
+                    onchange={(e) => {
+                      const v = (e.currentTarget as HTMLSelectElement).value;
+                      if (v) switchLocale(v);
+                    }}
+                  >
+                    {#each availableLocales as code (code)}
+                      <option value={code}>{code}{#if dirtyLocales.has(code)} ●{/if}</option>
+                    {/each}
+                  </select>
+                </label>
+                <div class="menu-sep"></div>
+              {/if}
+              <button
+                type="button"
+                role="menuitem"
+                class:active={showBookPanel}
+                onclick={() => openBookDrawer("book")}
+              >
+                Book settings{#if bookDirty}<span class="dot-mini">●</span>{/if}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class:active={showGroupsPanel}
+                onclick={() => openBookDrawer("groups")}
+              >
+                Chapter groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class:active={showTablesPanel}
+                onclick={() => openBookDrawer("tables")}
+              >
+                Reward tables{#if rewardTablesDirty}<span class="dot-mini">●</span>{/if}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class:active={showLocalePanel}
+                onclick={() => openBookDrawer("locales")}
+              >
+                Locales{#if dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class:active={showKubeJsPanel}
+                onclick={() => openBookDrawer("kubejs")}
+              >
+                KubeJS
+              </button>
+            </div>
+          {/if}
+        </div>
       </div>
-      <button
-        type="button"
-        class="ghost"
-        class:active={aiSidebarOpen}
-        title="Quest AI sidebar"
-        aria-label="Quest AI sidebar"
-        onclick={() => setAiSidebar(!aiSidebarOpen)}
-      >
-        <Sparkles size={16} /> AI
-      </button>
-      <button
-        type="button"
-        class="ghost"
-        disabled={!canUndo(history)}
-        title="Undo (Ctrl+Z)"
-        aria-label="Undo (Ctrl+Z)"
-        onclick={handleUndo}
-      >
-        <Undo2 size={16} />
-      </button>
-      <button
-        type="button"
-        class="ghost"
-        disabled={!canRedo(history)}
-        title="Redo (Ctrl+Y)"
-        aria-label="Redo (Ctrl+Y)"
-        onclick={handleRedo}
-      >
-        <Redo2 size={16} />
-      </button>
-      <button
-        type="button"
-        class="ghost"
-        title="Shortcuts (Ctrl+/)"
-        aria-label="Shortcuts (Ctrl+/)"
-        onclick={() => (showShortcuts = !showShortcuts)}
-      >
-        <Keyboard size={16} />
-      </button>
       {#if hasDirty}
         <span class="dirty-badge"
           >{dirtyChapters.size +
@@ -2122,19 +2145,9 @@
             dirtyLocales.size} unsaved</span
         >
         <button type="button" class="primary" onclick={saveAll} disabled={!$projectPath || saving} title="Ctrl+S">
-          <Save size={16} /> {saving ? "Saving…" : "Save all"}
+          <Save size={16} class={saving ? "spin" : ""} /> {saving ? "Saving…" : "Save all"}
         </button>
       {/if}
-      <button
-        type="button"
-        class="ghost"
-        onclick={requestReload}
-        disabled={!$projectPath || loading}
-        title="Reload from disk"
-        aria-label="Reload from disk"
-      >
-        <RefreshCw size={16} class={loading ? "spin" : ""} />
-      </button>
     </div>
   </div>
 
@@ -2761,11 +2774,11 @@
     display: flex;
     flex-direction: column;
     background: var(--ftbq-bg);
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
   }
   /* Isolate from global TuffBox green primary buttons — flat chrome */
   .qe.ftbq :global(button) {
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     font-weight: 600;
     box-shadow: none;
     text-shadow: none;
@@ -2792,14 +2805,14 @@
     border: 1px solid var(--ftbq-frame);
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     box-shadow: none;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     text-shadow: none;
   }
   .qe.ftbq :global(button.ghost:hover:not(:disabled)),
   .qe.ftbq :global(button.ico:hover:not(:disabled)) {
     border-color: var(--ftbq-frame);
     background: var(--bg-hover, var(--ftbq-btn-hover-top));
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
   }
   .qe.ftbq :global(button.ghost:active:not(:disabled)),
   .qe.ftbq :global(button.ico:active:not(:disabled)) {
@@ -2826,11 +2839,11 @@
   .qe.ftbq :global(input),
   .qe.ftbq :global(select),
   .qe.ftbq :global(textarea) {
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     border: 1px solid var(--ftbq-frame);
     background: var(--ftbq-input-bg);
     box-shadow: none;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     min-width: 0;
     outline: none;
     color-scheme: inherit;
@@ -2842,8 +2855,8 @@
   .qe.ftbq :global(select:focus),
   .qe.ftbq :global(textarea:focus) {
     outline: none;
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: var(--ftbq-focus-border);
+    box-shadow: 0 0 0 2px var(--ftbq-focus-ring);
   }
   .qe-tb,
   .qe-title,
@@ -2857,10 +2870,55 @@
   .tb-pop {
     position: relative;
   }
-  .locale-controls {
+  .tb-btn-group {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: var(--ftbq-radius-control);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+  }
+  .qe.ftbq .tb-btn-group :global(button) {
+    border: none;
+    border-left: 1px solid var(--ftbq-frame);
+    border-radius: 0;
+    background: transparent;
+    padding: 5px 8px;
+    color: var(--ftbq-text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+  }
+  .qe.ftbq .tb-btn-group :global(button:first-child) {
+    border-left: none;
+  }
+  .qe.ftbq .tb-btn-group :global(button:hover:not(:disabled)) {
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--ftbq-text);
+  }
+  .qe.ftbq .tb-btn-group :global(button.active) {
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--text-primary, var(--ftbq-text));
+  }
+  .menu-locale {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ftbq-text-muted);
+  }
+  .menu-locale select {
+    flex: 1;
+    font-size: 11px;
+    padding: 4px 6px;
+  }
+  .menu-sep {
+    height: 1px;
+    background: var(--ftbq-frame);
+    margin: 4px 0;
   }
   .locale-select {
     max-width: 110px;
@@ -2879,7 +2937,7 @@
     gap: 2px;
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     border: 1px solid var(--ftbq-frame);
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-panel);
     box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.12));
   }
   .book-menu button {
@@ -2891,9 +2949,9 @@
     text-align: left;
     padding: 8px 10px;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     background: transparent;
-    color: var(--ftbq-text, #e8e8ea);
+    color: var(--ftbq-text);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
@@ -2904,7 +2962,7 @@
     color: var(--text-primary, var(--ftbq-text));
   }
   .dot-mini {
-    color: var(--ftbq-quest-started, #f2c94c);
+    color: var(--ftbq-quest-started);
     margin-left: 4px;
     font-size: 10px;
   }
@@ -2937,7 +2995,7 @@
     flex-direction: column;
     background: var(--ftbq-bg-panel);
     border: 1px solid var(--ftbq-frame);
-    border-radius: var(--border-radius-lg, 12px);
+    border-radius: var(--ftbq-radius-sheet);
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
   }
   .qe-sheet-wide {
@@ -2947,11 +3005,14 @@
     position: relative;
   }
   .issues-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     border: 1px solid var(--ftbq-frame);
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     box-shadow: none;
-    color: var(--ftbq-quest-completed, #55c95a);
-    border-radius: 6px;
+    color: var(--ftbq-quest-completed);
+    border-radius: var(--ftbq-radius-control);
     padding: 2px 8px;
     font-size: 12px;
     cursor: pointer;
@@ -2959,9 +3020,6 @@
   }
   .issues-btn.warn {
     color: #fbbf24;
-  }
-  .issues-btn:disabled {
-    cursor: default;
   }
   .issues-pop {
     position: absolute;
@@ -2973,7 +3031,7 @@
     overflow: auto;
     background: var(--ftbq-bg-panel);
     border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
+    border-radius: var(--ftbq-radius-panel);
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.06),
       0 10px 24px rgba(0, 0, 0, 0.5);
@@ -2987,12 +3045,36 @@
     border: none;
     border-bottom: 1px solid var(--ftbq-border);
     background: transparent;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     font-size: 11px;
     cursor: pointer;
   }
   .issue-row:hover {
     background: rgba(61, 184, 168, 0.1);
+  }
+  .issue-row.action {
+    color: var(--ftbq-text);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-bottom: none;
+  }
+  .issue-row.action:hover {
+    color: var(--ftbq-accent-teal);
+  }
+  .issues-ok {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px;
+    font-size: 11px;
+    color: var(--ftbq-quest-completed);
+    border-bottom: 1px solid var(--ftbq-border);
+  }
+  .issues-pop-sep {
+    height: 1px;
+    background: var(--ftbq-frame);
+    margin: 0;
   }
   .qe-tb {
     justify-content: space-between;
@@ -3003,7 +3085,7 @@
     max-height: 48px;
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     border: 1px solid var(--ftbq-frame);
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-panel);
     box-shadow: none;
   }
   .apply-save-banner {
@@ -3015,9 +3097,9 @@
     margin-bottom: 6px;
     font-size: 12px;
     color: var(--text-primary, var(--ftbq-text));
-    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 40%, var(--ftbq-frame));
-    border-radius: 6px;
+    background: color-mix(in srgb, var(--ftbq-accent-teal) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--ftbq-accent-teal) 40%, var(--ftbq-frame));
+    border-radius: var(--ftbq-radius-panel);
   }
   .apply-save-banner .mini {
     padding: 4px 10px;
@@ -3029,13 +3111,13 @@
     gap: 8px;
     min-width: 0;
     flex-wrap: wrap;
-    color: var(--text-muted, var(--ftbq-text-muted, #868e96));
+    color: var(--text-muted, var(--ftbq-text-muted));
     font-weight: 600;
     font-size: 13px;
     letter-spacing: 0.02em;
   }
   .qe-title .book-name {
-    color: var(--text-primary, #1e293b);
+    color: var(--text-primary, var(--ftbq-text));
     font-weight: 600;
     text-shadow: none;
   }
@@ -3045,18 +3127,18 @@
     padding: 2px 8px;
     border-radius: 999px;
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     background: color-mix(in srgb, var(--ftbq-bg) 70%, transparent);
     white-space: nowrap;
   }
   .prog-stat {
-    color: var(--ftbq-quest-completed, #55c95a);
+    color: var(--ftbq-quest-completed);
   }
   .dirty-badge {
     font-size: 10px;
-    color: var(--accent-warning, #d97706);
+    color: var(--accent-warning);
     padding: 3px 8px;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     background: color-mix(in srgb, var(--accent-warning) 12%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent);
     text-shadow: none;
@@ -3076,7 +3158,7 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-panel);
     margin-bottom: 8px;
     border: 1px solid var(--ftbq-border);
     flex-shrink: 0;
@@ -3106,17 +3188,17 @@
     border-color: rgba(239, 68, 68, 0.35);
   }
   .notice.success {
-    color: var(--ftbq-quest-completed, #55c95a);
+    color: var(--ftbq-quest-completed);
     background: rgba(85, 201, 90, 0.1);
     border-color: rgba(85, 201, 90, 0.3);
   }
   .empty {
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     padding: 48px 32px;
     text-align: center;
     background: var(--ftbq-bg-panel);
     border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
+    border-radius: var(--ftbq-radius-panel);
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.05),
       inset 0 0 48px rgba(0, 0, 0, 0.25);
@@ -3145,7 +3227,7 @@
     gap: 6px;
     padding: 10px 16px;
     border: 1px solid color-mix(in srgb, var(--accent-secondary) 45%, var(--ftbq-frame));
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     background: var(--accent-secondary);
     box-shadow: none;
     color: #fff;
@@ -3163,7 +3245,7 @@
   }
   .hint {
     font-size: 12px;
-    border-radius: 3px;
+    border-radius: var(--ftbq-radius-control);
     padding: 4px 8px;
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
@@ -3171,10 +3253,10 @@
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: var(--qe-rail, 180px) 4px 1fr;
+    grid-template-columns: var(--qe-rail, 200px) 4px 1fr;
     gap: 0;
     border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
+    border-radius: var(--ftbq-radius-panel);
     overflow: hidden;
     background: var(--ftbq-bg-canvas);
     box-shadow:
@@ -3183,7 +3265,7 @@
     min-width: 0;
   }
   .qe-lay.with-insp {
-    grid-template-columns: var(--qe-rail, 180px) 4px 1fr 4px var(--qe-insp, 300px);
+    grid-template-columns: var(--qe-rail, 200px) 4px 1fr 4px var(--qe-insp, 300px);
   }
   .col-resizer {
     width: 4px;
@@ -3203,7 +3285,7 @@
   }
   .col-resizer:hover,
   .col-resizer:active {
-    background: var(--ftbq-accent-teal, #3db8a8);
+    background: var(--ftbq-accent-teal);
   }
   .qe-body-row {
     display: flex;
@@ -3239,20 +3321,20 @@
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
     color: inherit;
-    border-radius: 3px;
+    border-radius: var(--ftbq-radius-control);
     padding: 4px 8px;
     font-size: 12px;
   }
   .canvas-tools input:focus {
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: var(--ftbq-focus-border);
+    box-shadow: 0 0 0 2px var(--ftbq-focus-ring);
     outline: none;
   }
   .filt-count {
     flex: 1;
     padding: 5px 8px;
     font-size: 12px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
   .layout-btns {
@@ -3265,13 +3347,13 @@
     font-size: 11px;
     border: 1px solid var(--ftbq-border);
     background: rgba(0, 0, 0, 0.25);
-    color: var(--ftbq-text-muted, #9a9aa0);
-    border-radius: 3px;
+    color: var(--ftbq-text-muted);
+    border-radius: var(--ftbq-radius-control);
     cursor: pointer;
   }
   .layout-btn:hover {
-    color: var(--ftbq-text, #e8e8e8);
-    border-color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-text);
+    border-color: var(--ftbq-accent-teal);
   }
   .search-bar {
     display: flex;
@@ -3288,8 +3370,8 @@
     font-size: 12px;
   }
   .search-bar input:focus {
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: var(--ftbq-focus-border);
+    box-shadow: 0 0 0 2px var(--ftbq-focus-ring);
     outline: none;
   }
   .search-panel {
@@ -3306,7 +3388,7 @@
     margin: 0;
     padding: 8px 12px 10px;
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .search-empty code {
     font-size: 10px;
@@ -3329,7 +3411,7 @@
     text-align: left;
     padding: 5px 8px;
     border: 1px solid transparent;
-    border-radius: 3px;
+    border-radius: var(--ftbq-radius-control);
     background: rgba(0, 0, 0, 0.2);
     color: inherit;
     font-size: 11px;
@@ -3337,15 +3419,15 @@
   }
   .search-hit:hover,
   .search-hit.active {
-    border-color: var(--ftbq-accent-teal, #3db8a8);
+    border-color: var(--ftbq-accent-teal);
     background: rgba(61, 184, 168, 0.12);
   }
   .search-hit:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: -2px;
   }
   .hit-ch {
-    color: var(--ftbq-title-gold, #f2c94c);
+    color: var(--ftbq-title-gold);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -3355,7 +3437,7 @@
     transition: background 0.12s ease, color 0.12s ease;
   }
   .hit-field {
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     text-transform: uppercase;
     font-size: 9px;
     letter-spacing: 0.04em;
@@ -3367,7 +3449,7 @@
   }
   .search-more {
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     padding: 4px 8px;
   }
   .side-panel {
@@ -3393,9 +3475,9 @@
     padding: 7px 2px;
     border: 1px solid transparent;
     border-bottom: none;
-    border-radius: 6px 6px 0 0;
+    border-radius: var(--ftbq-radius-control) var(--ftbq-radius-control) 0 0;
     background: transparent;
-    color: var(--text-muted, var(--ftbq-text-muted, #868e96));
+    color: var(--text-muted, var(--ftbq-text-muted));
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
@@ -3411,15 +3493,15 @@
     box-shadow: none;
   }
   .panel-tabs .tab:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: -2px;
   }
   .panel-tabs .tab:hover {
-    color: var(--text-secondary, var(--ftbq-text, #495057));
-    background: color-mix(in srgb, var(--bg-hover, #dee2e6) 55%, transparent);
+    color: var(--text-secondary, var(--ftbq-text));
+    background: color-mix(in srgb, var(--bg-hover, var(--ftbq-btn-hover-top)) 55%, transparent);
   }
   .panel-tabs .tab.active {
-    color: var(--text-primary, var(--ftbq-text, #212529));
+    color: var(--text-primary, var(--ftbq-text));
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     border-color: var(--ftbq-frame);
     border-bottom-color: var(--bg-secondary, var(--ftbq-bg-panel));
@@ -3436,7 +3518,7 @@
     margin: 0;
     padding: 8px 12px 12px;
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     border-top: 1px solid var(--ftbq-frame);
   }
   .sel-empty {
@@ -3453,11 +3535,11 @@
   }
   .qe-actions .active {
     color: var(--text-primary, var(--ftbq-text));
-    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
+    border-color: var(--ftbq-focus-border);
     background: var(--bg-hover, var(--ftbq-btn-hover-top));
   }
   .qe-actions button:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: 1px;
   }
   :global(.spin) {

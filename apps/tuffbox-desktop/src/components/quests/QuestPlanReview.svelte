@@ -328,12 +328,12 @@
     flex-wrap: wrap;
   }
   .review-h strong {
-    color: var(--ftbq-title-gold, #f2c94c);
+    color: var(--ftbq-title-gold);
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
   }
   .meta,
   .expl {
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     font-size: 12px;
     margin: 0;
   }
@@ -346,7 +346,7 @@
     font-size: 11px;
     font-weight: 600;
     padding: 2px 8px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .tree {
     display: flex;
@@ -373,7 +373,7 @@
     height: 22px;
     border: none;
     background: transparent;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     cursor: pointer;
     padding: 0;
     transform: rotate(-90deg);
@@ -398,7 +398,7 @@
   }
   .q {
     padding-left: 36px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .mode-badge {
     font-size: 9px;
@@ -408,7 +408,7 @@
     padding: 1px 5px;
     border-radius: 2px;
     background: rgba(61, 184, 168, 0.15);
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     flex-shrink: 0;
   }
   .ch small,
@@ -436,7 +436,7 @@
     background: #9b7bff;
   }
   .dot.tasks {
-    background: var(--ftbq-accent-teal, #3db8a8);
+    background: var(--ftbq-accent-teal);
   }
   .dot.deps {
     background: var(--ftbq-line, #5c8a9e);
@@ -449,7 +449,7 @@
     font-size: 11px;
   }
   .warns {
-    color: var(--ftbq-quest-started, #f2c94c);
+    color: var(--ftbq-quest-started);
   }
   .errs {
     color: #e57373;
@@ -466,7 +466,7 @@
   .actions .ghost {
     background: transparent;
     border-color: transparent;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .apply-hint {
     margin: 0;

@@ -771,7 +771,8 @@
     flex: 1 1 auto;
     display: flex;
     flex-direction: column;
-    min-height: calc(100dvh - 6.5rem);
+    height: calc(100dvh - 6.5rem);
+    overflow: hidden;
   }
 
   .home-feed :global(.youtube-feed.is-collapsed) {

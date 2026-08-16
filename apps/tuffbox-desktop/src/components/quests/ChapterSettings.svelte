@@ -177,19 +177,19 @@
     font-weight: 600;
     letter-spacing: 0;
     text-transform: none;
-    color: var(--text-primary, var(--ftbq-text, #212529));
+    color: var(--text-primary, var(--ftbq-text));
     background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
     border-bottom: 1px solid var(--ftbq-frame);
   }
   .ch-set h4:not(:first-child) {
     margin-top: 4px;
     border-top: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
   }
   .ch-set label {
     display: grid;
     gap: 4px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -205,8 +205,8 @@
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
     box-shadow: none;
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
-    border-radius: 6px;
+    color: var(--text-primary, var(--ftbq-text));
+    border-radius: var(--ftbq-radius-control);
     text-transform: none;
     outline: none;
     color-scheme: inherit;
@@ -223,20 +223,20 @@
     align-items: center;
     padding: 0 12px;
     font-size: 11px;
-    color: var(--text-secondary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-secondary, var(--ftbq-text));
   }
   .extra-row code {
     font-size: 11px;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
   }
   .extra-row button {
     width: 28px;
     height: 28px;
     padding: 0;
     border: 1px solid var(--ftbq-frame);
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     background: var(--bg-secondary, var(--ftbq-bg-panel));
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     cursor: pointer;
   }
   .extra-row button:hover {
@@ -255,8 +255,8 @@
     font-size: 11px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
-    border-radius: 6px;
+    color: var(--text-primary, var(--ftbq-text));
+    border-radius: var(--ftbq-radius-control);
     box-shadow: none;
   }
   .extra-add button {
@@ -266,6 +266,6 @@
   }
   .extra-add button:hover {
     background: var(--bg-hover, var(--ftbq-btn-hover-top));
-    color: var(--ftbq-accent-green, #55c95a);
+    color: var(--ftbq-accent-green);
   }
 </style>

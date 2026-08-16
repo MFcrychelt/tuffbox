@@ -263,7 +263,7 @@
 
   function matchColor(field: string): string {
     if (field.includes("missing")) return "#ef4444";
-    return "var(--ftbq-text-muted, #9a9aa0)";
+    return "var(--ftbq-text-muted)";
   }
 </script>
 
@@ -501,7 +501,7 @@
     height: 100%;
     overflow: hidden;
     background: var(--bg-secondary, var(--ftbq-bg-panel));
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-primary, var(--ftbq-text));
   }
   .batch-header {
     display: flex;
@@ -516,11 +516,11 @@
     margin: 0;
     font-size: 14px;
     font-weight: 600;
-    color: var(--text-primary, var(--ftbq-text, #212529));
+    color: var(--text-primary, var(--ftbq-text));
   }
   .batch-count {
     font-size: 10px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     padding: 2px 6px;
     border: 1px solid var(--ftbq-frame);
     border-radius: 4px;
@@ -540,8 +540,8 @@
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
     box-shadow: none;
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
-    border-radius: 6px;
+    color: var(--text-primary, var(--ftbq-text));
+    border-radius: var(--ftbq-radius-control);
     outline: none;
   }
   .search-input:focus {
@@ -558,7 +558,7 @@
     align-items: center;
     gap: 4px;
     font-size: 11px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     cursor: pointer;
   }
   .filter input { width: 12px; height: 12px; }
@@ -575,8 +575,8 @@
     padding: 5px 6px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
-    border-radius: 6px;
+    color: var(--text-primary, var(--ftbq-text));
+    border-radius: var(--ftbq-radius-control);
     outline: none;
   }
   .scope-row select:focus {
@@ -597,7 +597,7 @@
   .mass-label {
     font-size: 11px;
     font-weight: 600;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     align-self: center;
   }
   .mass-field {
@@ -605,7 +605,7 @@
     flex-direction: column;
     gap: 2px;
     font-size: 10px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }
@@ -617,8 +617,8 @@
     padding: 4px 6px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
-    border-radius: 6px;
+    color: var(--text-primary, var(--ftbq-text));
+    border-radius: var(--ftbq-radius-control);
     text-transform: none;
     outline: none;
   }
@@ -629,7 +629,7 @@
   }
   .mass-status {
     font-size: 10px;
-    color: var(--ftbq-accent-green, #55c95a);
+    color: var(--ftbq-accent-green);
     align-self: center;
   }
 
@@ -638,7 +638,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     font-size: 12px;
     padding: 24px;
     text-align: center;
@@ -655,7 +655,7 @@
 
   .quest-card {
     border: 1px solid var(--ftbq-frame);
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     overflow: hidden;
     background: color-mix(in srgb, var(--ftbq-bg) 40%, transparent);
     transition: border-color 0.15s;
@@ -681,7 +681,7 @@
   }
   .quest-id {
     font-family: monospace;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     font-size: 10px;
   }
   .save-badge {
@@ -691,8 +691,8 @@
     border-radius: 4px;
     font-weight: 600;
   }
-  .save-badge.saving { color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0)); }
-  .save-badge.saved { color: var(--ftbq-accent-green, #55c95a); background: rgba(85,201,90,0.12); }
+  .save-badge.saving { color: var(--text-muted, var(--ftbq-text-muted)); }
+  .save-badge.saved { color: var(--ftbq-accent-green); background: rgba(85,201,90,0.12); }
   .save-badge.error { color: #ef4444; background: rgba(239,68,68,0.12); }
 
   .quest-preview {
@@ -705,12 +705,12 @@
     margin-bottom: 2px;
   }
   .preview-label {
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     min-width: 70px;
     flex-shrink: 0;
   }
   .preview-value {
-    color: var(--text-secondary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-secondary, var(--ftbq-text));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -738,7 +738,7 @@
   .field-label {
     font-size: 10px;
     font-weight: 600;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -750,8 +750,8 @@
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
     box-shadow: none;
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
-    border-radius: 6px;
+    color: var(--text-primary, var(--ftbq-text));
+    border-radius: var(--ftbq-radius-control);
     outline: none;
   }
   .field input:focus, .field textarea:focus {
@@ -796,17 +796,17 @@
   }
   .page-info {
     font-size: 11px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
   }
 
   .btn {
     padding: 6px 10px;
     border: 1px solid var(--ftbq-frame);
     background: var(--bg-secondary, var(--ftbq-bg-panel));
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-primary, var(--ftbq-text));
     font-size: 12px;
     font-weight: 600;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     cursor: pointer;
   }
   .btn:hover:not(:disabled) {
@@ -815,9 +815,9 @@
   }
   .btn:disabled { opacity: 0.4; cursor: default; }
   .btn.primary {
-    border-color: color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 55%, var(--ftbq-frame));
-    background: color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 14%, transparent);
-    color: var(--ftbq-accent-green, #55c95a);
+    border-color: color-mix(in srgb, var(--ftbq-accent-green) 55%, var(--ftbq-frame));
+    background: color-mix(in srgb, var(--ftbq-accent-green) 14%, transparent);
+    color: var(--ftbq-accent-green);
   }
   .btn.ghost { background: transparent; }
   .btn.small { padding: 4px 8px; font-size: 11px; }

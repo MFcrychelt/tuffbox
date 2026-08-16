@@ -160,6 +160,7 @@
         <button type="button" class="group-h" onclick={() => toggleGroup(g.key)}>
           {#if collapsed.has(g.key)}<ChevronRight size={12} class="flex-shrink-0" />{:else}<ChevronDown size={12} class="flex-shrink-0" />{/if}
           <span>{g.label}</span>
+          <span class="group-count">{g.chapters.length}</span>
         </button>
       {/if}
       {#if !collapsed.has(g.key)}
@@ -292,7 +293,7 @@
   }
   .rail-h h3 {
     margin: 0;
-    color: var(--text-muted, var(--ftbq-text-muted, #868e96));
+    color: var(--text-muted, var(--ftbq-text-muted));
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
@@ -305,15 +306,15 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     border: 1px solid var(--ftbq-frame);
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     box-shadow: none;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     cursor: pointer;
   }
   .ico:hover {
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     border-color: var(--ftbq-frame);
     background: var(--bg-hover, var(--ftbq-btn-hover-top));
     filter: none;
@@ -339,7 +340,7 @@
     padding: 8px 10px 4px;
     border: none;
     background: transparent;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     font-size: 9px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -347,7 +348,17 @@
     font-weight: 700;
   }
   .group-h:hover {
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
+  }
+  .group-count {
+    margin-left: auto;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--ftbq-text-muted);
+    font-variant-numeric: tabular-nums;
   }
   .ch-row-wrap {
     position: relative;
@@ -375,11 +386,11 @@
     flex: 1;
     min-width: 0;
     margin: 0;
-    padding: 6px 10px;
+    padding: 7px 10px;
     border: none;
     border-radius: 0;
     background: transparent;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     font-weight: 500;
     text-align: left;
     cursor: pointer;
@@ -390,7 +401,7 @@
     background: var(--bg-hover, color-mix(in srgb, var(--ftbq-text) 6%, transparent));
   }
   .ch-row-wrap.sel .ch-row {
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
   }
   .ch-row-wrap.sel .ch-row:hover {
     background: color-mix(in srgb, var(--ftbq-accent-green) 15%, transparent);
@@ -399,7 +410,7 @@
     position: relative;
     padding: 4px 4px 4px 0;
     font-weight: 800;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     box-shadow: none;
     transition: box-shadow 0.12s ease, border-color 0.12s ease;
   }
@@ -411,7 +422,7 @@
     flex-direction: column;
     background: var(--ftbq-bg-panel);
     border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
+    border-radius: var(--ftbq-radius-panel);
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.06),
       0 8px 20px rgba(0, 0, 0, 0.55);
@@ -420,16 +431,16 @@
     text-align: left;
     border: none;
     background: transparent;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     padding: 8px 10px;
     font-size: 11px;
     cursor: pointer;
   }
   .ch-menu button:hover {
-    background: color-mix(in srgb, var(--ftbq-accent-teal) 12%, transparent);
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
   }
   .ch-menu button.danger {
-    color: #f87171;
+    color: var(--accent-danger);
   }
   .ico.tiny {
     width: 18px;
@@ -438,10 +449,10 @@
     padding: 0;
   }
   .glyph {
-    width: 26px;
-    height: 26px;
+    width: 28px;
+    height: 28px;
     flex-shrink: 0;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
     display: flex;
@@ -449,7 +460,7 @@
     justify-content: center;
     font-size: 11px;
     font-weight: 800;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     box-shadow: none;
   }
   .ch-row-wrap:hover .glyph {
@@ -466,15 +477,15 @@
     flex: 1;
   }
   .ch-text strong {
-    font-size: 12px;
+    font-size: 13px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-weight: 600;
   }
   .ch-text span {
-    font-size: 9px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    font-size: 11px;
+    color: var(--ftbq-text-muted);
   }
   .title-edit {
     font-size: 12px;
@@ -483,10 +494,10 @@
     width: 100%;
     background: var(--ftbq-bg);
     border: 1px solid var(--ftbq-border);
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
   }
   .dot {
-    color: var(--ftbq-quest-started, #f2c94c);
+    color: var(--ftbq-quest-started);
     font-size: 10px;
   }
   .save-ch {
@@ -497,7 +508,7 @@
     justify-content: center;
     gap: 6px;
     padding: 7px;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
     background: var(--accent-primary);
     box-shadow: none;

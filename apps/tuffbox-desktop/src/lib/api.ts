@@ -1450,8 +1450,9 @@ export const api = {
       });
     },
     add(modId: string, side: string, p?: string) { return cmd<void>("add_modrinth_mod", { ...pathArg(p), modId, side }); },
-    addWithDeps(modId: string, side: string, p?: string) { return cmd<string[]>("add_modrinth_mod_with_dependencies", { ...pathArg(p), modId, side }); },
-    addManyWithDeps(modIds: string[], side: string, p?: string) { return cmd<string[]>("add_modrinth_mods_with_dependencies", { ...pathArg(p), modIds, side }); },
+    addWithDeps(modId: string, side: string, p?: string, dependencyTargets?: string[] | null) { return cmd<string[]>("add_modrinth_mod_with_dependencies", { ...pathArg(p), modId, side, dependencyTargets: dependencyTargets ?? null }); },
+    addManyWithDeps(modIds: string[], side: string, p?: string, dependencyTargets?: string[] | null) { return cmd<string[]>("add_modrinth_mods_with_dependencies", { ...pathArg(p), modIds, side, dependencyTargets: dependencyTargets ?? null }); },
+    resolveInstallDependencies(modId: string, p?: string) { return cmd<{ target: string; name: string | null; depth: number }[]>("resolve_install_dependencies", { ...pathArg(p), modId }); },
     addCurseforge(modId: string, side: string, p?: string) {
       return cmd<void>("add_curseforge_mod", { ...pathArg(p), modId, side });
     },

@@ -1477,7 +1477,7 @@ pub async fn install_pack_draft(
                 &format!("modrinth batch {}/{}", i + 1, chunk_count),
             );
             let installed =
-                install_modrinth_with_dependencies_rounds(&mut manifest, chunk, &side, 200)?;
+                install_modrinth_with_dependencies_rounds(&mut manifest, chunk, &side, 200, None)?;
             all_installed.extend(installed);
         }
 

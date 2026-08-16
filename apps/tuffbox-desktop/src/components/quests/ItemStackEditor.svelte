@@ -291,14 +291,14 @@
     font-size: 11px;
     text-transform: none;
     letter-spacing: 0;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .badge {
     font-size: 10px;
     padding: 1px 6px;
     border-radius: 2px;
     background: rgba(61, 184, 168, 0.15);
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     border: 1px solid rgba(61, 184, 168, 0.35);
   }
   .mode {
@@ -332,22 +332,22 @@
     gap: 3px;
     font-size: 11px;
     text-transform: none;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .choose-cta {
     width: 100%;
     margin-top: 4px;
     padding: 8px 10px;
-    border: 1px solid color-mix(in srgb, var(--accent-primary, #3db8a8) 55%, var(--ftbq-border));
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-border));
     border-radius: 4px;
-    background: color-mix(in srgb, var(--accent-primary, #3db8a8) 18%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
     color: var(--text-primary, var(--ftbq-text));
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
   }
   .choose-cta:hover {
-    background: color-mix(in srgb, var(--accent-primary, #3db8a8) 28%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
   .pick,
   .mini {
@@ -357,14 +357,14 @@
     border-radius: 2px;
     border: 1px solid var(--ftbq-border);
     background: transparent;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     cursor: pointer;
     padding: 6px;
     font-size: 11px;
   }
   .mini.add {
     justify-self: start;
-    color: var(--ftbq-accent-green, #55c95a);
+    color: var(--ftbq-accent-green);
   }
   .mini.danger {
     color: #ef4444;
@@ -375,7 +375,7 @@
   }
   .extra {
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .extra summary {
     cursor: pointer;

@@ -687,6 +687,7 @@
         path: $projectPath,
         modId: id,
         side: "both",
+        dependencyTargets: null,
       });
       toasts.success(`Installed ${catalogViewResult.name}`);
       catalogViewResult = null;
@@ -727,6 +728,7 @@
         path: $projectPath,
         modId: p.projectId || slug,
         side: p.side || "both",
+        dependencyTargets: null,
       });
       toasts.success(`Installed ${p.name}`);
       await refresh();

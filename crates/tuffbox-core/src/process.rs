@@ -634,12 +634,12 @@ mod tests {
     }
 
     #[test]
-    fn process_exit_carries_pid_for_event_correlation() {
+    fn process_exit_carries_code_and_duration() {
         let exit = ProcessExit {
-            pid: 42,
             code: Some(1),
             duration_secs: 3,
         };
-        assert_eq!(exit.pid, 42);
+        assert_eq!(exit.code, Some(1));
+        assert_eq!(exit.duration_secs, 3);
     }
 }

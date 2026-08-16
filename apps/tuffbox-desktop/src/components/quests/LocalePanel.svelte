@@ -210,14 +210,14 @@
     flex-direction: column;
     gap: 14px;
     padding: 4px 2px 12px;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     font-size: 12px;
   }
   .block h4 {
     margin: 0 0 8px;
     font-size: 11px;
     font-weight: 700;
-    color: var(--ftbq-title-gold, #f2c94c);
+    color: var(--ftbq-title-gold);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -232,7 +232,7 @@
     flex-direction: column;
     gap: 3px;
     font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .field input,
   .field select {
@@ -241,23 +241,23 @@
     font-size: 12px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     border-radius: 3px;
   }
   .btn {
     padding: 6px 12px;
     border: 1px solid var(--ftbq-border);
     background: rgba(0, 0, 0, 0.25);
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     font-size: 12px;
     font-weight: 600;
     border-radius: 3px;
     cursor: pointer;
   }
   .btn.primary {
-    border-color: var(--ftbq-accent-green, #55c95a);
+    border-color: var(--ftbq-accent-green);
     background: rgba(85, 201, 90, 0.18);
-    color: var(--ftbq-accent-green, #55c95a);
+    color: var(--ftbq-accent-green);
   }
   .btn:disabled {
     opacity: 0.5;
@@ -266,7 +266,7 @@
   .hint {
     margin: 6px 0 0;
     font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .err {
     margin: 6px 0 0;
@@ -276,7 +276,7 @@
   .gap-count {
     margin: 8px 0 6px;
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .gap-list {
     max-height: 280px;
@@ -321,14 +321,14 @@
   }
   .key {
     font-size: 10px;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .prev {
     font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

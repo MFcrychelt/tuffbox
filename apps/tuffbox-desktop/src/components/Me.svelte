@@ -47,6 +47,7 @@
   let skinUrlInput = $state("");
   let skinVariant = $state<"classic" | "slim">("classic");
   let skinBusy = $state(false);
+  let showSecondLayer = $state(true);
 
   const skinUrl = $derived($authState.profile?.skinUrl ?? null);
   const capeUrl = $derived($authState.profile?.capeUrl ?? null);
@@ -302,6 +303,7 @@
           {accountKey}
           playerName={$authState.profile.name}
           showName={false}
+          {showSecondLayer}
           width={280}
           height={380}
         />
@@ -314,6 +316,10 @@
         >
           {loginTypeLabel($authState.loginType, activeAuthority)}
         </span>
+        <label class="layer-toggle" title="Show the skin overlay (hat, jacket, sleeves, pants)">
+          <input type="checkbox" bind:checked={showSecondLayer} />
+          <span>Second layer</span>
+        </label>
       {:else}
         <div class="skin-empty">
           <User size={48} />
@@ -1089,6 +1095,37 @@
   .type-badge.ygg {
     color: var(--badge-ygg-fg, #e9d5ff);
     background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.15));
+  }
+
+  .layer-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    padding: 4px 8px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    transition:
+      color var(--motion-fast) var(--ease-out),
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out);
+  }
+  .layer-toggle:hover {
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+  .layer-toggle input {
+    accent-color: var(--accent-primary);
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    cursor: pointer;
   }
 
   .accent-btn {

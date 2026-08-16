@@ -113,7 +113,7 @@
     height: 10px !important;
     min-width: 10px;
     min-height: 10px;
-    background: var(--ftbq-accent-teal, #3db8a8) !important;
+    background: var(--ftbq-accent-teal) !important;
     border: 2px solid var(--ftbq-frame, #3a3a42) !important;
     border-radius: 50%;
     opacity: 0;
@@ -127,7 +127,7 @@
   .node-root:hover:not(.external) :global(.conn-handle):hover,
   .node-root.sel:not(.external) :global(.conn-handle):hover {
     transform: scale(1.25);
-    background: var(--ftbq-accent-green, #55c95a) !important;
+    background: var(--ftbq-accent-green) !important;
   }
   .node-root.external :global(.conn-handle) {
     pointer-events: none;
@@ -160,7 +160,7 @@
     flex-shrink: 0;
     border: 2px solid var(--ftbq-quest-default, #ffffff);
     background: transparent;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     box-shadow:
       0 0 0 2px rgba(0, 0, 0, 0.65),
       0 3px 8px rgba(0, 0, 0, 0.55);
@@ -170,7 +170,7 @@
     border-color: var(--ftbq-quest-locked, #6b6b6b);
   }
   .node-wrap.sel .node-icon {
-    border-color: var(--ftbq-title-gold, #f2c94c);
+    border-color: var(--ftbq-title-gold);
     box-shadow:
       0 0 0 2px rgba(0, 0, 0, 0.65),
       0 0 12px 2px rgba(242, 201, 76, 0.5),
@@ -208,15 +208,15 @@
   .node-wrap.sel .node-icon.clipped {
     border-color: transparent;
     animation: none;
-    filter: drop-shadow(0 0 3px var(--ftbq-title-gold, #f2c94c)) drop-shadow(0 3px 4px rgba(0, 0, 0, 0.6));
+    filter: drop-shadow(0 0 3px var(--ftbq-title-gold)) drop-shadow(0 3px 4px rgba(0, 0, 0, 0.6));
   }
   .node-icon.clipped.prog-completed {
     border-color: transparent;
-    filter: drop-shadow(0 0 3px var(--ftbq-quest-completed, #55c95a)) drop-shadow(0 3px 4px rgba(0, 0, 0, 0.6));
+    filter: drop-shadow(0 0 3px var(--ftbq-quest-completed)) drop-shadow(0 3px 4px rgba(0, 0, 0, 0.6));
   }
   .node-icon.clipped.prog-started {
     border-color: transparent;
-    filter: drop-shadow(0 0 3px var(--ftbq-quest-started, #f2c94c)) drop-shadow(0 3px 4px rgba(0, 0, 0, 0.6));
+    filter: drop-shadow(0 0 3px var(--ftbq-quest-started)) drop-shadow(0 3px 4px rgba(0, 0, 0, 0.6));
   }
   .node-icon.clipped.prog-locked {
     border-color: transparent;
@@ -260,7 +260,7 @@
     border-radius: 0;
   }
   .node-face.shape-gear {
-    border-radius: 3px;
+    border-radius: var(--ftbq-radius-control);
     clip-path: polygon(
       50% 0%,
       61% 8%,
@@ -305,7 +305,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--text-primary, var(--ftbq-text, #212529));
+    color: var(--text-primary, var(--ftbq-text));
     font-weight: 500;
     pointer-events: none;
     text-shadow: none;
@@ -324,7 +324,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     font-weight: 500;
     pointer-events: none;
     text-shadow: none;
@@ -336,11 +336,11 @@
     backdrop-filter: blur(4px);
   }
   .node-wrap:hover .node-label {
-    color: var(--text-primary, var(--ftbq-text, #212529));
+    color: var(--text-primary, var(--ftbq-text));
     background: color-mix(in srgb, var(--bg-secondary, #fff) 92%, transparent);
   }
   .node-wrap.sel .node-label {
-    color: var(--text-primary, var(--ftbq-text, #212529));
+    color: var(--text-primary, var(--ftbq-text));
     font-weight: 600;
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 45%, transparent);
   }
@@ -349,7 +349,7 @@
     top: -3px;
     right: -3px;
     font-size: 9px;
-    color: var(--ftbq-quest-started, #f2c94c);
+    color: var(--ftbq-quest-started);
     font-weight: 900;
     text-shadow: none;
   }
@@ -375,14 +375,14 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.35);
   }
   .node-icon.prog-completed {
-    border-color: var(--ftbq-quest-completed, #55c95a);
+    border-color: var(--ftbq-quest-completed);
     box-shadow:
       0 0 0 2px rgba(0, 0, 0, 0.65),
       0 0 10px 2px rgba(85, 201, 90, 0.4),
       0 3px 8px rgba(0, 0, 0, 0.55);
   }
   .node-icon.prog-started {
-    border-color: var(--ftbq-quest-started, #f2c94c);
+    border-color: var(--ftbq-quest-started);
     box-shadow:
       0 0 0 2px rgba(0, 0, 0, 0.65),
       0 0 10px 2px rgba(242, 201, 76, 0.4),

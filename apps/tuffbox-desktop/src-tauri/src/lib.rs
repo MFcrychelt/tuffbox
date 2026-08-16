@@ -1875,6 +1875,7 @@ async fn add_modrinth_mod_with_dependencies(
     path: String,
     mod_id: String,
     side: String,
+    dependency_targets: Option<Vec<String>>,
 ) -> Result<Vec<String>, String> {
     let path_for_stats = path.clone();
     let installed = tokio::task::spawn_blocking(move || {
@@ -1883,7 +1884,12 @@ async fn add_modrinth_mod_with_dependencies(
             auto_snapshot_before_mod_op(&manifest_path, "add-mod-with-dependencies")
                 .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id.clone()], &side)?;
+        let installed = install_modrinth_with_dependencies(
+            &mut manifest,
+            &[mod_id.clone()],
+            &side,
+            dependency_targets.as_deref(),
+        )?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         let related: Vec<&ModSpec> = installed
@@ -1917,6 +1923,7 @@ async fn add_modrinth_mods_with_dependencies(
     path: String,
     mod_ids: Vec<String>,
     side: String,
+    dependency_targets: Option<Vec<String>>,
 ) -> Result<Vec<String>, String> {
     let path_for_stats = path.clone();
     let installed = tokio::task::spawn_blocking(move || {
@@ -1925,7 +1932,12 @@ async fn add_modrinth_mods_with_dependencies(
             auto_snapshot_before_mod_op(&manifest_path, "bulk-add-mods-with-dependencies")
                 .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side)?;
+        let installed = install_modrinth_with_dependencies(
+            &mut manifest,
+            &mod_ids,
+            &side,
+            dependency_targets.as_deref(),
+        )?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         let related: Vec<&ModSpec> = installed
@@ -2991,7 +3003,7 @@ fn execute_fix_action_inner(
                 auto_snapshot(&manifest_path, "fix-install-dep").map_err(|e| e.to_string())?;
             }
             let mut manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
-            install_modrinth_with_dependencies(&mut manifest, &[mod_id.clone()], "both")?;
+            install_modrinth_with_dependencies(&mut manifest, &[mod_id.clone()], "both", None)?;
             save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
             download_project_mods_tracked(app, &manifest_path, &manifest, None, false);
             Ok(format!("Installed dependency {mod_id}"))
@@ -4685,6 +4697,7 @@ async fn install_curated_optimize_pack(
         path.clone(),
         root_id.clone(),
         "both".into(),
+        None,
     )
     .await
     {
@@ -4917,6 +4930,7 @@ async fn apply_optimize_custom_plan(
                 path.clone(),
                 offer.project_id.clone(),
                 "both".into(),
+                None,
             )
             .await
             {
@@ -6381,11 +6395,45 @@ async fn analyze_crash_with_ai(
         }
     };
 
+    // Co-occurrence negative evidence (best-effort, non-fatal): pairs of mods
+    // known to coexist in working packs let us SUPPRESS speculative conflict
+    // claims instead of blindly downgrading them. Global Supabase pairs are
+    // merged with the project's local co-occurrence store.
+    let compat_pairs: Vec<tuffbox_core::action_plan::CoexistingPair> = {
+        let mut pairs: Vec<tuffbox_core::swarm::ModPairStat> =
+            tuffbox_core::swarm::top_cooccurrence_pairs(&project_dir, 200);
+        if let (Some(url), Some(key)) = (
+            integrations::swarm_supabase_url(),
+            integrations::swarm_supabase_anon_key(),
+        ) {
+            if let Ok(net) = tuffbox_core::swarm_supabase::fetch_cooccurrence_supabase(
+                &url,
+                &key,
+                &ai_ctx.mc_version,
+                &ai_ctx.loader,
+                200,
+            )
+            .await
+            {
+                pairs = tuffbox_core::swarm::merge_cooccurrence_pairs(&pairs, &net, 200);
+            }
+        }
+        pairs
+            .into_iter()
+            .map(|p| tuffbox_core::action_plan::CoexistingPair {
+                a: p.mod_a,
+                b: p.mod_b,
+                count: p.count,
+            })
+            .collect()
+    };
+
     // Inventory grounding + Crash Assistant overlay (all modes).
-    let grounded = tuffbox_core::action_plan::ground_action_plan(
+    let grounded = tuffbox_core::action_plan::ground_action_plan_with_compat(
         plan,
         &inventory_ids,
         &missing_ids,
+        &compat_pairs,
     );
     let mut normalize_notes = grounded.notes;
     normalize_notes.extend(fallback_notes);
@@ -6405,10 +6453,11 @@ async fn analyze_crash_with_ai(
 
     let pending_path =
         swarm_api::maybe_persist_pending_from_plan(&project_dir, &plan, network_used);
-    let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory(
+    let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory_and_compat(
         &plan,
         &inventory_ids,
         &missing_ids,
+        &compat_pairs,
     );
     let legacy = tuffbox_core::action_plan::plan_to_legacy_ai_actions(&plan);
 
@@ -9651,7 +9700,7 @@ async fn resolve_missing_dependencies(
         }
         auto_snapshot(&manifest_path, "resolve-dependencies").map_err(|e| e.to_string())?;
         // Use recursive resolution: install direct deps + transitive deps
-        let installed = install_modrinth_with_dependencies(&mut manifest, &missing, "auto")?;
+        let installed = install_modrinth_with_dependencies(&mut manifest, &missing, "auto", None)?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         let installed_ids = manifest
             .mods
@@ -9693,7 +9742,7 @@ async fn install_graph_dep(
             .collect::<std::collections::HashSet<_>>();
         auto_snapshot(&manifest_path, "install-graph-dep").map_err(|e| e.to_string())?;
         // Recursive: install the dep + all its transitive dependencies
-        let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], "auto")?;
+        let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], "auto", None)?;
         if installed.is_empty() {
             return Err(format!(
                 "Failed to install dependency: not found on Modrinth or already installed"
@@ -15128,12 +15177,91 @@ fn apply_change_action(
     Ok(())
 }
 
+#[derive(serde::Serialize, Clone)]
+struct DepPlanEntry {
+    target: String,
+    name: Option<String>,
+    depth: usize,
+}
+
+/// Recursively resolves the full `Requires` dependency tree that
+/// `install_modrinth_with_dependencies_rounds` would auto-install for the given
+/// seeds, WITHOUT downloading or mutating the manifest. Used to let the user
+/// review and deselect dependencies before installing.
+fn plan_modrinth_dependencies(
+    manifest: &ProjectManifest,
+    seed_ids: &[String],
+) -> Vec<DepPlanEntry> {
+    let mut working = manifest.clone();
+    let failed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut entries: Vec<DepPlanEntry> = Vec::new();
+
+    for seed in seed_ids {
+        if working
+            .mods
+            .iter()
+            .any(|m| m.id == *seed || m.source.project_id.as_deref() == Some(seed.as_str()))
+        {
+            continue;
+        }
+        let _ = add_mod_from_modrinth(&mut working, seed, Some("auto".to_string()));
+    }
+
+    for depth in 0..50 {
+        let missing: Vec<String> = working
+            .mods
+            .iter()
+            .flat_map(|m| m.dependencies.iter())
+            .filter(|dep| dep.kind == tuffbox_core::DependencyKind::Requires)
+            .map(|dep| dep.target.clone())
+            .filter(|t| {
+                !manifest_has_dependency_target(&working, t)
+                    && !seen.contains(t)
+                    && !failed.contains(t)
+            })
+            .collect();
+        if missing.is_empty() {
+            break;
+        }
+        for t in missing {
+            seen.insert(t.clone());
+            let _ = add_mod_from_modrinth(&mut working, &t, Some("auto".to_string()));
+            let name = working
+                .mods
+                .iter()
+                .find(|m| m.id == t || m.source.project_id.as_deref() == Some(t.as_str()))
+                .map(|m| m.name.clone());
+            entries.push(DepPlanEntry {
+                target: t.clone(),
+                name,
+                depth: depth + 1,
+            });
+        }
+    }
+    entries
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn resolve_install_dependencies(
+    path: String,
+    mod_id: String,
+) -> Result<Vec<DepPlanEntry>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        Ok(plan_modrinth_dependencies(&manifest, &[mod_id]))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn install_modrinth_with_dependencies(
     manifest: &mut ProjectManifest,
     mod_ids: &[String],
     side: &str,
+    explicit_deps: Option<&[String]>,
 ) -> Result<Vec<String>, String> {
-    install_modrinth_with_dependencies_rounds(manifest, mod_ids, side, 50)
+    install_modrinth_with_dependencies_rounds(manifest, mod_ids, side, 50, explicit_deps)
 }
 
 pub(crate) fn install_modrinth_with_dependencies_rounds(
@@ -15141,6 +15269,7 @@ pub(crate) fn install_modrinth_with_dependencies_rounds(
     mod_ids: &[String],
     side: &str,
     max_rounds: usize,
+    explicit_deps: Option<&[String]>,
 ) -> Result<Vec<String>, String> {
     let mut installed = Vec::new();
     let mut primary_errors: Vec<String> = Vec::new();
@@ -15159,6 +15288,25 @@ pub(crate) fn install_modrinth_with_dependencies_rounds(
     }
     if installed.is_empty() && !mod_ids.is_empty() && !primary_errors.is_empty() {
         return Err(primary_errors.join("; "));
+    }
+
+    if let Some(deps) = explicit_deps {
+        // User-reviewed subset: install exactly the listed targets, no recursion.
+        let mut failed = std::collections::HashSet::new();
+        for dependency_id in deps {
+            if manifest_has_dependency_target(manifest, dependency_id)
+                || failed.contains(dependency_id)
+            {
+                continue;
+            }
+            match add_mod_from_modrinth(manifest, dependency_id, Some("auto".to_string())) {
+                Ok(()) => installed.push(dependency_id.clone()),
+                Err(_) => {
+                    failed.insert(dependency_id.clone());
+                }
+            }
+        }
+        return Ok(installed);
     }
 
     let mut failed = std::collections::HashSet::new();
@@ -16272,6 +16420,7 @@ pub fn run() {
             search_curseforge_mods,
             search_unified_mods,
             preview_modrinth_install,
+            resolve_install_dependencies,
             preview_curseforge_install,
             get_modrinth_project_icon,
             get_modrinth_project,

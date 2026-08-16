@@ -196,7 +196,7 @@
     flex-direction: column;
     gap: 4px;
     font-size: 12px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .drawer input {
     background: var(--ftbq-input-bg);
@@ -209,7 +209,7 @@
   .drawer-hint {
     margin: 0;
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .book-flags {
     display: flex;
@@ -226,7 +226,7 @@
     gap: 8px;
     font-size: 11px;
     text-transform: none;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     letter-spacing: 0;
   }
   .group-row {
@@ -237,7 +237,7 @@
   .book-extra .extra-val {
     flex: 1;
     font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

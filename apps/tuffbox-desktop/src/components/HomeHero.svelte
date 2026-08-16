@@ -267,46 +267,51 @@
         {/key}
       {/if}
 
-      <div class="poster-play-row">
-        <button
-          class={["play-btn", { stop: playStop }]}
-          onclick={onPlayClick}
-          disabled={playDisabled || launching}
-          aria-busy={launching}
-          title={launching ? (launchMessage || "Launching…") : undefined}
-        >
-          {#if launching}
-            <span class="spinner spin" aria-hidden="true"></span>
-            <span class="play-text play-phase">{launchMessage || "Launching…"}</span>
-            {#if launchPercent != null}
-              <span class="play-pct" aria-hidden="true">{launchPercent}%</span>
-            {/if}
-          {:else if playStop}
-            <Square size={24} fill="currentColor" />
-            <span class="play-text">Stop</span>
-          {:else}
-            <Play size={28} fill="currentColor" />
-            <span class="play-text">Play</span>
-          {/if}
-        </button>
-        {#if meta}
-          <p class="poster-meta">
-            {meta}
-            <span class="meta-chevron" aria-hidden="true"></span>
-          </p>
-        {/if}
-        {#if playerName}
-          <span class="poster-player">{playerName}</span>
-        {/if}
-        {#if !signedIn && onSignIn && !launching}
-          <button type="button" class="poster-signin" onclick={onSignIn}>
-            Sign in
-          </button>
-        {/if}
-      </div>
     </div>
   {/if}
 </section>
+
+{#if !showStorefront}
+  <div class="poster-action-bar">
+    <div class="poster-play-row">
+      <button
+        class={["play-btn", { stop: playStop }]}
+        onclick={onPlayClick}
+        disabled={playDisabled || launching}
+        aria-busy={launching}
+        title={launching ? (launchMessage || "Launching…") : undefined}
+      >
+        {#if launching}
+          <span class="spinner spin" aria-hidden="true"></span>
+          <span class="play-text play-phase">{launchMessage || "Launching…"}</span>
+          {#if launchPercent != null}
+            <span class="play-pct" aria-hidden="true">{launchPercent}%</span>
+          {/if}
+        {:else if playStop}
+          <Square size={24} fill="currentColor" />
+          <span class="play-text">Stop</span>
+        {:else}
+          <Play size={28} fill="currentColor" />
+          <span class="play-text">Play</span>
+        {/if}
+      </button>
+      {#if meta}
+        <p class="poster-meta">
+          {meta}
+          <span class="meta-chevron" aria-hidden="true"></span>
+        </p>
+      {/if}
+      {#if playerName}
+        <span class="poster-player">{playerName}</span>
+      {/if}
+      {#if !signedIn && onSignIn && !launching}
+        <button type="button" class="poster-signin" onclick={onSignIn}>
+          Sign in
+        </button>
+      {/if}
+    </div>
+  </div>
+{/if}
 
 <style>
   .poster {
@@ -598,6 +603,11 @@
     white-space: nowrap;
   }
 
+  .poster-action-bar {
+    margin-top: 14px;
+    width: 100%;
+  }
+
   .poster-play-row {
     display: flex;
     align-items: center;
@@ -605,6 +615,11 @@
     flex-wrap: wrap;
     min-width: 0;
     width: 100%;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow-sm);
   }
 
   .play-btn {

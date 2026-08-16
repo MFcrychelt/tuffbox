@@ -52,6 +52,12 @@
     radial-gradient(ellipse 80% 50% at 12% -10%, color-mix(in srgb, var(--accent-primary) 8%, transparent), transparent 55%),
     radial-gradient(ellipse 60% 40% at 96% 0%, color-mix(in srgb, var(--accent-secondary) 5%, transparent), transparent 50%),
     var(--bg-primary);
+  /* Light themes: drop the blocky MC speckle — component surfaces (hero
+     poster, vitrine) and the procedural poster would otherwise inherit the
+     dark default --tex-speck-* tones and read as a rough background. */
+  --tex-speck-a: transparent;
+  --tex-speck-b: transparent;
+  --tex-speck-c: transparent;
   --glass-bg: rgba(11, 11, 13, 0.65);
   --glass-highlight: color-mix(in srgb, #fff 40%, var(--bg-primary));
   --play-glow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 22%, transparent);
@@ -2027,6 +2033,15 @@ html[data-theme] {
   --ftbq-btn-bottom: var(--bg-tertiary);
   --ftbq-btn-hover-top: var(--bg-hover);
   --ftbq-btn-hover-bottom: var(--bg-elevated);
+  /* Design-system aliases — react to Rounded corners toggle & themes */
+  --ftbq-radius-control: var(--border-radius-sm);
+  --ftbq-radius-panel: var(--border-radius-md);
+  --ftbq-radius-sheet: var(--border-radius-lg);
+  --ftbq-card-bg: var(--bg-elevated);
+  --ftbq-hover: var(--bg-hover);
+  --ftbq-text-strong: var(--text-primary);
+  --ftbq-focus-border: color-mix(in srgb, var(--accent-primary) 55%, var(--border-color));
+  --ftbq-focus-ring: color-mix(in srgb, var(--accent-primary) 35%, transparent);
 }
 
 .qe.ftbq {
@@ -2064,7 +2079,7 @@ html[data-theme] {
 [data-theme="light"] .qe.ftbq :is(input, textarea, select):not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
   background-color: var(--ftbq-input-bg);
   border: 1px solid var(--ftbq-frame);
-  border-radius: 6px;
+  border-radius: var(--ftbq-radius-control);
   box-shadow: none;
   color-scheme: light;
 }

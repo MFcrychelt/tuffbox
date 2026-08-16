@@ -12,7 +12,7 @@
   } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
   import { tick } from "svelte";
-  import { Maximize2, Plus } from "@lucide/svelte";
+  import { Maximize2, Plus, LayoutGrid, ChevronDown } from "@lucide/svelte";
   import {
     iconDisplayId,
     type QuestChapter,
@@ -84,6 +84,46 @@
   let issueIds = $derived(new Set(issues.map((i) => i.questId)));
   let iconRevision = $state(0);
   let selectedEdgeId = $state<string | null>(null);
+  let layoutMenuOpen = $state(false);
+  let lastLayout = $state<"tree" | "grid" | "circle" | null>(null);
+
+  /** Live zoom for the toolbar readout — SvelteFlow moves the viewport via translate/scale. */
+  let zoomPercent = $state(100);
+  $effect(() => {
+    const el = document.querySelector(".svelte-flow__viewport");
+    if (!el) return;
+    const read = () => {
+      const m = /scale\(([\d.]+)\)/.exec(el.getAttribute("style") ?? "");
+      zoomPercent = m ? Math.round(parseFloat(m[1]) * 100) : 100;
+    };
+    read();
+    const mo = new MutationObserver(read);
+    mo.observe(el, { attributes: true, attributeFilter: ["style"] });
+    return () => mo.disconnect();
+  });
+
+  $effect(() => {
+    if (!layoutMenuOpen) return;
+    const onPtr = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest?.(".layout-pop")) layoutMenuOpen = false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") layoutMenuOpen = false;
+    };
+    window.addEventListener("pointerdown", onPtr, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPtr, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  });
+
+  function pickLayout(mode: "tree" | "grid" | "circle") {
+    lastLayout = mode;
+    layoutMenuOpen = false;
+    onApplyLayout?.(mode);
+  }
 
   const { screenToFlowPosition, fitView: flowFitView, getViewport } = useSvelteFlow();
 
@@ -219,7 +259,7 @@
           "stroke: var(--ftbq-line, #5c8a9e); stroke-width: 3; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));";
         if (!targetExists || external) {
           style =
-            "stroke: var(--ftbq-quest-started, #f2c94c); stroke-width: 2.5; stroke-dasharray: 6 4; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));";
+            "stroke: var(--ftbq-quest-started); stroke-width: 2.5; stroke-dasharray: 6 4; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));";
         } else if (depDone) {
           style =
             "stroke: var(--ftbq-line-done, #55c95a); stroke-width: 3.5; filter: drop-shadow(0 0 3px rgba(85,201,90,0.6));";
@@ -480,7 +520,7 @@
       selected: ed.id === edge.id,
       style:
         ed.id === edge.id
-          ? `${String(ed.style ?? "").replace(/stroke:[^;]+;?/g, "").replace(/stroke-width:[^;]+;?/g, "")} stroke: var(--ftbq-accent-teal, #3db8a8); stroke-width: 4;`
+          ? `${String(ed.style ?? "").replace(/stroke:[^;]+;?/g, "").replace(/stroke-width:[^;]+;?/g, "")} stroke: var(--ftbq-accent-teal); stroke-width: 4;`
           : ed.style,
     }));
     onEdgeSelect?.({ questId: dependentId, depId });
@@ -618,14 +658,37 @@
     <button type="button" class="tb" title="Fit view" aria-label="Fit view" onclick={() => flowFitView({ padding: 0.2 })}>
       <Maximize2 size={14} class="flex-shrink-0" /> Fit
     </button>
+    <span class="zoom-pct" title="Zoom level">{zoomPercent}%</span>
     <button type="button" class="tb" title="Add quest at center (N or double-click)" aria-label="Add quest at center" onclick={addAtCenter}>
       <Plus size={14} class="flex-shrink-0" /> Add quest
     </button>
     {#if onApplyLayout}
-      <div class="layout-btns" title="Auto-layout current chapter">
-        <button type="button" class="tb" onclick={() => onApplyLayout?.("tree")}>Tree</button>
-        <button type="button" class="tb" onclick={() => onApplyLayout?.("grid")}>Grid</button>
-        <button type="button" class="tb" onclick={() => onApplyLayout?.("circle")}>Circle</button>
+      <div class="layout-pop">
+        <button
+          type="button"
+          class="tb"
+          class:active={layoutMenuOpen}
+          title="Auto-layout current chapter"
+          aria-haspopup="menu"
+          aria-expanded={layoutMenuOpen}
+          onclick={() => (layoutMenuOpen = !layoutMenuOpen)}
+        >
+          <LayoutGrid size={14} class="flex-shrink-0" /> Layout
+          <ChevronDown size={12} class="flex-shrink-0" />
+        </button>
+        {#if layoutMenuOpen}
+          <div class="layout-menu" role="menu">
+            <button role="menuitem" aria-checked={lastLayout === "tree"} onclick={() => pickLayout("tree")}>
+              Tree
+            </button>
+            <button role="menuitem" aria-checked={lastLayout === "grid"} onclick={() => pickLayout("grid")}>
+              Grid
+            </button>
+            <button role="menuitem" aria-checked={lastLayout === "circle"} onclick={() => pickLayout("circle")}>
+              Circle
+            </button>
+          </div>
+        {/if}
       </div>
     {/if}
   </div>
@@ -694,7 +757,7 @@
         nodeStrokeWidth={2}
         maskColor="rgba(0, 0, 0, 0.45)"
         bgColor="var(--ftbq-bg-panel, #1a1a1e)"
-        nodeColor={() => "var(--ftbq-accent-teal, #3db8a8)"}
+        nodeColor={() => "var(--ftbq-accent-teal)"}
         ariaLabel="Chapter minimap"
       />
     </SvelteFlow>
@@ -739,42 +802,82 @@
     padding: 4px 8px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #e8e8e8);
-    border-radius: 4px;
+    color: var(--ftbq-text);
+    border-radius: var(--ftbq-radius-control);
   }
   .canvas-toolbar .tb-filter:focus {
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: var(--ftbq-focus-border);
+    box-shadow: 0 0 0 2px var(--ftbq-focus-ring);
   }
   .canvas-toolbar .tb:focus-visible {
-    outline: 2px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 80%, #fff);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: 1px;
   }
   .filt-count {
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
-  .layout-btns {
-    display: inline-flex;
-    gap: 4px;
+  .zoom-pct {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ftbq-text-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .layout-pop {
+    position: relative;
+    flex-shrink: 0;
     margin-left: auto;
   }
-  .layout-btns .tb {
-    opacity: 0.85;
-    transition: opacity 0.15s ease, background 0.15s ease;
+  .layout-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 40;
+    min-width: 130px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    border: 1px solid var(--ftbq-frame);
+    border-radius: var(--ftbq-radius-panel);
+    box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.35));
   }
-  .layout-btns .tb:hover {
-    opacity: 1;
+  .layout-menu button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 7px 10px;
+    border: none;
+    border-radius: var(--ftbq-radius-control);
+    background: transparent;
+    color: var(--ftbq-text);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    text-shadow: none;
+  }
+  .layout-menu button:hover,
+  .layout-menu button[aria-checked="true"] {
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+  }
+  .layout-menu button[aria-checked="true"]::after {
+    content: "✓";
+    color: var(--ftbq-accent-teal);
   }
   .tb {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     padding: 4px 10px;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     border: 1px solid var(--ftbq-frame);
     background: var(--bg-secondary, var(--ftbq-bg-panel));
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
@@ -784,7 +887,7 @@
   .tb:hover {
     border-color: var(--ftbq-frame);
     background: var(--bg-hover, var(--ftbq-btn-hover-top));
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
   }
   .tb:active {
     background: var(--bg-active, var(--ftbq-btn-hover-bottom));
@@ -800,7 +903,7 @@
     outline: none;
   }
   .viewport:focus-visible {
-    outline: 2px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 80%, #fff);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: -2px;
   }
   .empty-hint {
@@ -813,7 +916,7 @@
     gap: 10px;
     pointer-events: none;
     z-index: 10;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     font-size: 12px;
     font-weight: 600;
     text-shadow: none;
@@ -823,10 +926,10 @@
     padding: 6px 12px;
     font-size: 12px;
     font-weight: 700;
-    border: 1px solid var(--ftbq-accent-teal, #3db8a8);
-    border-radius: 2px;
+    border: 1px solid var(--ftbq-accent-teal);
+    border-radius: var(--ftbq-radius-control);
     background: rgba(61, 184, 168, 0.15);
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     cursor: pointer;
     text-shadow: none;
   }
@@ -836,7 +939,7 @@
   .empty-sub {
     font-size: 11px;
     font-weight: 500;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
   .vignette {
     position: absolute;
@@ -850,8 +953,8 @@
     position: absolute;
     z-index: 8;
     pointer-events: none;
-    border: 1px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 85%, #fff);
-    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--ftbq-accent-teal) 85%, #fff);
+    background: color-mix(in srgb, var(--ftbq-accent-teal) 18%, transparent);
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
   }
 
@@ -866,14 +969,14 @@
     stroke-width: 3;
   }
   :global(.svelte-flow__edge:hover path) {
-    stroke: var(--ftbq-line-hover, #7fb3c8);
+    stroke: var(--ftbq-line-hover);
   }
   :global(.svelte-flow__minimap) {
     display: none !important;
   }
   :global(.svelte-flow__controls) {
     border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
+    border-radius: var(--ftbq-radius-control);
     overflow: hidden;
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.06),
@@ -883,7 +986,7 @@
     background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
     border: none;
     border-bottom: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
   }
   :global(.svelte-flow__controls button:hover) {
     background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
@@ -892,7 +995,7 @@
   :global(.ftbq-canvas .tb svg),
   :global(.ftbq-canvas .flex-shrink-0) {
     flex-shrink: 0;
-    fill: var(--ftbq-text, #e8e8e8);
+    fill: var(--ftbq-text);
   }
   :global(.svelte-flow__attribution) {
     display: none;

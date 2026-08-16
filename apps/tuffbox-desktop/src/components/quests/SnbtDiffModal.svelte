@@ -184,17 +184,17 @@
   .modal-header h2 {
     margin: 0;
     font-size: 16px;
-    color: var(--text-primary, #e8e8e8);
+    color: var(--text-primary);
   }
   .modal-header p {
     margin: 4px 0 0;
     font-size: 12px;
-    color: var(--text-muted, #9a9aa0);
+    color: var(--text-muted);
   }
   .icon-btn {
     border: 0;
     background: transparent;
-    color: var(--text-muted, #9a9aa0);
+    color: var(--text-muted);
     font-size: 20px;
     line-height: 1;
     cursor: pointer;
@@ -231,7 +231,7 @@
   .file-btn.active {
     background: var(--bg-tertiary, var(--ftbq-bg-panel));
     border-color: rgba(61, 184, 168, 0.35);
-    color: var(--text-primary, #e8e8e8);
+    color: var(--text-primary);
   }
   .diff-body {
     flex: 1;
@@ -284,7 +284,7 @@
     color: var(--text-secondary, #c4c4c8);
   }
   .modal-actions .primary {
-    background: var(--accent, #3db8a8);
+    background: var(--accent);
     border-color: transparent;
     color: #0b1210;
   }

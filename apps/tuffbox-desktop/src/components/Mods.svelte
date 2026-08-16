@@ -1040,6 +1040,7 @@ import { trapFocus } from "../lib/focusTrap";
         path: $projectPath,
         modId: rec.slug,
         side: "both",
+        dependencyTargets: null,
       });
       recommendations = recommendations.filter((r) => r.slug !== rec.slug);
       message = `Installed ${rec.name}${rec.compatibleVersion ? ` · ${rec.compatibleVersion}` : ""}`;
@@ -1519,6 +1520,7 @@ import { trapFocus } from "../lib/focusTrap";
         path: $projectPath,
         modIds: selected,
         side: selectedSide,
+        dependencyTargets: [],
       });
       await reloadModsSilent();
     } catch (e) {
@@ -1958,6 +1960,7 @@ import { trapFocus } from "../lib/focusTrap";
         path: $projectPath,
         modIds,
         side: "both",
+        dependencyTargets: null,
       });
       message = `Installed ${modIds.length} mods from "${listName}"`;
       await reloadModsSilent();
@@ -1974,15 +1977,30 @@ import { trapFocus } from "../lib/focusTrap";
   let planPreviewMod: SearchResult | null = null;
   let planPreviewLoading = $state(false);
   let planPreviewDeps: InstallPreview | null = null;
+  type DepPlanEntry = { target: string; name: string | null; depth: number };
+  let planDepTree: DepPlanEntry[] = [];
+  let planDepSelected: Record<string, boolean> = {};
 
   async function showPlanPreview(result: SearchResult) {
     planPreviewMod = result;
     planPreviewOpen = true;
     planPreviewLoading = true;
+    planDepTree = [];
+    planDepSelected = {};
     try {
       planPreviewDeps = isCurseForgeResult(result)
         ? await api.mods.previewCurseforgeInstall(result.id, $projectPath ?? undefined)
         : await api.mods.previewInstall(result.id, $projectPath ?? undefined);
+      if (!isCurseForgeResult(result)) {
+        try {
+          planDepTree = await api.mods.resolveInstallDependencies(result.id, $projectPath ?? undefined);
+        } catch {
+          planDepTree = [];
+        }
+        const sel: Record<string, boolean> = {};
+        for (const d of planDepTree) sel[d.target] = true;
+        planDepSelected = sel;
+      }
     } catch {
       planPreviewDeps = null;
     } finally {
@@ -1990,7 +2008,18 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
-  async function confirmFromPlan(withDeps: boolean) {
+  const planDepSelectedCount = $derived(
+    planDepTree.filter((d) => planDepSelected[d.target]).length,
+  );
+
+  function selectAllDeps() {
+    planDepSelected = Object.fromEntries(planDepTree.map((d) => [d.target, true]));
+  }
+  function clearAllDeps() {
+    planDepSelected = Object.fromEntries(planDepTree.map((d) => [d.target, false]));
+  }
+
+  async function confirmFromPlan(selectedDepTargets?: string[]) {
     if (!$projectPath || !planPreviewMod) return;
     const seedId = planPreviewMod.id;
     const seedLabel = planPreviewMod.name || planPreviewMod.slug || planPreviewMod.id;
@@ -1998,13 +2027,18 @@ import { trapFocus } from "../lib/focusTrap";
     planPreviewOpen = false;
     mutating = true;
     error = null;
-    openDownloadOverlay(withDeps ? `Installing ${planPreviewMod.name} + deps` : `Installing ${planPreviewMod.name}`);
+    const selectedCount = selectedDepTargets?.length ?? 0;
+    openDownloadOverlay(
+      selectedDepTargets
+        ? `Installing ${planPreviewMod.name} + ${selectedCount} dep(s)`
+        : `Installing ${planPreviewMod.name}`,
+    );
     try {
       if (curseforge) {
         // CF always resolves required deps when installing.
         await api.mods.addCurseforge(planPreviewMod.id, selectedSide, $projectPath);
-      } else if (withDeps) {
-        await api.mods.addWithDeps(planPreviewMod.id, selectedSide, $projectPath);
+      } else if (selectedDepTargets) {
+        await api.mods.addWithDeps(planPreviewMod.id, selectedSide, $projectPath, selectedDepTargets);
       } else {
         await api.mods.add(planPreviewMod.id, selectedSide, $projectPath);
       }
@@ -2934,6 +2968,7 @@ import { trapFocus } from "../lib/focusTrap";
         <span class="ideas-toggle-label">Often together</span>
       </label>
     </div>
+    <div class="control-actions">
     <button
       type="button"
       class="ghost mini glow-btn ideas-accent"
@@ -3050,6 +3085,7 @@ import { trapFocus } from "../lib/focusTrap";
       <Plus size={16} />
       Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
     </button>
+    </div>
   </div>
 
   {#if recommendations.length > 0}
@@ -4431,17 +4467,53 @@ import { trapFocus } from "../lib/focusTrap";
               </div>
             </div>
           {/if}
+
+          {#if planDepTree.length > 0}
+            <div class="plan-deps-section dep-review">
+              <strong>
+                Dependencies to install ({planDepTree.length})
+                <span class="dep-installed-count"> · {planDepSelectedCount} selected</span>
+              </strong>
+              <div class="dep-review-actions">
+                <button type="button" class="dep-review-link" onclick={selectAllDeps}>Select all</button>
+                <button type="button" class="dep-review-link" onclick={clearAllDeps}>Clear all</button>
+              </div>
+              <div class="plan-dep-list dep-review-list">
+                {#each planDepTree as dep (dep.target)}
+                  <label class="plan-dep-row selectable" style="--depth: {dep.depth}">
+                    <input type="checkbox" bind:checked={planDepSelected[dep.target]} disabled={mutating} />
+                    <code>{dep.name || dep.target}</code>
+                    {#if dep.name && dep.name !== dep.target}<span class="muted">{dep.target}</span>{/if}
+                  </label>
+                {/each}
+              </div>
+              <p class="dep-review-hint">Uncheck any dependency you do not want. Unselected dependencies are not downloaded now — resolve them later via Missing dependencies.</p>
+            </div>
+          {/if}
         </div>
       {/if}
 
       <div class="plan-modal-actions">
         <button class="ghost" onclick={() => { planPreviewOpen = false; if (planPreviewMod) startInstallPlan(planPreviewMod); }}>See raw details</button>
-        <button class="secondary" onclick={() => confirmFromPlan(false)} disabled={mutating}>
-          <Download size={16} /> Install mod only
-        </button>
-        <button onclick={() => confirmFromPlan(true)} disabled={mutating}>
-          <Zap size={16} /> Install with dependencies
-        </button>
+        {#if planPreviewMod && isCurseForgeResult(planPreviewMod)}
+          <button onclick={() => confirmFromPlan()} disabled={mutating}>
+            <Zap size={16} /> Install (CurseForge resolves dependencies)
+          </button>
+        {:else if planDepTree.length > 0}
+          <button class="secondary" onclick={() => confirmFromPlan([])} disabled={mutating}>
+            <Download size={16} /> Install mod only
+          </button>
+          <button
+            onclick={() => confirmFromPlan(planDepTree.filter((d) => planDepSelected[d.target]).map((d) => d.target))}
+            disabled={mutating}
+          >
+            <Zap size={16} /> Install mod + {planDepSelectedCount} {planDepSelectedCount === 1 ? "dependency" : "dependencies"}
+          </button>
+        {:else}
+          <button onclick={() => confirmFromPlan([])} disabled={mutating}>
+            <Zap size={16} /> Install mod
+          </button>
+        {/if}
       </div>
     </div>
   </div>
@@ -4723,6 +4795,15 @@ import { trapFocus } from "../lib/focusTrap";
     margin-bottom: 10px;
   }
 
+  .control-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-left: auto;
+    min-width: 0;
+  }
+
   .side-segment {
     display: inline-flex;
     align-items: stretch;
@@ -4832,6 +4913,18 @@ import { trapFocus } from "../lib/focusTrap";
     background: color-mix(in srgb, var(--bg-tertiary) 55%, transparent);
     max-height: min(70vh, 820px);
     overflow: auto;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-elevated) transparent;
+  }
+  .installed-pane::-webkit-scrollbar {
+    width: 8px;
+  }
+  .installed-pane::-webkit-scrollbar-thumb {
+    background: var(--bg-elevated);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
   }
   .installed-pane-header {
     display: flex;
@@ -7013,6 +7106,14 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-dep-row.already-installed { opacity: 0.72; }
   .plan-dep-row.conflict { border-left: 3px solid rgba(239,68,68,.6); }
   .plan-no-deps { color: var(--text-muted); font-size: 12px; padding: 8px; }
+  .dep-review > strong { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .dep-review-actions { display: flex; gap: 12px; margin: -2px 0 8px; }
+  .dep-review-link { background: none; border: none; padding: 0; color: var(--accent-primary); font-size: 12px; cursor: pointer; text-decoration: underline; }
+  .dep-review-link:hover { color: var(--text-primary); }
+  .dep-review-list { max-height: 220px; overflow: auto; }
+  .dep-review .plan-dep-row.selectable { cursor: pointer; align-items: center; }
+  .dep-review .plan-dep-row.selectable code { margin-left: calc((var(--depth, 1) - 1) * 14px); }
+  .dep-review-hint { margin: 8px 0 0; font-size: 11px; color: var(--text-muted); line-height: 1.4; }
   .plan-modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border-color); margin-top: 8px; }
 
   .recs-panel {

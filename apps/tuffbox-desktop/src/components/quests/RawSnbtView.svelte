@@ -149,7 +149,7 @@
   }
   .raw-title {
     font-size: 14px;
-    color: var(--text-primary, var(--ftbq-text, #212529));
+    color: var(--text-primary, var(--ftbq-text));
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -157,7 +157,7 @@
   }
   .raw-note {
     font-size: 10px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     line-height: 1.35;
   }
   .raw-actions {
@@ -183,8 +183,8 @@
     font-size: 11px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    border-radius: 6px;
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    border-radius: var(--ftbq-radius-control);
+    color: var(--text-primary, var(--ftbq-text));
     outline: none;
   }
   .raw-find input:focus {
@@ -193,7 +193,7 @@
   }
   .find-count {
     font-size: 10px;
-    color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0));
+    color: var(--text-muted, var(--ftbq-text-muted));
     min-width: 2.5em;
     text-align: right;
   }
@@ -206,7 +206,7 @@
     line-height: 1.5;
     font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
     background: color-mix(in srgb, var(--ftbq-bg) 70%, transparent);
-    color: var(--text-secondary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-secondary, var(--ftbq-text));
     white-space: pre;
     tab-size: 2;
   }
@@ -214,10 +214,10 @@
     padding: 4px 8px;
     border: 1px solid var(--ftbq-frame);
     background: var(--bg-secondary, var(--ftbq-bg-panel));
-    color: var(--text-primary, var(--ftbq-text, #e8e8e8));
+    color: var(--text-primary, var(--ftbq-text));
     font-size: 11px;
     font-weight: 600;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     cursor: pointer;
     flex-shrink: 0;
   }

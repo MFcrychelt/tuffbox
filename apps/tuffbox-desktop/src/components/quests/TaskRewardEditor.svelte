@@ -1000,8 +1000,11 @@
   }
   .tr-h h4 {
     margin: 0;
-    color: var(--ftbq-accent-teal, #3db8a8);
-    font-weight: 600;
+    color: var(--ftbq-text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
   }
   .add-row {
     display: flex;
@@ -1013,8 +1016,8 @@
     min-width: 140px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #e8e8e8);
-    border-radius: 6px;
+    color: var(--ftbq-text);
+    border-radius: var(--ftbq-radius-control);
     cursor: pointer;
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
@@ -1023,8 +1026,8 @@
   }
   .add-row select:focus {
     outline: none;
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: var(--ftbq-focus-border);
+    box-shadow: 0 0 0 2px var(--ftbq-focus-ring);
   }
 
   .card {
@@ -1037,7 +1040,7 @@
     transition: background 0.12s ease;
   }
   .card:hover {
-    background: color-mix(in srgb, var(--ftbq-bg-panel) 95%, var(--bg-hover, #1a1a1a) 5%);
+    background: color-mix(in srgb, var(--ftbq-bg-panel) 95%, var(--bg-hover) 5%);
   }
   .card-h {
     display: flex;
@@ -1050,8 +1053,8 @@
     padding: 8px 10px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #e8e8e8);
-    border-radius: 6px;
+    color: var(--ftbq-text);
+    border-radius: var(--ftbq-radius-control);
     cursor: pointer;
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
@@ -1060,8 +1063,8 @@
   }
   .card-h select:focus {
     outline: none;
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: var(--ftbq-focus-border);
+    box-shadow: 0 0 0 2px var(--ftbq-focus-ring);
   }
 
   .card label {
@@ -1070,7 +1073,7 @@
     font-size: 11px;
     text-transform: none;
     letter-spacing: 0;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
   }
 
   .card input[type="text"],
@@ -1081,8 +1084,8 @@
     padding: 7px 10px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #e8e8e8);
-    border-radius: 6px;
+    color: var(--ftbq-text);
+    border-radius: var(--ftbq-radius-control);
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
   .card input[type="text"]:hover,
@@ -1094,8 +1097,8 @@
   .card input[type="number"]:focus,
   .card select:focus {
     outline: none;
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: var(--ftbq-focus-border);
+    box-shadow: 0 0 0 2px var(--ftbq-focus-ring);
   }
 
   .item-row {
@@ -1115,10 +1118,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 6px;
+    border-radius: var(--ftbq-radius-control);
     border: 1px solid var(--ftbq-frame);
     background: var(--bg-secondary, var(--ftbq-bg-panel));
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     cursor: pointer;
     flex-shrink: 0;
     transition: all 0.12s ease;
@@ -1133,7 +1136,7 @@
     transform: scale(0.95);
   }
   .ico:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: 1px;
   }
 
@@ -1141,17 +1144,17 @@
     margin: 0;
     padding: 8px 10px;
     font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     text-transform: none;
     background: rgba(0, 0, 0, 0.15);
-    border-radius: 4px;
-    border-left: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    border-radius: var(--ftbq-radius-control);
+    border-left: 2px solid var(--ftbq-accent-teal);
   }
 
   .raw {
     margin-top: 4px;
     font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-text-muted);
     text-transform: none;
   }
   .raw summary {
@@ -1175,14 +1178,14 @@
     text-transform: none;
     background: var(--ftbq-bg);
     border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text, #e8e8e8);
-    border-radius: 4px;
+    color: var(--ftbq-text);
+    border-radius: var(--ftbq-radius-control);
     padding: 8px;
   }
   .raw textarea:focus {
     outline: none;
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: var(--ftbq-focus-border);
+    box-shadow: 0 0 0 2px var(--ftbq-focus-ring);
   }
 
   .checkbox {
@@ -1191,13 +1194,13 @@
     align-items: center;
     gap: 8px;
     text-transform: none;
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--ftbq-text);
     padding: 4px 0;
   }
   .checkbox input[type="checkbox"] {
     width: 16px;
     height: 16px;
-    accent-color: var(--ftbq-accent-teal, #3db8a8);
+    accent-color: var(--ftbq-accent-teal);
     cursor: pointer;
   }
 
@@ -1211,22 +1214,22 @@
     font-size: 11px;
     font-weight: 600;
     padding: 6px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--ftbq-accent-teal, #3db8a8);
+    border-radius: var(--ftbq-radius-control);
+    border: 1px solid var(--ftbq-accent-teal);
     background: rgba(61, 184, 168, 0.12);
-    color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-accent-teal);
     cursor: pointer;
     transition: all 0.12s ease;
   }
   .kjs-btn:hover {
     background: rgba(61, 184, 168, 0.22);
-    border-color: var(--ftbq-accent-teal, #3db8a8);
+    border-color: var(--ftbq-accent-teal);
   }
   .kjs-btn:active {
     transform: scale(0.98);
   }
   .kjs-btn:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: 1px;
   }
 </style>
