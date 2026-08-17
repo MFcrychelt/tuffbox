@@ -905,6 +905,12 @@ export type YoutubePlayerSession = {
   title: string;
   originRect: DOMRect | null;
   startMini: boolean;
+  /**
+   * Resume playback from this offset (seconds) instead of the beginning.
+   * The queue window's preview tracks currentTime and passes it here so the
+   * mini/full player continues where the embed preview left off.
+   */
+  start?: number;
 };
 
 export const youtubePlayerSession = writable<YoutubePlayerSession | null>(null);
@@ -915,6 +921,23 @@ export function openYoutubePlayer(session: YoutubePlayerSession) {
 
 export function closeYoutubePlayer() {
   youtubePlayerSession.set(null);
+}
+
+/**
+ * Keeps the last known playback position (seconds) per video id, learned from
+ * YouTube embed "infoDelivery" postMessages. Used to resume a video in the
+ * mini/full player at the same offset the user was at in a previous embed
+ * (e.g. the queue window preview) instead of restarting from 0:00.
+ */
+const progressById = new Map<string, number>();
+
+export function setYoutubeVideoProgress(videoId: string, seconds: number) {
+  if (!videoId || !Number.isFinite(seconds) || seconds < 0) return;
+  progressById.set(videoId, seconds);
+}
+
+export function getYoutubeVideoProgress(videoId: string): number | undefined {
+  return progressById.get(videoId);
 }
 
 /** Personal YouTube queue (playlist) — survives restarts. */

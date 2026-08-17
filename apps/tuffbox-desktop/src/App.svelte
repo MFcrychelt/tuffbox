@@ -773,6 +773,7 @@
       title={$youtubePlayerSession.title}
       originRect={$youtubePlayerSession.originRect}
       startMini={$youtubePlayerSession.startMini}
+      start={$youtubePlayerSession.start}
       onclose={closeYoutubePlayer}
     />
   {/key}

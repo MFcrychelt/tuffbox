@@ -952,6 +952,15 @@ pub fn parse_quest_plan(json_str: &str) -> Result<QuestPlan, String> {
     parse_quest_plan_value(&v)
 }
 
+/// True when at least one chapter carries at least one quest.
+///
+/// Callers (outline repair, review gating) treat `false` as "the model produced
+/// headings without content — retry or surface an explicit error instead of
+/// merging empty chapters".
+pub fn quest_plan_has_quests(plan: &QuestPlan) -> bool {
+    plan.chapters.iter().any(|ch| !ch.quests.is_empty())
+}
+
 pub fn parse_quest_plan_value(v: &Value) -> Result<QuestPlan, String> {
     let mut v = v.clone();
     expand_compact_quest_value(&mut v);
@@ -1064,6 +1073,58 @@ fn expand_compact_quest_value(v: &mut Value) {
                 expand_compact_chapter(ch);
             }
         }
+
+        // Recover quests misplaced NEXT TO chapters (a common LLM shape: a top-level
+        // `quests` array beside `chapters`). If some chapters ended up quest-less,
+        // distribute the stray quests into them in contiguous chunks so dependency
+        // order survives. Chapters that already carry quests keep theirs.
+        if let Some(quests) = obj.remove("quests") {
+            let mut quests = coerce_quests_value(quests);
+            if let Some(arr) = quests.as_array_mut() {
+                for q in arr.iter_mut() {
+                    expand_compact_quest(q);
+                }
+            }
+            if let Some(chapters) = obj.get_mut("chapters").and_then(|c| c.as_array_mut()) {
+                let questless: Vec<usize> = chapters
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, ch)| {
+                        ch.get("quests")
+                            .and_then(|q| q.as_array())
+                            .map(|a| a.is_empty())
+                            .unwrap_or(true)
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                if !questless.is_empty() {
+                    if let Value::Array(mut arr) = quests {
+                        if !arr.is_empty() {
+                            let n = questless.len();
+                            let base = arr.len() / n;
+                            let extra = arr.len() % n;
+                            for (k, &ci) in questless.iter().enumerate() {
+                                if let Some(ch) = chapters.get_mut(ci) {
+                                    let take = base + usize::from(k < extra);
+                                    ch["quests"] =
+                                        Value::Array(arr.drain(0..take).collect());
+                                }
+                            }
+                            // Any remainder lands on the last quest-less chapter.
+                            if !arr.is_empty() {
+                                if let Some(ci) = questless.last() {
+                                    if let Some(ch) = chapters.get_mut(*ci) {
+                                        if let Some(existing) = ch["quests"].as_array_mut() {
+                                            existing.append(&mut arr);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1071,7 +1132,8 @@ fn expand_compact_chapter(ch: &mut Value) {
     let Some(obj) = ch.as_object_mut() else {
         return;
     };
-    if let Some(quests) = obj.remove("quests") {
+    // Accept a singular `quest` alias; `quests` is the canonical key.
+    if let Some(quests) = obj.remove("quests").or_else(|| obj.remove("quest")) {
         let coerced = coerce_quests_value(quests);
         if let Some(arr) = coerced.as_array() {
             let mut quests_out = Vec::with_capacity(arr.len());
@@ -2671,6 +2733,57 @@ mod tests {
         assert_eq!(detect_target_quest_count("линейка на 24 квеста early game"), 24);
         assert_eq!(detect_target_quest_count("make 20 quests about nether"), 20);
         assert!(detect_target_quest_count("something vague") >= 4);
+    }
+
+    #[test]
+    fn recovers_top_level_quests_into_questless_chapters() {
+        // Degenerate LLM shape: `quests` sits next to `chapters` instead of inside.
+        let raw = r#"{
+            "why": "t",
+            "chapters": [
+                {"title": "Exploring the Jungle"},
+                {"title": "Crafting Basics"}
+            ],
+            "quests": [
+                {"title": "Q1", "deps": [], "tasks": [{"type": "checkmark"}], "rewards": [{"type": "xp", "xp": 5}]},
+                {"title": "Q2", "tasks": [{"type": "checkmark"}]},
+                {"title": "Q3", "tasks": [{"type": "checkmark"}]}
+            ]
+        }"#;
+        let plan = parse_quest_plan(raw).unwrap();
+        assert_eq!(plan.chapters.len(), 2);
+        assert!(quest_plan_has_quests(&plan));
+        assert_eq!(plan.chapters[0].quests.len(), 2);
+        assert_eq!(plan.chapters[1].quests.len(), 1);
+        assert_eq!(plan.chapters[0].quests[0].title, "Q1");
+        assert_eq!(plan.chapters[0].quests[0].tasks[0].task_type, "checkmark");
+        assert_eq!(plan.chapters[0].quests[0].rewards[0].reward_type, "xp");
+        assert_eq!(plan.chapters[1].quests[0].title, "Q3");
+    }
+
+    #[test]
+    fn chapters_with_quests_keep_them_ignoring_top_level_quests() {
+        let raw = r#"{
+            "chapters": [{"title": "A", "quests": [{"title": "Own", "tasks": [{"type": "checkmark"}]}]}],
+            "quests": [{"title": "Stray", "tasks": [{"type": "checkmark"}]}]
+        }"#;
+        let plan = parse_quest_plan(raw).unwrap();
+        assert_eq!(plan.chapters.len(), 1);
+        assert_eq!(plan.chapters[0].quests.len(), 1);
+        assert_eq!(plan.chapters[0].quests[0].title, "Own");
+    }
+
+    #[test]
+    fn accepts_singular_quest_alias_and_flags_empty_plan() {
+        let raw = r#"{"chapters": [{"title": "C", "quest": {"title": "Solo", "tasks": [{"type": "checkmark"}]}}]}"#;
+        let plan = parse_quest_plan(raw).unwrap();
+        assert_eq!(plan.chapters[0].quests.len(), 1);
+        assert_eq!(plan.chapters[0].quests[0].title, "Solo");
+        assert!(quest_plan_has_quests(&plan));
+
+        // Headings without content must be detectable as empty.
+        let empty = parse_quest_plan(r#"{"chapters": [{"title": "C"}]}"#).unwrap();
+        assert!(!quest_plan_has_quests(&empty));
     }
 
     #[test]

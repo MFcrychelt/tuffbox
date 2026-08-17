@@ -349,7 +349,7 @@
     padding: 0 10px 0 8px;
     color: #52525b;
     background: #111114;
-    border-right: 1px solid #1f1f23;
+    border-right: 1px solid var(--border-color);
   }
   .ll {
     padding: 0 8px;

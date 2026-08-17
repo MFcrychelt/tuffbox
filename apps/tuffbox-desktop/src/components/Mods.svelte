@@ -1851,6 +1851,36 @@ import { trapFocus } from "../lib/focusTrap";
     await openExternalUrl(url);
   }
 
+  /** Open the mod's catalog page inside the launcher's mod browser (add-mods modal). */
+  async function openInstalledModCatalog(mod: ModRow) {
+    const source = (mod.source || "").toLowerCase();
+    const id = (mod.projectId || mod.id || "").trim();
+    if ((source !== "modrinth" && source !== "curseforge") || !id) {
+      toasts.error("This mod has no Modrinth/CurseForge page.");
+      return;
+    }
+    addOpen = true;
+    error = null;
+    catalogViewResult = {
+      id,
+      slug: id,
+      name: mod.name,
+      description: `Installed ${mod.contentType || "mod"} — loading catalog data…`,
+      projectType: mod.contentType || "mod",
+      iconUrl: mod.iconUrl ?? null,
+      clientSide: mod.clientSide ?? null,
+      serverSide: mod.serverSide ?? null,
+      author: null,
+      downloads: null,
+      follows: null,
+      dateModified: null,
+      categories: [],
+      provider: source === "curseforge" ? "curseforge" : "modrinth",
+    };
+    // Populate the browser behind the catalog layer so "Back" lands on search results.
+    await initAddFilters();
+  }
+
   async function copyProjectLink(result: SearchResult) {
     const url = projectPageUrl(result);
     if (!url) return;
@@ -3325,7 +3355,7 @@ import { trapFocus } from "../lib/focusTrap";
           <div class="installed-main">
             <div class="installed-title">
               {#if installedModPageUrl(mod)}
-                <button type="button" class="installed-name linkish" title="Open catalog page" onclick={(e) => { e.stopPropagation(); openInstalledModPage(mod); } }>{mod.name}</button>
+                <button type="button" class="installed-name linkish" title="Open in mod browser" onclick={(e) => { e.stopPropagation(); openInstalledModCatalog(mod); } }>{mod.name}</button>
               {:else}
                 <strong>{mod.name}</strong>
               {/if}
@@ -4850,7 +4880,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .side-segment button.active {
     background: var(--accent-primary);
-    color: #04140a;
+    color: var(--on-accent);
   }
 
   .side-segment button.active span {
@@ -6978,7 +7008,7 @@ import { trapFocus } from "../lib/focusTrap";
   .save-check { width: 16px; text-align: center; color: var(--accent-primary); font-weight: 700; }
   .save-dropdown-new { display: flex; gap: 4px; padding: 6px 4px 2px; border-top: 1px solid var(--border-color); margin-top: 4px; }
   .save-dropdown-new input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary); font-size: 12px; }
-  .save-dropdown-new button { padding: 6px 10px; border-radius: 6px; background: var(--accent-primary); color: #0a0d14; border: none; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .save-dropdown-new button { padding: 6px 10px; border-radius: 6px; background: var(--accent-primary); color: var(--on-accent); border: none; font-size: 12px; font-weight: 600; cursor: pointer; }
   .save-dropdown-new button:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .result-footer {

@@ -972,7 +972,7 @@
     font-weight: 600;
     cursor: pointer;
     transition:
-      transform var(--motion-fast) var(--ease-spring),
+      transform var(--motion-fast) var(--ease-out),
       background var(--motion-fast) var(--ease-out),
       border-color var(--motion-fast) var(--ease-out),
       color var(--motion-fast) var(--ease-out),
@@ -1052,9 +1052,9 @@
     font-weight: 700;
     font-size: 14px;
     color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.3;
   }
   button.pack-name.linkish {
     background: none;

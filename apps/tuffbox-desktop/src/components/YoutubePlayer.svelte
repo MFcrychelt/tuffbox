@@ -10,12 +10,14 @@
     title = "",
     originRect = null,
     startMini = false,
+    start = 0,
     onclose,
   }: {
     videoId: string;
     title?: string;
     originRect?: DOMRect | null;
     startMini?: boolean;
+    start?: number;
     onclose?: () => void;
   } = $props();
   const MINI_POS_KEY = "tuffbox-youtube-mini-pos";
@@ -54,7 +56,11 @@
   let embedTipDismissed = $state(false);
   let embedLoadTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const embedSrc = $derived(`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3`);
+  const embedStart = Math.max(0, Math.floor(start || 0));
+  const embedSrc = $derived(
+    `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3` +
+      (embedStart > 0 ? `&start=${embedStart}` : ""),
+  );
   const miniVideoH = $derived(Math.round((miniW * 9) / 16));
 
   function bodyPortal(node: HTMLElement) {

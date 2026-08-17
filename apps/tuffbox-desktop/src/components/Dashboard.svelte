@@ -520,6 +520,11 @@
         overflowOpen={heroOverflowOpen}
         signedIn={$authState.loggedIn}
         playerName={$authState.profile?.name ?? ""}
+        accounts={$authState.accounts}
+        accountSkins={accountSkinPaths}
+        activeAccountUuid={$authState.activeAccountUuid ?? null}
+        accountSwitchBusy={accountSwitchBusy}
+        onSwitchAccount={(uuid) => void switchHomeAccount(uuid)}
         crashBanner={crashFixBanner}
         crashFixBusy={crashFixBusy}
         softVerifyRemainingSecs={softVerifyRemainingSecs}
@@ -623,30 +628,6 @@
           >
             {$authState.profile.name}
           </div>
-
-          {#if $authState.accounts.length > 0}
-            <div class="accounts-switcher">
-              <div class="accounts-switcher-label">Accounts</div>
-              <div class="accounts-switcher-list">
-                {#each $authState.accounts as account (account.uuid)}
-                  <button
-                    type="button"
-                    class={["account-chip", { active: account.uuid === $authState.activeAccountUuid }]}
-                    disabled={accountSwitchBusy}
-                    title={account.name}
-                    onclick={() => switchHomeAccount(account.uuid)}
-                  >
-                    <HeadAvatar
-                      skinSrc={accountSkinPaths[account.uuid] ?? null}
-                      size={22}
-                      alt={account.name}
-                    />
-                    <span class="account-chip-name">{account.name}</span>
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/if}
         {:else}
           <div class="skin-panel-empty">
             <User size={48} aria-hidden="true" />
@@ -948,74 +929,6 @@
   .change-skin-btn:hover {
     border-color: var(--accent-primary);
     color: var(--accent-primary);
-  }
-
-  .accounts-switcher {
-    padding: 12px 16px 16px;
-    border-top: 1px solid var(--border-color);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .accounts-switcher-label {
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .accounts-switcher-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 200px;
-    overflow: auto;
-  }
-
-  .account-chip {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    padding: 8px 10px;
-    border-radius: var(--border-radius-sm);
-    border: 1px solid var(--border-color);
-    background: var(--bg-primary);
-    color: var(--text-secondary);
-    cursor: pointer;
-    text-align: left;
-    transition:
-      border-color var(--motion-fast, 160ms) var(--ease-hover-in, ease),
-      background var(--motion-fast, 160ms) var(--ease-hover-in, ease),
-      color var(--motion-fast, 160ms) var(--ease-hover-in, ease);
-  }
-
-  .account-chip:hover:not(:disabled) {
-    border-color: var(--accent-primary);
-    color: var(--text-primary);
-  }
-
-  .account-chip.active {
-    border-color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-    color: var(--accent-primary);
-  }
-
-  .account-chip:disabled {
-    opacity: 0.55;
-    cursor: default;
-  }
-
-  .account-chip-name {
-    font-family: var(--font-minecraft);
-    font-size: 11px;
-    letter-spacing: 0.4px;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .skin-panel-empty {

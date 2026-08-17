@@ -60,13 +60,12 @@
     me: "Me",
   };
 
-  /** Inside an instance the pack name IS the page heading. */
+  /** The pack name lives in the Home hero — the header just names the section. */
   const pageTitle = $derived.by(() => {
     const mcHome =
       $launcherSettingsLive?.theme === "minecraft" &&
       (currentView === "dashboard" || currentView === "library" || currentView === "me");
     if (mcHome) return "Minecraft: Java Edition";
-    if (currentView === "dashboard" && $projectInfo) return $projectInfo.name;
     return titles[currentView] ?? "";
   });
 
@@ -101,7 +100,7 @@
 <header class="header" data-view={currentView}>
   <div class="header-top">
   <div class="left">
-    {#key currentView + ($projectInfo?.name ?? "") + ($launcherSettingsLive?.theme ?? "")}
+    {#key currentView + ($launcherSettingsLive?.theme ?? "")}
       <div class="title-swap" in:titleIntro>
         <div class="breadcrumb">
           <span class="crumb">TuffBox</span>

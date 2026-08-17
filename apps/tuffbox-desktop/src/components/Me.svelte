@@ -14,6 +14,7 @@
     Upload,
     Link2,
     Sparkles,
+    Library,
   } from "@lucide/svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { api } from "../lib/api";
@@ -27,10 +28,13 @@
     type CapeCatalog,
     type CapeOffer,
   } from "../lib/store";
+  import { listSavedSkins } from "../lib/skinLibrary";
   import { toasts } from "../lib/toast";
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
+  import SkinLibraryBrowser from "./SkinLibraryBrowser.svelte";
+  import AddSkinModal from "./AddSkinModal.svelte";
 
   let { onBack = () => {} }: { onBack?: () => void } = $props();
 
@@ -48,6 +52,13 @@
   let skinVariant = $state<"classic" | "slim">("classic");
   let skinBusy = $state(false);
   let showSecondLayer = $state(true);
+  let showAddSkin = $state(false);
+  let skinLibRevision = $state(0);
+
+  const savedSkinCount = $derived.by(() => {
+    void skinLibRevision;
+    return listSavedSkins().length;
+  });
 
   const skinUrl = $derived($authState.profile?.skinUrl ?? null);
   const capeUrl = $derived($authState.profile?.capeUrl ?? null);
@@ -137,10 +148,8 @@
   }
 
   async function refreshCapes() {
-    if (!$authState.loggedIn) {
-      capeCatalog = null;
-      return;
-    }
+    // Rust resolves the active profile itself, so don't gate on the (possibly
+    // stale) store snapshot — this lets capes load in parallel with auth.
     capeLoading = true;
     try {
       capeCatalog = await api.mcAuth.listCapes();
@@ -264,10 +273,11 @@
 
   onMount(() => {
     void (async () => {
-      await refreshAuth();
       capeTab = defaultCapeTab($authState.loginType);
       void refreshPlaytime();
-      void refreshCapes();
+      // Auth and capes are independent (Rust reads the profile from disk) —
+      // run them concurrently instead of serially.
+      await Promise.allSettled([refreshAuth(), refreshCapes()]);
     })();
   });
 </script>
@@ -421,7 +431,7 @@
 
           {#if capeLoading && !capeCatalog}
             <div class="cape-grid" aria-busy="true">
-              {#each Array(4) as _, i (i)}
+              {#each Array(6) as _, i (i)}
                 <div class="cape-tile skel"></div>
               {/each}
             </div>
@@ -449,6 +459,8 @@
                         alt=""
                         referrerpolicy="no-referrer"
                         draggable="false"
+                        loading="lazy"
+                        decoding="async"
                         onerror={() => markCapeBroken(offer.id)}
                       />
                     {:else}
@@ -547,6 +559,30 @@
       </section>
     </div>
   </div>
+
+  <section class="card skin-lib-card">
+    <div class="card-head">
+      <Library size={16} />
+      <h3>Skin library</h3>
+      {#if savedSkinCount > 0}
+        <span class="tab-count">{savedSkinCount}</span>
+      {/if}
+      <button class="ghost-btn lib-add-btn" onclick={() => (showAddSkin = true)}>
+        <Plus size={14} />
+        Add skin
+      </button>
+    </div>
+    <SkinLibraryBrowser
+      capeCatalog={capeCatalog}
+      revision={skinLibRevision}
+      onaddnew={() => (showAddSkin = true)}
+      onapplied={() => {
+        void refreshPlaytime();
+        void refreshCapes();
+      }}
+      onlibrarychange={() => skinLibRevision++}
+    />
+  </section>
 </div>
 
 {#if showLogin}
@@ -562,6 +598,17 @@
   <AccountManager
     onclose={() => {
       showAccountManager = false;
+      void refreshAuth();
+      void refreshCapes();
+    }}
+  />
+{/if}
+{#if showAddSkin}
+  <AddSkinModal
+    capeOffers={capeCatalog?.offers ?? []}
+    onclose={() => (showAddSkin = false)}
+    onsaved={() => {
+      skinLibRevision++;
       void refreshAuth();
       void refreshCapes();
     }}
@@ -752,8 +799,8 @@
 
   .cape-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-    gap: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
   }
 
   .cape-tile {
@@ -762,13 +809,13 @@
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    padding: 8px 6px 10px;
+    padding: 10px 8px 12px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
     color: var(--text-secondary);
     cursor: pointer;
-    min-height: 132px;
+    min-height: 192px;
     box-shadow: none;
   }
 
@@ -789,15 +836,15 @@
   }
 
   .cape-tile.skel {
-    min-height: 132px;
+    min-height: 192px;
     background: var(--bg-primary);
     opacity: 0.55;
     pointer-events: none;
   }
 
   .cape-tile-art {
-    width: 64px;
-    height: 80px;
+    width: 100px;
+    height: 124px;
     border-radius: var(--border-radius-sm);
     background: #121218;
     border: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
@@ -816,14 +863,14 @@
   }
 
   .cape-none-mark {
-    font-size: 28px;
+    font-size: 36px;
     font-weight: 300;
     line-height: 1;
     color: var(--text-muted);
   }
 
   .cape-tile-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-align: center;
     line-height: 1.2;
@@ -834,7 +881,7 @@
   }
 
   .cape-tile-src {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.4px;
@@ -852,6 +899,16 @@
     border-radius: 4px;
     background: var(--accent-primary);
     color: var(--on-accent, #000);
+  }
+
+  .skin-lib-card {
+    margin-top: 16px;
+    padding-bottom: 20px;
+  }
+
+  .lib-add-btn {
+    padding: 6px 10px;
+    font-size: 12px;
   }
 
   .skin-form {

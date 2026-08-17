@@ -715,7 +715,7 @@
   .btn.primary {
     border: 1px solid transparent;
     background: var(--accent-primary);
-    color: #0b0b0b;
+    color: var(--on-accent);
   }
 
   .btn.primary:hover:not(:disabled) {

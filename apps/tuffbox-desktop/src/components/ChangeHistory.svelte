@@ -1376,7 +1376,7 @@
   .editor-actions { gap: 10px; }
   .dirty { color: var(--accent-warning); font-size: 12px; font-weight: 800; }
   .icon-btn { width: 36px; height: 36px; padding: 0; background: transparent; color: var(--text-muted); }
-  textarea { flex: 1; width: 100%; resize: none; border: 0; outline: none; padding: 20px; background: #0b0b0d; color: #e5e7eb; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.65; }
+  textarea { flex: 1; width: 100%; resize: none; border: 0; outline: none; padding: 20px; background: var(--bg-primary); color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.65; }
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 1000px) { .history-layout { grid-template-columns: 1fr; } .search { min-width: 0; } }

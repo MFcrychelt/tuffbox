@@ -682,7 +682,7 @@
     justify-content: center;
     font-size: 22px;
     font-weight: 800;
-    color: #04140a;
+    color: var(--on-accent);
     background: linear-gradient(135deg, var(--accent-primary), #0ea5e9);
     flex-shrink: 0;
     border: 1px solid transparent;

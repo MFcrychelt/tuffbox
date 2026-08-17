@@ -691,8 +691,8 @@
     await ensureTagsLoaded();
     message =
       kind === "tags"
-        ? "Pick or type a tag, drag items to add, click members to remove, then Save."
-        : `Drag ingredients for ${kind}, then Add.`;
+        ? "Pick or type a tag, drag or click items to add, click members to remove, then Save."
+        : `Click or drag ingredients for ${kind}, then Add.`;
   }
 
   function cookingKindFromType(recipeType: string): EditorKind {
@@ -962,6 +962,75 @@
     if (!id) return;
     if (!tagAdd.includes(id)) tagAdd = [...tagAdd, id];
     tagRemove = tagRemove.filter((x) => x !== id);
+  }
+
+  /**
+   * JEI-style fallback for native drag & drop (which is unreliable in some
+   * WebView2 setups): clicking a palette item while the editor is open places
+   * it into the first empty slot of the current editor layout.
+   */
+  function placePaletteItem(id: string) {
+    if (!editorOpen || !id) return;
+    if (editorKind === "tags") {
+      if (!tagAdd.includes(id)) tagAdd = [...tagAdd, id];
+      tagRemove = tagRemove.filter((x) => x !== id);
+      return;
+    }
+    if (editorKind === "crafting") {
+      const idx = editGrid.findIndex((s) => !s);
+      if (idx >= 0) {
+        setEditSlot(idx, id);
+        return;
+      }
+      if (!editOutput) {
+        editOutput = id;
+        return;
+      }
+      message = "Crafting grid and output are full — right-click a slot to clear it.";
+      return;
+    }
+    if (isCookingKind(editorKind) || editorKind === "stonecutting") {
+      if (!editInput) {
+        editInput = id;
+        return;
+      }
+      if (!editOutput) {
+        editOutput = id;
+        return;
+      }
+      message = "Input and output are full — right-click a slot to clear it.";
+      return;
+    }
+    if (editorKind === "smithing") {
+      if (!editTemplate) {
+        editTemplate = id;
+        return;
+      }
+      if (!editBase) {
+        editBase = id;
+        return;
+      }
+      if (!editAddition) {
+        editAddition = id;
+        return;
+      }
+      if (!editOutput) {
+        editOutput = id;
+        return;
+      }
+      message = "Smithing slots are full — right-click a slot to clear it.";
+      return;
+    }
+  }
+
+  let quickAddId = $state("");
+
+  /** Type-in fallback so recipes can be built even when the item palette is empty. */
+  function submitQuickAdd() {
+    const id = quickAddId.trim();
+    if (!id) return;
+    placePaletteItem(id);
+    quickAddId = "";
   }
 
   function clearEditSlotIfClick(index: number) {
@@ -1698,10 +1767,27 @@
 
             <div class="editor-hint">
               {#if editorKind === "tags"}
-                Select a tag from the Tags palette or type an id · Drag items to add · Click members to remove
+                Click a tag to edit it · Click items to add members · Click members to remove
               {:else}
-                Drag from the item/tag palette · Click or right-click to clear · Shift+click output for count (1–64)
+                Click an item to place it (or drag from the palette) · Click/right-click a slot to clear · Shift+click output for count (1–64)
               {/if}
+            </div>
+
+            <div class="quick-add-row">
+              <input
+                type="text"
+                placeholder="Type item id — e.g. minecraft:stick — then Enter"
+                bind:value={quickAddId}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    submitQuickAdd();
+                  }
+                }}
+              />
+              <button class="secondary" onclick={submitQuickAdd} title="Place this item into the next empty slot">
+                <Plus size={12} /> Add id
+              </button>
             </div>
 
             <div class="recipe-actions">
@@ -2054,7 +2140,7 @@
                   title={item.id}
                   draggable={editorOpen ? "true" : "false"}
                   ondragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
-                  onclick={() => !editorOpen && selectItem(item.id, "recipes")}
+                  onclick={() => editorOpen ? placePaletteItem(item.id) : selectItem(item.id, "recipes")}
                   oncontextmenu={(e) => { e.preventDefault(); !editorOpen && selectItem(item.id, "uses"); } }
                 >
                   {#if iconSrc(item.id)}
@@ -2128,7 +2214,7 @@
                 title="{item.id} — R: {item.recipeCount} · U: {item.useCount}"
                 draggable={editorOpen ? "true" : "false"}
                 ondragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
-                onclick={() => !editorOpen && selectItem(item.id, "recipes")}
+                onclick={() => editorOpen ? placePaletteItem(item.id) : selectItem(item.id, "recipes")}
                 oncontextmenu={(e) => { e.preventDefault(); !editorOpen && selectItem(item.id, "uses"); } }
                 onauxclick={(e) => {
                   if (e.button === 1) {
@@ -2248,7 +2334,7 @@
   .primary-scan {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 8px 14px; border-radius: 10px; border: none;
-    background: var(--accent-primary); color: #04140a; font-weight: 700; cursor: pointer;
+    background: var(--accent-primary); color: var(--on-accent); font-weight: 700; cursor: pointer;
   }
   .primary-scan:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -2378,6 +2464,13 @@
   .focus-item { display: flex; align-items: center; gap: 10px; margin-left: auto; }
   .focus-item small { display: block; font-size: 10px; color: var(--text-muted); }
   .editor-view .gui-top { justify-content: space-between; }
+  .recipe-view.editor-view {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
   .focus-item code { font-size: 10px; color: var(--text-muted); }
   .star {
     background: transparent; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);
@@ -2613,6 +2706,31 @@
     font-size: 12px;
     color: var(--text-muted);
     margin: 8px 0 4px;
+  }
+  .quick-add-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin: 6px 0 10px;
+  }
+  .quick-add-row input {
+    width: 300px;
+    max-width: 60%;
+    padding: 6px 10px;
+    font-size: 12px;
+    border: 1px solid var(--border-color, #3a3a40);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-secondary, #1a1a1e);
+    color: var(--text-primary, #eee);
+    outline: none;
+  }
+  .quick-add-row input:focus {
+    border-color: var(--jei-gold);
+  }
+  .quick-add-row .secondary {
+    padding: 6px 10px;
+    font-size: 12px;
   }
   .mc-slot.drop-target {
     outline: 1px dashed rgba(251, 191, 36, 0.35);

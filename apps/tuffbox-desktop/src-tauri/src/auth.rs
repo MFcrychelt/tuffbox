@@ -586,13 +586,27 @@ async fn fetch_skin_for_username(username: &str, source: &SkinSource) -> Option<
     }
 }
 
+/// Short-timeout client for cheap existence probes (capes can be dead URLs).
+fn probe_client() -> Result<Client, String> {
+    Client::builder()
+        .timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
 /// Probe whether a remote URL returns an image (used for OptiFine / TL capes).
+///
+/// Uses HEAD first — it costs one round-trip instead of downloading the whole
+/// PNG. Falls back to a header-only GET (body is never read) for hosts that
+/// reject HEAD.
 async fn probe_image_url(url: &str) -> Option<String> {
-    let c = client().ok()?;
-    let resp = c.get(url).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
+    let c = probe_client().ok()?;
+    let resp = match c.head(url).send().await {
+        Ok(r) if r.status().is_success() => Some(r),
+        _ => c.get(url).send().await.ok(),
+    };
+    let resp = resp.filter(|r| r.status().is_success())?;
     let ct = resp
         .headers()
         .get("content-type")
@@ -617,9 +631,6 @@ async fn fetch_cape_optifine(username: &str) -> Option<String> {
 async fn fetch_cape_tlauncher(username: &str) -> Option<String> {
     let (_, cape) = fetch_tlauncher_textures(username).await;
     if let Some(url) = cape {
-        if probe_image_url(&url).await.is_some() {
-            return Some(url);
-        }
         return Some(url);
     }
     let mut direct = format!(
@@ -695,6 +706,14 @@ async fn build_cape_catalog(
 ) -> CapeCatalog {
     let mut offers = Vec::new();
 
+    // Probe all external cape sources in parallel — this is the slow part and
+    // was previously done sequentially (twice, via resolve_display_cape).
+    let (mojang_session, optifine_url, tlauncher_url) = tokio::join!(
+        fetch_cape_mojang_session(uuid),
+        fetch_cape_optifine(username),
+        fetch_cape_tlauncher(username),
+    );
+
     for cape in mojang_owned {
         offers.push(CapeOffer {
             provider: CapeProvider::Mojang,
@@ -709,35 +728,35 @@ async fn build_cape_catalog(
         });
     }
     if mojang_owned.is_empty() {
-        if let Some(url) = fetch_cape_mojang_session(uuid).await {
+        if let Some(ref url) = mojang_session {
             offers.push(CapeOffer {
                 provider: CapeProvider::Mojang,
                 id: "mojang-session".into(),
                 label: "Mojang cape".into(),
-                url,
+                url: url.clone(),
                 can_activate: false,
                 active: selected == CapeProvider::Mojang,
             });
         }
     }
 
-    if let Some(url) = fetch_cape_optifine(username).await {
+    if let Some(ref url) = optifine_url {
         offers.push(CapeOffer {
             provider: CapeProvider::Optifine,
             id: "optifine".into(),
             label: "OptiFine cape".into(),
-            url,
+            url: url.clone(),
             can_activate: false,
             active: selected == CapeProvider::Optifine,
         });
     }
 
-    if let Some(url) = fetch_cape_tlauncher(username).await {
+    if let Some(ref url) = tlauncher_url {
         offers.push(CapeOffer {
             provider: CapeProvider::TLauncher,
             id: "tlauncher".into(),
             label: "TLauncher cape".into(),
-            url,
+            url: url.clone(),
             can_activate: false,
             active: selected == CapeProvider::TLauncher,
         });
@@ -752,7 +771,18 @@ async fn build_cape_catalog(
         active: selected == CapeProvider::None,
     });
 
-    let display_url = resolve_display_cape(username, uuid, &selected, mojang_owned).await;
+    // Derive the display URL from what we already probed — no second network pass.
+    let display_url = match &selected {
+        CapeProvider::None => None,
+        CapeProvider::Mojang => mojang_owned
+            .iter()
+            .find(|c| c.state.eq_ignore_ascii_case("ACTIVE"))
+            .map(|c| c.url.clone())
+            .or_else(|| mojang_owned.first().map(|c| c.url.clone()))
+            .or(mojang_session),
+        CapeProvider::Optifine => optifine_url,
+        CapeProvider::TLauncher => tlauncher_url,
+    };
 
     CapeCatalog {
         selected_provider: selected,
@@ -2598,6 +2628,7 @@ pub async fn mc_switch_account(uuid: String) -> Result<AuthState, String> {
 pub async fn mc_remove_account(uuid: String) -> Result<AuthState, String> {
     let state = load_auth_state();
     let was_active = state.active_account_uuid.as_deref() == Some(uuid.as_str());
+    invalidate_cape_cache(&uuid);
     let _ = clear_token(&account_refresh_key(&uuid));
     let _ = clear_token(&account_access_key(&uuid));
     remove_account_from_list(&uuid)?;
@@ -2620,18 +2651,71 @@ pub async fn mc_remove_account(uuid: String) -> Result<AuthState, String> {
     Ok(load_auth_state())
 }
 
+// ─── Cape catalog cache ─────────────────────────────────────────
+
+/// Capes are re-discovered from Mojang / OptiFine / TLauncher — a handful of
+/// network round-trips. Cache the catalog per UUID so re-opening the Me tab is
+/// instant; the next cold load refreshes it.
+const CAPE_CACHE_TTL_SECS: u64 = 600; // 10 min
+
+fn cape_cache_path(uuid: &str) -> PathBuf {
+    dirs::cache_dir()
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("TuffBox")
+        .join("capes")
+        .join(format!("{uuid}.json"))
+}
+
+#[derive(Debug, Deserialize)]
+struct CapeCacheEnvelope {
+    #[serde(default)]
+    saved_at: u64,
+    catalog: CapeCatalog,
+}
+
+fn load_cape_cache(uuid: &str) -> Option<CapeCatalog> {
+    let raw = fs::read_to_string(cape_cache_path(uuid)).ok()?;
+    let env: CapeCacheEnvelope = serde_json::from_str(&raw).ok()?;
+    if now_secs().saturating_sub(env.saved_at) >= CAPE_CACHE_TTL_SECS {
+        return None;
+    }
+    Some(env.catalog)
+}
+
+fn save_cape_cache(uuid: &str, catalog: &CapeCatalog) {
+    let path = cape_cache_path(uuid);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let env = serde_json::json!({ "savedAt": now_secs(), "catalog": catalog });
+    let Ok(bytes) = serde_json::to_vec(&env) else {
+        return;
+    };
+    let _ = fs::write(&path, bytes);
+}
+
+fn invalidate_cape_cache(uuid: &str) {
+    let _ = fs::remove_file(cape_cache_path(uuid));
+}
+
 /// Discover capes from Mojang / OptiFine / TLauncher for the active profile.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn mc_list_capes() -> Result<CapeCatalog, String> {
     let state = load_auth_state();
     let profile = state.profile.ok_or("Not logged in")?;
-    Ok(build_cape_catalog(
+    if let Some(cached) = load_cape_cache(&profile.uuid) {
+        return Ok(cached);
+    }
+    let catalog = build_cape_catalog(
         &profile.name,
         &profile.uuid,
         state.cape_provider,
         &profile.capes,
     )
-    .await)
+    .await;
+    save_cape_cache(&profile.uuid, &catalog);
+    Ok(catalog)
 }
 
 /// Select which cape provider is shown on the skin preview (only one).
@@ -2648,6 +2732,7 @@ pub async fn mc_set_cape_provider(provider: CapeProvider) -> Result<AuthState, S
 
     state.cape_provider = provider.clone();
     if let Some(ref mut profile) = state.profile {
+        invalidate_cape_cache(&profile.uuid);
         profile.cape_url = resolve_display_cape(
             &profile.name,
             &profile.uuid,
@@ -2710,6 +2795,7 @@ pub async fn mc_upload_skin_file(path: String, variant: String) -> Result<AuthSt
 pub async fn mc_logout() -> Result<AuthState, String> {
     let state = load_auth_state();
     if let Some(uuid) = state.active_account_uuid.clone() {
+        invalidate_cape_cache(&uuid);
         let _ = clear_token(&account_access_key(&uuid));
         let _ = clear_token(&account_refresh_key(&uuid));
         let _ = remove_account_from_list(&uuid);
@@ -2745,6 +2831,7 @@ pub async fn mc_apply_cape(cape_id: String) -> Result<AuthState, String> {
     // Refresh Mojang profile so ACTIVE cape updates, then re-apply display provider.
     let mut state = load_auth_state();
     if let Ok(mut profile) = fetch_mc_profile(&access_token).await {
+        invalidate_cape_cache(&profile.uuid);
         if let Some(ref skin_url) = profile.skin_url {
             let _ = download_and_cache_skin(skin_url, &profile.uuid).await;
         }

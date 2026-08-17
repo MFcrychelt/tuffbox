@@ -14,7 +14,8 @@ use tuffbox_core::{
     filter_plan_selection, ground_items_in_plan, list_quest_chats_detailed, load_quest_chat,
     merge_quest_plan, merge_quest_plan_strict, new_quest_chat_id, now_iso, parse_quest_plan,
     pin_target_chapter,
-    save_quest_chat, stitch_extend_plan, stitch_lore_into_plan, try_heuristic_quest_plan,
+    quest_plan_has_quests, save_quest_chat, stitch_extend_plan, stitch_lore_into_plan,
+    try_heuristic_quest_plan,
     AnchorQuest, ExistingChapter, ExistingGroup, QuestAuthorContext, QuestChatMessage,
     QuestChatSession, AiTokenUsage, QuestPlan, QuestPlanMergeResult, QUEST_LORE_SYSTEM_PROMPT,
     QUEST_OUTLINE_SYSTEM_PROMPT, QUEST_PLAN_SYSTEM_PROMPT,
@@ -364,12 +365,18 @@ async fn ai_quest_plan(
     merge_usage(usage_acc, usage);
     let raw1 = value_to_raw(value);
     match parse_quest_plan(&raw1) {
-        Ok(plan) => Ok(plan),
+        Ok(plan) if quest_plan_has_quests(&plan) => Ok(plan),
+        // Syntactically valid but empty (chapters without quests) — same repair flow.
+        Ok(_) => Err(
+            "chapters contain no quests — each chapter MUST include a non-empty \"quests\" array"
+                .into(),
+        ),
         Err(first_err) => {
             let repair = format!(
                 "{user}\n\nYour previous answer was invalid QuestPlan JSON ({first_err}).\n\
 Return ONLY compact JSON. desc/deps/tasks/rewards MUST be arrays (never plain strings).\n\
-Example: \"desc\": [\"Collect 10 oak wood\"], \"tasks\": [{{ \"type\": \"item\", \"item\": \"minecraft:oak_log\", \"count\": 10 }}].\n\
+Every chapter MUST contain a non-empty \"quests\" array of quest objects ({{ \"title\", \"tasks\" }}) — never a top-level \"quests\" list beside chapters.\n\
+Example: \"desc\": [\"Collect 10 oak wood\"], \"chapters\": [{{ \"title\": \"Chapter\", \"quests\": [{{ \"title\": \"Quest\", \"tasks\": [{{ \"type\": \"item\", \"item\": \"minecraft:oak_log\", \"count\": 10 }}] }}] }}].\n\
 Omit ids/schemaVersion. No markdown fences."
             );
             let (value2, usage2) = if let Some(p) = progress {
@@ -380,7 +387,10 @@ Omit ids/schemaVersion. No markdown fences."
             merge_usage(usage_acc, usage2);
             let raw2 = value_to_raw(value2);
             match parse_quest_plan(&raw2) {
-                Ok(plan) => Ok(plan),
+                Ok(plan) if quest_plan_has_quests(&plan) => Ok(plan),
+                Ok(_) => Err(format!(
+                    "QuestPlan has chapters but no quests after retry\n<<<QUEST_RAW_JSON>>>\n{raw2}\n<<<END_QUEST_RAW_JSON>>>"
+                )),
                 Err(e) => Err(format!(
                     "Invalid QuestPlan JSON after retry: {e}\n<<<QUEST_RAW_JSON>>>\n{raw2}\n<<<END_QUEST_RAW_JSON>>>"
                 )),

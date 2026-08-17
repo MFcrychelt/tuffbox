@@ -85,6 +85,58 @@
   --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.55);
 }
 
+/* Light theme Home: polished-quartz backdrop with dark silvery content
+   islands (poster, play bar, pack shelf, YouTube feed) so they read clearly
+   against the light stone instead of dissolving into white. */
+:is([data-theme="light"], [data-theme="tuffbox-light"]) .home {
+  --home-quartz-line: rgba(18, 26, 32, 0.05);
+  --home-quartz-sheen: rgba(255, 255, 255, 0.65);
+
+  /* Polished quartz texture — near-white stone + faint seams + soft sheen. */
+  background:
+    radial-gradient(ellipse 140% 90% at 50% -8%, var(--home-quartz-sheen), transparent 58%),
+    linear-gradient(90deg, var(--home-quartz-line) 1px, transparent 1px),
+    linear-gradient(0deg, var(--home-quartz-line) 1px, transparent 1px),
+    linear-gradient(150deg, #e9eeed 0%, #dfe6e4 46%, #eaf0ef 100%);
+  background-size:
+    auto,
+    60px 60px,
+    60px 60px,
+    auto;
+
+  /* Surface tokens inside home → dark silvery islands. */
+  --bg-primary: #191c21;
+  --bg-secondary: #22272e;
+  --bg-tertiary: #2b313a;
+  --bg-elevated: #363d48;
+  --bg-hover: #414a56;
+  --bg-active: #4c5665;
+
+  --text-primary: #f2f5f7;
+  --text-secondary: #c4ccd5;
+  --text-muted: #8c96a1;
+
+  --border-color: #333a44;
+  --shadow-sm: 0 1px 2px rgba(5, 8, 11, 0.35);
+  --shadow-md: 0 4px 14px rgba(5, 8, 11, 0.4);
+  --shadow-lg: 0 14px 36px rgba(5, 8, 11, 0.5);
+
+  /* Glass chrome + hero type stay light-on-silver. */
+  --glass-bg: rgba(13, 16, 20, 0.68);
+  --glass-border: color-mix(in srgb, #fff 14%, #333a44);
+  --glass-highlight: color-mix(in srgb, #fff 16%, transparent);
+  --hero-fg: #f4f7f9;
+  --hero-fg-muted: color-mix(in srgb, #f4f7f9 74%, transparent);
+  --hero-scrim:
+    linear-gradient(90deg, rgba(9, 12, 15, 0.8) 0%, transparent 60%),
+    linear-gradient(0deg, rgba(9, 12, 15, 0.74) 0%, transparent 55%);
+
+  /* Stone speckle for the procedural (no-cover) poster. */
+  --tex-speck-a: rgba(150, 170, 190, 0.1);
+  --tex-speck-b: rgba(4, 7, 10, 0.34);
+  --tex-speck-c: rgba(100, 120, 140, 0.12);
+}
+
 [data-theme="inferno"] {
   --bg-primary: #120a0a;
   --bg-secondary: #1c1010;

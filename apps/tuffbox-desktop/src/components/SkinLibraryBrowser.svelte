@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Plus, Trash2 } from "@lucide/svelte";
+  import { MoreHorizontal, Plus, Trash2 } from "@lucide/svelte";
   import { api } from "../lib/api";
   import {
     duplicateSavedSkin,
@@ -225,10 +225,10 @@
           <button
             type="button"
             class="tile-hit"
-            aria-expanded={open}
-            aria-label="{entry.name} options"
+            aria-label={canApplyMojang ? `Apply ${entry.name}` : `${entry.name} options`}
             disabled={busy}
-            onclick={(e) => openMenu(entry.id, e)}
+            title={canApplyMojang ? "Apply skin" : "Microsoft account required to apply"}
+            onclick={(e) => (canApplyMojang ? void applySkinEntry(entry) : openMenu(entry.id, e))}
           >
             <span class="tile-name">{entry.name}</span>
             <span class="tile-art">
@@ -239,6 +239,21 @@
                 height={140}
               />
             </span>
+            {#if busy}
+              <span class="tile-progress">Applying…</span>
+            {/if}
+          </button>
+
+          <button
+            type="button"
+            class="tile-more"
+            class:open
+            aria-label="{entry.name} options"
+            aria-expanded={open}
+            disabled={busy}
+            onclick={(e) => openMenu(entry.id, e)}
+          >
+            <MoreHorizontal size={14} />
           </button>
 
           {#if open}
@@ -258,15 +273,9 @@
                   height={96}
                 />
               </div>
-              <button
-                type="button"
-                class="menu-btn primary"
-                disabled={busy || !canApplyMojang}
-                title={canApplyMojang ? "Upload to Mojang account" : "Microsoft account required"}
-                onclick={() => void applySkinEntry(entry)}
-              >
-                Apply
-              </button>
+              {#if !canApplyMojang}
+                <p class="menu-hint">Applying needs a Microsoft account.</p>
+              {/if}
               <button type="button" class="menu-btn" disabled={busy} onclick={() => copySkin(entry)}>
                 Copy
               </button>
@@ -365,7 +374,7 @@
     border: none;
     border-radius: var(--border-radius-sm);
     background: var(--accent-primary);
-    color: #0b0b0b;
+    color: var(--on-accent);
     font-size: 13px;
     font-weight: 800;
     cursor: pointer;
@@ -456,6 +465,59 @@
     background: color-mix(in srgb, var(--bg-secondary, #1a1a1e) 90%, transparent);
   }
 
+  .tile-more {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-secondary) 85%, transparent);
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0.6;
+    transition:
+      opacity var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out);
+  }
+
+  .skin-tile:hover .tile-more,
+  .tile-more.open {
+    opacity: 1;
+  }
+
+  .tile-more:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .tile-more:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  .tile-progress {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--accent-primary);
+    color: var(--on-accent);
+    font-size: 10px;
+    font-weight: 800;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
   .tile-name {
     font-size: 12px;
     font-weight: 700;
@@ -506,6 +568,17 @@
     margin: 2px 0 4px;
   }
 
+  .menu-hint {
+    margin: 0;
+    padding: 6px 8px;
+    border-radius: var(--border-radius-sm);
+    background: color-mix(in srgb, var(--badge-offline-bg, rgba(245, 158, 11, 0.12)) 60%, transparent);
+    color: var(--badge-offline-fg, #fde68a);
+    font-size: 10px;
+    line-height: 1.35;
+    text-align: center;
+  }
+
   .menu-btn {
     display: inline-flex;
     align-items: center;
@@ -524,16 +597,6 @@
 
   .menu-btn:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--text-primary) 40%, transparent);
-  }
-
-  .menu-btn.primary {
-    border-color: transparent;
-    background: var(--accent-primary);
-    color: #0b0b0b;
-  }
-
-  .menu-btn.primary:hover:not(:disabled) {
-    filter: brightness(1.05);
   }
 
   .menu-btn.danger {

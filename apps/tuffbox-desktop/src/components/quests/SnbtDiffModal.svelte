@@ -286,6 +286,6 @@
   .modal-actions .primary {
     background: var(--accent);
     border-color: transparent;
-    color: #0b1210;
+    color: var(--on-accent);
   }
 </style>

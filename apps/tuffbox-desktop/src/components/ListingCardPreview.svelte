@@ -363,7 +363,7 @@
     cursor: default;
     pointer-events: none;
     background: var(--accent-primary);
-    color: #04140a;
+    color: var(--on-accent);
   }
 
   .mr-dl-btn.card-dl {

@@ -3994,7 +3994,7 @@
   .lg-dot {
     width: 11px; height: 11px; border-radius: 3px;
     border: 1.6px solid; display: inline-block;
-    background: #18181b;
+    background: var(--bg-tertiary);
   }
   .lg-dot.client { border-color: color-mix(in srgb, var(--accent-secondary) 80%, transparent); }
   .lg-dot.server { border-color: rgba(59,130,246,.8); }
@@ -4084,8 +4084,8 @@
   }
 
   .svg-node rect {
-    fill: #18181b;
-    stroke: rgba(255,255,255,.28);
+    fill: var(--bg-tertiary);
+    stroke: var(--border-color);
     stroke-width: 1.6;
     transition: stroke 120ms ease, fill 120ms ease;
   }
@@ -4356,7 +4356,7 @@
     background: rgba(14, 116, 144, 0.2);
   }
   .missing-fallback {
-    background: linear-gradient(135deg, #27272a, #18181b);
+    background: linear-gradient(135deg, var(--bg-hover), var(--bg-tertiary));
     color: #a1a1aa;
     font-size: 18px;
     font-weight: 800;

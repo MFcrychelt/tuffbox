@@ -39,6 +39,7 @@
     skinPath,
     loginTypeLabel,
     loginModalOpen,
+    uiScalePercentLive,
     type RecentProject,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
@@ -135,6 +136,8 @@
   const selectedRunning = $derived(
     isProjectRunning(selectedPath, $runningInstances),
   );
+  /** Multiplier from the Settings UI-scale (Auto mode derives it from screen size). */
+  const sideScale = $derived(($uiScalePercentLive ?? 100) / 100);
   let selectingPath = false;
   $effect(() => {
     const recent = $recentProjects;
@@ -974,7 +977,7 @@
     </div>
   </div>
 
-  <div class="prism-body" class:is-dragging={dragging}>
+  <div class="prism-body" class:is-dragging={dragging} style={`--side-scale: ${sideScale}`}>
     <div class="prism-grid-pane">
       {#if $recentProjects.length === 0}
         <div class="empty-state">
@@ -1464,7 +1467,7 @@
 
   .prism-body {
     display: grid;
-    grid-template-columns: 1fr 220px;
+    grid-template-columns: minmax(0, 1fr) calc(clamp(300px, 26vw, 460px) * var(--side-scale, 1));
     flex: 1;
     min-height: 0;
   }
@@ -1654,13 +1657,13 @@
   }
 
   .inst-icon {
-    width: 72px;
-    height: 72px;
-    border-radius: 50%;
+    width: 76px;
+    height: 76px;
+    border-radius: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 28px;
+    font-size: 30px;
     font-weight: 900;
     color: #fff;
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -1672,6 +1675,12 @@
       border-radius var(--motion-fast) var(--ease-out),
       box-shadow var(--motion-fast) var(--ease-out),
       filter var(--motion-fast) var(--ease-out);
+  }
+  .inst-tile:hover .inst-icon,
+  .inst-tile.selected .inst-icon,
+  .inst-tile.running .inst-icon,
+  .inst-tile:focus-visible .inst-icon {
+    border-radius: var(--border-radius-lg);
   }
   .inst-icon.folder-preview {
     border-radius: var(--border-radius-lg);
@@ -1697,20 +1706,16 @@
   .folder-stack .stack-a { top: 10px; left: 10px; }
   .folder-stack .stack-b { bottom: 10px; right: 10px; }
   .inst-name {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
     max-width: 100%;
     width: fit-content;
-    line-height: 1.3;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+    line-height: 1.35;
     white-space: normal;
+    word-break: break-word;
     padding: 2px 8px;
-    border-radius: 999px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
     box-sizing: border-box;
     transition:
@@ -1750,58 +1755,56 @@
   .prism-side {
     border-left: 1px solid var(--border-color);
     background: var(--bg-tertiary);
-    padding: 14px 12px;
+    padding: 20px 18px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 16px;
     overflow: auto;
   }
-  .side-panel { display: flex; flex-direction: column; gap: 12px; }
+  .side-panel { display: flex; flex-direction: column; gap: 16px; }
   .side-hero { text-align: center; min-width: 0; }
   .side-icon {
-    width: 64px;
-    height: 64px;
-    margin: 0 auto 10px;
-    border-radius: 50%;
+    width: 104px;
+    height: 104px;
+    margin: 0 auto 12px;
+    border-radius: var(--border-radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 24px;
+    font-size: 40px;
     font-weight: 900;
     color: #fff;
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
   }
   .side-title {
-    font-size: 13px;
+    font-size: 18px;
     font-weight: 700;
     color: var(--text-primary);
     margin-bottom: 4px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
+    line-height: 1.3;
+    word-break: break-word;
   }
   .side-meta {
-    font-size: 11px;
+    font-size: 13px;
     color: var(--text-muted);
     text-transform: capitalize;
   }
   .side-actions {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
   }
   .side-btn {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     width: 100%;
-    padding: 8px 10px;
+    padding: 12px 14px;
     border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
     background: transparent;
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: 15px;
     font-weight: 600;
     cursor: pointer;
     text-align: left;

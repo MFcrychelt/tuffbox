@@ -129,22 +129,22 @@
 
   let files = $state<ConfigFile[]>([]);
   let selected = $state<ConfigFile | null>(null);
-  let content = "";
-  let originalContent = "";
-  let filter = "";
-  let rootFilter: string | null = null;
-  let loading = false;
-  let saving = false;
-  let formatting = false;
-  let error: string | null = null;
-  let message: string | null = null;
-  let lastSnapshotId: string | null = null;
-  let lastLoadedPath: string | null = null;
+  let content = $state("");
+  let originalContent = $state("");
+  let filter = $state("");
+  let rootFilter = $state<string | null>(null);
+  let loading = $state(false);
+  let saving = $state(false);
+  let formatting = $state(false);
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let lastSnapshotId = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
 
-  let searchQuery = "";
-  let searchResults: SearchHit[] = [];
-  let searchLoading = false;
-  let searchError: string | null = null;
+  let searchQuery = $state("");
+  let searchResults = $state<SearchHit[]>([]);
+  let searchLoading = $state(false);
+  let searchError = $state<string | null>(null);
 
   let expandedDirs = $state(new Set<string>());
   let aiOpen = $state(
@@ -179,17 +179,17 @@
     }
   }
 
-  let confirmOpen = false;
-  let pendingFile: ConfigFile | null = null;
-  let pendingJumpLine: number | null = null;
-  let highlightLine: number | null = null;
+  let confirmOpen = $state(false);
+  let pendingFile = $state<ConfigFile | null>(null);
+  let pendingJumpLine = $state<number | null>(null);
+  let highlightLine = $state<number | null>(null);
   let highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
-  let lintIssues: { severity: string; code: string; message: string; line?: number | null }[] = [];
-  let lintLoading = false;
+  let lintIssues = $state<{ severity: string; code: string; message: string; line?: number | null }[]>([]);
+  let lintLoading = $state(false);
 
   let cmView: EditorView | null = null;
-  let showSnippets = false;
+  let showSnippets = $state(false);
 
   function buildFlatTree(fileList: ConfigFile[], filterQuery: string, rootPrefix: string | null): FlatNode[] {
     const q = filterQuery.toLowerCase().trim();

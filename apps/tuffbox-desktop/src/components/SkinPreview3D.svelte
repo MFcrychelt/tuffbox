@@ -10,6 +10,7 @@
     playerName = "",
     showName = true,
     showSecondLayer = true,
+    model = null,
     width = 300,
     height = 400,
   }: {
@@ -20,6 +21,8 @@
     playerName?: string;
     showName?: boolean;
     showSecondLayer?: boolean;
+    /** Override arm model; `null` auto-detects from the skin texture. */
+    model?: "classic" | "slim" | null;
     width?: number;
     height?: number;
   } = $props();
@@ -34,6 +37,7 @@
   let lastCape = "";
   let lastAccount = "";
   let lastCachedPath = "";
+  let lastModel = "";
   let skinShown = false;
   let capeFrames: HTMLCanvasElement[] = [];
   let capeFrameIdx = 0;
@@ -93,8 +97,10 @@
 
       // Transparent WebGL clear — CSS .skin-bg paints the backdrop.
       viewer.background = null;
-      viewer.globalLight.intensity = 1.55;
-      viewer.cameraLight.intensity = 1.15;
+      // skinview3d's ambient (globalLight) default is intensity 3; keep it
+      // bright, plus a front "key" light from the camera for a well-lit skin.
+      viewer.globalLight.intensity = 2.6;
+      viewer.cameraLight.intensity = 1.4;
 
       viewer.controls.enableRotate = true;
       viewer.controls.enableZoom = true;
@@ -136,7 +142,7 @@
   async function loadSkinFromCachedPath(path: string): Promise<boolean> {
     if (!viewer || !path) return false;
     try {
-      await viewer.loadSkin(convertFileSrc(path), { model: "auto-detect" });
+      await viewer.loadSkin(convertFileSrc(path), { model: model ?? "auto-detect" });
       return true;
     } catch (e) {
       console.warn("[SkinPreview3D] cached skin failed:", e);
@@ -383,7 +389,7 @@
       const [skinData, capeFramesResult] = await Promise.all([skinPromise, capePromise]);
 
       if (skinData) {
-        await viewer.loadSkin(skinData, { model: "auto-detect" });
+        await viewer.loadSkin(skinData, { model: model ?? "auto-detect" });
         lastSkin = skin!;
         skinShown = true;
         applySecondLayer();
@@ -421,23 +427,14 @@
     void initViewer();
   }
 
-  /** Show/hide the Minecraft skin overlay (hat, jacket, sleeves, pants). */
+  /** Show/hide the Minecraft skin second layer (hat, jacket, sleeves, pants). */
   function applySecondLayer() {
     if (!viewer) return;
     const skin = viewer.playerObject?.skin;
     if (!skin) return;
-    const parts = [
-      "head",
-      "body",
-      "rightArm",
-      "leftArm",
-      "rightLeg",
-      "leftLeg",
-    ] as const;
-    for (const part of parts) {
-      const p: any = skin[part];
-      if (p && p.layer2) p.layer2.visible = showSecondLayer;
-    }
+    // skinview3d v3 exposes the overlay as `outerLayer` on each BodyPart;
+    // toggle it across every body part at once.
+    skin.setOuterLayerVisible(showSecondLayer);
   }
 
   // Track texture props; apply when viewer already exists (init also applies).
@@ -446,14 +443,24 @@
     const cape = capeUrl;
     const acct = accountKey;
     const cache = cachedPath;
+    const mdl = model ?? "";
     if (!viewer) return;
+    const modelChanged = mdl !== lastModel;
     if (
       skin === lastSkin &&
       capeKey(cape) === lastCape &&
       acct === lastAccount &&
-      (cache ?? "") === lastCachedPath
+      (cache ?? "") === lastCachedPath &&
+      !modelChanged
     ) {
       return;
+    }
+    if (modelChanged) {
+      // Reload the skin texture so the new arm model takes effect.
+      lastModel = mdl;
+      lastSkin = "";
+      lastCachedPath = "";
+      skinShown = false;
     }
     if (acct !== lastAccount) {
       lastAccount = acct;

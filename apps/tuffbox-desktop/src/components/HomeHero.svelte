@@ -19,6 +19,9 @@
   } from "@lucide/svelte";
   import { fade } from "svelte/transition";
   import type { CrashFixBannerPayload } from "../lib/homeBootstrap";
+  import type { AccountEntry } from "../lib/store";
+  import HeadAvatar from "./HeadAvatar.svelte";
+  import MojangNews from "./MojangNews.svelte";
 
   let {
     hasSelection = false,
@@ -37,6 +40,10 @@
     overflowOpen = false,
     signedIn = true,
     playerName = "",
+    accounts = [],
+    accountSkins = null,
+    activeAccountUuid = null,
+    accountSwitchBusy = false,
     crashBanner = null,
     crashFixBusy = false,
     softVerifyRemainingSecs = null,
@@ -54,6 +61,7 @@
     onRollback,
     onDiagnostics,
     onSignIn,
+    onSwitchAccount = null,
   }: {
     hasSelection?: boolean;
     emptyZero?: boolean;
@@ -71,6 +79,12 @@
     overflowOpen?: boolean;
     signedIn?: boolean;
     playerName?: string;
+    /** Saved accounts for the mini-avatar switcher row. */
+    accounts?: AccountEntry[];
+    /** Cached skin PNG path per account UUID. */
+    accountSkins?: Record<string, string | null> | null;
+    activeAccountUuid?: string | null;
+    accountSwitchBusy?: boolean;
     crashBanner?: CrashFixBannerPayload | null;
     crashFixBusy?: boolean;
     softVerifyRemainingSecs?: number | null;
@@ -88,7 +102,66 @@
     onRollback: () => void;
     onDiagnostics: () => void;
     onSignIn?: () => void;
+    onSwitchAccount?: ((uuid: string) => void) | null;
   } = $props();
+
+  let avatarRowEl = $state<HTMLDivElement | null>(null);
+  /** True when the strip overflows — enables the Xbox-style edge fade mask. */
+  let avatarScrollable = $state(false);
+  const avatarEls = new Map<string, HTMLButtonElement>();
+
+  function updateAvatarScrollState() {
+    const el = avatarRowEl;
+    avatarScrollable = !!el && el.scrollWidth > el.clientWidth + 1;
+  }
+
+  // Track the strip overflow (for the edge mask) on mount and on any resize;
+  // re-runs when the accounts prop changes too.
+  $effect(() => {
+    const el = avatarRowEl;
+    void accounts.length;
+    if (!el) return;
+    updateAvatarScrollState();
+    const ro = new ResizeObserver(() => updateAvatarScrollState());
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
+  /** Track avatar tile elements so the active one can be scrolled into view. */
+  function avatarRef(node: HTMLButtonElement, uuid: string) {
+    avatarEls.set(uuid, node);
+    return {
+      destroy() {
+        avatarEls.delete(uuid);
+      },
+    };
+  }
+
+  /** Keep the active avatar in view (Xbox / BoI character-select feel). */
+  $effect(() => {
+    const active = activeAccountUuid;
+    if (!active) return;
+    const el = avatarEls.get(active);
+    if (!el) return;
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({
+      behavior: reduced ? "auto" : "smooth",
+      inline: "center",
+      block: "nearest",
+    });
+  });
+
+  /** Vertical wheel → horizontal scroll on the avatar strip. */
+  function onAvatarWheel(e: WheelEvent) {
+    const el = avatarRowEl;
+    if (!el) return;
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    }
+  }
 
   const showStorefront = $derived(!hasSelection);
   const playStop = $derived(running && !launching);
@@ -213,13 +286,15 @@
 
   {#if showStorefront}
     <div class="poster-storefront">
-      {#if emptyZero}
-        <p class="storefront-title">No instances yet</p>
-        <p class="storefront-hint">Create a blank pack, import one you already have, or browse the library.</p>
-      {:else}
-        <p class="storefront-title">Select an instance</p>
-        <p class="storefront-hint">Pick a pack from the shelf below, or create a new instance.</p>
-      {/if}
+      <div class="storefront-copy">
+        {#if emptyZero}
+          <p class="storefront-title">No instances yet</p>
+          <p class="storefront-hint">Create a blank pack, import one you already have, or browse the library.</p>
+        {:else}
+          <p class="storefront-title">Select an instance</p>
+          <p class="storefront-hint">Pick a pack from the shelf below, or create a new instance.</p>
+        {/if}
+      </div>
       <div class="storefront-ctas">
         <button type="button" class="storefront-primary" onclick={onCreate}>
           <Package size={15} />
@@ -235,40 +310,45 @@
         </button>
       </div>
     </div>
-  {:else}
-    <div class="poster-bottom">
-      {#if crashBanner}
-        <div class="crash-fix-banner" role="status">
-          <ShieldAlert size={18} />
-          <div class="crash-fix-banner-body">
-            <strong>Fix applied</strong>
-            <span>
-              {#if crashBanner.softVerifyStartedUnix}
-                Play about {softVerifyRemainingSecs ?? 0}s more to confirm it works.
-              {:else}
-                Launch the game to confirm the fix. You can restore anytime.
-              {/if}
-            </span>
-          </div>
-          <div class="crash-fix-banner-actions">
-            <button class="crash-restore" type="button" disabled={crashFixBusy} onclick={onRollback}>
-              Restore
-            </button>
-            <button class="crash-fix-diag" type="button" onclick={onDiagnostics}>
-              Diagnostics
-            </button>
-          </div>
-        </div>
-      {/if}
-
-      {#if title}
-        {#key title}
-          <h1 class="poster-title" in:fade={{ duration: artFadeMs }}>{title}</h1>
-        {/key}
-      {/if}
-
-    </div>
   {/if}
+
+  <div class="poster-bottom">
+    {#if crashBanner}
+      <div class="crash-fix-banner" role="status">
+        <ShieldAlert size={18} />
+        <div class="crash-fix-banner-body">
+          <strong>Fix applied</strong>
+          <span>
+            {#if crashBanner.softVerifyStartedUnix}
+              Play about {softVerifyRemainingSecs ?? 0}s more to confirm it works.
+            {:else}
+              Launch the game to confirm the fix. You can restore anytime.
+            {/if}
+          </span>
+        </div>
+        <div class="crash-fix-banner-actions">
+          <button class="crash-restore" type="button" disabled={crashFixBusy} onclick={onRollback}>
+            Restore
+          </button>
+          <button class="crash-fix-diag" type="button" onclick={onDiagnostics}>
+            Diagnostics
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    {#if !crashBanner}
+      <div class="poster-news">
+        <MojangNews />
+      </div>
+    {/if}
+
+    {#if hasSelection && title}
+      {#key title}
+        <h1 class="poster-title" in:fade={{ duration: artFadeMs }}>{title}</h1>
+      {/key}
+    {/if}
+  </div>
 </section>
 
 {#if !showStorefront}
@@ -314,6 +394,38 @@
         {/if}
       </div>
     </div>
+
+    {#if accounts.length > 1}
+      <div
+        class={["account-avatars", { scrollable: avatarScrollable }]}
+        role="group"
+        aria-label="Switch account"
+        bind:this={avatarRowEl}
+        onwheel={onAvatarWheel}
+      >
+        {#each accounts as account, i (account.uuid)}
+          <button
+            type="button"
+            class={["avatar-tile", { active: account.uuid === activeAccountUuid }]}
+            disabled={accountSwitchBusy}
+            title={account.name}
+            aria-pressed={account.uuid === activeAccountUuid}
+            aria-label={`Switch to ${account.name}`}
+            use:avatarRef={account.uuid}
+            in:fade={{ duration: 200, delay: Math.min(i * 40, 240) }}
+            out:fade={{ duration: 120 }}
+            onclick={() => onSwitchAccount?.(account.uuid)}
+          >
+            <HeadAvatar
+              skinSrc={accountSkins?.[account.uuid] ?? null}
+              size={40}
+              alt={account.name}
+            />
+            <span class="avatar-name">{account.name}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -321,7 +433,7 @@
   .poster {
     position: relative;
     isolation: isolate;
-    height: 400px;
+    height: 440px;
     border-radius: var(--border-radius-xl);
     border: 1px solid var(--border-color);
     box-shadow:
@@ -593,6 +705,20 @@
     max-width: calc(100% - 40px);
   }
 
+  /** Mojang news strip — sits above the build name with a large gap. */
+  .poster-news {
+    width: 100%;
+    min-width: 0;
+    margin-bottom: clamp(36px, 5cqi, 56px);
+    animation: poster-in var(--motion-enter, 320ms) var(--ease-spring, ease) both;
+    animation-delay: calc(var(--stagger-step, 48ms) * 1);
+  }
+
+  /* No build selected — nothing sits under the strip, keep it near the base. */
+  .poster.storefront .poster-news {
+    margin-bottom: 2px;
+  }
+
   .poster-title {
     margin: 0;
     max-width: 100%;
@@ -610,6 +736,128 @@
   .poster-action-bar {
     margin-top: 14px;
     width: 100%;
+  }
+
+  /* ─── Account mini-avatar strip (Xbox / BoI character-select style) ─── */
+  .account-avatars {
+    margin-top: 10px;
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    padding: 6px 2px 12px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .account-avatars::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Edge fade on the strip — only when it actually overflows. */
+  .account-avatars.scrollable {
+    -webkit-mask-image: linear-gradient(
+      to right,
+      transparent 0,
+      #000 22px,
+      #000 calc(100% - 22px),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      transparent 0,
+      #000 22px,
+      #000 calc(100% - 22px),
+      transparent 100%
+    );
+  }
+
+  .avatar-tile {
+    position: relative;
+    width: 68px;
+    height: 64px;
+    padding: 6px 4px 4px;
+    flex-shrink: 0;
+    scroll-snap-align: center;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    cursor: pointer;
+    transition:
+      border-color var(--motion-fast, 160ms) var(--ease-out, ease),
+      box-shadow var(--motion-fast, 160ms) var(--ease-out, ease),
+      transform var(--motion-fast, 160ms) var(--ease-out, ease),
+      background var(--motion-fast, 160ms) var(--ease-out, ease);
+  }
+
+  .avatar-tile:hover:not(:disabled) {
+    border-color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
+    transform: translateY(-2px);
+  }
+
+  .avatar-tile.active {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    transform: scale(1.06);
+    animation: avatar-pop 320ms var(--ease-out, ease);
+  }
+
+  @keyframes avatar-pop {
+    0% {
+      transform: scale(0.92);
+    }
+    60% {
+      transform: scale(1.1);
+    }
+    100% {
+      transform: scale(1.06);
+    }
+  }
+
+  .avatar-tile.active::after {
+    content: "";
+    position: absolute;
+    bottom: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--accent-primary);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 70%, transparent);
+    pointer-events: none;
+  }
+
+  .avatar-name {
+    max-width: 100%;
+    font-family: var(--font-minecraft);
+    font-size: 10px;
+    line-height: 1.15;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color var(--motion-fast, 160ms) var(--ease-out, ease);
+  }
+
+  .avatar-tile.active .avatar-name {
+    color: var(--accent-primary);
+  }
+
+  .avatar-tile:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .avatar-tile :global(.head-wrap) {
+    pointer-events: none;
   }
 
   .poster-play-row {
@@ -769,46 +1017,59 @@
 
   .poster-storefront {
     position: absolute;
-    inset: 0;
+    left: 20px;
+    right: 20px;
+    top: 20px;
     z-index: 3;
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 24px;
-    text-align: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    max-width: calc(100% - 40px);
+    animation: poster-in var(--motion-enter, 320ms) var(--ease-spring, ease) both;
+  }
+
+  .storefront-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
   }
 
   .storefront-title {
     margin: 0;
-    font-size: 18px;
+    font-size: 15px;
     font-weight: 800;
+    line-height: 1.25;
     color: var(--hero-fg);
+    text-shadow: 0 1px 10px rgba(0, 0, 0, 0.5);
   }
 
   .storefront-hint {
-    margin: 0 0 8px;
+    margin: 0;
     max-width: 420px;
-    font-size: 13px;
+    font-size: 12px;
+    line-height: 1.4;
     color: var(--hero-fg-muted);
   }
 
   .storefront-ctas {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
+    justify-content: flex-end;
     gap: 8px;
   }
 
   .storefront-primary {
-    height: 40px;
-    padding: 0 16px;
+    height: 34px;
+    padding: 0 14px;
     border-radius: var(--border-radius-md);
     box-shadow: var(--play-glow);
   }
 
   .storefront-ghost {
+    height: 34px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--glass-border);
     background: var(--glass-bg);
@@ -967,6 +1228,12 @@
       filter: none;
       animation: none;
       animation-delay: 0ms;
+    }
+
+    .avatar-tile {
+      animation: none;
+      transition: none;
+      transform: none;
     }
 
     .poster-art {

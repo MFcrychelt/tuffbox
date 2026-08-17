@@ -299,7 +299,7 @@
   .primary {
     border: none;
     background: var(--accent-primary);
-    color: #04140a;
+    color: var(--on-accent);
   }
   .primary:disabled { opacity: 0.55; cursor: not-allowed; }
   .head-actions { display: flex; gap: 8px; flex-wrap: wrap; }

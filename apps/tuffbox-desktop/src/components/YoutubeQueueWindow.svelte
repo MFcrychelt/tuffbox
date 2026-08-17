@@ -31,6 +31,8 @@
     youtubeQueueClear,
     openYoutubePlayer,
     closeYoutubeQueue,
+    getYoutubeVideoProgress,
+    setYoutubeVideoProgress,
     type YoutubeQueueItem,
   } from "../lib/store";
   import { trapFocus } from "../lib/focusTrap";
@@ -63,8 +65,10 @@
   onMount(() => {
     const unsubItems = youtubeQueueItems.subscribe((v) => (items = v));
     const unsubIndex = youtubeQueueIndex.subscribe((v) => (queueIndex = v));
+    window.addEventListener("message", onProgressMessage);
     void loadBrowse();
     return () => {
+      window.removeEventListener("message", onProgressMessage);
       unsubItems();
       unsubIndex();
     };
@@ -83,7 +87,20 @@
   });
 
   function embedSrc(id: string) {
-    return `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3`;
+    const saved = getYoutubeVideoProgress(id);
+    const resume = saved && saved > 1 ? `&start=${Math.floor(saved)}` : "";
+    return `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3&enablejsapi=1${resume}`;
+  }
+
+  /** Learn the embed's playback position (YouTube posts infoDelivery postMessages when enablejsapi=1). */
+  function onProgressMessage(ev: MessageEvent) {
+    const d = ev.data as { event?: string; info?: { currentTime?: number } };
+    if (!d || d.event !== "infoDelivery" || !d.info) return;
+    const t = d.info.currentTime;
+    const c = current;
+    if (c && typeof t === "number" && Number.isFinite(t) && t > 1) {
+      setYoutubeVideoProgress(c.videoId, Math.floor(t));
+    }
   }
 
   function toMini() {
@@ -94,6 +111,7 @@
       title: c.title,
       originRect: null,
       startMini: true,
+      start: getYoutubeVideoProgress(c.videoId),
     });
   }
 
