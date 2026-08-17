@@ -66,6 +66,21 @@
     return HTML_ORIGIN + (u.startsWith("/") ? "" : "/") + u;
   }
 
+  /**
+   * Square "cover" for a version card, built in JS and applied inline —
+   * keeps the heavy multi-layer gradients out of the startup CSS bundle.
+   * Layers: repeated pixel speckle + accent-tinted vignette + vertical fade.
+   */
+  function coverStyle(hue: number): string {
+    return (
+      `background:` +
+      `radial-gradient(rgba(255,255,255,.07) 0 11%,transparent 12%) 0 0/18px 18px,` +
+      `repeating-conic-gradient(rgba(255,255,255,.05) 0 25%,transparent 0 50%) 0 0/18px 18px,` +
+      `radial-gradient(ellipse at 30% 22%,hsl(${hue} 62% 42%/.55),transparent 58%),` +
+      `linear-gradient(165deg,hsl(${hue} 44% 21%),hsl(${hue} 50% 9%) 62%);`
+    );
+  }
+
   function mapCard(a: ZendeskArticle): Card | null {
     const t = (a.title || a.name || "").trim();
     if (!t || !isJavaChangelog(t)) return null;
@@ -276,7 +291,7 @@
           >
             <span
               class="card-shot shot-version"
-              style={`--h: ${entry.hue}`}
+              style={coverStyle(entry.hue)}
             >
               <span class="shot-kind">{entry.kind}</span>
               <span class="shot-ver">{entry.version}</span>
@@ -456,34 +471,8 @@
     aspect-ratio: 1 / 1;
     overflow: hidden;
     border-radius: 0;
-    background:
-      radial-gradient(
-        ellipse at 30% 22%,
-        hsl(calc(var(--h) * 1deg) 60% 42% / 0.55),
-        transparent 58%
-      ),
-      linear-gradient(
-        165deg,
-        hsl(calc(var(--h) * 1deg) 42% 20%),
-        hsl(calc(var(--h) * 1deg) 48% 9%) 62%
-      );
-  }
-
-  .card-shot::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image:
-      radial-gradient(circle at 22% 30%, rgba(255, 255, 255, 0.14) 0 5%, transparent 6%),
-      radial-gradient(circle at 68% 12%, rgba(0, 0, 0, 0.35) 0 6%, transparent 7%),
-      radial-gradient(circle at 82% 64%, rgba(255, 255, 255, 0.1) 0 4%, transparent 5%),
-      radial-gradient(circle at 38% 78%, rgba(0, 0, 0, 0.3) 0 7%, transparent 8%),
-      repeating-conic-gradient(
-        rgba(255, 255, 255, 0.05) 0% 25%,
-        transparent 0% 50%
-      );
+    background: var(--bg-secondary, #17181b);
     image-rendering: pixelated;
-    pointer-events: none;
   }
 
   .shot-kind {
