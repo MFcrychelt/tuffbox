@@ -367,13 +367,13 @@
     border-radius: 2px;
     padding: 0 1px;
   }
-  .log-stage :global(.tok-time) { color: #71717a; }
-  .log-stage :global(.tok-error) { color: #f87171; font-weight: 700; }
-  .log-stage :global(.tok-warn) { color: #fbbf24; font-weight: 700; }
-  .log-stage :global(.tok-info) { color: #38bdf8; }
-  .log-stage :global(.tok-stack) { color: #a1a1aa; }
-  .log-stage :global(.tok-caused) { color: #fb7185; font-weight: 700; }
-  .log-stage :global(.tok-section) { color: #c4b5fd; font-weight: 700; }
-  .log-stage :global(.tok-exc) { color: #f472b6; }
-  .log-stage :global(.tok-mod) { color: #4ade80; }
+  .log-stage :global(.tok-time) { color: var(--text-muted); }
+  .log-stage :global(.tok-error) { color: var(--accent-danger); font-weight: 700; }
+  .log-stage :global(.tok-warn) { color: var(--accent-warning); font-weight: 700; }
+  .log-stage :global(.tok-info) { color: #0369a1; }
+  .log-stage :global(.tok-stack) { color: var(--text-secondary); }
+  .log-stage :global(.tok-caused) { color: var(--accent-danger); font-weight: 700; }
+  .log-stage :global(.tok-section) { color: var(--accent-secondary); font-weight: 700; }
+  .log-stage :global(.tok-exc) { color: #9d174d; }
+  .log-stage :global(.tok-mod) { color: var(--accent-primary); }
 </style>

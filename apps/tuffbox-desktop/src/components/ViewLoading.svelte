@@ -61,15 +61,15 @@
   .retry-btn {
     margin-top: 16px;
     padding: 6px 16px;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-color, #cfd8cf);
     border-radius: var(--border-radius-sm);
-    background: var(--surface-raised);
+    background: var(--bg-elevated, #e2e8df);
     color: var(--text-primary);
     cursor: pointer;
     font-size: 13px;
   }
 
   .retry-btn:hover {
-    background: var(--surface-hover);
+    background: var(--bg-hover, #d5ddd1);
   }
 </style>

@@ -12,9 +12,9 @@
   }
   function clr(t: string): string {
     if (t === "success") return "var(--accent-primary)";
-    if (t === "error") return "#f87171";
-    if (t === "warning") return "#fbbf24";
-    return "#93c5fd";
+    if (t === "error") return "var(--accent-danger)";
+    if (t === "warning") return "var(--accent-warning)";
+    return "var(--accent-secondary)";
   }
 
   let now = $state(Date.now());

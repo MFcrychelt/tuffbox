@@ -2370,7 +2370,7 @@
     justify-content: center;
     font-weight: 900;
     font-size: 32px;
-    color: #000;
+    color: var(--on-accent, #000);
     box-shadow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
 
@@ -2378,7 +2378,7 @@
     display: block;
     object-fit: cover;
     background: transparent;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 25%, transparent);
     color: transparent;
     font-size: 0;
   }
@@ -2467,7 +2467,7 @@
   .shortcut-row small { color: var(--text-muted); font-size: 10px; }
 
   .update-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); border: 1px solid var(--border-color); margin: 10px 0; font-size: 12px; }
-  .update-info.error { color: #fecaca; border-color: rgba(239, 68, 68, 0.28); background: rgba(239, 68, 68, 0.08); }
+  .update-info.error { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); }
   .update-avail { color: var(--accent-primary); font-weight: 700; }
   .update-ok { color: var(--text-muted); }
 
@@ -2555,7 +2555,7 @@
     color: var(--text-secondary, inherit);
   }
   .notice { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-color); font-size: 12px; }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
+  .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .inline-status { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; margin-bottom: 10px; }
   :global(.spin) { animation: spin 900ms linear infinite; }

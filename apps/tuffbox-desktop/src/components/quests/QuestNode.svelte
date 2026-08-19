@@ -193,7 +193,7 @@
     }
   }
   .node-wrap.issue .node-icon {
-    border-color: #f87171;
+    border-color: var(--accent-danger);
     box-shadow:
       0 0 0 2px rgba(0, 0, 0, 0.65),
       0 0 10px 2px rgba(248, 113, 113, 0.45),
@@ -360,9 +360,9 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: linear-gradient(180deg, #6fdd74, #3da344);
-    border: 1px solid #0d2a10;
-    color: #07230b;
+    background: linear-gradient(180deg, var(--ftbq-accent-green), color-mix(in srgb, var(--ftbq-accent-green) 70%, #000));
+    border: 1px solid var(--ftbq-bg);
+    color: var(--ftbq-bg);
     font-size: 10px;
     font-weight: 900;
     display: flex;

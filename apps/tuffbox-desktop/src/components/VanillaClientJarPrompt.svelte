@@ -118,7 +118,7 @@
     margin-bottom: 20px;
   }
   .vcj-error {
-    color: #f87171;
+    color: var(--accent-danger);
     margin-top: -12px;
     margin-bottom: 16px;
   }

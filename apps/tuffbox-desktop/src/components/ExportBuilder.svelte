@@ -534,9 +534,9 @@
     line-height: 1.4;
   }
   .notice.error {
-    color: #fecaca;
-    background: rgba(239, 68, 68, 0.08);
-    border-color: rgba(239, 68, 68, 0.28);
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent);
   }
   .notice.success {
     color: var(--accent-primary);
@@ -641,14 +641,14 @@
     line-height: 1;
   }
   .fmt-chip.warn {
-    color: #fbbf24;
-    background: rgba(245, 158, 11, 0.15);
-    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: var(--accent-warning);
+    background: color-mix(in srgb, var(--accent-warning) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 35%, transparent);
   }
   .fmt-chip.err {
-    color: #fecaca;
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 40%, transparent);
   }
   .fmt-blurb {
     grid-column: 2;
@@ -722,14 +722,14 @@
     border-radius: 999px;
   }
   .chip.err {
-    color: #fecaca;
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 30%, transparent);
   }
   .chip.warn {
-    color: #fbbf24;
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: var(--accent-warning);
+    background: color-mix(in srgb, var(--accent-warning) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent);
   }
   .issue {
     display: grid;

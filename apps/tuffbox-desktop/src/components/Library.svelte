@@ -1087,9 +1087,9 @@
       var(--bg-secondary);
   }
   .create-plus.browse .plus-ring {
-    background: rgba(245, 158, 11, 0.14);
-    color: #fbbf24;
-    border-color: rgba(245, 158, 11, 0.35);
+    background: color-mix(in srgb, var(--accent-warning) 14%, transparent);
+    color: var(--accent-warning);
+    border-color: color-mix(in srgb, var(--accent-warning) 35%, transparent);
   }
   .create-plus:hover {
     border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
@@ -1409,9 +1409,9 @@
     margin-bottom: 16px;
   }
   .error {
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid rgba(239, 68, 68, 0.35);
-    color: #fca5a5;
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 35%, transparent);
+    color: var(--accent-danger);
   }
   .catalog-warn {
     background: color-mix(in srgb, var(--accent-primary) 10%, transparent);

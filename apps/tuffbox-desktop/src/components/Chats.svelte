@@ -2281,7 +2281,7 @@
     color: var(--text-primary, #e8ecf4);
   }
   .icon-btn.danger:hover {
-    color: #f87171;
+    color: var(--accent-danger);
   }
   .thread {
     display: flex;
@@ -2474,7 +2474,7 @@
   .btn.primary {
     background: var(--accent-primary);
     border-color: var(--accent-primary);
-    color: #0b1a10;
+    color: var(--on-accent, #0b1a10);
     font-weight: 600;
   }
   .btn.accent {
@@ -2724,7 +2724,7 @@
   }
   .mod-meta code {
     font-size: 11px;
-    color: #7dd3fc;
+    color: #0284c7;
   }
   .mod-reason {
     font-size: 11px;
@@ -2768,7 +2768,7 @@
   .unresolved {
     padding: 10px 12px;
     font-size: 11px;
-    color: #fbbf24;
+    color: var(--accent-warning);
     border-top: 1px solid var(--border-color, #2a2f3a);
   }
   .muted {
@@ -2856,7 +2856,7 @@
     font-size: 10px;
     padding: 1px 5px;
     border-radius: 4px;
-    background: color-mix(in srgb, var(--accent, #5b8def) 25%, transparent);
+    background: color-mix(in srgb, var(--accent-secondary) 25%, transparent);
   }
   .pillar-warn {
     margin: 8px 0 0;
@@ -2902,7 +2902,7 @@
     cursor: pointer;
   }
   .draft-confirm-row strong { display: block; font-size: 13px; }
-  .draft-confirm-row code { font-size: 11px; color: #7dd3fc; margin-right: 6px; }
+  .draft-confirm-row code { font-size: 11px; color: #0284c7; margin-right: 6px; }
   .preview-meta {
     display: flex;
     flex-wrap: wrap;
@@ -2918,7 +2918,7 @@
   }
   .preview-meta .pill.ok { background: color-mix(in srgb, var(--accent-primary) 22%, transparent); color: var(--accent-primary); }
   .preview-meta .pill.skip { background: rgba(154, 163, 181, 0.2); color: var(--text-muted, #9aa3b5); }
-  .preview-meta .pill.fail { background: rgba(229, 72, 77, 0.2); color: #ff8b8b; }
+  .preview-meta .pill.fail { background: color-mix(in srgb, var(--accent-danger) 20%, transparent); color: var(--accent-danger); }
   .preview-meta .hash { font-size: 10px; color: var(--text-muted, #9aa3b5); }
   .preview-meta .dest { font-size: 10px; color: var(--text-muted, #9aa3b5); }
   .draft-confirm-actions {
@@ -2926,7 +2926,7 @@
     justify-content: flex-end;
     gap: 8px;
   }
-  .warn { color: #fbbf24; font-size: 12px; margin: 0 0 10px; }
+  .warn { color: var(--accent-warning); font-size: 12px; margin: 0 0 10px; }
   @media (max-width: 1100px) {
     .chats {
       grid-template-columns: 1fr;

@@ -271,7 +271,7 @@
   .err {
     margin: 6px 0 0;
     font-size: 11px;
-    color: #fca5a5;
+    color: var(--accent-danger);
   }
   .gap-count {
     margin: 8px 0 6px;
@@ -314,10 +314,10 @@
     letter-spacing: 0.04em;
   }
   .kind.missing {
-    color: #fca5a5;
+    color: var(--accent-danger);
   }
   .kind.empty {
-    color: #fde68a;
+    color: var(--accent-warning);
   }
   .key {
     font-size: 10px;

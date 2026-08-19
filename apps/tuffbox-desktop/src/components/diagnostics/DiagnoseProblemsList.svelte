@@ -240,8 +240,8 @@
     font-weight: 800;
     letter-spacing: 0.02em;
   }
-  .sev-chip { background: rgba(245, 158, 11, 0.15); color: var(--accent-warning); }
-  .sev-critical .sev-chip { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+  .sev-chip { background: color-mix(in srgb, var(--accent-warning) 15%, transparent); color: var(--accent-warning); }
+  .sev-critical .sev-chip { background: color-mix(in srgb, var(--accent-danger) 15%, transparent); color: var(--accent-danger); }
   .cat-chip, .src-chip { background: var(--bg-tertiary); color: var(--text-muted); text-transform: capitalize; }
   .dx-card h4 { margin: 0; font-size: 15px; color: var(--text-primary); }
   .summary { margin: 6px 0 0; font-size: 13px; line-height: 1.45; color: var(--text-secondary); }
@@ -304,8 +304,8 @@
     cursor: pointer;
   }
   .dx-card-actions .primary.danger {
-    background: #ef4444;
-    color: #fff;
+    background: var(--accent-danger);
+    color: var(--on-accent, #fff);
   }
   .dx-card-actions .ghost {
     display: inline-flex;
@@ -327,5 +327,5 @@
     font-size: 11px;
     color: var(--text-muted);
   }
-  .risk.destructive { color: #f87171; font-weight: 600; }
+  .risk.destructive { color: var(--accent-danger); font-weight: 600; }
 </style>

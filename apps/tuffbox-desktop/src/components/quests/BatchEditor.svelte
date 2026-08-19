@@ -262,7 +262,7 @@
   }
 
   function matchColor(field: string): string {
-    if (field.includes("missing")) return "#ef4444";
+    if (field.includes("missing")) return "var(--accent-danger)";
     return "var(--ftbq-text-muted, #9a9aa0)";
   }
 </script>
@@ -693,7 +693,7 @@
   }
   .save-badge.saving { color: var(--text-muted, var(--ftbq-text-muted, #9a9aa0)); }
   .save-badge.saved { color: var(--ftbq-accent-green, #55c95a); background: rgba(85,201,90,0.12); }
-  .save-badge.error { color: #ef4444; background: rgba(239,68,68,0.12); }
+  .save-badge.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 12%, transparent); }
 
   .quest-preview {
     padding: 0 8px 8px;

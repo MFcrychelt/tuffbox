@@ -910,12 +910,12 @@
     color: var(--accent-primary);
   }
   .notice { gap: 8px; padding: 8px 10px; border-radius: var(--border-radius-md); margin-bottom: 8px; border: 1px solid var(--border-color); flex-shrink: 0; justify-content: space-between; flex-wrap: wrap; font-size: 13px; }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
+  .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .trail-actions { gap: 6px; }
   .mini { padding: 4px 8px; font-size: 11px; }
-  .lint-bad { border-color: rgba(239, 68, 68, 0.45) !important; color: #fca5a5 !important; }
-  .lint-warn { border-color: rgba(245, 158, 11, 0.45) !important; color: #fde68a !important; }
+  .lint-bad { border-color: color-mix(in srgb, var(--accent-danger) 45%, transparent) !important; color: var(--accent-danger) !important; }
+  .lint-warn { border-color: color-mix(in srgb, var(--accent-warning) 45%, transparent) !important; color: var(--accent-warning) !important; }
 
   .snippet-wrap { position: relative; }
   .snippet-menu {
@@ -1018,7 +1018,7 @@
   }
   .mini-btn { width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); color: var(--text-secondary); cursor: pointer; }
   .mini-btn:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
-  .search-error, .search-status { color: #fecaca; font-size: 11px; margin-top: 4px; }
+  .search-error, .search-status { color: var(--accent-danger); font-size: 11px; margin-top: 4px; }
   .search-status { color: var(--text-muted); }
   .search-results { max-height: 140px; overflow: auto; margin-top: 6px; }
   .search-hit { width: 100%; display: grid; gap: 2px; text-align: left; padding: 5px 6px; margin-bottom: 2px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); transform: none; }
@@ -1074,12 +1074,12 @@
     display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px; font-size: 11px;
     width: 100%; text-align: left; border: 1px solid transparent; cursor: pointer; background: transparent; transform: none;
   }
-  .lint-item.error { background: rgba(239,68,68,.08); color: #fca5a5; }
-  .lint-item.warning { background: rgba(245,158,11,.08); color: #fde68a; }
-  .lint-item:hover { border-color: rgba(255,255,255,.12); }
+  .lint-item.error { background: color-mix(in srgb, var(--accent-danger) 8%, transparent); color: var(--accent-danger); }
+  .lint-item.warning { background: color-mix(in srgb, var(--accent-warning) 8%, transparent); color: var(--accent-warning); }
+  .lint-item:hover { border-color: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
   .lint-sev { font-weight: 800; text-transform: uppercase; font-size: 9px; padding: 1px 4px; border-radius: 3px; }
-  .lint-item.error .lint-sev { background: rgba(239,68,68,.2); }
-  .lint-item.warning .lint-sev { background: rgba(245,158,11,.2); }
+  .lint-item.error .lint-sev { background: color-mix(in srgb, var(--accent-danger) 20%, transparent); }
+  .lint-item.warning .lint-sev { background: color-mix(in srgb, var(--accent-warning) 20%, transparent); }
   .lint-item code { font-size: 10px; color: var(--accent-primary); }
   .lint-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lint-item small { color: var(--text-muted); font-size: 10px; }

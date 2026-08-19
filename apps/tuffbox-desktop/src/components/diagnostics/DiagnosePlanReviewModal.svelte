@@ -167,17 +167,17 @@
     background: var(--bg-tertiary);
     color: var(--text-secondary);
   }
-  .diff-chip.add { color: #86efac; border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.1); }
-  .diff-chip.remove { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.1); }
-  .diff-chip.change { color: #fde68a; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.1); }
+  .diff-chip.add { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
+  .diff-chip.remove { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); background: color-mix(in srgb, var(--accent-danger) 10%, transparent); }
+  .diff-chip.change { color: var(--accent-warning); border-color: color-mix(in srgb, var(--accent-warning) 35%, transparent); background: color-mix(in srgb, var(--accent-warning) 10%, transparent); }
   .plan-review-warn {
     margin: 0 0 10px !important;
     padding: 8px 10px;
     border-radius: var(--border-radius-sm);
     font-size: 12px !important;
-    color: #fde68a !important;
-    background: rgba(245, 158, 11, 0.1);
-    border: 1px solid rgba(245, 158, 11, 0.28);
+    color: var(--accent-warning) !important;
+    background: color-mix(in srgb, var(--accent-warning) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 28%, transparent);
   }
   .modal-backdrop {
     position: fixed;

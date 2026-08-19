@@ -242,7 +242,7 @@
     margin: 0;
     padding: 12px;
     border-radius: var(--border-radius-md);
-    background: #09090b;
+    background: var(--bg-elevated);
     border: 1px solid var(--border-color, var(--ftbq-border));
     font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
     font-size: 11px;
@@ -254,17 +254,17 @@
   }
   .same {
     display: block;
-    color: #a1a1aa;
+    color: var(--text-muted);
   }
   .added {
     display: block;
-    color: #86efac;
+    color: var(--accent-primary);
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
   .removed {
     display: block;
-    color: #fca5a5;
-    background: rgba(239, 68, 68, 0.08);
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
   }
   .modal-actions {
     display: flex;
@@ -286,6 +286,6 @@
   .modal-actions .primary {
     background: var(--accent, #3db8a8);
     border-color: transparent;
-    color: #0b1210;
+    color: var(--ftbq-bg);
   }
 </style>

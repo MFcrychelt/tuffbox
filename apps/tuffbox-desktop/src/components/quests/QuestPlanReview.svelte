@@ -452,7 +452,7 @@
     color: var(--ftbq-quest-started, #f2c94c);
   }
   .errs {
-    color: #e57373;
+    color: var(--accent-danger);
   }
   .actions {
     display: flex;
@@ -471,6 +471,6 @@
   .apply-hint {
     margin: 0;
     font-size: 11px;
-    color: #fbbf24;
+    color: var(--accent-warning);
   }
 </style>

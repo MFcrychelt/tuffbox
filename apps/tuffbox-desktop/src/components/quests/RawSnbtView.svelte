@@ -103,6 +103,7 @@
     <input
       type="search"
       placeholder="Find in SNBT…"
+      aria-label="Find in SNBT"
       bind:value={findQuery}
       onkeydown={(e) => {
         if (e.key === "Enter") {

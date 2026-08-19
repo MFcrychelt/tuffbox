@@ -188,7 +188,7 @@
         oninput={(e) => onIdInput((e.currentTarget as HTMLInputElement).value)}
         placeholder="Pick item"
       />
-      <button type="button" class="pick" onclick={() => openPicker("main")} title="Pick item"
+      <button type="button" class="pick" onclick={() => openPicker("main")} title="Pick item" aria-label="Pick item"
         ><Package size={12} /></button
       >
     </div>
@@ -203,7 +203,7 @@
         oninput={(e) => onIdInput((e.currentTarget as HTMLInputElement).value)}
         placeholder="Pick item"
       />
-      <button type="button" class="pick" onclick={() => openPicker("main")} title="Pick item"
+      <button type="button" class="pick" onclick={() => openPicker("main")} title="Pick item" aria-label="Pick item"
         ><Package size={12} /></button
       >
     </div>
@@ -248,7 +248,7 @@
             oninput={(e) => setChildId(i, (e.currentTarget as HTMLInputElement).value)}
             placeholder="modid:item"
           />
-          <button type="button" class="pick" onclick={() => openPicker(i)} title="Pick item"
+          <button type="button" class="pick" onclick={() => openPicker(i)} title="Pick item" aria-label="Pick item"
             ><Package size={12} /></button
           >
           <button type="button" class="mini danger" onclick={() => removeChild(i)}>×</button>
@@ -367,7 +367,7 @@
     color: var(--ftbq-accent-green, #55c95a);
   }
   .mini.danger {
-    color: #ef4444;
+    color: var(--accent-danger);
   }
   .kids {
     display: grid;
@@ -392,7 +392,7 @@
   }
   .err {
     margin: 0;
-    color: #ef4444;
+    color: var(--accent-danger);
     font-size: 11px;
   }
 </style>

@@ -280,10 +280,11 @@
       type="button"
       class="ghost ico"
       title="Refresh"
+      aria-label="Refresh"
       disabled={loading}
       onclick={() => void refresh()}><RefreshCw size={14} /></button
     >
-    <button type="button" class="ghost ico" onclick={onclose}><X size={14} /></button>
+    <button type="button" class="ghost ico" aria-label="Close panel" onclick={onclose}><X size={14} /></button>
   </div>
 
   {#if audit}
@@ -512,8 +513,8 @@
     border-color: rgba(61, 184, 168, 0.45);
   }
   .stat.miss.on {
-    color: #f87171;
-    border-color: rgba(248, 113, 113, 0.45);
+    color: var(--accent-danger);
+    border-color: color-mix(in srgb, var(--accent-danger) 45%, transparent);
   }
   .err,
   .ok {
@@ -522,8 +523,8 @@
     font-size: 11px;
   }
   .err {
-    color: #f87171;
-    background: rgba(239, 68, 68, 0.08);
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 10%, transparent);
   }
   .ok {
     color: var(--ftbq-accent-teal, #3db8a8);
@@ -612,8 +613,8 @@
     color: var(--ftbq-accent-teal, #3db8a8);
   }
   .badge.bad {
-    background: rgba(248, 113, 113, 0.15);
-    color: #f87171;
+    background: color-mix(in srgb, var(--accent-danger) 15%, transparent);
+    color: var(--accent-danger);
   }
   .meta {
     margin: 0;

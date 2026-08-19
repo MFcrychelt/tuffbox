@@ -165,11 +165,11 @@
   }
   .task {
     pointer-events: auto;
-    background: var(--surface, #1a1a1e);
-    border: 1px solid var(--border, #333);
+    background: var(--bg-elevated, #e2e8df);
+    border: 1px solid var(--border-color, #cfd8cf);
     border-radius: var(--border-radius-sm);
     padding: 10px 12px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--shadow-md, 0 4px 14px rgba(21, 40, 28, 0.09));
   }
   .task.failed {
     border-color: #c44;

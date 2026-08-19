@@ -165,7 +165,7 @@
   }
   .rss-line {
     fill: none;
-    stroke: #60a5fa;
+    stroke: #3b82f6;
     stroke-width: 2;
     vector-effect: non-scaling-stroke;
   }
@@ -207,7 +207,7 @@
     background: var(--accent-primary);
   }
   .swatch.rss {
-    background: #60a5fa;
+    background: #3b82f6;
   }
   .swatch.cpu {
     opacity: 0.45;

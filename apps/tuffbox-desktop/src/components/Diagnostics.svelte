@@ -3350,7 +3350,7 @@
   .log-reader-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
   h2 { display: flex; font-size: 14px; margin: 0 0 12px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
+  .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .stat-card, .panel, .empty, .loading { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .muted-box, .report-card span, .log-status, .snapshot-row span, .snapshot-row small, .suspect-head span { color: var(--text-muted); font-size: 12px; }
@@ -3366,7 +3366,7 @@
     font-size: 11px;
     font-weight: 700;
   }
-  .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); }
+  .notice.warning { color: var(--accent-warning); background: color-mix(in srgb, var(--accent-warning) 8%, transparent); border-color: color-mix(in srgb, var(--accent-warning) 28%, transparent); }
   .group-test-panel {
     display: flex;
     flex-direction: column;
@@ -3408,9 +3408,9 @@
     background: var(--bg-tertiary);
     color: var(--text-secondary);
   }
-  .diff-chip.add { color: #86efac; border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.1); }
-  .diff-chip.remove { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.1); }
-  .diff-chip.change { color: #fde68a; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.1); }
+  .diff-chip.add { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
+  .diff-chip.remove { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); background: color-mix(in srgb, var(--accent-danger) 10%, transparent); }
+  .diff-chip.change { color: var(--accent-warning); border-color: color-mix(in srgb, var(--accent-warning) 35%, transparent); background: color-mix(in srgb, var(--accent-warning) 10%, transparent); }
   .muted-box { padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color); }
   .loading, .empty { padding: 24px; text-align: center; color: var(--text-muted); }
   .log-pre {

@@ -2,6 +2,7 @@
   import type { QuestChapter, QuestData } from "../../lib/api";
   import { searchColorHits, aggregateColors, recolorAtPosition, type ColorHit, type ColorAggregation } from "../../lib/color-manager";
   import { mcFormat, MC_COLORS, FORMATTING_NAMES } from "../../lib/mcformat";
+  import { trapFocus } from "../../lib/focusTrap";
 
   interface Props {
     chapters: QuestChapter[];
@@ -265,6 +266,7 @@
       aria-label="Recolor"
       tabindex="-1"
       style="left: {popupPos.x}px; top: {popupPos.y}px"
+      use:trapFocus={{ onEscape: closePopup }}
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => {
         if (e.key === "Escape") {
@@ -283,6 +285,7 @@
             class:active={popupColor === mc.code}
             style="background: {mc.color}"
             title="&{mc.code} — {FORMATTING_NAMES[mc.code]}"
+            aria-label="Recolor to &{mc.code} — {FORMATTING_NAMES[mc.code]}"
             onclick={() => { popupColor = mc.code; }}
           ></button>
         {/each}

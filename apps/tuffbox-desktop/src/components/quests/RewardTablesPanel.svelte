@@ -68,12 +68,14 @@
         weight: 1,
       },
     ];
+    extrasDraft = {}; // indices shifted — drop stale drafts
     onChange();
   }
 
   function removeEntry(i: number) {
     if (!selected) return;
     selected.rewards = selected.rewards.filter((_, idx) => idx !== i);
+    extrasDraft = {}; // indices shifted — drop stale drafts
     onChange();
   }
 
@@ -179,7 +181,7 @@
         >
         <div class="entries-h">
           <strong>Weighted rewards</strong>
-          <button type="button" class="mini" onclick={addEntry}><Plus size={12} /></button>
+          <button type="button" class="mini" aria-label="Add reward entry" title="Add reward entry" onclick={addEntry}><Plus size={12} /></button>
         </div>
         {#each selected.rewards as entry, i (i)}
           <div class="entry-card">

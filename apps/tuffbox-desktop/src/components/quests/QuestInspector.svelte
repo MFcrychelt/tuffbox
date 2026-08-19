@@ -55,6 +55,7 @@
   let depPick = $state("");
   let depFilter = $state("");
   let descText = $state("");
+  let descEl = $state<HTMLTextAreaElement | null>(null);
   let extraKey = $state("");
   let idCopied = $state(false);
   let idCopyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -277,8 +278,33 @@
   }
 
   function wrapFmt(code: string) {
-    descText = `${descText}${descText && !descText.endsWith("\n") ? "" : ""}${code}`;
+    const el = descEl;
+    const text = descText;
+    const selStart = el ? el.selectionStart : text.length;
+    const selEnd = el ? el.selectionEnd : text.length;
+    const start = selStart ?? text.length;
+    const end = selEnd ?? text.length;
+    const selected = text.slice(start, end);
+    const head = text.slice(0, start);
+    const tail = text.slice(end);
+    let applied: string;
+    let cursorAt: number;
+    if (selected && end > start) {
+      // Wrap the selection in the format code + reset, preserving the text.
+      applied = `${head}${code}${selected}&r${tail}`;
+      cursorAt = start + code.length + selected.length; // before &r — keep typing formatted
+    } else {
+      // Just insert the format code at the cursor.
+      applied = `${head}${code}${tail}`;
+      cursorAt = start + code.length;
+    }
+    descText = applied;
     commitDescription();
+    queueMicrotask(() => {
+      if (!descEl) return;
+      descEl.focus();
+      descEl.setSelectionRange(cursorAt, cursorAt);
+    });
   }
 
   function insertTemplate(kind: string) {
@@ -430,6 +456,7 @@
         </details>
         <textarea
           rows="3"
+          bind:this={descEl}
           value={descText}
           oninput={autoGrowDescription}
           onchange={commitDescription}
@@ -998,8 +1025,8 @@
     line-height: 1;
   }
   .dep-rm:hover {
-    color: #ef4444;
-    background: rgba(239, 68, 68, 0.1);
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
   }
 
   .dep-add {
@@ -1184,10 +1211,10 @@
     padding: 10px 14px;
     margin: 10px 14px 0;
     border-radius: var(--border-radius-sm);
-    background: rgba(251, 191, 36, 0.1);
-    border: 1px solid rgba(251, 191, 36, 0.3);
+    background: color-mix(in srgb, var(--accent-warning) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent);
     font-size: 12px;
-    color: #f59e0b;
+    color: var(--accent-warning);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -1218,9 +1245,9 @@
   }
   .ico.danger:hover,
   .ico:hover {
-    border-color: #ef4444;
-    background: rgba(239, 68, 68, 0.08);
-    color: #ef4444;
+    border-color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 10%, transparent);
+    color: var(--accent-danger);
   }
   .ico:active {
     transform: scale(0.95);

@@ -641,7 +641,7 @@
 
   .mark.active {
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent, #000);
     border-color: var(--accent-primary);
   }
 
@@ -652,8 +652,8 @@
   }
 
   .error {
-    background: rgba(239, 68, 68, 0.12);
-    color: #ef4444;
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    color: var(--accent-danger);
     padding: 10px 12px;
     border-radius: var(--border-radius-md);
     font-size: 13px;
@@ -664,6 +664,6 @@
   .schema-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--bg-tertiary); border-radius: var(--border-radius-md); border: 1px solid var(--border-color); }
   .schema-row span { color: var(--text-muted); font-size: 13px; }
   .schema-row code { font-family: ui-monospace, monospace; font-size: 14px; color: var(--accent-primary); }
-  .schema-warning { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); color: #fcd34d; font-size: 13px; }
+  .schema-warning { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent-warning) 8%, transparent); border: 1px solid color-mix(in srgb, var(--accent-warning) 25%, transparent); color: var(--accent-warning); font-size: 13px; }
   .schema-ok { color: var(--accent-primary); font-size: 13px; padding: 10px 14px; background: color-mix(in srgb, var(--accent-primary) 6%, transparent); border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent-primary) 20%, transparent); }
 </style>

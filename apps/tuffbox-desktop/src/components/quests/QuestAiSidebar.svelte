@@ -669,7 +669,12 @@
       </div>
     {:else}
       {#each session.messages as m, i (`${m.role}-${i}`)}
-        <div class="msg" class:user={m.role === "user"} class:assistant={m.role === "assistant"}>
+        <div
+          class="msg"
+          class:user={m.role === "user"}
+          class:assistant={m.role === "assistant"}
+          aria-live={m.role === "assistant" ? "polite" : undefined}
+        >
           <strong>{m.role === "user" ? "You" : "AI"}</strong>
           <p>{m.content}</p>
           {#if m.progressLog?.length}
@@ -943,7 +948,7 @@
     background: linear-gradient(90deg, rgba(61, 184, 168, 0.18), rgba(61, 184, 168, 0.05));
     border-bottom: 1px solid var(--ftbq-frame);
     box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
-    color: #c9f2ec;
+    color: var(--ftbq-text);
   }
   .anchor-banner :global(svg) {
     color: var(--ftbq-accent-teal, #3db8a8);
@@ -1047,7 +1052,7 @@
   }
   .msg.user {
     background: linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 12%, transparent), color-mix(in srgb, var(--accent-primary) 5%, transparent));
-    border-color: #1f5a2c;
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
   }
   .msg p {
     margin: 4px 0 0;
@@ -1155,11 +1160,11 @@
     display: flex;
     align-items: flex-start;
     gap: 8px;
-    color: #f87171;
+    color: var(--accent-danger);
     padding: 6px 10px;
     font-size: 12px;
-    background: rgba(239, 68, 68, 0.08);
-    border-top: 1px solid rgba(239, 68, 68, 0.25);
+    background: color-mix(in srgb, var(--accent-danger) 10%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--accent-danger) 25%, transparent);
   }
   .err-text {
     flex: 1;
@@ -1207,9 +1212,9 @@
   .review-plan {
     font-size: 11px;
     font-weight: 600;
-    color: #86efac;
+    color: var(--ftbq-accent-green);
     background: transparent;
-    border: 1px solid #1f5a2c;
+    border: 1px solid color-mix(in srgb, var(--ftbq-accent-green) 40%, #1f5a2c);
     border-radius: 3px;
     padding: 3px 8px;
     cursor: pointer;
@@ -1224,9 +1229,9 @@
   .discard-plan {
     font-size: 11px;
     font-weight: 600;
-    color: #f87171;
+    color: var(--accent-danger);
     background: transparent;
-    border: 1px solid #5a1a1a;
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 40%, #5a1a1a);
     border-radius: 3px;
     padding: 3px 8px;
     cursor: pointer;
@@ -1249,7 +1254,7 @@
   }
   .composer-hint {
     font-size: 11px;
-    color: #fbbf24;
+    color: var(--accent-warning);
     padding: 2px 0;
   }
   .intent-row {
@@ -1337,10 +1342,10 @@
     flex: 1;
     justify-content: center;
     padding: 6px 12px;
-    border: 1px solid #5a1a1a;
-    background: linear-gradient(180deg, #a84848, #7a2e2e);
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 60%, #000);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent-danger) 78%, #000), color-mix(in srgb, var(--accent-danger) 45%, #000));
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
-    color: #ffe9e9;
+    color: var(--ftbq-bg);
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
     border-radius: 3px;
     font-weight: 700;

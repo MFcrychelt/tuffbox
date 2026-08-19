@@ -149,7 +149,7 @@
 <aside class="rail ftbq-rail">
   <div class="rail-h">
     <h3>Chapters</h3>
-    <button type="button" class="ico" title="Add chapter" onclick={onCreate}>
+    <button type="button" class="ico" title="Add chapter" aria-label="Add chapter" onclick={onCreate}>
       <Plus size={14} class="flex-shrink-0" />
     </button>
   </div>
@@ -157,7 +157,7 @@
   <div class="rail-list">
     {#each groups as g (g.key)}
       {#if groups.length > 1 || g.key}
-        <button type="button" class="group-h" onclick={() => toggleGroup(g.key)}>
+        <button type="button" class="group-h" onclick={() => toggleGroup(g.key)} aria-expanded={!collapsed.has(g.key)}>
           {#if collapsed.has(g.key)}<ChevronRight size={12} class="flex-shrink-0" />{:else}<ChevronDown size={12} class="flex-shrink-0" />{/if}
           <span>{g.label}</span>
         </button>
@@ -429,7 +429,7 @@
     background: color-mix(in srgb, var(--ftbq-accent-teal) 12%, transparent);
   }
   .ch-menu button.danger {
-    color: #f87171;
+    color: var(--accent-danger);
   }
   .ico.tiny {
     width: 18px;

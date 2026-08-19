@@ -610,7 +610,7 @@
     display: grid;
     gap: 2px;
   }
-  .err { margin: 0; font-size: 12px; color: #fca5a5; }
+  .err { margin: 0; font-size: 12px; color: var(--accent-danger); }
   .research {
     flex-shrink: 0;
     font-size: 11px;

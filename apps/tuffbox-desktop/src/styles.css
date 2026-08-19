@@ -137,6 +137,14 @@ html[data-ui-scaled="1"] #app {
 
   --glass-bg: rgba(11, 11, 13, 0.65);
   --glass-highlight: color-mix(in srgb, #fff 40%, var(--bg-primary));
+  --glass-border: color-mix(in srgb, #fff 24%, var(--border-color));
+  --glass-blur: 14px;
+  --glass-saturate: 140%;
+  --hero-fg: #ffffff;
+  --hero-fg-muted: color-mix(in srgb, #ffffff 78%, transparent);
+  --hero-scrim:
+    linear-gradient(90deg, rgba(11, 11, 13, 0.72) 0%, rgba(11, 11, 13, 0.38) 55%, rgba(11, 11, 13, 0.28) 75%, transparent 100%),
+    linear-gradient(0deg, rgba(11, 11, 13, 0.72) 0%, rgba(11, 11, 13, 0.42) 52%, rgba(11, 11, 13, 0.24) 78%, transparent 100%);
   --play-glow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 22%, transparent);
   --play-glow-hover: 0 12px 32px color-mix(in srgb, var(--accent-primary) 32%, transparent);
 }

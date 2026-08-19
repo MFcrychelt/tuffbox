@@ -1,7 +1,7 @@
 <script lang="ts">
   import {
     History, Plus, RefreshCw, RotateCcw, Calendar, GitCompare, FileText, Archive, Trash2,
-    Search, ChevronDown, ChevronRight, ExternalLink, AlertTriangle,
+    Search, ChevronDown, ChevronRight, ExternalLink, AlertTriangle, HardDrive, ShieldCheck,
   } from "@lucide/svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import EmptyState from "./EmptyState.svelte";
@@ -13,6 +13,8 @@
     type SnapshotDetail,
     type SnapshotDiff,
     type SnapshotFileDiff,
+    type SnapshotVsCurrent,
+    type PruneResult,
   } from "../lib/api";
   import { historyFocusSnapshotId, ideStageRequest, projectPath } from "../lib/store";
 
@@ -37,6 +39,19 @@
   let filterKind = $state<"all" | "auto" | "manual" | "crash">("all");
   let backupsOpen = $state(false);
   let compareOpen = $state(false);
+
+  // Diff vs current (project now) panel for the selected snapshot.
+  let vsDiff = $state<SnapshotVsCurrent | null>(null);
+  let vsLoading = $state(false);
+  let vsSelectedPath = $state("");
+  let vsFileDiff = $state<SnapshotFileDiff | null>(null);
+  let vsFileLoading = $state(false);
+
+  // Disk cleanup / prune.
+  let cleanupOpen = $state(false);
+  let pruneDays = $state<number>(30);
+  let pruneLoading = $state(false);
+  let pruneResult = $state<PruneResult | null>(null);
 
   let confirmOpen = $state(false);
   let confirmTitle = $state("");
@@ -162,6 +177,17 @@
     return s.actor === "user" || s.operation === "manual" || (!isAuto(s) && !isCrash(s));
   }
 
+  function kindOf(s: Snapshot): "auto" | "manual" | "crash" {
+    if (isCrash(s)) return "crash";
+    if (isAuto(s)) return "auto";
+    return "manual";
+  }
+
+  const totalBytes = $derived(snapshots.reduce((acc, s) => acc + (s.sizeBytes || 0), 0));
+  const autoCount = $derived(snapshots.filter(isAuto).length);
+  const manualCount = $derived(snapshots.filter(isManual).length);
+  const crashCount = $derived(snapshots.filter(isCrash).length);
+
   function previewLine(s: Snapshot): string {
     const summary = s.actionsSummary?.filter(Boolean) ?? [];
     if (summary.length) return summary.slice(0, 2).join(" · ");
@@ -192,6 +218,36 @@
     return list;
   })());
 
+  function dayKey(iso: string): string {
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? "Other" : `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  }
+  function dayLabel(iso: string): string {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "Other";
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const start = new Date(d);
+    start.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((today.getTime() - start.getTime()) / 86_400_000);
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  }
+  // Group filtered snapshots by local calendar day, newest day first.
+  const timeline = $derived((() => {
+    const groups = new Map<string, Snapshot[]>();
+    for (const s of filtered) {
+      const key = dayKey(s.createdAt);
+      const arr = groups.get(key) ?? [];
+      arr.push(s);
+      groups.set(key, arr);
+    }
+    return Array.from(groups.entries())
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([key, items]) => ({ key, label: dayLabel(items[0]?.createdAt ?? ""), items }));
+  })());
+
   async function load(force = false) {
     if (!$projectPath) return;
     if (!force && lastLoadedPath === $projectPath && snapshots.length > 0) return;
@@ -205,6 +261,16 @@
       if (snapshots.length >= 2) {
         fromId ||= snapshots[snapshots.length - 2].id;
         toId ||= snapshots[snapshots.length - 1].id;
+      }
+      // Re-validate compare targets: a snapshot may have been deleted since
+      // the last load, which would leave the compare panel pointing at a
+      // non-existent id.
+      const ids = new Set(snapshots.map((s) => s.id));
+      if (fromId && !ids.has(fromId)) fromId = "";
+      if (toId && !ids.has(toId)) toId = "";
+      if (!fromId && !toId && snapshots.length >= 2) {
+        fromId = snapshots[snapshots.length - 2].id;
+        toId = snapshots[snapshots.length - 1].id;
       }
       if (selectedId && !snapshots.some((s) => s.id === selectedId)) {
         selectedId = "";
@@ -229,6 +295,11 @@
 
   async function selectSnapshot(id: string) {
     selectedId = id;
+    if (vsDiff) {
+      vsDiff = null;
+      vsFileDiff = null;
+      vsSelectedPath = "";
+    }
     const dir = await ensureProjectDir();
     if (!dir) return;
     detailLoading = true;
@@ -383,6 +454,79 @@
     }
   }
 
+  async function loadVsCurrent(id: string) {
+    const dir = await ensureProjectDir();
+    if (!dir || !id) return;
+    vsDiff = null;
+    vsFileDiff = null;
+    vsSelectedPath = "";
+    vsLoading = true;
+    error = null;
+    try {
+      vsDiff = await api.snapshots.diffVsCurrent(id, dir);
+    } catch (e) {
+      error = String(e);
+      vsDiff = null;
+    } finally {
+      vsLoading = false;
+    }
+  }
+
+  async function openVsFile(path: string) {
+    const dir = await ensureProjectDir();
+    if (!dir || !selectedId) return;
+    vsSelectedPath = path;
+    vsFileLoading = true;
+    error = null;
+    try {
+      vsFileDiff = await api.snapshots.fileDiffVsCurrent(selectedId, path, dir);
+    } catch (e) {
+      error = String(e);
+      vsFileDiff = null;
+    } finally {
+      vsFileLoading = false;
+    }
+  }
+
+  const vsChangedFiles = $derived(vsDiff
+    ? Array.from(new Set([...vsDiff.snapshotChangedFiles, ...vsDiff.snapshotGoneFiles, ...vsDiff.currentAddedFiles])).sort()
+    : []);
+
+  async function runPrune() {
+    const dir = await ensureProjectDir();
+    if (!dir || pruneDays < 1) return;
+    const target = Math.max(1, Math.floor(pruneDays));
+    const autoCountBefore = autoCount;
+    showConfirm(
+      "Clean up old auto-snapshots",
+      `Delete automatic snapshots that are ${target} days old or older? Manual and crash-fix snapshots are kept. Up to ${autoCountBefore} auto snapshot(s) may qualify.`,
+      async () => {
+        pruneLoading = true;
+        error = null;
+        message = null;
+        try {
+          const res = await api.snapshots.pruneAuto(target, dir!);
+          pruneResult = res;
+          message = res.removedIds.length
+            ? `Removed ${res.removedIds.length} old snapshot(s), freed ${formatBytes(res.totalBytes)}.`
+            : "No automatic snapshots were old enough to remove.";
+          await load(true);
+          if (fromId && toId) {
+            // Re-validate compare targets after deletion.
+            const ids = new Set(snapshots.map((s) => s.id));
+            if (!ids.has(fromId)) fromId = "";
+            if (!ids.has(toId)) toId = "";
+          }
+        } catch (e) {
+          error = String(e);
+        } finally {
+          pruneLoading = false;
+        }
+      },
+      true,
+    );
+  }
+
   function lineClass(line: string) {
     if (line.startsWith("+ ")) return "added";
     if (line.startsWith("- ")) return "removed";
@@ -445,29 +589,89 @@
       </div>
     </div>
 
+    <div class="summary">
+      <div class="summary-stat"><strong>{snapshots.length}</strong><span>Checkpoints</span></div>
+      <div class="summary-stat auto"><strong>{autoCount}</strong><span>Auto</span></div>
+      <div class="summary-stat manual"><strong>{manualCount}</strong><span>Manual</span></div>
+      <div class="summary-stat crash"><strong>{crashCount}</strong><span>Crash fixes</span></div>
+      <div class="summary-stat size" title={formatBytes(totalBytes)}>
+        <HardDrive size={14} />
+        <strong>{formatBytes(totalBytes)}</strong>
+        <span>on disk</span>
+      </div>
+    </div>
+
+    <div class="collapsible">
+      <button type="button" class="collapse-toggle" onclick={() => (cleanupOpen = !cleanupOpen)}>
+        {#if cleanupOpen}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}
+        <ShieldCheck size={16} /> Disk cleanup
+      </button>
+      {#if cleanupOpen}
+        <div class="cleanup-panel">
+          <p class="muted">
+            Delete automatic (launcher / AI / scan) snapshots that are older than the selected age.
+            Manual and crash-fix snapshots are always kept.
+          </p>
+          <div class="cleanup-controls">
+            <label>
+              Older than
+              <select value={pruneDays} onchange={(e) => { pruneDays = parseInt((e.currentTarget as HTMLSelectElement).value, 10) || 30; }}>
+                <option value={14}>14 days</option>
+                <option value={30}>30 days</option>
+                <option value={60}>60 days</option>
+                <option value={90}>90 days</option>
+              </select>
+            </label>
+            <button class="ghost" onclick={runPrune} disabled={pruneLoading || autoCount === 0}>
+              {pruneLoading ? "Cleaning..." : "Clean up old auto-snapshots"}
+            </button>
+            <span class="muted">({autoCount} auto snapshot(s))</span>
+          </div>
+          {#if pruneResult && pruneResult.removedIds.length > 0}
+            <div class="notice success">
+              Removed {pruneResult.removedIds.length} old snapshot(s), freed {formatBytes(pruneResult.totalBytes)}.
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
     <div class="master-detail">
       <aside class="list-pane">
-        {#each filtered as s (s.id)}
-          <button
-            type="button"
-            class="row"
-            class:selected={selectedId === s.id}
-            onclick={() => selectSnapshot(s.id)}
-          >
-            <div class="row-top">
-              <strong>{s.name}</strong>
-              <span class="op-badge">{operationLabel(s)}</span>
+        {#each timeline as group}
+          <div class="timeline-group">
+            <div class="timeline-header">
+              <span class="timeline-dot"></span>
+              <span class="timeline-label">{group.label}</span>
+              <span class="timeline-count">{group.items.length}</span>
             </div>
-            <p class="preview">{previewLine(s)}</p>
-            <div class="row-meta">
-              <span><Calendar size={12} /> {formatDate(s.createdAt)}</span>
-              {#if s.tags?.length}
-                <span class="tags">
-                  {#each s.tags as t}<span class="tag" class:crash-fix={t === "crash_fix"}>{t}</span>{/each}
-                </span>
-              {/if}
-            </div>
-          </button>
+            {#each group.items as s (s.id)}
+              <button
+                type="button"
+                class="row"
+                class:selected={selectedId === s.id}
+                onclick={() => selectSnapshot(s.id)}
+              >
+                <div class="row-top">
+                  <strong>{s.name}</strong>
+                  <span class="op-badge">{operationLabel(s)}</span>
+                </div>
+                <p class="preview">{previewLine(s)}</p>
+                <div class="row-meta">
+                  <span><Calendar size={12} /> {formatDate(s.createdAt)}</span>
+                  <span class="kind-badge" class:auto={kindOf(s) === "auto"} class:manual={kindOf(s) === "manual"} class:crash={kindOf(s) === "crash"}>{kindOf(s)}</span>
+                  {#if s.sizeBytes}
+                    <span class="size-badge"><HardDrive size={11} /> {formatBytes(s.sizeBytes)}</span>
+                  {/if}
+                  {#if s.tags?.length}
+                    <span class="tags">
+                      {#each s.tags as t}<span class="tag" class:crash-fix={t === "crash_fix"}>{t}</span>{/each}
+                    </span>
+                  {/if}
+                </div>
+              </button>
+            {/each}
+          </div>
         {:else}
           <div class="muted pad">No snapshots match filters.</div>
         {/each}
@@ -489,6 +693,9 @@
               </div>
             </div>
             <div class="detail-actions">
+              <button class="secondary" onclick={() => loadVsCurrent(s.id)} title="What changed in this project since this checkpoint?">
+                <GitCompare size={14} /> Diff vs current
+              </button>
               <button class="secondary" onclick={() => compareWithPrevious(s.id)} title="Compare with previous">
                 <GitCompare size={14} /> Compare prev
               </button>
@@ -571,6 +778,56 @@
                   </li>
                 {/each}
               </ul>
+            </div>
+          {/if}
+
+          {#if vsDiff}
+            <div class="block vs-panel">
+              <h3>What changed since this checkpoint?</h3>
+              {#if vsDiff.manifestCompared && vsDiff.manifestDiff}
+                <h4>Manifest</h4>
+                <pre class="manifest-diff-text">
+{#each vsDiff.manifestDiff.split("\n") as line}
+<span class={lineClass(line)}>{line}</span>
+{/each}
+                </pre>
+              {:else if vsDiff.manifestCompared}
+                <p class="muted">Manifest on disk matches this snapshot.</p>
+              {/if}
+              {#if vsChangedFiles.length > 0}
+                <h4>Tracked files</h4>
+                <div class="inline-diff-shell">
+                  <aside class="diff-files">
+                    {#each vsChangedFiles as path}
+                      <button class:selected={vsSelectedPath === path} onclick={() => openVsFile(path)}>
+                        <span>{path}</span>
+                        {#if vsDiff.snapshotGoneFiles.includes(path)}<small class="removed-label">gone</small>{/if}
+                        {#if vsDiff.currentAddedFiles.includes(path)}<small class="added-label">new</small>{/if}
+                        {#if vsDiff.snapshotChangedFiles.includes(path)}<small>changed</small>{/if}
+                      </button>
+                    {/each}
+                  </aside>
+                  <section class="inline-diff">
+                    {#if vsFileLoading}
+                      <div class="muted">Loading file diff...</div>
+                    {:else if vsFileDiff}
+                      <div class="inline-diff-header">
+                        <strong>{vsFileDiff.path}</strong>
+                        <span>{vsFileDiff.fromExists ? "snapshot" : "snapshot missing"} → {vsFileDiff.toExists ? "on disk" : "missing on disk"}</span>
+                      </div>
+                      <pre>
+{#each vsFileDiff.text.split("\n") as line}
+<span class={lineClass(line)}>{line}</span>
+{/each}
+                      </pre>
+                    {:else}
+                      <div class="muted">Select a file above to view the inline diff against the current state.</div>
+                    {/if}
+                  </section>
+                </div>
+              {:else}
+                <p class="muted">No tracked files recorded for this snapshot.</p>
+              {/if}
             </div>
           {/if}
         {:else}
@@ -729,9 +986,9 @@
   .title { color: var(--text-secondary); font-weight: 600; }
   .actions input, .backup-create input, .search input { min-width: 180px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); border: 1px solid var(--border-color); display: flex; align-items: flex-start; gap: 8px; }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
+  .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
-  .notice.warn { color: #fcd34d; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); font-size: 13px; }
+  .notice.warn { color: var(--accent-warning); background: color-mix(in srgb, var(--accent-warning) 8%, transparent); border-color: color-mix(in srgb, var(--accent-warning) 28%, transparent); font-size: 13px; }
 
   .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
   .search { flex: 1; min-width: 220px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 0 10px; color: var(--text-muted); }
@@ -750,15 +1007,38 @@
   .list-pane, .detail-pane, .compare-panel, .diff-panel, .inline-diff-shell, .backup-section, .collapsible {
     background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg);
   }
-  .list-pane { overflow: auto; min-height: 0; max-height: none; padding: 8px; display: flex; flex-direction: column; gap: 6px; scrollbar-gutter: stable; }
+  .list-pane { overflow: auto; min-height: 0; max-height: none; padding: 10px; display: flex; flex-direction: column; gap: 16px; scrollbar-gutter: stable; }
   .row { width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); display: grid; gap: 6px; transform: none; }
   .row:hover, .row.selected { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent); color: var(--text-primary); }
-  .row-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+  .timeline-group { display: grid; gap: 6px; }
+  .timeline-header { display: flex; align-items: center; gap: 8px; padding: 6px 6px 2px; position: sticky; top: 0; z-index: 2; background: var(--bg-secondary); }
+  .timeline-dot { width: 8px; height: 8px; border-radius: 50%; background: color-mix(in srgb, var(--accent-primary) 55%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 14%, transparent); flex-shrink: 0; }
+  .timeline-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
+  .timeline-count { font-size: 10px; font-weight: 700; color: var(--text-muted); background: var(--bg-elevated); border-radius: 999px; padding: 1px 7px; }
   .row-top strong { font-size: 13px; color: var(--text-primary); }
   .op-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); font-family: ui-monospace, monospace; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .preview { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .row-meta { font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
   .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+  .kind-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; letter-spacing: 0.04em; }
+  .kind-badge.auto { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
+  .kind-badge.manual { color: var(--text-secondary); background: var(--bg-elevated); }
+  .kind-badge.crash { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 14%, transparent); }
+  .size-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); }
+
+  .summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; flex-shrink: 0; }
+  .summary-stat { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 12px 14px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .summary-stat strong { font-size: 20px; color: var(--text-primary); line-height: 1; }
+  .summary-stat span { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .summary-stat.size { flex-direction: row; align-items: center; gap: 8px; }
+  .summary-stat.size strong { font-size: 15px; }
+  @media (max-width: 760px) { .summary { grid-template-columns: repeat(3, 1fr); } }
+
+  .cleanup-panel { padding: 0 14px 14px; display: grid; gap: 10px; border: 0; background: transparent; }
+  .cleanup-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  .cleanup-controls label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+  .cleanup-controls select { min-width: 120px; }
+  .vs-panel h4 { margin: 12px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
 
   .detail-pane { padding: 18px; overflow: auto; min-height: 0; max-height: none; display: flex; flex-direction: column; gap: 14px; scrollbar-gutter: stable; }
   .detail-header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
@@ -791,7 +1071,7 @@
   .diff-files button:hover, .diff-files button.selected { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent); color: var(--text-primary); }
   .diff-files small { color: var(--text-muted); }
   .added-label { color: var(--accent-primary) !important; }
-  .removed-label { color: #fca5a5 !important; }
+  .removed-label { color: var(--accent-danger) !important; }
   .manifest-diff-panel { margin: 0 14px 14px; padding: 14px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .manifest-diff-panel h3 { font-size: 13px; margin: 0 0 10px; color: var(--text-secondary); }
   .manifest-diff-stats { display: grid; gap: 6px; margin-bottom: 12px; }
@@ -801,15 +1081,15 @@
   .diff-stat.changed { border-color: rgba(245,158,11,.30); }
   .diff-stat.added { border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
   .diff-stat.removed { border-color: rgba(239,68,68,.30); }
-  .manifest-diff-text { margin: 0; padding: 12px; border-radius: 10px; background: #0d0d10; color: #a1a1aa; font-family: ui-monospace,monospace; font-size: 11px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; }
+  .manifest-diff-text { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg-elevated); color: var(--text-secondary); font-family: ui-monospace,monospace; font-size: 11px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; }
   .inline-diff { min-width: 0; }
   .inline-diff-header { display: flex; justify-content: space-between; gap: 12px; padding: 0 0 10px; color: var(--text-secondary); }
   .inline-diff-header span { color: var(--text-muted); font-size: 12px; }
-  pre { overflow: auto; max-height: 420px; background: #0d0d10; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin: 0; }
+  pre { overflow: auto; max-height: 420px; background: var(--bg-elevated); border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin: 0; }
   pre span { display: block; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-  pre span.added { color: #86efac; background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
-  pre span.removed { color: #fca5a5; background: rgba(239, 68, 68, 0.08); }
-  pre span.context { color: #a1a1aa; }
+  pre span.added { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
+  pre span.removed { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); }
+  pre span.context { color: var(--text-muted); }
 
   .backup-section { padding: 0 14px 14px; display: grid; gap: 10px; border: 0; background: transparent; }
   .backup-list { display: grid; gap: 6px; }
@@ -818,7 +1098,7 @@
   .backup-info strong { color: var(--text-primary); font-size: 13px; }
   .backup-info span { color: var(--text-muted); font-size: 11px; }
   .rollback { padding: 6px 10px; font-size: 12px; font-weight: 600; }
-  .danger { color: #fca5a5; }
+  .danger { color: var(--accent-danger); }
   .loading { color: var(--text-muted); padding: 80px; text-align: center; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
 
   :global(.spin) { animation: spin 900ms linear infinite; }

@@ -4564,8 +4564,8 @@ import { trapFocus } from "../lib/focusTrap";
     margin-top: 2px;
   }
   .stat-pill.warn {
-    border-color: rgba(251, 191, 36, 0.45);
-    color: #fbbf24;
+    border-color: color-mix(in srgb, var(--accent-warning) 45%, transparent);
+    color: var(--accent-warning);
   }
   .trail-notice {
     display: flex;
@@ -5296,9 +5296,9 @@ import { trapFocus } from "../lib/focusTrap";
     text-transform: uppercase;
     padding: 2px 6px;
     border-radius: 999px;
-    color: #fca5a5;
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 30%, transparent);
   }
 
   .selection-inspector {

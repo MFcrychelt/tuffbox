@@ -3498,8 +3498,8 @@
     flex-shrink: 0;
   }
 
-  .graph-status.stale { color: #fbbf24; }
-  .graph-status.error { color: #fca5a5; }
+  .graph-status.stale { color: var(--accent-warning); }
+  .graph-status.error { color: var(--accent-danger); }
 
   .title,
   h3 {
@@ -3578,7 +3578,7 @@
     padding: 2px 8px; border-radius: 999px;
     background: var(--bg-tertiary); border: 1px solid var(--border-color);
   }
-  .change-plan-risk.req { color: #fbbf24; border-color: rgba(251,191,36,.35); }
+  .change-plan-risk.req { color: var(--accent-warning); border-color: color-mix(in srgb, var(--accent-warning) 35%, transparent); }
   .change-plan-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .change-plan-list {
     list-style: none;
@@ -3751,17 +3751,17 @@
   }
 
   .canvas-controls .hl-btn.conflicts.active {
-    background: rgba(239, 68, 68, 0.28);
-    border-color: rgba(248, 113, 113, 0.95);
-    color: #fecaca;
-    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.35), 0 0 18px rgba(239, 68, 68, 0.35);
+    background: color-mix(in srgb, var(--accent-danger) 28%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger) 95%, transparent);
+    color: var(--accent-danger);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-danger) 35%, transparent), 0 0 18px color-mix(in srgb, var(--accent-danger) 35%, transparent);
   }
 
   .canvas-controls .hl-btn.missing.active {
-    background: rgba(245, 158, 11, 0.28);
-    border-color: rgba(251, 191, 36, 0.95);
-    color: #fde68a;
-    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.35), 0 0 18px rgba(245, 158, 11, 0.35);
+    background: color-mix(in srgb, var(--accent-warning) 28%, transparent);
+    border-color: color-mix(in srgb, var(--accent-warning) 95%, transparent);
+    color: var(--accent-warning);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-warning) 35%, transparent), 0 0 18px color-mix(in srgb, var(--accent-warning) 35%, transparent);
   }
 
   .zoom-readout {
@@ -4563,7 +4563,7 @@
     align-items: center;
     gap: 8px;
     margin: 0 0 4px;
-    color: #fecaca;
+    color: var(--accent-danger);
     font-size: 14px;
   }
   .conflict-panel-head p {
@@ -4601,16 +4601,16 @@
     flex-shrink: 0;
     padding: 2px 7px;
     border-radius: 999px;
-    background: rgba(245, 158, 11, 0.16);
-    color: #fbbf24;
+    background: color-mix(in srgb, var(--accent-warning) 16%, transparent);
+    color: var(--accent-warning);
     font-size: 10px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
   .conflict-card.critical .conflict-badge {
-    background: rgba(239, 68, 68, 0.18);
-    color: #fca5a5;
+    background: color-mix(in srgb, var(--accent-danger) 18%, transparent);
+    color: var(--accent-danger);
   }
   .conflict-pair {
     display: flex;
@@ -4800,8 +4800,8 @@
   }
 
   .tag.missing-tag {
-    background: rgba(245, 158, 11, 0.18);
-    color: #fbbf24;
+    background: color-mix(in srgb, var(--accent-warning) 18%, transparent);
+    color: var(--accent-warning);
   }
 
   .missing-map-hint {
@@ -4852,13 +4852,13 @@
   .missing-map-mod span {
     flex-shrink: 0;
     font-size: 11px;
-    color: #fbbf24;
+    color: var(--accent-warning);
     font-weight: 700;
   }
 
   .missing-map-mod.active strong,
   .missing-map-dep.active {
-    color: #fde68a;
+    color: var(--accent-warning);
   }
 
   .missing-map-deps {
@@ -5016,8 +5016,8 @@
   }
 
   .error {
-    color: #fecaca;
-    border-color: rgba(239, 68, 68, 0.35);
+    color: var(--accent-danger);
+    border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent);
   }
 
   .modal-backdrop {
@@ -5072,9 +5072,9 @@
     font-size: 13px;
   }
   .install-transfer.failed {
-    border-color: rgba(239, 68, 68, 0.35);
-    background: rgba(239, 68, 68, 0.08);
-    color: #fca5a5;
+    border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
+    color: var(--accent-danger);
   }
   .install-transfer.done { color: var(--accent-primary); }
   .install-transfer pre {

@@ -390,7 +390,7 @@
             <option value={task.type}>{taskTypeLabel(task.type)}</option>
           {/if}
         </select>
-        <button type="button" class="ico danger" onclick={() => removeTask(i)}
+        <button type="button" class="ico danger" aria-label="Remove task" title="Remove task" onclick={() => removeTask(i)}
           ><Trash2 size={12} /></button
         >
       </div>
@@ -784,7 +784,7 @@
             <option value={reward.type}>{rewardTypeLabel(reward.type)}</option>
           {/if}
         </select>
-        <button type="button" class="ico danger" onclick={() => removeReward(i)}
+        <button type="button" class="ico danger" aria-label="Remove reward" title="Remove reward" onclick={() => removeReward(i)}
           ><Trash2 size={12} /></button
         >
       </div>
@@ -1126,8 +1126,8 @@
   .ico.danger:hover,
   .ico:hover {
     border-color: color-mix(in srgb, var(--accent-danger) 45%, var(--ftbq-frame));
-    background: rgba(239, 68, 68, 0.08);
-    color: #f87171;
+    background: color-mix(in srgb, var(--accent-danger) 10%, transparent);
+    color: var(--accent-danger);
   }
   .ico:active {
     transform: scale(0.95);

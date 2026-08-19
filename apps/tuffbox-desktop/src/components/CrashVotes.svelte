@@ -897,17 +897,17 @@
 
   .error-state {
     background: var(--bg-secondary);
-    border: 1px solid rgba(239, 68, 68, 0.35);
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 35%, transparent);
     border-radius: var(--border-radius-lg);
-    color: #fecaca;
+    color: var(--accent-danger);
     text-align: center;
   }
 
   .inline-err {
-    color: #fecaca;
+    color: var(--accent-danger);
     font-size: 13px;
     padding: 8px 12px;
-    background: rgba(239, 68, 68, 0.08);
+    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
     border-radius: var(--border-radius-sm);
   }
 
@@ -982,12 +982,12 @@
   }
 
   .status-chip.open {
-    background: rgba(245, 158, 11, 0.14);
+    background: color-mix(in srgb, var(--accent-warning) 14%, transparent);
     color: var(--accent-warning);
   }
 
   .status-chip.rejected {
-    background: rgba(239, 68, 68, 0.14);
+    background: color-mix(in srgb, var(--accent-danger) 14%, transparent);
     color: var(--accent-danger, #ef4444);
   }
 
@@ -1190,7 +1190,7 @@
 
   .vote.keep:hover:not(:disabled) {
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent, #000);
   }
 
   .vote.discard {
@@ -1330,9 +1330,9 @@
     font-weight: 800;
     border: 1px solid var(--border-color);
   }
-  .diff-chip.add { color: #86efac; border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.1); }
-  .diff-chip.remove { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.1); }
-  .diff-chip.change { color: #fde68a; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.1); }
+  .diff-chip.add { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
+  .diff-chip.remove { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); background: color-mix(in srgb, var(--accent-danger) 10%, transparent); }
+  .diff-chip.change { color: var(--accent-warning); border-color: color-mix(in srgb, var(--accent-warning) 35%, transparent); background: color-mix(in srgb, var(--accent-warning) 10%, transparent); }
 
   .op {
     color: var(--accent-primary);
@@ -1361,7 +1361,7 @@
 
   .risk.high {
     color: var(--accent-danger);
-    background: rgba(239, 68, 68, 0.12);
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
   }
 
   .solution-text {

@@ -304,11 +304,11 @@
   .row:hover { background: var(--bg-tertiary); }
   .row.leaf { cursor: default; }
   .children { padding-left: 14px; }
-  .type { color: #8fd3ff; min-width: 72px; }
+  .type { color: var(--accent-secondary); min-width: 72px; }
   .name { color: var(--text-primary); font-weight: 600; }
-  .val { color: #b8e986; margin-left: 6px; word-break: break-all; }
+  .val { color: var(--accent-primary); margin-left: 6px; word-break: break-all; }
   .muted { color: var(--text-muted); font-size: 11px; }
-  .err { color: #fca5a5; padding: 8px 14px; font-size: 12px; }
+  .err { color: var(--accent-danger); padding: 8px 14px; font-size: 12px; }
   .pad { width: 12px; display: inline-block; }
   .edit {
     margin-left: 6px; flex: 1; min-width: 80px;

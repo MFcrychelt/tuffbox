@@ -29,7 +29,7 @@
   <div class="drawer-h">
     <strong>Chapter groups</strong>
     <button type="button" class="ghost" onclick={onadd}>+ Group</button>
-    <button type="button" class="ghost ico" onclick={onclose}><X size={14} /></button>
+    <button type="button" class="ghost ico" aria-label="Close panel" onclick={onclose}><X size={14} /></button>
   </div>
   {#each chapterGroups as g, gi (g.id)}
     <div class="group-row">

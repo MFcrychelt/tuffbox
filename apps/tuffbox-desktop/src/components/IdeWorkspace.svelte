@@ -817,9 +817,9 @@
   }
 
   .inline-error {
-    color: #fecaca;
-    background: rgba(239, 68, 68, 0.08);
-    border-color: rgba(239, 68, 68, 0.28);
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent);
   }
 
   .inline-success {

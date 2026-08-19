@@ -11352,6 +11352,7 @@ fn get_project_dir(path: String) -> Result<String, String> {
 #[tauri::command]
 fn list_snapshots(project_dir: String) -> Result<Vec<tuffbox_core::Snapshot>, String> {
     let store = SnapshotStore::new(&project_dir);
+    let _ = store.ensure_sizes();
     store.list().map_err(|e| e.to_string())
 }
 
@@ -11416,6 +11417,103 @@ fn rollback_snapshot(
 fn delete_snapshot(project_dir: String, id: String) -> Result<(), String> {
     let store = SnapshotStore::new(&project_dir);
     store.delete(id).map_err(|e| e.to_string())
+}
+
+/// Compare a snapshot's stored manifest/file copies against the live project
+/// state so the UI can answer "what changed in this project since this
+/// checkpoint?".
+#[tauri::command(rename_all = "camelCase")]
+fn diff_snapshot_vs_current(
+    project_dir: String,
+    id: String,
+) -> Result<crate::types::SnapshotVsCurrent, String> {
+    let store = SnapshotStore::new(&project_dir);
+    store
+        .get(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("snapshot {id} not found"))?;
+
+    // File-level diff of the tracked changed-files set.
+    let file_diff = store.diff_current(&id).map_err(|e| e.to_string())?;
+    // Files stored in the snapshot that are now missing on disk.
+    let snapshot_gone: Vec<String> = file_diff
+        .removed_files
+        .iter()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    let snapshot_changed: Vec<String> = file_diff
+        .modified_files
+        .iter()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    let current_added: Vec<String> = file_diff
+        .added_files
+        .iter()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+
+    // Manifest comparison between the snapshot's manifest copy and now.
+    let mut manifest_diff = String::new();
+    let mut manifest_compared = false;
+    if let Ok(project_manifest) = find_manifest_in_project_dir(&project_dir) {
+        let snapshot_manifest = store.snapshot_dir(&id).join("manifest.json");
+        if snapshot_manifest.is_file() {
+            manifest_compared = true;
+            let before = read_small_text_file(&snapshot_manifest).unwrap_or_default();
+            let after = read_small_text_file(&project_manifest).unwrap_or_default();
+            manifest_diff = unified_text_diff(&before, &after);
+        }
+    }
+
+    Ok(crate::types::SnapshotVsCurrent {
+        snapshot_changed_files: snapshot_changed,
+        snapshot_gone_files: snapshot_gone,
+        current_added_files: current_added,
+        manifest_compared,
+        manifest_diff,
+    })
+}
+
+/// Inline text diff of one stored snapshot file vs its current on-disk state.
+#[tauri::command(rename_all = "camelCase")]
+fn get_snapshot_file_vs_current_diff(
+    project_dir: String,
+    id: String,
+    relative_path: String,
+) -> Result<crate::types::SnapshotFileDiff, String> {
+    let relative = validate_relative_snapshot_path(&relative_path)?;
+    let base = PathBuf::from(&project_dir)
+        .join(".tuffbox")
+        .join("snapshots");
+    let from_path = base.join(&id).join("changed_files").join(&relative);
+    let to_path = PathBuf::from(&project_dir).join(&relative);
+    let from_exists = from_path.is_file();
+    let to_exists = to_path.is_file();
+    let from_text = read_small_text_file(&from_path)?;
+    let to_text = read_small_text_file(&to_path)?;
+    Ok(crate::types::SnapshotFileDiff {
+        path: relative_path,
+        from_exists,
+        to_exists,
+        text: unified_text_diff(&from_text, &to_text),
+    })
+}
+
+/// Delete automatic snapshots older than `older_than_days`, keeping
+/// user/manual and crash-fix snapshots. Returns removed ids + freed bytes.
+#[tauri::command(rename_all = "camelCase")]
+fn prune_auto_snapshots(
+    project_dir: String,
+    older_than_days: u64,
+) -> Result<crate::types::PruneResult, String> {
+    let store = SnapshotStore::new(&project_dir);
+    let (removed_ids, total_bytes) = store
+        .prune_auto_snapshots(older_than_days)
+        .map_err(|e| e.to_string())?;
+    Ok(crate::types::PruneResult {
+        removed_ids,
+        total_bytes,
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -16552,6 +16650,9 @@ pub fn run() {
             get_snapshot_detail,
             diff_manifest_snapshots,
             get_snapshot_file_diff,
+            diff_snapshot_vs_current,
+            get_snapshot_file_vs_current_diff,
+            prune_auto_snapshots,
             validate_modrinth_export,
             validate_curseforge_export,
             generate_release_changelog,

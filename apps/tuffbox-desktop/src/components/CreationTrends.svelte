@@ -1239,14 +1239,14 @@
     border-radius: var(--border-radius-sm);
   }
   .err {
-    color: #fecaca;
+    color: var(--accent-danger);
     margin-bottom: 10px;
     font-size: 13px;
   }
   .warn-line {
     margin-bottom: 10px;
     font-size: 13px;
-    color: color-mix(in srgb, var(--accent-warning, #f59e0b) 80%, #fde68a);
+    color: var(--accent-warning, #f59e0b);
   }
   section {
     margin-top: 16px;
@@ -1370,10 +1370,10 @@
     font-size: 12px;
   }
   .check-list li.ok .check-status {
-    color: color-mix(in srgb, var(--accent-primary) 80%, #86efac);
+    color: var(--accent-primary);
   }
   .check-list li.fail .check-status {
-    color: #fecaca;
+    color: var(--accent-danger);
   }
   .check-status {
     font-weight: 700;
@@ -1386,7 +1386,7 @@
     margin: 8px 0;
   }
   .reward-granted {
-    color: color-mix(in srgb, var(--accent-primary) 70%, #86efac);
+    color: var(--accent-primary);
   }
   .suggest-grid {
     display: grid;

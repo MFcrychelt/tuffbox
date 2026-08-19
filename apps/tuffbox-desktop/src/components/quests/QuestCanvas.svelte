@@ -243,10 +243,18 @@
   });
 
   // Sync marquee / multi-select from Svelte Flow back to parent
+  let lastMultiSelection = $state<readonly string[]>([]);
   $effect(() => {
     const selectedNodes = nodes.filter((n) => n.selected && !n.id.startsWith("ext:"));
     if (selectedNodes.length > 1) {
-      onSelectMultiple(selectedNodes.map((n) => n.id));
+      const ids = selectedNodes.map((n) => n.id);
+      const changed =
+        ids.length !== lastMultiSelection.length ||
+        ids.some((id) => !lastMultiSelection.includes(id));
+      lastMultiSelection = ids;
+      if (changed) onSelectMultiple(ids);
+    } else {
+      lastMultiSelection = [];
     }
   });
 

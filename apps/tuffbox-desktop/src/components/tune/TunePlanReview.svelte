@@ -181,8 +181,8 @@
     white-space: pre-wrap;
     word-break: break-word;
   }
-  .diff-before { background: rgba(239, 68, 68, 0.08); }
-  .diff-after { background: rgba(34, 197, 94, 0.08); }
+  .diff-before { background: color-mix(in srgb, var(--accent-danger) 8%, transparent); }
+  .diff-after { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   .plan-review-ack {
     display: flex;
     gap: 8px;

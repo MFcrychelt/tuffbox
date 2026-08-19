@@ -939,19 +939,31 @@
       flashNotice("error", String(e));
       return;
     }
+    let allSaved = true;
     if (dirtyIds.length > 0) {
       for (const id of dirtyIds) {
         const result = await saveChapter(id, { skipDiff: true });
-        if (result === "error") break;
+        if (result !== "saved") {
+          allSaved = false;
+          break;
+        }
       }
+      if (!allSaved || error) return; // save cancelled/failed — keep dirty flags
     }
     if (rewardTablesDirty) {
       for (const t of rewardTables) {
-        await saveRewardTable(t);
+        const ok = await saveRewardTable(t);
+        if (!ok) return;
       }
     }
-    if (bookDirty) await saveBookData();
-    if (groupsDirty) await saveGroups();
+    if (bookDirty) {
+      const ok = await saveBookData();
+      if (!ok) return;
+    }
+    if (groupsDirty) {
+      const ok = await saveGroups();
+      if (!ok) return;
+    }
     applyNeedsSave = false;
   }
 
@@ -1154,6 +1166,20 @@
     target.addEventListener("pointercancel", onUp);
   }
 
+  /** Keyboard resize for the col-resizer separators (ArrowLeft/ArrowRight). */
+  function onColResizeKeydown(which: "rail" | "insp", e: KeyboardEvent) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const step = 16;
+    if (which === "rail") {
+      const delta = e.key === "ArrowRight" ? step : -step;
+      railWidth = clampPanel(railWidth + delta, 140, 360);
+    } else {
+      const delta = e.key === "ArrowLeft" ? step : -step;
+      inspWidth = clampPanel(inspWidth + delta, 240, 520);
+    }
+  }
+
   function addQuestAt(x: number, y: number) {
     if (!selectedChapter) return;
     pushHistory();
@@ -1309,8 +1335,8 @@
     rewardTablesDirty = true;
   }
 
-  async function saveRewardTable(table: QuestRewardTable) {
-    if (!$projectPath) return;
+  async function saveRewardTable(table: QuestRewardTable): Promise<boolean> {
+    if (!$projectPath) return false;
     saving = true;
     error = null;
     try {
@@ -1319,8 +1345,11 @@
       rewardTables = [...rewardTables];
       rewardTablesDirty = false;
       flashNotice("success", `Saved reward table → ${res.relativePath}`);
+      return true;
     } catch (e) {
+      error = String(e);
       flashNotice("error", String(e));
+      return false;
     } finally {
       saving = false;
     }
@@ -1497,21 +1526,26 @@
     }
   }
 
-  function onSearchKey(e: KeyboardEvent) {
+  function onBookMenuKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
-      questSearch = "";
+      e.preventDefault();
+      closeBookChrome();
+      document.querySelector<HTMLElement>('[aria-controls="quest-book-menu"]')?.focus();
       return;
     }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const first = filteredChapterQuests[0];
-      if (first) {
-        selectedQuest = first;
-        selection = selectSingle(selection, first.id);
-        panelTab = "quest";
-        fitToken += 1;
-      }
-    }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+    e.preventDefault();
+    const items = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('#quest-book-menu [role="menuitem"]'),
+    );
+    if (items.length === 0) return;
+    const active = items.findIndex((el) => el === document.activeElement);
+    let next = 0;
+    if (e.key === "ArrowDown") next = active < 0 ? 0 : (active + 1) % items.length;
+    else if (e.key === "ArrowUp") next = active < 0 ? items.length - 1 : (active - 1 + items.length) % items.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = items.length - 1;
+    items[next]?.focus();
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -1521,11 +1555,13 @@
     if (e.ctrlKey || e.metaKey) {
       switch (e.key.toLowerCase()) {
         case "z":
+          if (isInput) return; // let the text field undo itself
           e.preventDefault();
           if (e.shiftKey) handleRedo();
           else handleUndo();
           return;
         case "y":
+          if (isInput) return; // let the text field redo itself
           e.preventDefault();
           handleRedo();
           return;
@@ -1695,8 +1731,8 @@
     fitToken += 1;
   }
 
-  async function saveBookData() {
-    if (!$projectPath) return;
+  async function saveBookData(): Promise<boolean> {
+    if (!$projectPath) return false;
     saving = true;
     error = null;
     try {
@@ -1706,15 +1742,18 @@
       );
       bookDirty = false;
       flashNotice("success", "Book data.snbt saved.");
+      return true;
     } catch (e) {
+      error = String(e);
       flashNotice("error", String(e));
+      return false;
     } finally {
       saving = false;
     }
   }
 
-  async function saveGroups() {
-    if (!$projectPath) return;
+  async function saveGroups(): Promise<boolean> {
+    if (!$projectPath) return false;
     saving = true;
     error = null;
     try {
@@ -1722,8 +1761,11 @@
       await api.quests.saveChapterGroups(chapterGroups, $projectPath);
       groupsDirty = false;
       flashNotice("success", "Chapter groups saved.");
+      return true;
     } catch (e) {
+      error = String(e);
       flashNotice("error", String(e));
+      return false;
     } finally {
       saving = false;
     }
@@ -1967,7 +2009,7 @@
             On disk
           </button>
           {#if issuesOpen && validationIssues.length > 0}
-            <div class="issues-pop" id="quest-issues-pop" role="listbox" aria-label="Validation issues">
+            <div class="issues-pop" id="quest-issues-pop" aria-label="Validation issues">
               {#each validationIssues as iss, i (`${iss.questId}-${i}`)}
                 <button type="button" class="issue-row" onclick={() => jumpToIssue(iss)}>
                   <code>{iss.questId.slice(0, 8)}</code>
@@ -2002,12 +2044,15 @@
           </select>
         </div>
       {/if}
-      <div class="tb-pop">
+      <div
+        class="tb-pop"
+        role="group"
+        aria-label="Quest book tools"
+      >
         <button
           type="button"
           class="ghost"
           class:active={bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel}
-          class:has-dirty={bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}
           title="Book, groups, reward tables, locales, KubeJS"
           aria-haspopup="menu"
           aria-expanded={bookMenuOpen}
@@ -2030,10 +2075,11 @@
           Book{#if bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
         </button>
         {#if bookMenuOpen && $projectPath}
-          <div class="book-menu" id="quest-book-menu" role="menu">
+          <div class="book-menu" id="quest-book-menu" role="menu" onkeydown={onBookMenuKeydown}>
             <button
               type="button"
               role="menuitem"
+              tabindex="0"
               class:active={showBookPanel}
               onclick={() => openBookDrawer("book")}
             >
@@ -2042,6 +2088,7 @@
             <button
               type="button"
               role="menuitem"
+              tabindex="0"
               class:active={showGroupsPanel}
               onclick={() => openBookDrawer("groups")}
             >
@@ -2050,6 +2097,7 @@
             <button
               type="button"
               role="menuitem"
+              tabindex="0"
               class:active={showTablesPanel}
               onclick={() => openBookDrawer("tables")}
             >
@@ -2058,6 +2106,7 @@
             <button
               type="button"
               role="menuitem"
+              tabindex="0"
               class:active={showLocalePanel}
               onclick={() => openBookDrawer("locales")}
             >
@@ -2066,6 +2115,7 @@
             <button
               type="button"
               role="menuitem"
+              tabindex="0"
               class:active={showKubeJsPanel}
               onclick={() => openBookDrawer("kubejs")}
             >
@@ -2140,10 +2190,7 @@
 
   {#if applyNeedsSave && hasDirty}
     <div class="apply-save-banner" role="status">
-      <span>AI plan is in the editor only — <strong>Save</strong> writes SNBT to disk.</span>
-      <button type="button" class="primary mini" onclick={() => void saveAll()} disabled={saving}>
-        Save all
-      </button>
+      <span>AI plan is in the editor only — use <strong>Save all</strong> to write SNBT to disk.</span>
       <button type="button" class="ghost mini" onclick={() => (applyNeedsSave = false)} aria-label="Dismiss">
         Dismiss
       </button>
@@ -2197,6 +2244,9 @@
           id="quest-global-search"
           placeholder="Search fields… (Ctrl+F). Filter toolbar hides nodes."
           aria-label="Search quest fields"
+          role="combobox"
+          aria-expanded={search.results.length > 0}
+          aria-autocomplete="list"
           value={search.query}
           bind:this={searchInputEl}
           aria-controls="quest-search-results"
@@ -2290,7 +2340,9 @@
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize chapters panel"
+        tabindex="0"
         onpointerdown={(e) => startColResize("rail", e)}
+        onkeydown={(e) => onColResizeKeydown("rail", e)}
       ></div>
       <div class="canvas-wrap">
         <SvelteFlowProvider>
@@ -2364,7 +2416,9 @@
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize quest inspector"
+          tabindex="0"
           onpointerdown={(e) => startColResize("insp", e)}
+          onkeydown={(e) => onColResizeKeydown("insp", e)}
         ></div>
         <div class="side-panel">
           <div
@@ -2609,7 +2663,7 @@
     >
       <div class="drawer-h sheet-h">
         <strong>Reward tables</strong>
-        <button type="button" class="ghost ico" onclick={closeBookChrome}><X size={14} /></button>
+        <button type="button" class="ghost ico" aria-label="Close panel" onclick={closeBookChrome}><X size={14} /></button>
       </div>
       <RewardTablesPanel
         tables={rewardTables}
@@ -2639,7 +2693,7 @@
     >
       <div class="drawer-h sheet-h">
         <strong>Locales (lang/*.snbt)</strong>
-        <button type="button" class="ghost ico" onclick={closeBookChrome}><X size={14} /></button>
+        <button type="button" class="ghost ico" aria-label="Close panel" onclick={closeBookChrome}><X size={14} /></button>
       </div>
       <LocalePanel
         {locales}
@@ -2958,7 +3012,7 @@
     text-shadow: none;
   }
   .issues-btn.warn {
-    color: #fbbf24;
+    color: var(--accent-warning);
   }
   .issues-btn:disabled {
     cursor: default;
@@ -3062,15 +3116,6 @@
     text-shadow: none;
     animation: none;
   }
-  @keyframes badge-glow {
-    0%,
-    100% {
-      box-shadow: 0 0 3px rgba(242, 201, 76, 0.15);
-    }
-    50% {
-      box-shadow: 0 0 9px rgba(242, 201, 76, 0.4);
-    }
-  }
   .notice {
     display: flex;
     align-items: center;
@@ -3094,16 +3139,10 @@
   .notice-dismiss:hover {
     opacity: 1;
   }
-  .clear-filter {
-    font-size: 11px;
-    font-weight: 600;
-    white-space: nowrap;
-    padding: 2px 8px;
-  }
   .notice.error {
-    color: #fecaca;
-    background: rgba(239, 68, 68, 0.1);
-    border-color: rgba(239, 68, 68, 0.35);
+    color: color-mix(in srgb, var(--accent-danger) 85%, #fff);
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent);
   }
   .notice.success {
     color: var(--ftbq-quest-completed, #55c95a);
@@ -3161,12 +3200,6 @@
   .empty-cta:active {
     transform: translateY(0);
   }
-  .hint {
-    font-size: 12px;
-    border-radius: 3px;
-    padding: 4px 8px;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease;
-  }
   .qe-lay {
     flex: 1;
     min-height: 0;
@@ -3202,8 +3235,13 @@
     inset: 0 -3px;
   }
   .col-resizer:hover,
-  .col-resizer:active {
+  .col-resizer:active,
+  .col-resizer:focus-visible {
     background: var(--ftbq-accent-teal, #3db8a8);
+  }
+  .col-resizer:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 1px var(--ftbq-accent-teal, #3db8a8);
   }
   .qe-body-row {
     display: flex;
@@ -3224,54 +3262,12 @@
     min-height: 0;
     overflow: hidden;
   }
-  .canvas-tools {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.2)),
-      var(--ftbq-bg-panel);
-    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
-  }
-  .canvas-tools input {
-    flex: 1;
-    background: var(--ftbq-input-bg);
-    border: 1px solid var(--ftbq-frame);
-    color: inherit;
-    border-radius: 3px;
-    padding: 4px 8px;
-    font-size: 12px;
-  }
-  .canvas-tools input:focus {
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
-    outline: none;
-  }
   .filt-count {
     flex: 1;
     padding: 5px 8px;
     font-size: 12px;
     color: var(--ftbq-text-muted, #9a9aa0);
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
-  }
-  .layout-btns {
-    display: flex;
-    gap: 4px;
-    flex-shrink: 0;
-  }
-  .layout-btn {
-    padding: 3px 8px;
-    font-size: 11px;
-    border: 1px solid var(--ftbq-border);
-    background: rgba(0, 0, 0, 0.25);
-    color: var(--ftbq-text-muted, #9a9aa0);
-    border-radius: 3px;
-    cursor: pointer;
-  }
-  .layout-btn:hover {
-    color: var(--ftbq-text, #e8e8e8);
-    border-color: var(--ftbq-accent-teal, #3db8a8);
   }
   .search-bar {
     display: flex;

@@ -3674,7 +3674,7 @@
   .stats .sel { color: #ff7a7e; }
   .stats .clip { color: #8fd3ff; }
   .stats .ok { color: var(--accent-primary); }
-  .stats .err { color: #fca5a5; }
+  .stats .err { color: var(--accent-danger); }
 
   .filter-bar, .nbt-bar {
     display: flex;

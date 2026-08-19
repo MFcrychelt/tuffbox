@@ -546,7 +546,7 @@
   }
   .icon-btn.small :global(svg) { width: 14px; height: 14px; stroke: currentColor; }
   .icon-btn.small:hover { background: var(--bg-hover) !important; color: var(--text-primary) !important; transform: none !important; }
-  .icon-btn.small.danger:hover { background: rgba(239, 68, 68, 0.12) !important; color: #ef4444 !important; }
+  .icon-btn.small.danger:hover { background: color-mix(in srgb, var(--accent-danger) 12%, transparent) !important; color: var(--accent-danger) !important; }
 
   /* ─── Add Options ───────────────────────── */
   .add-options { display: flex; flex-direction: column; gap: 10px; }
@@ -605,8 +605,8 @@
   }
 
   .error-msg {
-    color: #f87171; font-size: 12px; background: rgba(248, 113, 113, 0.1);
-    border: 1px solid rgba(248, 113, 113, 0.2); border-radius: var(--border-radius-sm);
+    color: var(--accent-danger); font-size: 12px; background: color-mix(in srgb, var(--accent-danger) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 20%, transparent); border-radius: var(--border-radius-sm);
     padding: 8px 12px; text-align: center;
   }
 

@@ -2248,7 +2248,7 @@
   .primary-scan {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 8px 14px; border-radius: 10px; border: none;
-    background: var(--accent-primary); color: #04140a; font-weight: 700; cursor: pointer;
+    background: var(--accent-primary); color: var(--on-accent, #04140a); font-weight: 700; cursor: pointer;
   }
   .primary-scan:disabled { opacity: 0.5; cursor: not-allowed; }
 

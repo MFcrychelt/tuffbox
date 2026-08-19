@@ -784,6 +784,8 @@ export interface Snapshot {
   manifestPath: string;
   lockfilePath: string | null;
   changedFiles: string[];
+  /** On-disk size of the snapshot directory in bytes (0 when unknown). */
+  sizeBytes: number;
   tags?: string[];
   crashFingerprintKey?: string | null;
   reportId?: string | null;
@@ -805,6 +807,19 @@ export interface SnapshotFileDiff {
   fromExists: boolean;
   toExists: boolean;
   text: string;
+}
+
+export interface SnapshotVsCurrent {
+  snapshotChangedFiles: string[];
+  snapshotGoneFiles: string[];
+  currentAddedFiles: string[];
+  manifestCompared: boolean;
+  manifestDiff: string;
+}
+
+export interface PruneResult {
+  removedIds: string[];
+  totalBytes: number;
 }
 
 export interface SnapshotChangedFile {
@@ -1869,6 +1884,9 @@ export const api = {
     detail(id: string, projectDir?: string) { return cmd<SnapshotDetail>("get_snapshot_detail", { projectDir: projectDir ?? get(projectPath) ?? "", id }); },
     diffManifest(fromId: string, toId: string, projectDir?: string) { return cmd<ManifestSnapshotDiff>("diff_manifest_snapshots", { projectDir: projectDir ?? get(projectPath) ?? "", fromId, toId }); },
     fileDiff(from: string, to: string, relativePath: string, projectDir?: string) { return cmd<SnapshotFileDiff>("get_snapshot_file_diff", { projectDir: projectDir ?? get(projectPath) ?? "", from, to, relativePath }); },
+    diffVsCurrent(id: string, projectDir?: string) { return cmd<SnapshotVsCurrent>("diff_snapshot_vs_current", { projectDir: projectDir ?? get(projectPath) ?? "", id }); },
+    fileDiffVsCurrent(id: string, relativePath: string, projectDir?: string) { return cmd<SnapshotFileDiff>("get_snapshot_file_vs_current_diff", { projectDir: projectDir ?? get(projectPath) ?? "", id, relativePath }); },
+    pruneAuto(olderThanDays: number, projectDir?: string) { return cmd<PruneResult>("prune_auto_snapshots", { projectDir: projectDir ?? get(projectPath) ?? "", olderThanDays }); },
   },
 
   // ── Backups ───────────────────────────────────────────────────────

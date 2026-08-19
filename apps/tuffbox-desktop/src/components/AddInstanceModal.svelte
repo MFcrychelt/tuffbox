@@ -822,7 +822,7 @@
   .input-row input { flex: 1; }
   .error {
     padding: 10px 12px; border-radius: 10px;
-    background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35); color: #fca5a5;
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent-danger) 35%, transparent); color: var(--accent-danger);
   }
   .notice {
     padding: 10px 12px; border-radius: 10px;

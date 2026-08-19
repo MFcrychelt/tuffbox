@@ -240,8 +240,8 @@
     cursor: pointer;
   }
   .extra-row button:hover {
-    color: #ef4444;
-    border-color: color-mix(in srgb, #ef4444 45%, var(--ftbq-frame));
+    color: var(--accent-danger);
+    border-color: color-mix(in srgb, var(--accent-danger) 45%, var(--ftbq-frame));
     background: var(--bg-hover, var(--ftbq-btn-hover-top));
   }
   .extra-add {
