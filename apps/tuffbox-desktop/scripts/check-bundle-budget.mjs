@@ -15,6 +15,12 @@
  * Budgets have ~35-70% headroom over the current baseline (~163 KB JS /
  * ~17 KB CSS gzipped) for normal growth; run `npm run build` locally and
  * bump these deliberately (with a note why) if a real feature needs it.
+ *
+ * 2026-08 bump: CSS 30 -> 31 KB for the github-pack-transport line, which
+ * legitimately grew the startup stylesheet with the steel-graphite dark theme
+ * redesign, the light-theme Home (quartz backdrop + dark content islands), and
+ * the quest-editor design-system aliases. Current startup CSS is ~30.0 KB
+ * gzipped; 31 KB keeps ~1 KB headroom while still catching accidental bloat.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -27,7 +33,7 @@ const indexHtmlPath = path.join(distDir, "index.html");
 
 const BUDGETS_GZIP_BYTES = {
   ".js": 230 * 1024,
-  ".css": 30 * 1024,
+  ".css": 31 * 1024,
 };
 
 if (!existsSync(indexHtmlPath)) {
