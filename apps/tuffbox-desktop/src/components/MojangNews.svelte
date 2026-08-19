@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
+  import { ChevronLeft, ChevronRight } from "@lucide/svelte";
 
   /**
    * Minecraft Java Edition update feed — snapshots & releases only.
@@ -10,7 +11,7 @@
    * in the app CSP.
    */
   const FEED_URL =
-    "https://feedback.minecraft.net/api/v2/help_center/en-us/sections/360001186971/articles.json?per_page=100&sort_by=created_at&sort_order=desc";
+    "https://feedback.minecraft.net/api/v2/help_center/en-us/sections/360001186971/articles.json?per_page=100&sort_by=created_at&sort_order=desc&include=body";
   /** Help Center articles publish with public-facing URLs on this domain. */
   const HTML_ORIGIN = "https://feedback.minecraft.net";
 
@@ -20,6 +21,7 @@
     title?: string | null;
     html_url?: string | null;
     created_at?: string | null;
+    body?: string | null;
   };
 
   type Card = {
@@ -30,6 +32,8 @@
     kind: "Snapshot" | "Release";
     date: string;
     hue: number;
+    /** Real Mojang header screenshot for the card cover, when the article has one. */
+    image?: string | null;
   };
 
   let { limit = 10 }: { limit?: number } = $props();
@@ -81,6 +85,25 @@
     );
   }
 
+  /**
+   * Pull the first real screenshot from the article body. Mojang drops the
+   * header image as a `<figure class="wysiwyg-image"><img src="…"></figure>`
+   * near the top of each release changelog; fall back to null so the card can
+   * keep its gradient tile when an article has no image.
+   */
+  function firstBodyImage(a: ZendeskArticle): string | null {
+    const body = a.body;
+    if (!body) return null;
+    // Only touch the leading image block — older snapshots embed it later,
+    // so grab the first <img> whatever its position.
+    const m = body.match(/<img[^>]*\bsrc=["']([^"']+)["']/i);
+    if (!m) return null;
+    const src = m[1].trim();
+    if (!src) return null;
+    if (src.startsWith("data:")) return null;
+    return absoluteUrl(src);
+  }
+
   function mapCard(a: ZendeskArticle): Card | null {
     const t = (a.title || a.name || "").trim();
     if (!t || !isJavaChangelog(t)) return null;
@@ -94,6 +117,7 @@
         kind: /Snapshot/i.test(t) ? "Snapshot" : "Release",
         date: a.created_at ?? "",
         hue: hashStr(version) % 360,
+        image: firstBodyImage(a),
       };
     }
     return null;
@@ -197,23 +221,6 @@
     e.preventDefault();
   }
 
-  /** Pixel-map (7x5) of a right-pointing chevron, drawn with unit squares. */
-  const ARROW_CELLS = [
-    [3, 0],
-    [2, 1],
-    [3, 1],
-    [4, 1],
-    [1, 2],
-    [2, 2],
-    [3, 2],
-    [4, 2],
-    [5, 2],
-    [2, 3],
-    [3, 3],
-    [4, 3],
-    [3, 4],
-  ] as const;
-
   function formatDate(iso: string): string {
     const d = iso ? new Date(iso) : null;
     if (!d || Number.isNaN(d.getTime())) return iso || "";
@@ -235,18 +242,12 @@
   }
 </script>
 
-{#snippet pixelArrow(dir: "left" | "right")}
-  <svg
-    class="pixel-arrow"
-    viewBox="0 0 7 5"
-    aria-hidden="true"
-    shape-rendering="crispEdges"
-  >
-    {#each ARROW_CELLS as [x, y], i (i)}
-      {@const cx = dir === "left" ? 6 - x : x}
-      <rect x={cx} y={y} width="1" height="1" />
-    {/each}
-  </svg>
+{#snippet navArrow(dir: "left" | "right")}
+  {#if dir === "left"}
+    <ChevronLeft size={30} stroke-width={2.4} />
+  {:else}
+    <ChevronRight size={30} stroke-width={2.4} />
+  {/if}
 {/snippet}
 
 <div class="mojang-news" aria-label="Minecraft Java updates">
@@ -264,7 +265,7 @@
       title="Scroll left"
       onclick={() => scrollDir(-1)}
     >
-      {@render pixelArrow("left")}
+      {@render navArrow("left")}
     </button>
 
     {#if loading}
@@ -293,6 +294,16 @@
               class="card-shot shot-version"
               style={coverStyle(entry.hue)}
             >
+              {#if entry.image}
+                <img
+                  class="shot-img"
+                  src={entry.image}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                />
+              {/if}
+              <span class="shot-scrim" aria-hidden="true"></span>
               <span class="shot-kind">{entry.kind}</span>
               <span class="shot-ver">{entry.version}</span>
             </span>
@@ -313,7 +324,7 @@
       title="Scroll right"
       onclick={() => scrollDir(1)}
     >
-      {@render pixelArrow("right")}
+      {@render navArrow("right")}
     </button>
   </div>
 </div>
@@ -390,7 +401,7 @@
     transform: none;
   }
 
-  .news-arrow:active:not(:disabled) .pixel-arrow {
+  .news-arrow:active:not(:disabled) :global(svg) {
     transform: translateY(2px);
   }
 
@@ -399,11 +410,10 @@
     cursor: default;
   }
 
-  .pixel-arrow {
-    width: 46%;
+  .news-arrow :global(svg) {
+    width: 56%;
     height: auto;
     display: block;
-    fill: currentColor;
     transition: transform var(--motion-fast, 160ms) var(--ease-out, ease);
   }
 
@@ -473,6 +483,31 @@
     border-radius: 0;
     background: var(--bg-secondary, #17181b);
     image-rendering: pixelated;
+  }
+
+  /** Real Mojang changelog screenshot, fills the tile. */
+  .shot-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+    image-rendering: auto;
+  }
+
+  /** Gradients the shot bottom for text legibility over any image. */
+  .shot-scrim {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      180deg,
+      rgba(0, 0, 0, 0.1) 0%,
+      transparent 34%,
+      rgba(0, 0, 0, 0.55) 86%,
+      rgba(0, 0, 0, 0.72) 100%
+    );
   }
 
   .shot-kind {
@@ -549,7 +584,7 @@
   @media (prefers-reduced-motion: reduce) {
     .news-card,
     .news-arrow,
-    .pixel-arrow {
+    .news-arrow :global(svg) {
       transition: none;
     }
   }
