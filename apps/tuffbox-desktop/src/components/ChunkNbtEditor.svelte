@@ -1,25 +1,35 @@
 <script lang="ts">
-  import { X, Save, ChevronRight, ChevronDown, RefreshCw } from "lucide-svelte";
+  import { X, Save, ChevronRight, ChevronDown, RefreshCw } from "@lucide/svelte";
   import type { ChunkEditorData, NbtNode } from "../lib/api";
   import { api } from "../lib/api";
   import { projectPath } from "../lib/store";
 
-  export let worldName: string;
-  export let dimension: string = "overworld";
-  export let regionX: number;
-  export let regionZ: number;
-  export let index: number;
-  export let onClose: () => void;
-  export let onSaved: () => void = () => {};
+  let {
+    worldName,
+    dimension = "overworld",
+    regionX,
+    regionZ,
+    index,
+    onClose,
+    onSaved = () => {},
+  }: {
+    worldName: string;
+    dimension?: string;
+    regionX: number;
+    regionZ: number;
+    index: number;
+    onClose: () => void;
+    onSaved?: () => void;
+  } = $props();
 
-  let data: ChunkEditorData | null = null;
-  let layer: "region" | "entities" | "poi" = "region";
-  let loading = false;
-  let saving = false;
-  let error: string | null = null;
-  let expanded = new Set<string>(["root"]);
-  let editPath: string | null = null;
-  let editValue = "";
+  let data = $state<ChunkEditorData | null>(null);
+  let layer = $state<"region" | "entities" | "poi">("region");
+  let loading = $state(false);
+  let saving = $state(false);
+  let error = $state<string | null>(null);
+  let expanded = $state(new Set<string>(["root"]));
+  let editPath = $state<string | null>(null);
+  let editValue = $state("");
 
   async function load() {
     if (!$projectPath || !worldName) return;
@@ -102,8 +112,13 @@
     return findNode(node.children, rest);
   }
 
-  $: if (worldName) load();
-  $: if (layer) load();
+  $effect(() => {
+    if (worldName) void load();
+  });
+
+  $effect(() => {
+    if (layer) void load();
+  });
 </script>
 
 <div class="editor-overlay" role="dialog" aria-modal="true">
@@ -119,9 +134,9 @@
           <option value="entities">entities</option>
           <option value="poi">poi</option>
         </select>
-        <button class="ghost" on:click={load} disabled={loading} title="Reload"><RefreshCw size={14} /></button>
-        <button class="ghost" on:click={save} disabled={!data || saving} title="Apply"><Save size={14} /> Apply</button>
-        <button class="ghost" on:click={onClose} title="Close"><X size={14} /></button>
+        <button class="ghost" onclick={load} disabled={loading} title="Reload"><RefreshCw size={14} /></button>
+        <button class="ghost" onclick={save} disabled={!data || saving} title="Apply"><Save size={14} /> Apply</button>
+        <button class="ghost" onclick={onClose} title="Close"><X size={14} /></button>
       </div>
     </div>
 
@@ -133,7 +148,7 @@
         {#each [data.root] as root (root)}
           {@const rootPath = "root"}
           <div class="node">
-            <button class="row" on:click={() => toggle(rootPath)}>
+            <button class="row" onclick={() => toggle(rootPath)}>
               {#if expanded.has(rootPath)}<ChevronDown size={12} />{:else}<ChevronRight size={12} />{/if}
               <span class="type">Compound</span>
               <span class="name">{root.name || "(root)"}</span>
@@ -144,7 +159,7 @@
                   {@const p = pathKey([child.name || String(i)])}
                   {#if child.tagType === 10 || child.tagType === 9}
                     <div class="node">
-                      <button class="row" on:click={() => toggle(p)}>
+                      <button class="row" onclick={() => toggle(p)}>
                         {#if expanded.has(p)}<ChevronDown size={12} />{:else}<ChevronRight size={12} />{/if}
                         <span class="type">{typeName(child.tagType)}</span>
                         <span class="name">{child.name}</span>
@@ -156,7 +171,7 @@
                             {@const sp = pathKey([child.name, sub.name || String(si)])}
                             <div class="node">
                               {#if sub.tagType === 10 || sub.tagType === 9}
-                                <button class="row" on:click={() => toggle(sp)}>
+                                <button class="row" onclick={() => toggle(sp)}>
                                   {#if expanded.has(sp)}<ChevronDown size={12} />{:else}<ChevronRight size={12} />{/if}
                                   <span class="type">{typeName(sub.tagType)}</span>
                                   <span class="name">{sub.name}</span>
@@ -169,8 +184,8 @@
                                         class="row leaf"
                                         role="button"
                                         tabindex="0"
-                                        on:dblclick={() => startEdit(lp, leaf)}
-                                        on:keydown={(e) => e.key === "Enter" && startEdit(lp, leaf)}
+                                        ondblclick={() => startEdit(lp, leaf)}
+                                        onkeydown={(e) => e.key === "Enter" && startEdit(lp, leaf)}
                                       >
                                         <span class="pad"></span>
                                         <span class="type">{typeName(leaf.tagType)}</span>
@@ -179,8 +194,8 @@
                                           <input
                                             class="edit"
                                             bind:value={editValue}
-                                            on:keydown={(e) => e.key === "Enter" && applyEdit(leaf)}
-                                            on:blur={() => applyEdit(leaf)}
+                                            onkeydown={(e) => e.key === "Enter" && applyEdit(leaf)}
+                                            onblur={() => applyEdit(leaf)}
                                           />
                                         {:else if leaf.value != null && !Array.isArray(leaf.value)}
                                           <span class="val">{String(leaf.value)}</span>
@@ -196,8 +211,8 @@
                                   class="row leaf"
                                   role="button"
                                   tabindex="0"
-                                  on:dblclick={() => startEdit(sp, sub)}
-                                  on:keydown={(e) => e.key === "Enter" && startEdit(sp, sub)}
+                                  ondblclick={() => startEdit(sp, sub)}
+                                  onkeydown={(e) => e.key === "Enter" && startEdit(sp, sub)}
                                 >
                                   <span class="pad"></span>
                                   <span class="type">{typeName(sub.tagType)}</span>
@@ -206,8 +221,8 @@
                                     <input
                                       class="edit"
                                       bind:value={editValue}
-                                      on:keydown={(e) => e.key === "Enter" && applyEdit(sub)}
-                                      on:blur={() => applyEdit(sub)}
+                                      onkeydown={(e) => e.key === "Enter" && applyEdit(sub)}
+                                      onblur={() => applyEdit(sub)}
                                     />
                                   {:else if sub.value != null && !Array.isArray(sub.value)}
                                     <span class="val">{String(sub.value)}</span>
@@ -226,8 +241,8 @@
                       class="row leaf"
                       role="button"
                       tabindex="0"
-                      on:dblclick={() => startEdit(p, child)}
-                      on:keydown={(e) => e.key === "Enter" && startEdit(p, child)}
+                      ondblclick={() => startEdit(p, child)}
+                      onkeydown={(e) => e.key === "Enter" && startEdit(p, child)}
                     >
                       <span class="pad"></span>
                       <span class="type">{typeName(child.tagType)}</span>
@@ -236,8 +251,8 @@
                         <input
                           class="edit"
                           bind:value={editValue}
-                          on:keydown={(e) => e.key === "Enter" && applyEdit(child)}
-                          on:blur={() => applyEdit(child)}
+                          onkeydown={(e) => e.key === "Enter" && applyEdit(child)}
+                          onblur={() => applyEdit(child)}
                         />
                       {:else if child.value != null && !Array.isArray(child.value)}
                         <span class="val">{String(child.value)}</span>
@@ -289,11 +304,11 @@
   .row:hover { background: var(--bg-tertiary); }
   .row.leaf { cursor: default; }
   .children { padding-left: 14px; }
-  .type { color: #8fd3ff; min-width: 72px; }
+  .type { color: var(--accent-secondary); min-width: 72px; }
   .name { color: var(--text-primary); font-weight: 600; }
-  .val { color: #b8e986; margin-left: 6px; word-break: break-all; }
+  .val { color: var(--accent-primary); margin-left: 6px; word-break: break-all; }
   .muted { color: var(--text-muted); font-size: 11px; }
-  .err { color: #fca5a5; padding: 8px 14px; font-size: 12px; }
+  .err { color: var(--accent-danger); padding: 8px 14px; font-size: 12px; }
   .pad { width: 12px; display: inline-block; }
   .edit {
     margin-left: 6px; flex: 1; min-width: 80px;

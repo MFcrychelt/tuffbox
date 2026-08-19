@@ -67,6 +67,8 @@ impl ContentProvider for LocalJarProvider {
             license: None,
             client_side: None,
             server_side: None,
+            issues_url: None,
+            source_url: None,
         })
     }
 

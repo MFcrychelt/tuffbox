@@ -40,6 +40,9 @@
 - Migration advisor: Forge → NeoForge.
 - Compatibility database.
 - Performance audit.
+- **Optimize pack** (Content → Optimize): two modes —
+  - **Curated (Fabric/Quilt):** author Modrinth opt pack per MC version (`crates/tuffbox-core/data/optimize-packs.json`); install root + required deps into the current instance (no full `.mrpack` replace); deterministic safe config templates only (no AI).
+  - **Custom:** missing whitelist perf mods resolved Modrinth → CurseForge (deduped); config templates for `options.txt`, Sodium / Sodium Extra, C2ME, Bobby, ModernFix (safe subset when denylist hits); optional “Use AI for configs” → Tune Config Advisor (`fps_client`) merged with templates, Review before apply.
 - Test matrix.
 - GitHub Releases export.
 - Modrinth draft publishing.

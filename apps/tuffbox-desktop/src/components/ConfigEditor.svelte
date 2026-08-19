@@ -2,13 +2,14 @@
   import { invoke } from "@tauri-apps/api/core";
   import {
     FileCode2, RefreshCw, Save, Search, RotateCcw, AlertTriangle, FileSearch,
-    ChevronRight, ChevronDown, File, Folder, FolderOpen, History, Camera, Code2,
-  } from "lucide-svelte";
+    ChevronRight, ChevronDown, File, Folder, FolderOpen, History, Camera, Code2, Sparkles,
+  } from "@lucide/svelte";
   import { onDestroy, tick } from "svelte";
   import { EditorView } from "@codemirror/view";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import EmptyState from "./EmptyState.svelte";
-  import { ideStageRequest, projectPath, tuneDirty } from "../lib/store";
+  import TuneAiSidebar from "./tune/TuneAiSidebar.svelte";
+  import { configFocusPath, ideStageRequest, projectPath, tuneDirty, tuneChatFocusId } from "../lib/store";
   import CodeMirror from "svelte-codemirror-editor";
   import { json } from "@codemirror/lang-json";
   import { javascript } from "@codemirror/lang-javascript";
@@ -126,8 +127,8 @@
     },
   ];
 
-  let files: ConfigFile[] = [];
-  let selected: ConfigFile | null = null;
+  let files = $state<ConfigFile[]>([]);
+  let selected = $state<ConfigFile | null>(null);
   let content = "";
   let originalContent = "";
   let filter = "";
@@ -145,8 +146,38 @@
   let searchLoading = false;
   let searchError: string | null = null;
 
-  let expandedDirs = new Set<string>();
-  let flatTree: FlatNode[] = [];
+  let expandedDirs = $state(new Set<string>());
+  let aiOpen = $state(
+    typeof localStorage !== "undefined" && localStorage.getItem("tuffbox.tuneAiOpen") === "1",
+  );
+  let editorEpoch = $state(0);
+
+  function setAiOpen(next: boolean) {
+    aiOpen = next;
+    try {
+      localStorage.setItem("tuffbox.tuneAiOpen", next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function onAiApplied(paths: string[]) {
+    message = `AI applied ${paths.length} config patch(es)`;
+    await loadFiles(true);
+    if (selected && paths.some((p) => p.replace(/\\/g, "/") === selected?.path)) {
+      try {
+        const text = await invoke<string>("read_config_file", {
+          path: $projectPath,
+          relativePath: selected.path,
+        });
+        content = text;
+        originalContent = text;
+        editorEpoch += 1;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 
   let confirmOpen = false;
   let pendingFile: ConfigFile | null = null;
@@ -266,19 +297,23 @@
   }
 
   function toggleDir(fullPath: string) {
-    if (expandedDirs.has(fullPath)) expandedDirs.delete(fullPath);
-    else expandedDirs.add(fullPath);
-    flatTree = buildFlatTree(files, filter, rootFilter);
+    const next = new Set(expandedDirs);
+    if (next.has(fullPath)) next.delete(fullPath);
+    else next.add(fullPath);
+    expandedDirs = next;
   }
 
   function setRootChip(root: string | null) {
     rootFilter = rootFilter === root ? null : root;
-    if (rootFilter) expandedDirs.add(rootFilter);
-    flatTree = buildFlatTree(files, filter, rootFilter);
+    if (rootFilter) {
+      const next = new Set(expandedDirs);
+      next.add(rootFilter);
+      expandedDirs = next;
+    }
   }
 
-  $: flatTree = buildFlatTree(files, filter, rootFilter);
-  $: presentRoots = ROOT_CHIPS.filter((r) => files.some((f) => f.path === r || f.path.startsWith(r + "/")));
+  const flatTree = $derived(buildFlatTree(files, filter, rootFilter));
+  const presentRoots = $derived(ROOT_CHIPS.filter((r) => files.some((f) => f.path === r || f.path.startsWith(r + "/"))));
 
   function langForFile(file: ConfigFile | null) {
     if (!file) return undefined;
@@ -325,13 +360,15 @@
     return ext || "text";
   }
 
-  $: currentLang = langForFile(selected) ?? (looksLikeProps(content) ? propsLang() : undefined);
-  $: dirty = content !== originalContent;
-  $: tuneDirty.set(dirty);
-  $: canFormat = ["json", "toml"].includes(selected?.extension?.toLowerCase() ?? "");
-  $: isKubejsFile = !!selected?.path.startsWith("kubejs/");
-  $: lintErrorCount = lintIssues.filter((i) => i.severity === "error").length;
-  $: lintWarnCount = lintIssues.filter((i) => i.severity !== "error").length;
+  const currentLang = $derived(langForFile(selected) ?? (looksLikeProps(content) ? propsLang() : undefined));
+  const dirty = $derived(content !== originalContent);
+  $effect(() => {
+    tuneDirty.set(dirty);
+  });
+  const canFormat = $derived(["json", "toml"].includes(selected?.extension?.toLowerCase() ?? ""));
+  const isKubejsFile = $derived(!!selected?.path.startsWith("kubejs/"));
+  const lintErrorCount = $derived(lintIssues.filter((i) => i.severity === "error").length);
+  const lintWarnCount = $derived(lintIssues.filter((i) => i.severity !== "error").length);
 
   onDestroy(() => {
     tuneDirty.set(false);
@@ -352,12 +389,42 @@
         originalContent = "";
         lintIssues = [];
       }
+      consumeConfigFocus();
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
   }
+
+  function consumeConfigFocus() {
+    const p = ($configFocusPath ?? "").trim().replace(/\\/g, "/");
+    if (!p || !files.length) return;
+    configFocusPath.set(null);
+    const norm = p.toLowerCase();
+    const file =
+      files.find((f) => f.path.replace(/\\/g, "/") === p) ??
+      files.find((f) => f.path.replace(/\\/g, "/").toLowerCase() === norm) ??
+      files.find((f) => f.path.replace(/\\/g, "/").toLowerCase().endsWith("/" + norm)) ??
+      files.find((f) => f.path.replace(/\\/g, "/").toLowerCase().endsWith(norm));
+    if (file) tryOpenFile(file);
+  }
+
+  $effect(() => {
+    const p = $configFocusPath;
+    if (!p) return;
+    if (files.length > 0) {
+      consumeConfigFocus();
+      return;
+    }
+    void loadFiles(false);
+  });
+
+  $effect(() => {
+    if ($tuneChatFocusId) {
+      setAiOpen(true);
+    }
+  });
 
   function tryOpenFile(file: ConfigFile, line?: number) {
     if (dirty && file.path !== selected?.path) {
@@ -397,8 +464,8 @@
     }
   }
 
-  function onCmReady(e: CustomEvent<EditorView>) {
-    cmView = e.detail;
+  function onCmReady(view: EditorView) {
+    cmView = view;
     if (pendingJumpLine != null) {
       jumpToLine(pendingJumpLine);
     }
@@ -566,7 +633,9 @@
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
-  $: if ($projectPath && lastLoadedPath !== $projectPath) loadFiles(true);
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) loadFiles(true);
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === "s") {
@@ -575,12 +644,12 @@
     }
   }
 
-  function handleCmChange(e: CustomEvent<string>) {
-    content = e.detail;
+  function handleCmChange(value: string) {
+    content = value;
   }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="config-editor">
   <div class="toolbar">
@@ -589,7 +658,17 @@
       <span>Tune · configs</span>
     </div>
     <div class="toolbar-actions">
-      <button class="ghost" on:click={() => loadFiles(true)} disabled={!$projectPath || loading}>
+      <button
+        class="secondary"
+        class:active-ai={aiOpen}
+        onclick={() => setAiOpen(!aiOpen)}
+        disabled={!$projectPath}
+        title="Config AI advisor"
+      >
+        <Sparkles size={16} />
+        AI
+      </button>
+      <button class="ghost" onclick={() => loadFiles(true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
         Refresh
       </button>
@@ -597,7 +676,7 @@
         class="secondary"
         class:lint-bad={lintErrorCount > 0}
         class:lint-warn={lintErrorCount === 0 && lintWarnCount > 0}
-        on:click={lintFile}
+        onclick={lintFile}
         disabled={!selected || lintLoading}
         title={lintIssues.length ? `${lintIssues.length} issue(s)` : "Lint config"}
       >
@@ -611,27 +690,27 @@
         {/if}
       </button>
       <div class="snippet-wrap">
-        <button class="secondary" on:click={() => (showSnippets = !showSnippets)} disabled={!selected} title="Insert snippet">
+        <button class="secondary" onclick={() => (showSnippets = !showSnippets)} disabled={!selected} title="Insert snippet">
           <Code2 size={16} /> Snippets
         </button>
         {#if showSnippets}
           <div class="snippet-menu">
             {#each SNIPPETS as sn (sn.id)}
-              <button type="button" on:click={() => insertSnippet(sn)}>{sn.label}</button>
+              <button type="button" onclick={() => insertSnippet(sn)}>{sn.label}</button>
             {/each}
             {#if isKubejsFile}
-              <button type="button" class="gen" on:click={insertFromRecipeGenerator}>Insert from recipe generator</button>
+              <button type="button" class="gen" onclick={insertFromRecipeGenerator}>Insert from recipe generator</button>
             {/if}
           </div>
         {/if}
       </div>
-      <button class="secondary" on:click={formatFile} disabled={!canFormat || saving || formatting} title={canFormat ? "Pretty-print JSON/TOML" : "Format: .json or .toml"}>
+      <button class="secondary" onclick={formatFile} disabled={!canFormat || saving || formatting} title={canFormat ? "Pretty-print JSON/TOML" : "Format: .json or .toml"}>
         <FileCode2 size={16} /> {formatting ? "…" : "Format"}
       </button>
-      <button class="secondary" on:click={resetFile} disabled={!dirty || saving}>
+      <button class="secondary" onclick={resetFile} disabled={!dirty || saving}>
         <RotateCcw size={16} /> Reset
       </button>
-      <button on:click={saveFile} disabled={!dirty || saving || !selected}>
+      <button onclick={saveFile} disabled={!dirty || saving || !selected}>
         <Save size={16} />
         {saving ? "Saving…" : "Save"}
       </button>
@@ -645,8 +724,8 @@
     <div class="notice success">
       <span>{message}</span>
       <div class="trail-actions">
-        <button class="ghost mini" on:click={openHistory}><History size={12} /> History</button>
-        <button class="ghost mini" on:click={openSnapshots}><Camera size={12} /> Snapshots</button>
+        <button class="ghost mini" onclick={openHistory}><History size={12} /> History</button>
+        <button class="ghost mini" onclick={openSnapshots}><Camera size={12} /> Snapshots</button>
       </div>
     </div>
   {/if}
@@ -654,12 +733,12 @@
   {#if !$projectPath}
     <EmptyState icon={FileCode2} title="No project selected" description="Open a project to edit configs." />
   {:else}
-    <div class="layout">
+    <div class="layout" class:with-ai={aiOpen}>
       <aside class="file-panel">
         <div class="root-chips">
-          <button class="chip" class:active={rootFilter === null} on:click={() => setRootChip(null)}>All</button>
+          <button class="chip" class:active={rootFilter === null} onclick={() => setRootChip(null)}>All</button>
           {#each presentRoots as root (root)}
-            <button class="chip" class:active={rootFilter === root} on:click={() => setRootChip(root)}>{root}</button>
+            <button class="chip" class:active={rootFilter === root} onclick={() => setRootChip(root)}>{root}</button>
           {/each}
         </div>
 
@@ -672,8 +751,8 @@
 
         <div class="search-across">
           <div class="search-across-row">
-            <input bind:value={searchQuery} placeholder="Search in contents…" on:keydown={(e) => e.key === "Enter" && doSearch()} />
-            <button class="mini-btn" on:click={doSearch} disabled={searchLoading || !searchQuery.trim()}>
+            <input bind:value={searchQuery} placeholder="Search in contents…" onkeydown={(e) => e.key === "Enter" && doSearch()} />
+            <button class="mini-btn" onclick={doSearch} disabled={searchLoading || !searchQuery.trim()}>
               <FileSearch size={14} />
             </button>
           </div>
@@ -683,7 +762,7 @@
           {#if searchResults.length > 0}
             <div class="search-results">
               {#each searchResults.slice(0, 40) as hit (hit.path + ':' + hit.line + hit.text)}
-                <button class="search-hit" on:click={() => openSearchHit(hit)}>
+                <button class="search-hit" onclick={() => openSearchHit(hit)}>
                   <span class="hit-path">{hit.path}:{hit.line}</span>
                   <span class="hit-text">{hit.text}</span>
                 </button>
@@ -711,7 +790,7 @@
                   class="tree-dir"
                   class:root={node.isRoot}
                   style:padding-left="{12 + node.depth * 16}px"
-                  on:click={() => toggleDir(node.fullPath)}
+                  onclick={() => toggleDir(node.fullPath)}
                 >
                   {#if node.expanded}
                     <ChevronDown size={14} />
@@ -727,7 +806,7 @@
                   class="tree-file"
                   class:selected={selected?.path === node.file.path}
                   style:padding-left="{12 + node.depth * 16}px"
-                  on:click={() => { if (node.file) tryOpenFile(node.file); }}
+                  onclick={() => { if (node.file) tryOpenFile(node.file); }}
                   title={node.file.path}
                 >
                   <File size={14} />
@@ -755,13 +834,13 @@
             </div>
           </div>
           <div class="cm-wrapper" class:line-hl={highlightLine != null}>
-            {#key selected.path}
+            {#key selected.path + ':' + editorEpoch}
               <CodeMirror
                 value={content}
                 lang={currentLang}
                 theme={oneDark}
-                on:change={handleCmChange}
-                on:ready={onCmReady}
+                on:change={(e) => handleCmChange(e.detail)}
+                on:ready={(e) => onCmReady(e.detail)}
               />
             {/key}
           </div>
@@ -769,7 +848,7 @@
           {#if lintIssues.length > 0}
             <div class="lint-panel">
               {#each lintIssues as issue, i (issue.code + '-' + i + '-' + (issue.line ?? 0))}
-                <button type="button" class="lint-item {issue.severity}" on:click={() => openLintIssue(issue)}>
+                <button type="button" class="lint-item {issue.severity}" onclick={() => openLintIssue(issue)}>
                   <span class="lint-sev">{issue.severity}</span>
                   <code>{issue.code}</code>
                   <span>{issue.message}</span>
@@ -782,13 +861,20 @@
           <EmptyState icon={FileCode2} compact={true} title="No file selected" description="Select a config from the tree. Roots: config, defaultconfigs, kubejs, scripts, overrides, options.txt." />
         {/if}
       </section>
+
+      <TuneAiSidebar
+        open={aiOpen}
+        focusPath={selected?.path ?? null}
+        onclose={() => setAiOpen(false)}
+        onapplied={onAiApplied}
+      />
     </div>
   {/if}
 </div>
 
 {#if confirmOpen}
   <ConfirmDialog title="Discard changes?" message="You have unsaved changes. Discard them?" danger={false}
-    confirmLabel="Discard" on:confirm={() => {
+    confirmLabel="Discard" onconfirm={() => {
       confirmOpen = false;
       if (pendingFile) {
         const line = pendingJumpLine;
@@ -796,7 +882,7 @@
         pendingFile = null;
       }
     }}
-    on:cancel={() => { confirmOpen = false; pendingFile = null; pendingJumpLine = null; }} />
+    oncancel={() => { confirmOpen = false; pendingFile = null; pendingJumpLine = null; }} />
 {/if}
 
 <style>
@@ -819,13 +905,17 @@
     padding: 5px 10px;
     font-size: 12px;
   }
+  .toolbar-actions button.active-ai {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    color: var(--accent-primary);
+  }
   .notice { gap: 8px; padding: 8px 10px; border-radius: var(--border-radius-md); margin-bottom: 8px; border: 1px solid var(--border-color); flex-shrink: 0; justify-content: space-between; flex-wrap: wrap; font-size: 13px; }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .trail-actions { gap: 6px; }
   .mini { padding: 4px 8px; font-size: 11px; }
-  .lint-bad { border-color: rgba(239, 68, 68, 0.45) !important; color: #fca5a5 !important; }
-  .lint-warn { border-color: rgba(245, 158, 11, 0.45) !important; color: #fde68a !important; }
+  .lint-bad { border-color: color-mix(in srgb, var(--accent-danger) 45%, transparent) !important; color: var(--accent-danger) !important; }
+  .lint-warn { border-color: color-mix(in srgb, var(--accent-warning) 45%, transparent) !important; color: var(--accent-warning) !important; }
 
   .snippet-wrap { position: relative; }
   .snippet-menu {
@@ -847,7 +937,7 @@
     padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-muted); cursor: pointer;
   }
-  .chip.active, .chip:hover { border-color: rgba(27, 217, 106, 0.4); color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); }
+  .chip.active, .chip:hover { border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
 
   .layout {
     flex: 1;
@@ -856,6 +946,10 @@
     grid-template-columns: 300px minmax(0, 1fr);
     gap: 12px;
     overflow: hidden;
+  }
+  .layout.with-ai {
+    grid-template-columns: 260px minmax(0, 1fr) minmax(280px, 320px);
+    gap: 0 12px;
   }
   .file-panel, .editor-panel { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .file-panel {
@@ -898,7 +992,7 @@
     width: 100%;
     min-height: 32px;
     box-sizing: border-box;
-    padding: 6px 12px 6px 34px;
+    padding: 6px 12px 6px 40px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
@@ -924,11 +1018,11 @@
   }
   .mini-btn { width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); color: var(--text-secondary); cursor: pointer; }
   .mini-btn:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
-  .search-error, .search-status { color: #fecaca; font-size: 11px; margin-top: 4px; }
+  .search-error, .search-status { color: var(--accent-danger); font-size: 11px; margin-top: 4px; }
   .search-status { color: var(--text-muted); }
   .search-results { max-height: 140px; overflow: auto; margin-top: 6px; }
   .search-hit { width: 100%; display: grid; gap: 2px; text-align: left; padding: 5px 6px; margin-bottom: 2px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); transform: none; }
-  .search-hit:hover { background: var(--bg-tertiary); border-color: rgba(27,217,106,0.25); }
+  .search-hit:hover { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .hit-path { font-size: 11px; color: var(--accent-primary); font-family: ui-monospace, monospace; }
   .hit-text { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .search-truncated { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
@@ -951,7 +1045,7 @@
   .tree-dir { font-weight: 600; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
   .tree-dir.root { color: var(--accent-primary); opacity: 0.9; }
   .tree-dir:hover { background: var(--bg-tertiary); color: var(--text-primary); }
-  .tree-file:hover, .tree-file.selected { background: var(--bg-tertiary); border-color: rgba(27,217,106,0.35); color: var(--text-primary); }
+  .tree-file:hover, .tree-file.selected { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); color: var(--text-primary); }
   .tree-dir :global(.folder-icon) { color: var(--accent-primary); opacity: 0.7; }
   .tree-dir-name, .tree-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tree-file-name { font-weight: 500; }
@@ -965,12 +1059,12 @@
   .editor-header p { margin: 0; font-size: 12px; color: var(--text-muted); }
   .editor-stats { gap: 10px; white-space: nowrap; }
   .editor-stats strong { color: var(--accent-warning); font-size: 12px; }
-  .lang-badge { background: rgba(139,92,246,0.15); color: var(--accent-secondary); padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
+  .lang-badge { background: color-mix(in srgb, var(--accent-secondary) 15%, transparent); color: var(--accent-secondary); padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
 
   .cm-wrapper { flex: 1; min-height: 0; overflow: hidden; }
   .cm-wrapper :global(.cm-editor) { height: 100%; }
   .cm-wrapper :global(.cm-scroller) { overflow: auto; }
-  .cm-wrapper.line-hl :global(.cm-selectionBackground) { background: rgba(27, 217, 106, 0.22) !important; }
+  .cm-wrapper.line-hl :global(.cm-selectionBackground) { background: color-mix(in srgb, var(--accent-primary) 22%, transparent) !important; }
 
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -980,14 +1074,17 @@
     display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px; font-size: 11px;
     width: 100%; text-align: left; border: 1px solid transparent; cursor: pointer; background: transparent; transform: none;
   }
-  .lint-item.error { background: rgba(239,68,68,.08); color: #fca5a5; }
-  .lint-item.warning { background: rgba(245,158,11,.08); color: #fde68a; }
-  .lint-item:hover { border-color: rgba(255,255,255,.12); }
+  .lint-item.error { background: color-mix(in srgb, var(--accent-danger) 8%, transparent); color: var(--accent-danger); }
+  .lint-item.warning { background: color-mix(in srgb, var(--accent-warning) 8%, transparent); color: var(--accent-warning); }
+  .lint-item:hover { border-color: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
   .lint-sev { font-weight: 800; text-transform: uppercase; font-size: 9px; padding: 1px 4px; border-radius: 3px; }
-  .lint-item.error .lint-sev { background: rgba(239,68,68,.2); }
-  .lint-item.warning .lint-sev { background: rgba(245,158,11,.2); }
+  .lint-item.error .lint-sev { background: color-mix(in srgb, var(--accent-danger) 20%, transparent); }
+  .lint-item.warning .lint-sev { background: color-mix(in srgb, var(--accent-warning) 20%, transparent); }
   .lint-item code { font-size: 10px; color: var(--accent-primary); }
   .lint-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lint-item small { color: var(--text-muted); font-size: 10px; }
-  @media (max-width: 1050px) { .layout { grid-template-columns: 1fr; } }
+  @media (max-width: 1050px) {
+    .layout { grid-template-columns: 1fr; }
+    .layout.with-ai { grid-template-columns: 1fr; }
+  }
 </style>

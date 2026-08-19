@@ -1,16 +1,30 @@
 <script lang="ts">
+  import type { Component } from "svelte";
   import { toasts, type Toast } from "../lib/toast";
-  import { X, CheckCircle2, AlertTriangle, Info, AlertCircle } from "lucide-svelte";
+  import { X, CheckCircle2, AlertTriangle, Info, AlertCircle } from "@lucide/svelte";
   import { fly, fade } from "svelte/transition";
-  import { onMount, onDestroy } from "svelte";
 
-  function icon(t: string) { if(t==="success")return CheckCircle2; if(t==="error")return AlertCircle; if(t==="warning")return AlertTriangle; return Info; }
-  function clr(t: string): string { if(t==="success")return "#1bd96a"; if(t==="error")return "#f87171"; if(t==="warning")return "#fbbf24"; return "#93c5fd"; }
+  function icon(t: string): Component<{ size?: number; color?: string }> {
+    if (t === "success") return CheckCircle2;
+    if (t === "error") return AlertCircle;
+    if (t === "warning") return AlertTriangle;
+    return Info;
+  }
+  function clr(t: string): string {
+    if (t === "success") return "var(--accent-primary)";
+    if (t === "error") return "var(--accent-danger)";
+    if (t === "warning") return "var(--accent-warning)";
+    return "var(--accent-secondary)";
+  }
 
-  let now = Date.now();
-  let interval: ReturnType<typeof setInterval>;
-  onMount(() => { interval = setInterval(() => { now = Date.now(); }, 100); });
-  onDestroy(() => { clearInterval(interval); });
+  let now = $state(Date.now());
+
+  $effect(() => {
+    const interval = setInterval(() => {
+      now = Date.now();
+    }, 100);
+    return () => clearInterval(interval);
+  });
 
   function progress(t: Toast): number {
     if (t.duration <= 0) return 1;
@@ -20,20 +34,21 @@
 </script>
 <div class="tc">
   {#each $toasts as t (t.id)}
+    {@const Icon = icon(t.type)}
     <div
       class="t {t.type} tb-toast-enter"
       style="--tc:{clr(t.type)}; --progress:{progress(t)}"
       in:fly={{ y: 12, duration: 220 }}
       out:fade={{ duration: 140 }}
     >
-      <span class="ti"><svelte:component this={icon(t.type)} size={16} color="var(--tc)" /></span>
+      <span class="ti"><Icon size={16} color="var(--tc)" /></span>
       <span class="tm">{t.message}</span>
       {#if t.actions}
         {#each t.actions as a}
-          <button class="ta" on:click={() => { a.run(); toasts.dismiss(t.id); }}>{a.label}</button>
+          <button class="ta" onclick={() => { a.run(); toasts.dismiss(t.id); }}>{a.label}</button>
         {/each}
       {/if}
-      <button class="tx" on:click={() => toasts.dismiss(t.id)}><X size={12} /></button>
+      <button class="tx" onclick={() => toasts.dismiss(t.id)}><X size={12} /></button>
       {#if t.duration > 0}
         <div class="progress-bar" style="--tc:{clr(t.type)}; width: {((1 - progress(t)) * 100)}%"></div>
       {/if}

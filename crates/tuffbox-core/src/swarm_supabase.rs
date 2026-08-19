@@ -1,7 +1,8 @@
 //! Supabase transport for ExperienceCapsule (Phase B+ preferred remote).
 //!
-//! Publish goes through Edge Function `publish-capsule` (server-side verify).
-//! Lookup uses PostgREST SELECT with anon key (RLS read-only).
+//! Publish / vote / accept go through Edge Functions (`functions/v1/*`) and must use
+//! the legacy JWT anon key (not publishable `sb_publishable_…`).
+//! Lookup uses PostgREST SELECT with anon/publishable key (RLS read-only).
 
 use crate::action_plan::LauncherAction;
 use crate::crash_remote::{CrashLookupHit, CrashLookupResponse};
@@ -210,6 +211,142 @@ pub async fn vote_capsule_supabase(
     Ok(body)
 }
 
+/// POST `{supabaseUrl}/functions/v1/accept-creation` — award worker Kudos after customer Accept.
+/// `anon_key` must be the Edge JWT anon; `access_token` is the signed-in user session.
+pub async fn accept_creation_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    job_id: &str,
+    worker_signer_public_key: &str,
+    access_token: &str,
+    amount: Option<u32>,
+) -> Result<Value, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    let token = access_token.trim();
+    let job = job_id.trim();
+    let worker_pk = worker_signer_public_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase is not configured".into());
+    }
+    if token.is_empty() {
+        return Err("login required — register and sign in to accept".into());
+    }
+    if job.is_empty() {
+        return Err("jobId required".into());
+    }
+    if worker_pk.is_empty() {
+        return Err("workerSignerPublicKey required".into());
+    }
+    let endpoint = join_url(url, "functions/v1/accept-creation");
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut payload = json!({
+        "jobId": job,
+        "workerSignerPublicKey": worker_pk,
+    });
+    if let Some(a) = amount {
+        payload["amount"] = json!(a);
+    }
+    let mut headers = supabase_headers(key)?;
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|e| e.to_string())?,
+    );
+    let response = client
+        .post(&endpoint)
+        .headers(headers)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("supabase accept-creation failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!({}));
+    if !status.is_success() {
+        let msg = body
+            .get("error")
+            .or_else(|| body.get("message"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("supabase accept-creation {status}: {msg}"));
+    }
+    Ok(body)
+}
+
+/// Read public Kudos/RAC balance for a capsule author (`signer_public_key`).
+pub async fn fetch_kudos_balance_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    beneficiary_key: &str,
+) -> Result<Value, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    let beneficiary = beneficiary_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase is not configured".into());
+    }
+    if beneficiary.is_empty() {
+        return Err("beneficiary key empty".into());
+    }
+    let query = format!(
+        "kudos_balances?select=beneficiary_key,total_kudos,rac,rac_updated_at,updated_at&beneficiary_key=eq.{}&limit=1",
+        urlencoding_minimal(beneficiary)
+    );
+    let endpoint = join_url(url, &format!("rest/v1/{query}"));
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .get(&endpoint)
+        .headers(supabase_headers(key)?)
+        .send()
+        .await
+        .map_err(|e| format!("supabase kudos fetch failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!([]));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("supabase kudos {status}: {msg}"));
+    }
+    let row = body
+        .as_array()
+        .and_then(|a| a.first())
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "beneficiaryKey": beneficiary,
+                "totalKudos": 0,
+                "rac": 0,
+            })
+        });
+    let total = row
+        .get("total_kudos")
+        .or_else(|| row.get("totalKudos"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let rac = row
+        .get("rac")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    Ok(json!({
+        "beneficiaryKey": beneficiary,
+        "totalKudos": total,
+        "rac": rac,
+        "racUpdatedAt": row.get("rac_updated_at").or_else(|| row.get("racUpdatedAt")).cloned(),
+        "updatedAt": row.get("updated_at").or_else(|| row.get("updatedAt")).cloned(),
+    }))
+}
+
 fn looks_like_content_hash(s: &str) -> bool {
     let s = s.trim();
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
@@ -388,6 +525,13 @@ pub struct CommunityCapsuleCard {
     pub fail_count: u32,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// Capsule author device key (Kudos beneficiary).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer_public_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_total_kudos: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_rac: Option<f64>,
 }
 
 /// List community capsules for the Crash Votes board (open + saved).
@@ -413,7 +557,7 @@ pub async fn list_community_capsules_supabase(
         }
     };
     let query = format!(
-        "experience_capsules?select=id,content_hash,fingerprint_key,solution,actions,success_score,success_count,fail_count,confirm_count,reject_count,trust_score,status,payload,mc_major,loader,created_at,updated_at&{status_clause}&order=trust_score.desc,created_at.desc&limit={limit}"
+        "experience_capsules?select=id,content_hash,fingerprint_key,solution,actions,success_score,success_count,fail_count,confirm_count,reject_count,trust_score,status,payload,mc_major,loader,signer_public_key,created_at,updated_at&{status_clause}&order=trust_score.desc,created_at.desc&limit={limit}"
     );
     let endpoint = join_url(url, &format!("rest/v1/{query}"));
     let client = reqwest::Client::builder()
@@ -439,7 +583,119 @@ pub async fn list_community_capsules_supabase(
         return Err(format!("supabase list {status}: {msg}"));
     }
     let rows = body.as_array().cloned().unwrap_or_default();
-    Ok(rows.iter().filter_map(row_to_community_card).collect())
+    let mut cards: Vec<CommunityCapsuleCard> =
+        rows.iter().filter_map(row_to_community_card).collect();
+    enrich_community_cards_with_kudos(url, key, &mut cards).await;
+    Ok(cards)
+}
+
+/// One PostgREST round-trip for unique author keys on the Crash Votes page.
+async fn enrich_community_cards_with_kudos(
+    supabase_url: &str,
+    anon_key: &str,
+    cards: &mut [CommunityCapsuleCard],
+) {
+    let mut keys: Vec<String> = cards
+        .iter()
+        .filter_map(|c| c.signer_public_key.clone())
+        .filter(|k| !k.trim().is_empty())
+        .collect();
+    keys.sort();
+    keys.dedup();
+    if keys.is_empty() {
+        return;
+    }
+    let Ok(map) = fetch_kudos_balances_batch_supabase(supabase_url, anon_key, &keys).await else {
+        return;
+    };
+    for card in cards.iter_mut() {
+        let Some(ref pk) = card.signer_public_key else {
+            continue;
+        };
+        if let Some((total, rac)) = map.get(pk) {
+            card.author_total_kudos = Some(*total);
+            card.author_rac = Some(*rac);
+        } else {
+            card.author_total_kudos = Some(0.0);
+            card.author_rac = Some(0.0);
+        }
+    }
+}
+
+/// Batch-read public Kudos/RAC for many beneficiary keys (one IN query).
+pub async fn fetch_kudos_balances_batch_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    beneficiary_keys: &[String],
+) -> Result<std::collections::HashMap<String, (f64, f64)>, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase is not configured".into());
+    }
+    let mut unique: Vec<String> = beneficiary_keys
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    unique.sort();
+    unique.dedup();
+    if unique.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    // PostgREST `in.(a,b)` — values may contain `/+` from base64; encode each.
+    let in_list = unique
+        .iter()
+        .map(|k| format!("\"{}\"", k.replace('"', "")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!(
+        "kudos_balances?select=beneficiary_key,total_kudos,rac&beneficiary_key=in.({})",
+        in_list
+    );
+    let endpoint = join_url(url, &format!("rest/v1/{query}"));
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .get(&endpoint)
+        .headers(supabase_headers(key)?)
+        .send()
+        .await
+        .map_err(|e| format!("supabase kudos batch failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!([]));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("supabase kudos batch {status}: {msg}"));
+    }
+    let mut out = std::collections::HashMap::new();
+    if let Some(rows) = body.as_array() {
+        for row in rows {
+            let Some(bk) = row
+                .get("beneficiary_key")
+                .or_else(|| row.get("beneficiaryKey"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+            else {
+                continue;
+            };
+            let total = row
+                .get("total_kudos")
+                .or_else(|| row.get("totalKudos"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let rac = row.get("rac").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            out.insert(bk, (total, rac));
+        }
+    }
+    Ok(out)
 }
 
 fn row_to_community_card(row: &Value) -> Option<CommunityCapsuleCard> {
@@ -583,6 +839,14 @@ fn row_to_community_card(row: &Value) -> Option<CommunityCapsuleCard> {
             .get("updated_at")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        signer_public_key: row
+            .get("signer_public_key")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()),
+        author_total_kudos: None,
+        author_rac: None,
     })
 }
 
@@ -1372,6 +1636,112 @@ async fn rpc_launcher(
     Ok(body)
 }
 
+/// RPC `optimize_mods_for` — custom Optimize list (FO for Fabric; other loaders later).
+#[derive(Debug, Clone)]
+pub struct OptimizeModRow {
+    pub modrinth_slug: String,
+    pub sort_order: i32,
+    pub name: Option<String>,
+    pub source: Option<String>,
+}
+
+pub async fn optimize_mods_for_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    loader: &str,
+    mc_version: &str,
+) -> Result<Vec<OptimizeModRow>, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase is not configured".into());
+    }
+    let endpoint = join_url(url, "rest/v1/rpc/optimize_mods_for");
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let payload = json!({
+        "p_loader": loader.trim().to_ascii_lowercase(),
+        "p_mc_version": mc_version.trim(),
+    });
+    let response = client
+        .post(&endpoint)
+        .headers(supabase_headers(key)?)
+        .header("Accept", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("optimize_mods_for failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!([]));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("optimize_mods_for {status}: {msg}"));
+    }
+    let rows = body.as_array().cloned().unwrap_or_default();
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let slug = row.get("modrinth_slug")?.as_str()?.trim();
+            if slug.is_empty() {
+                return None;
+            }
+            Some(OptimizeModRow {
+                modrinth_slug: slug.to_ascii_lowercase(),
+                sort_order: row
+                    .get("sort_order")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0) as i32,
+                name: row
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                source: row
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            })
+        })
+        .collect())
+}
+
+/// Convert DB rows into local OptimizeModCandidate shape (reason/risk defaults).
+pub fn optimize_rows_to_candidates(rows: &[OptimizeModRow]) -> Vec<crate::optimize_pack::OptimizeModCandidate> {
+    let mut out = Vec::with_capacity(rows.len());
+    let mut seen = std::collections::HashSet::new();
+    for row in rows {
+        let slug = row.modrinth_slug.trim().to_ascii_lowercase();
+        if slug.is_empty() || !seen.insert(slug.clone()) {
+            continue;
+        }
+        let name = row
+            .name
+            .clone()
+            .unwrap_or_else(|| slug.clone());
+        let source = row.source.as_deref().unwrap_or("fabulously-optimized");
+        out.push(crate::optimize_pack::OptimizeModCandidate {
+            slug: slug.clone(),
+            name,
+            reason: format!("From {source} catalog for this Minecraft version"),
+            risk: "low".into(),
+            category: "performance".into(),
+            modrinth_slug: Some(slug),
+            curseforge_slug: None,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1379,6 +1749,28 @@ mod tests {
     #[test]
     fn urlencoding_encodes_pipe() {
         assert_eq!(urlencoding_minimal("a|b"), "a%7Cb");
+    }
+
+    #[test]
+    fn optimize_rows_to_candidates_dedupes() {
+        let rows = vec![
+            OptimizeModRow {
+                modrinth_slug: "sodium".into(),
+                sort_order: 0,
+                name: Some("Sodium".into()),
+                source: Some("fabulously-optimized".into()),
+            },
+            OptimizeModRow {
+                modrinth_slug: "sodium".into(),
+                sort_order: 1,
+                name: None,
+                source: None,
+            },
+        ];
+        let c = optimize_rows_to_candidates(&rows);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].slug, "sodium");
+        assert_eq!(c[0].modrinth_slug.as_deref(), Some("sodium"));
     }
 
     /// Smoke: `mod_partner_tops.partners` JSONB matches PartnerStat / RPC columns.

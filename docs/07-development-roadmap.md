@@ -603,6 +603,7 @@ AI explanation появляется в crash screen, но любые дейст�
 - Better graph UI.
 - Better update manager.
 - Performance audit.
+- **Optimize pack** wizard (Content): curated Fabric Modrinth packs per MC version + custom MR→CF missing mods and safe config patches.
 - Crash knowledge base.
 
 ---

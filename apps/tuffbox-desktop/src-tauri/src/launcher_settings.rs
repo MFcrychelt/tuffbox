@@ -14,6 +14,7 @@ pub struct GameResolution {
 #[serde(rename_all = "camelCase")]
 pub struct LauncherSettings {
     /// Theme id: tuffbox | tuffbox-light | carbon | inferno | aether | frost | pixelato | win95
+    /// | solar | fern | blaze | dusk | glacier | minecraft
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]
@@ -51,6 +52,9 @@ pub struct LauncherSettings {
     /// In-app YouTube player (lite nocookie embed). `false` = preview thumbnails only → system browser.
     #[serde(default = "default_youtube_inline_player")]
     pub youtube_inline_player: bool,
+    /// Show the YouTube feed strip on the home dashboard. Off by default; enable in Settings.
+    #[serde(default)]
+    pub show_youtube_on_home: bool,
     /// Hide IDE workflow rail (Content / Setup / …); reveal on bottom-edge hover.
     #[serde(default)]
     pub auto_hide_workflow_rail: bool,
@@ -60,9 +64,19 @@ pub struct LauncherSettings {
     /// UI zoom percent (75–150). Applied as CSS `--ui-scale` on the app shell.
     #[serde(default = "default_ui_scale_percent")]
     pub ui_scale_percent: u32,
+    /// `auto` follows screen/window size; `manual` locks `ui_scale_percent`.
+    /// Empty string = unset (migrated on load: non-100% → manual, else auto).
+    #[serde(default)]
+    pub ui_scale_mode: String,
     /// Round corners on panels/cards/chrome everywhere (CSS `--border-radius-*`).
     #[serde(default = "default_rounded_corners")]
     pub rounded_corners: bool,
+    /// Hide InstanceHome preview block on the home dashboard.
+    #[serde(default)]
+    pub hide_instance_home: bool,
+    /// Inject the in-game overlay bridge (YouTube player + friends/chat) on launch.
+    #[serde(default = "default_ingame_overlay")]
+    pub ingame_overlay: bool,
 }
 
 fn default_theme() -> String {
@@ -86,6 +100,24 @@ fn default_ui_scale_percent() -> u32 {
 fn default_rounded_corners() -> bool {
     true
 }
+fn default_ingame_overlay() -> bool {
+    true
+}
+
+fn normalize_ui_scale_mode(settings: &mut LauncherSettings) {
+    let mode = settings.ui_scale_mode.trim().to_ascii_lowercase();
+    settings.ui_scale_mode = match mode.as_str() {
+        "auto" | "manual" => mode,
+        _ => {
+            // Migration: respect an existing manual zoom choice.
+            if settings.ui_scale_percent != 100 {
+                "manual".into()
+            } else {
+                "auto".into()
+            }
+        }
+    };
+}
 
 impl Default for LauncherSettings {
     fn default() -> Self {
@@ -104,10 +136,14 @@ impl Default for LauncherSettings {
             java_custom_args: None,
             default_memory_mb: default_memory(),
             youtube_inline_player: default_youtube_inline_player(),
+            show_youtube_on_home: false,
             auto_hide_workflow_rail: false,
             sidebar_mode: default_sidebar_mode(),
             ui_scale_percent: default_ui_scale_percent(),
+            ui_scale_mode: "auto".into(),
             rounded_corners: default_rounded_corners(),
+            hide_instance_home: false,
+            ingame_overlay: default_ingame_overlay(),
         }
     }
 }
@@ -122,7 +158,7 @@ fn settings_path() -> PathBuf {
 
 pub fn load_launcher_settings() -> LauncherSettings {
     let path = settings_path();
-    let settings = if path.is_file() {
+    let mut settings = if path.is_file() {
         std::fs::read_to_string(&path)
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -130,6 +166,7 @@ pub fn load_launcher_settings() -> LauncherSettings {
     } else {
         LauncherSettings::default()
     };
+    normalize_ui_scale_mode(&mut settings);
     apply_runtime_side_effects(&settings);
     settings
 }
@@ -139,9 +176,11 @@ pub fn save_launcher_settings(settings: &LauncherSettings) -> Result<(), String>
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let raw = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    let mut normalized = settings.clone();
+    normalize_ui_scale_mode(&mut normalized);
+    let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
     std::fs::write(&path, raw).map_err(|e| e.to_string())?;
-    apply_runtime_side_effects(settings);
+    apply_runtime_side_effects(&normalized);
     Ok(())
 }
 
@@ -156,6 +195,11 @@ pub fn default_runtime_path() -> PathBuf {
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("TuffBox")
+}
+
+/// Whether the in-game overlay bridge should be injected on launch.
+pub fn overlay_enabled() -> bool {
+    load_launcher_settings().ingame_overlay
 }
 
 pub fn resolve_runtime_path() -> PathBuf {
@@ -269,6 +313,59 @@ pub fn split_custom_jvm_args(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+fn jvm_args_contain(args: &[String], needle: &str) -> bool {
+    args.iter().any(|a| a.contains(needle))
+}
+
+/// Append launch-stability / low-end JVM flags without overriding user or
+/// profile args that already set the same option.
+pub fn append_stability_jvm_args(args: &mut Vec<String>, potato_pc: bool) {
+    // Prefer G1 on modern JDKs; harmless if already the default.
+    if !jvm_args_contain(args, "UseG1GC") {
+        args.push("-XX:+UseG1GC".into());
+    }
+    if !jvm_args_contain(args, "MaxGCPauseMillis") {
+        args.push("-XX:MaxGCPauseMillis=50".into());
+    }
+    if potato_pc {
+        if !jvm_args_contain(args, "G1HeapRegionSize") {
+            args.push("-XX:G1HeapRegionSize=16M".into());
+        }
+        if !jvm_args_contain(args, "ParallelGCThreads") {
+            args.push("-XX:ParallelGCThreads=2".into());
+        }
+        if !jvm_args_contain(args, "ConcGCThreads") {
+            args.push("-XX:ConcGCThreads=1".into());
+        }
+        if !jvm_args_contain(args, "ReservedCodeCacheSize") {
+            args.push("-XX:ReservedCodeCacheSize=256m".into());
+        }
+        // Avoid long GC stalls that look like freezes on weak CPUs.
+        if !jvm_args_contain(args, "DisableExplicitGC") {
+            args.push("-XX:+DisableExplicitGC".into());
+        }
+    }
+}
+
+/// Resolve heap size: profile → launcher default, then clamp for potato PCs.
+pub fn resolve_launch_memory_mb(
+    profile_memory_mb: Option<u32>,
+    settings: &LauncherSettings,
+    override_mb: Option<u32>,
+) -> u32 {
+    if let Some(mb) = override_mb {
+        return mb.max(512);
+    }
+    let base = profile_memory_mb
+        .unwrap_or(settings.default_memory_mb)
+        .max(512);
+    if settings.potato_pc {
+        base.min(3072)
+    } else {
+        base
+    }
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_launcher_settings() -> LauncherSettings {
     load_launcher_settings()
@@ -304,4 +401,33 @@ pub fn validate_runtime_path_cmd(path: String) -> Result<bool, String> {
 #[tauri::command(rename_all = "camelCase")]
 pub fn validate_instances_path_cmd(path: String) -> Result<bool, String> {
     validate_instances_path(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn potato_memory_clamps_to_3gb() {
+        let mut settings = LauncherSettings::default();
+        settings.potato_pc = true;
+        settings.default_memory_mb = 8192;
+        assert_eq!(resolve_launch_memory_mb(Some(8192), &settings, None), 3072);
+        assert_eq!(resolve_launch_memory_mb(None, &settings, None), 3072);
+        assert_eq!(resolve_launch_memory_mb(None, &settings, Some(4096)), 4096);
+    }
+
+    #[test]
+    fn stability_args_skip_existing() {
+        let mut args = vec!["-XX:MaxGCPauseMillis=200".into()];
+        append_stability_jvm_args(&mut args, true);
+        assert_eq!(
+            args.iter()
+                .filter(|a| a.contains("MaxGCPauseMillis"))
+                .count(),
+            1
+        );
+        assert!(args.iter().any(|a| a.contains("UseG1GC")));
+        assert!(args.iter().any(|a| a.contains("ParallelGCThreads")));
+    }
 }

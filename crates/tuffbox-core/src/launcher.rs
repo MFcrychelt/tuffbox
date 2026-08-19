@@ -43,6 +43,16 @@ pub struct LaunchOptions {
 pub struct LaunchResult {
     pub exit_code: Option<i32>,
     pub log_path: PathBuf,
+    /// OS pid of the spawned Java process (set when launch returns "started").
+    #[serde(default)]
+    pub pid: Option<u32>,
+    /// Manifest path / instance id used for running-instance tracking.
+    #[serde(default)]
+    pub instance_id: Option<String>,
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,12 +100,17 @@ impl TestLauncher {
     /// any particular Minecraft version needs. Prefer
     /// [`Self::find_java_for_minecraft`] when a target version is known;
     /// this is kept only for callers that generically need "some" JVM.
+    ///
+    /// If no Java is installed on the machine, downloads the latest
+    /// GraalVM Community JDK into the TuffBox managed runtime folder.
     pub fn find_java() -> Result<JavaRuntime, LauncherError> {
-        crate::jre::find_all_runtimes()
-            .map_err(|_| LauncherError::JavaNotFound)?
-            .into_iter()
-            .next()
-            .ok_or(LauncherError::JavaNotFound)
+        crate::jre::ensure_java().map_err(|e| match e {
+            crate::jre::JreError::NotFound => LauncherError::JavaNotFound,
+            other => LauncherError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                other.to_string(),
+            )),
+        })
     }
 
     /// Picks the installed Java runtime that best matches what
@@ -104,10 +119,17 @@ impl TestLauncher {
     /// of compatibility. Falls back to the newest available runtime if
     /// nothing meets the requirement, since attempting the launch with a
     /// clear log message is more useful than refusing to start.
+    ///
+    /// If no Java is installed at all, downloads the latest GraalVM Community
+    /// JDK first, then picks the best match for `mc_version`.
     pub fn find_java_for_minecraft(mc_version: &str) -> Result<JavaRuntime, LauncherError> {
-        let runtimes = crate::jre::find_all_runtimes().map_err(|_| LauncherError::JavaNotFound)?;
-        let required = crate::jre::required_java_major(mc_version);
-        crate::jre::find_runtime_for(&runtimes, required).ok_or(LauncherError::JavaNotFound)
+        crate::jre::ensure_java_for_minecraft(mc_version).map_err(|e| match e {
+            crate::jre::JreError::NotFound => LauncherError::JavaNotFound,
+            other => LauncherError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                other.to_string(),
+            )),
+        })
     }
 
     /// Stage a dedicated server working directory: only `both` + `server`

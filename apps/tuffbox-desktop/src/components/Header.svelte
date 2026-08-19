@@ -1,23 +1,28 @@
 <script lang="ts">
-  import { Play, Square, FolderOpen, ChevronRight, Terminal } from "lucide-svelte";
+  import { FolderOpen, ChevronRight, Terminal } from "@lucide/svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, isTauri } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, isLaunching, openLaunchLog, runningInstances, isProjectRunning } from "../lib/store";
-  import { launchWithFeedback, killWithFeedback } from "../lib/launch";
+  import { projectPath, projectInfo, openLaunchLog, recentProjects, launcherSettingsLive } from "../lib/store";
+  import { api } from "../lib/api";
 
-  export let currentView: string;
+  import type { View } from "../lib/types";
 
-  let onlineCount = 0;
-  let onlineOk = false;
+  let { currentView = $bindable() }: { currentView: View } = $props();
+
+  let onlineCount = $state(0);
+  let onlineOk = $state(false);
   let onlineTimer: ReturnType<typeof setInterval> | null = null;
-
-  $: projectRunning = isProjectRunning($projectPath, $runningInstances);
 
   async function refreshOnline() {
     try {
+      if (!isTauri()) {
+        onlineOk = false;
+        onlineCount = 0;
+        return;
+      }
       const stats: any = await invoke("get_launcher_online");
       onlineCount = Number(stats?.onlineCount ?? 0);
       onlineOk = true;
@@ -35,8 +40,8 @@
     if (onlineTimer) clearInterval(onlineTimer);
   });
 
-  const titles: Record<string, string> = {
-    dashboard: "Launcher",
+  const titles: Record<View, string> = {
+    dashboard: "Home",
     ide: "IDE Workflow",
     mods: "Mods",
     graph: "Dependency Graph",
@@ -54,6 +59,16 @@
     quests: "Quest Editor",
     me: "Me",
   };
+
+  /** Inside an instance the pack name IS the page heading. */
+  const pageTitle = $derived.by(() => {
+    const mcHome =
+      $launcherSettingsLive?.theme === "minecraft" &&
+      (currentView === "dashboard" || currentView === "library" || currentView === "me");
+    if (mcHome) return "Minecraft: Java Edition";
+    if (currentView === "dashboard" && $projectInfo) return $projectInfo.name;
+    return titles[currentView] ?? "";
+  });
 
   function prefersReducedMotion(): boolean {
     if (typeof document === "undefined") return true;
@@ -75,28 +90,25 @@
     if (selected && typeof selected === "string") {
       const info = await invoke("validate_project", { path: selected }) as import("../lib/api").ProjectSummary;
       const manifestPath = info.manifestPath || selected;
+      recentProjects.add({ path: manifestPath, info: info as any }, { reorder: false });
       projectPath.set(manifestPath);
       projectInfo.set(info as any);
+      void api.session.setLastOpened(manifestPath).catch(() => {});
     }
-  }
-
-  async function launch() {
-    const path = $projectPath;
-    if (!path) return;
-    await launchWithFeedback({ path, profile: "client" });
   }
 </script>
 
-<header class="header">
+<header class="header" data-view={currentView}>
+  <div class="header-top">
   <div class="left">
-    {#key currentView}
+    {#key currentView + ($projectInfo?.name ?? "") + ($launcherSettingsLive?.theme ?? "")}
       <div class="title-swap" in:titleIntro>
         <div class="breadcrumb">
           <span class="crumb">TuffBox</span>
           <ChevronRight size={14} class="separator" />
           <span class="crumb active">{titles[currentView]}</span>
         </div>
-        <h1 class="page-title">{titles[currentView]}</h1>
+        <h1 class="page-title">{pageTitle}</h1>
       </div>
     {/key}
   </div>
@@ -105,59 +117,58 @@
     <div
       class="online-chip"
       class:live={onlineOk}
-      title={onlineOk ? "Users with TuffBox open right now" : "Online status unavailable"}
+      title={onlineOk
+        ? "Users with TuffBox open right now"
+        : isTauri()
+          ? "Community presence unavailable (no network / Supabase)"
+          : "Presence requires the Tauri app (browser preview is offline)"}
     >
       <span class="online-dot" class:on={onlineOk && onlineCount > 0}></span>
       <span class="online-label">{onlineOk ? onlineCount : "—"}</span>
-      <span class="online-hint">online</span>
+      <span class="online-hint">{onlineOk ? "online" : isTauri() ? "offline" : "preview"}</span>
     </div>
 
-    {#if $projectInfo}
-      <div class="project-chip">
-        <span class="project-name">{$projectInfo.name}</span>
-        <span class="project-meta"
-          >{$projectInfo.minecraftVersion} · {$projectInfo.loaderKind}
-          {$projectInfo.loaderVersion}</span
-        >
-      </div>
-    {/if}
-
-    <button class="secondary" on:click={selectProject}>
+    <button class="secondary" onclick={selectProject}>
       <FolderOpen size={16} />
       {$projectPath ? "Switch" : "Open"}
     </button>
 
-    <button
-      class="secondary"
-      disabled={!$projectPath}
-      title="Live logs of the running build"
-      on:click={() => $projectPath && openLaunchLog($projectPath)}
-    >
-      <Terminal size={16} />
-      Logs
-    </button>
-
-    {#if $isLaunching}
-      <button class="launch-btn" disabled>
-        <span class="spinner"></span>
-        <span>Launching…</span>
-      </button>
-    {:else if projectRunning}
+    {#if currentView !== "dashboard" && currentView !== "library" && currentView !== "me"}
       <button
-        class="launch-btn stop"
+        class="secondary"
         disabled={!$projectPath}
-        on:click={() => $projectPath && killWithFeedback($projectPath)}
+        title="Live logs of the running build"
+        onclick={() => $projectPath && openLaunchLog($projectPath)}
       >
-        <Square size={16} fill="currentColor" />
-        <span>Stop</span>
-      </button>
-    {:else}
-      <button class="launch-btn" on:click={launch} disabled={!$projectPath}>
-        <Play size={16} fill="currentColor" />
-        <span>Launch</span>
+        <Terminal size={16} />
+        Logs
       </button>
     {/if}
   </div>
+  </div>
+  <nav class="mc-tabs" aria-label="Launcher sections">
+    <button
+      type="button"
+      class={["mc-tab", { active: currentView === "dashboard" }]}
+      onclick={() => (currentView = "dashboard")}
+    >
+      Play
+    </button>
+    <button
+      type="button"
+      class={["mc-tab", { active: currentView === "library" }]}
+      onclick={() => (currentView = "library")}
+    >
+      Installations
+    </button>
+    <button
+      type="button"
+      class={["mc-tab", { active: currentView === "me" }]}
+      onclick={() => (currentView = "me")}
+    >
+      Skins
+    </button>
+  </nav>
 </header>
 
 <style>
@@ -167,10 +178,24 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid var(--border-color);
-    background: rgba(18, 18, 20, 0.8);
-    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--header-border, var(--border-color));
+    background: var(--header-bg, rgba(18, 18, 20, 0.8));
+    -webkit-backdrop-filter: var(--header-backdrop, blur(12px));
+    backdrop-filter: var(--header-backdrop, blur(12px));
     flex-shrink: 0;
+  }
+
+  .header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: 1;
+    min-width: 0;
+    gap: 16px;
+  }
+
+  .mc-tabs {
+    display: none;
   }
 
   .left {
@@ -204,9 +229,15 @@
   }
 
   .page-title {
-    font-size: 20px;
+    font-size: 24px;
     font-weight: 800;
+    letter-spacing: -0.3px;
+    line-height: 1.15;
     margin: 0;
+    max-width: 52vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .right {
@@ -239,8 +270,8 @@
     box-shadow: none;
   }
   .online-dot.on {
-    background: #22c55e;
-    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.22);
+    background: var(--accent-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 22%, transparent);
   }
   .online-label {
     font-variant-numeric: tabular-nums;
@@ -252,25 +283,6 @@
     letter-spacing: 0.02em;
   }
 
-  .project-chip {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    padding-right: 12px;
-    border-right: 1px solid var(--border-color);
-  }
-
-  .project-name {
-    font-weight: 700;
-    font-size: 14px;
-  }
-
-  .project-meta {
-    font-size: 12px;
-    color: var(--text-muted);
-    text-transform: capitalize;
-  }
-
   button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -279,26 +291,5 @@
   button:disabled:hover {
     transform: none;
     background: inherit;
-  }
-
-  .launch-btn {
-    min-width: 100px;
-  }
-
-  .launch-btn.stop {
-    background: var(--accent-danger, #ef4444);
-  }
-
-  .spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid rgba(0, 0, 0, 0.2);
-    border-top-color: #000;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
   }
 </style>

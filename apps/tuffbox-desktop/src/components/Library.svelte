@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    Library as LibraryIcon,
     Search,
     Plus,
     Download,
@@ -10,7 +9,7 @@
     Compass,
     LayoutGrid,
     ExternalLink,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
@@ -19,6 +18,9 @@
     projectPath,
     projectInfo,
     newProjectOpen,
+    libraryTabRequest,
+    addInstanceMode,
+    openAddInstance,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
@@ -26,42 +28,61 @@
   import CreationTrends from "./CreationTrends.svelte";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LibraryInstancesPane from "./LibraryInstancesPane.svelte";
+  import CatalogProjectView from "./CatalogProjectView.svelte";
+  import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
 
-  export let currentView:
-    | "dashboard"
-    | "ide"
-    | "mods"
-    | "graph"
-    | "diagnostics"
-    | "snapshots"
-    | "configs"
-    | "settings"
-    | "project-settings"
-    | "ore-gen"
-    | "recipes"
-    | "quests"
-    | "library"
-    | "chats"
-    | "me"
-    | "world";
+  let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world" } = $props();
 
   type Tab = "yours" | "discover" | "create";
-  let tab: Tab = "yours";
-  let swarmEnabled = false;
-  let importing = false;
-  let importMenuOpen = false;
+
+  let tab = $state<Tab>("yours");
+  let swarmEnabled = $state(false);
+  let p2pEnabled = $state(false);
+  let kudosBalance = $state<{ totalKudos?: number; rac?: number } | null>(null);
+  let kudosLoading = $state(false);
+  let importing = $state(false);
+  let importMenuOpen = $state(false);
 
   async function loadSwarm() {
     try {
-      const s = await invoke<{ enabled?: boolean }>("get_swarm_settings");
+      const s = await invoke<{ enabled?: boolean; p2pEnabled?: boolean }>("get_swarm_settings");
       swarmEnabled = !!s?.enabled;
+      p2pEnabled = !!s?.p2pEnabled;
     } catch {
       swarmEnabled = false;
+      p2pEnabled = false;
+    }
+    if (swarmEnabled) {
+      await loadKudos();
+    } else {
+      kudosBalance = null;
     }
   }
 
+  async function loadKudos() {
+    if (!swarmEnabled) {
+      kudosBalance = null;
+      return;
+    }
+    kudosLoading = true;
+    try {
+      kudosBalance = await invoke<{ totalKudos?: number; rac?: number }>("get_local_kudos_balance");
+    } catch {
+      kudosBalance = null;
+    } finally {
+      kudosLoading = false;
+    }
+  }
+
+  function focusCreationPeerGen() {
+    tab = "create";
+    queueMicrotask(() => {
+      document.querySelector(".create-trends .peer-gen")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   function openNewPack() {
-    newProjectOpen.set(true);
+    openAddInstance("blank");
   }
 
   async function resolveImportTargetDir(): Promise<string> {
@@ -107,7 +128,7 @@
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
-        toasts.error("Set a download/instances folder in Discover or Settings first.");
+        toasts.error("Set an instances folder in Settings first.");
         return;
       }
       const result: any = await invoke("install_modpack", {
@@ -148,9 +169,8 @@
     await importFromSource(selected);
   }
 
-  async function onPackCreated(e: CustomEvent<string>) {
+  async function onPackCreated(path: string) {
     newProjectOpen.set(false);
-    const path = e.detail;
     try {
       const info = (await invoke("validate_project", { path })) as any;
       const manifestPath = info.manifestPath || path;
@@ -180,14 +200,17 @@
   type DiscoverResult = SearchResult & { provider?: "modrinth" | "curseforge" };
   type DiscoverProvider = "modrinth" | "curseforge" | "both";
 
-  let query = "";
-  let results: DiscoverResult[] = [];
-  let loadingDiscover = false;
-  let discoverError = "";
-  let adding = new Set<string>();
-  let discoverProvider: DiscoverProvider = "modrinth";
-  let downloadDir = "";
-  let defaultDownloadDir = "";
+  let query = $state("");
+  let results = $state<DiscoverResult[]>([]);
+  let loadingDiscover = $state(false);
+  let discoverError = $state("");
+  let adding = $state(new Set<string>());
+  let discoverProvider = $state<DiscoverProvider>("modrinth");
+  let downloadDir = $state("");
+  let defaultDownloadDir = $state("");
+  let brokenIcons = $state<string[]>([]);
+  let catalogViewResult = $state<DiscoverResult | null>(null);
+  let searchRequestId = 0;
 
   async function loadDownloadDir() {
     try {
@@ -252,7 +275,15 @@
     return `https://modrinth.com/modpack/${slugOrId}`;
   }
 
-  async function openModpackPage(result: DiscoverResult) {
+  function openCatalogInApp(result: DiscoverResult) {
+    catalogViewResult = result;
+  }
+
+  function closeCatalogInApp() {
+    catalogViewResult = null;
+  }
+
+  async function openModpackExternal(result: DiscoverResult) {
     const url = modpackPageUrl(result);
     if (!url) {
       toasts.error("No catalog page for this modpack.");
@@ -262,6 +293,12 @@
       await openExternal(url);
     } catch (e) {
       toasts.error(`Could not open link: ${e}`);
+    }
+  }
+
+  function markIconBroken(key: string) {
+    if (!brokenIcons.includes(key)) {
+      brokenIcons = [...brokenIcons, key];
     }
   }
 
@@ -276,7 +313,7 @@
   }
 
   function gradientFrom(name: string) {
-    const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
+    const colors = ["var(--accent-primary)", "var(--accent-secondary)", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
@@ -332,15 +369,18 @@
   }
 
   async function search(_opts?: { reset?: boolean }) {
+    const requestId = ++searchRequestId;
     loadingDiscover = true;
     discoverError = "";
     try {
+      let next: DiscoverResult[];
       if (discoverProvider === "modrinth") {
-        results = await searchModrinth();
+        next = await searchModrinth();
       } else if (discoverProvider === "curseforge") {
-        results = await searchCurseForge();
+        next = await searchCurseForge();
       } else {
         const settled = await Promise.allSettled([searchModrinth(), searchCurseForge()]);
+        if (requestId !== searchRequestId) return;
         const mr = settled[0].status === "fulfilled" ? settled[0].value : [];
         const cf = settled[1].status === "fulfilled" ? settled[1].value : [];
         const errors = settled
@@ -350,21 +390,36 @@
           throw new Error(errors.join("; "));
         }
         if (errors.length > 0) {
-          discoverError = errors.join("; ");
+          const mrFailed = settled[0].status === "rejected";
+          const cfFailed = settled[1].status === "rejected";
+          if (mrFailed && !cfFailed) {
+            discoverError = "Modrinth unavailable — showing CurseForge results.";
+          } else if (cfFailed && !mrFailed) {
+            discoverError = "CurseForge unavailable — showing Modrinth results.";
+          } else {
+            discoverError = errors.join("; ");
+          }
         }
-        results = interleaveResults(mr, cf);
+        next = interleaveResults(mr, cf);
       }
+      if (requestId !== searchRequestId) return;
+      results = next;
+      brokenIcons = brokenIcons.filter((id) => next.some((r) => resultKey(r) === id));
     } catch (e) {
+      if (requestId !== searchRequestId) return;
       discoverError = String(e);
       results = [];
     } finally {
-      loadingDiscover = false;
+      if (requestId === searchRequestId) {
+        loadingDiscover = false;
+      }
     }
   }
 
   function setDiscoverProvider(provider: DiscoverProvider) {
     if (discoverProvider === provider) return;
     discoverProvider = provider;
+    catalogViewResult = null;
     search();
   }
 
@@ -404,7 +459,6 @@
       const manifestPath = info.manifestPath || res.path;
       recentProjects.add({ path: manifestPath, info: info as any });
       toasts.success(`Added "${result.name}" to ${targetDir}.`);
-      search();
     } catch (e) {
       toasts.error(`Could not add ${result.name}: ${e}`);
     } finally {
@@ -420,8 +474,16 @@
     if (tab === "discover") search();
   });
 
+  $effect(() => {
+    const req = $libraryTabRequest;
+    if (!req) return;
+    libraryTabRequest.set(null);
+    switchTab(req);
+  });
+
   function switchTab(t: Tab) {
     tab = t;
+    if (t !== "discover") catalogViewResult = null;
     if (t === "discover") {
       void loadDownloadDir();
       if (results.length === 0) search();
@@ -436,86 +498,98 @@
     return String(n);
   }
 
-  $: discoverPlaceholder =
+  const discoverPlaceholder = $derived(
     discoverProvider === "curseforge"
       ? "Search CurseForge modpacks…"
       : discoverProvider === "both"
         ? "Search modpacks…"
-        : "Search Modrinth modpacks…";
+        : "Search Modrinth modpacks…",
+  );
 </script>
 
 <div class="library fade-slide-in lib-page">
-  <div class="library-header lib-header-enter">
-    <div class="title-row">
-      <span class="lib-title-icon"><LibraryIcon size={22} /></span>
-      <h1>Library</h1>
+  <div class="library-subnav lib-header-enter">
+    <div class="tabs" role="tablist" aria-label="Library">
+      <button type="button" class:active={tab === "yours"} onclick={() => switchTab("yours")}>
+        <LayoutGrid size={15} /> Your packs
+      </button>
+      <button type="button" class:active={tab === "discover"} onclick={() => switchTab("discover")}>
+        <Compass size={15} /> Discover
+      </button>
+      <button
+        type="button"
+        class:active={tab === "create"}
+        onclick={() => switchTab("create")}
+        title="Create a new instance"
+      >
+        <Plus size={15} /> Create
+      </button>
     </div>
-    <div class="header-actions">
-      {#if tab !== "yours"}
-        <div class="import-wrap">
-          <button
-            type="button"
-            class="header-btn"
-            class:busy={importing}
-            disabled={importing}
-            on:click|stopPropagation={() => (importMenuOpen = !importMenuOpen)}
-            title="Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance"
-          >
-            {#if importing}
-              <span class="mini-spinner dark"></span> Importing…
-            {:else}
-              <Download size={15} /> Import
-            {/if}
-          </button>
-          {#if importMenuOpen}
-            <div class="import-menu" role="menu">
-              <button type="button" role="menuitem" on:click={importPackFile}>
-                File (.mrpack / .zip)
-              </button>
-              <button type="button" role="menuitem" on:click={importInstanceFolder}>
-                Instance folder
-              </button>
-            </div>
-          {/if}
-        </div>
-      {/if}
-      <div class="tabs">
-        <button class:active={tab === "yours"} on:click={() => switchTab("yours")}>
-          <LayoutGrid size={15} /> Your packs
-        </button>
-        <button class:active={tab === "discover"} on:click={() => switchTab("discover")}>
-          <Compass size={15} /> Discover
-        </button>
+    {#if tab !== "yours"}
+      <div class="import-wrap">
         <button
-          class:active={tab === "create"}
-          on:click={() => switchTab("create")}
-          title="Create a new modpack"
+          type="button"
+          class="header-btn"
+          class:busy={importing}
+          disabled={importing}
+          onclick={(e) => { e.stopPropagation(); (importMenuOpen = !importMenuOpen);  }}
+          title="Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance"
         >
-          <Plus size={15} /> Create
+          {#if importing}
+            <span class="mini-spinner dark"></span> Importing…
+          {:else}
+            <Download size={15} /> Import
+          {/if}
         </button>
+        {#if importMenuOpen}
+          <div class="import-menu" role="menu">
+            <button type="button" role="menuitem" onclick={importPackFile}>
+              File (.mrpack / .zip)
+            </button>
+            <button type="button" role="menuitem" onclick={importInstanceFolder}>
+              Instance folder
+            </button>
+          </div>
+        {/if}
       </div>
-    </div>
+    {/if}
   </div>
 
   {#if tab === "yours"}
-    <LibraryInstancesPane bind:currentView />
+    <div class="yours-wrap">
+      <LibraryInstancesPane bind:currentView />
+    </div>
   {:else if tab === "discover"}
+  <div class="tab-scroll">
+    {#if catalogViewResult}
+      <CatalogProjectView
+        result={catalogViewResult}
+        installing={adding.has(resultKey(catalogViewResult))}
+        onback={closeCatalogInApp}
+        oninstall={() => {
+          if (catalogViewResult) void addModpack(catalogViewResult);
+        }}
+        onopenexternal={() => {
+          if (catalogViewResult) void openModpackExternal(catalogViewResult);
+        }}
+      />
+    {:else}
     <div class="discover-bar">
       <div class="provider-toggle" role="group" aria-label="Catalog provider">
         <button
           type="button"
           class:active={discoverProvider === "modrinth"}
-          on:click={() => setDiscoverProvider("modrinth")}
+          onclick={() => setDiscoverProvider("modrinth")}
         >Modrinth</button>
         <button
           type="button"
           class:active={discoverProvider === "curseforge"}
-          on:click={() => setDiscoverProvider("curseforge")}
+          onclick={() => setDiscoverProvider("curseforge")}
         >CurseForge</button>
         <button
           type="button"
           class:active={discoverProvider === "both"}
-          on:click={() => setDiscoverProvider("both")}
+          onclick={() => setDiscoverProvider("both")}
           title="Search both catalogs at once"
         >Both</button>
       </div>
@@ -525,10 +599,10 @@
           aria-label="Search modpacks"
           bind:value={query}
           placeholder={discoverPlaceholder}
-          on:keydown={(e) => e.key === "Enter" && search()}
+          onkeydown={(e) => e.key === "Enter" && search()}
         />
       </div>
-      <button class="search-btn" on:click={() => search()} disabled={loadingDiscover}>
+      <button class="search-btn" onclick={() => search()} disabled={loadingDiscover}>
         {loadingDiscover ? "Searching…" : "Search"}
       </button>
     </div>
@@ -541,15 +615,15 @@
           bind:value={downloadDir}
           placeholder={defaultDownloadDir || "Choose a folder for modpacks"}
         />
-        <button type="button" class="path-btn" on:click={browseDownloadDir} title="Browse">
+        <button type="button" class="path-btn" onclick={browseDownloadDir} title="Browse">
           <FolderOpen size={15} />
         </button>
-        <button type="button" class="path-btn save" on:click={applyDownloadDir}>Save</button>
+        <button type="button" class="path-btn save" onclick={applyDownloadDir}>Save</button>
       </div>
     </div>
 
     {#if discoverError}
-      <div class="error">{discoverError}</div>
+      <div class={results.length > 0 ? "catalog-warn" : "error"}>{discoverError}</div>
     {/if}
 
     {#if loadingDiscover && results.length === 0}
@@ -557,23 +631,37 @@
     {:else if results.length === 0}
       <div class="empty-state">
         <div class="empty-icon"><Compass size={40} /></div>
-        <h3>No modpacks found</h3>
+        <h3>No packs found</h3>
         <p>Try a different search.</p>
       </div>
     {:else}
       <div class="pack-grid tb-stagger">
         {#each results as result, i (resultKey(result))}
-          <div class="pack-card discover-card tb-card" style={`--i: ${i}`}>
+          {@const key = resultKey(result)}
+          {@const showIcon = !!result.iconUrl && !brokenIcons.includes(key)}
+          <div
+            class="pack-card discover-card tb-card"
+            style={`--i: ${Math.min(i, 8)}`}
+            role="button"
+            tabindex="0"
+            onclick={() => openCatalogInApp(result)}
+            onkeydown={(e) => e.key === "Enter" && openCatalogInApp(result)}
+          >
             <div
               class="pack-cover"
-              style={result.iconUrl
-                ? `background: #18181b`
-                : `background: linear-gradient(135deg, ${gradientFrom(result.name)}, ${gradientFrom(result.slug)})`}
+              style={`background: linear-gradient(135deg, ${gradientFrom(result.name)}, ${gradientFrom(result.slug || result.id)})`}
             >
-              {#if result.iconUrl}
-                <img class="pack-cover-img tb-cover-media" src={result.iconUrl} alt="" />
+              {#if showIcon}
+                <img
+                  class="pack-cover-img tb-cover-media"
+                  src={result.iconUrl}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  onerror={() => markIconBroken(key)}
+                />
               {:else}
-                <span class="pack-cover-letter tb-cover-media">{result.name[0]}</span>
+                <span class="pack-cover-letter tb-cover-media">{result.name[0]?.toUpperCase() ?? "?"}</span>
               {/if}
             </div>
             <div class="pack-body">
@@ -581,8 +669,11 @@
                 <button
                   type="button"
                   class="pack-name linkish"
-                  title="Open on {result.provider === 'curseforge' ? 'CurseForge' : 'Modrinth'}"
-                  on:click={() => openModpackPage(result)}
+                  title={result.name}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    openCatalogInApp(result);
+                  }}
                 >{result.name}</button>
                 {#if discoverProvider === "both"}
                   <span
@@ -603,17 +694,23 @@
                 <button
                   type="button"
                   class="pack-page"
-                  title="Open catalog page"
-                  on:click={() => openModpackPage(result)}
+                  title="Open catalog page in TuffBox"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    openCatalogInApp(result);
+                  }}
                 >
                   <ExternalLink size={14} /> Page
                 </button>
                 <button
                   class="pack-add"
-                  disabled={adding.has(resultKey(result))}
-                  on:click={() => addModpack(result)}
+                  disabled={adding.has(key)}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    void addModpack(result);
+                  }}
                 >
-                  {#if adding.has(resultKey(result))}
+                  {#if adding.has(key)}
                     <span class="mini-spinner"></span> Adding…
                   {:else}
                     <Plus size={14} /> Add to TuffBox
@@ -625,24 +722,41 @@
         {/each}
       </div>
     {/if}
+    {/if}
+  </div>
   {:else if tab === "create"}
+  <div class="tab-scroll">
     <div class="create-pane">
       <header class="create-hero">
-        <h2>Start a pack</h2>
-        <p>Blank instance, import an existing pack, or steal ideas from what’s popular.</p>
+        <div class="create-hero-top">
+          <div>
+            <h2>Start a pack</h2>
+            <p>Blank instance, import a pack file, or browse Modrinth / CurseForge in Discover.</p>
+          </div>
+          {#if swarmEnabled && (kudosLoading || kudosBalance)}
+            <KudosBalanceStrip
+              compact
+              title="Kudos"
+              total={Number(kudosBalance?.totalKudos ?? 0)}
+              rac={Number(kudosBalance?.rac ?? 0)}
+              loading={kudosLoading && !kudosBalance}
+              onclick={focusCreationPeerGen}
+            />
+          {/if}
+        </div>
       </header>
       <div class="create-actions">
-        <button type="button" class="create-plus" on:click={openNewPack}>
+        <button type="button" class="create-plus" onclick={openNewPack}>
           <span class="plus-ring"><Plus size={28} strokeWidth={2.25} /></span>
           <div class="create-copy">
             <strong>Create modpack</strong>
-            <span>Blank · Fabric / Forge · CurseForge browse</span>
+            <span>Blank · Fabric / Forge / NeoForge / Quilt</span>
           </div>
         </button>
         <button
           type="button"
           class="create-plus import"
-          on:click={() => (importMenuOpen = true)}
+          onclick={() => openAddInstance("import")}
           disabled={importing}
         >
           <span class="plus-ring"><Download size={26} strokeWidth={2.25} /></span>
@@ -651,49 +765,72 @@
             <span>.mrpack · zip · Prism · MultiMC · CurseForge</span>
           </div>
         </button>
+        <button
+          type="button"
+          class="create-plus browse"
+          onclick={() => switchTab("discover")}
+        >
+          <span class="plus-ring"><Compass size={26} strokeWidth={2.25} /></span>
+          <div class="create-copy">
+            <strong>Browse packs</strong>
+            <span>Modrinth · CurseForge — Library Discover</span>
+          </div>
+        </button>
       </div>
       <div class="create-trends">
-        <CreationTrends {swarmEnabled} />
+        <CreationTrends {swarmEnabled} {p2pEnabled} />
       </div>
     </div>
+  </div>
   {/if}
 </div>
 
 {#if $newProjectOpen}
   <AddInstanceModal
-    on:close={() => newProjectOpen.set(false)}
-    on:created={onPackCreated}
+    initialMode={$addInstanceMode}
+    onclose={() => newProjectOpen.set(false)}
+    oncreated={onPackCreated}
   />
 {/if}
 
-<svelte:window on:mousedown={onGlobalPointerDown} on:keydown={onGlobalKeydown} />
+<svelte:window onmousedown={onGlobalPointerDown} onkeydown={onGlobalKeydown} />
 
 <style>
   .library {
-    max-width: 1200px;
-    margin: 0 auto;
+    max-width: none;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+  }
+  .library .yours-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .library .tab-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
   }
 
   .lib-header-enter {
     animation: lib-page-header var(--motion-enter) var(--ease-spring) both;
   }
-  .lib-title-icon {
-    display: inline-flex;
-    animation: lib-icon-spin-in 520ms var(--ease-spring) both;
-  }
 
-  .library-header {
+  .library-subnav {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 22px;
+    margin-top: 4px;
+    margin-bottom: 14px;
     gap: 16px;
-    flex-wrap: wrap;
-  }
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
     flex-wrap: wrap;
   }
   .import-wrap {
@@ -705,8 +842,8 @@
     gap: 6px;
     padding: 8px 14px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
-    border: 1px solid rgba(27, 217, 106, 0.35);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--accent-primary);
     font-size: 13px;
     font-weight: 700;
@@ -744,19 +881,8 @@
     cursor: pointer;
   }
   .import-menu button:hover {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
-  }
-  .title-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--accent-primary);
-  }
-  .title-row h1 {
-    margin: 0;
-    font-size: 22px;
-    color: var(--text-primary);
   }
 
   .tabs {
@@ -790,10 +916,10 @@
     transform: scale(0.96);
   }
   .tabs button.active {
-    border-color: rgba(27, 217, 106, 0.35);
-    background: rgba(27, 217, 106, 0.1);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--accent-primary);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.12), 0 6px 16px rgba(27, 217, 106, 0.08);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 12%, transparent), 0 6px 16px color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
 
   .pack-grid {
@@ -819,12 +945,14 @@
   }
   .pack-card:hover {
     background: var(--bg-tertiary);
-    border-color: rgba(27, 217, 106, 0.28);
+    border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
 
   .pack-cover {
     position: relative;
-    height: 120px;
+    aspect-ratio: 1;
+    width: 100%;
+    height: auto;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -840,7 +968,7 @@
   .pack-cover-img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
   }
 
   .pack-body {
@@ -898,6 +1026,13 @@
     flex-direction: column;
     gap: 20px;
   }
+  .create-hero-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
   .create-hero h2 {
     margin: 0 0 4px;
     font-size: 20px;
@@ -911,7 +1046,7 @@
   }
   .create-actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
   }
   .create-plus {
@@ -922,9 +1057,9 @@
     min-height: 0;
     padding: 18px 16px;
     border-radius: var(--border-radius-xl);
-    border: 1px solid rgba(27, 217, 106, 0.28);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
     background:
-      linear-gradient(135deg, rgba(27, 217, 106, 0.1), transparent 55%),
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 10%, transparent), transparent 55%),
       var(--bg-secondary);
     color: var(--text-secondary);
     cursor: pointer;
@@ -945,13 +1080,27 @@
     color: #60a5fa;
     border-color: rgba(59, 130, 246, 0.35);
   }
+  .create-plus.browse {
+    border-color: rgba(245, 158, 11, 0.28);
+    background:
+      linear-gradient(135deg, rgba(245, 158, 11, 0.1), transparent 55%),
+      var(--bg-secondary);
+  }
+  .create-plus.browse .plus-ring {
+    background: color-mix(in srgb, var(--accent-warning) 14%, transparent);
+    color: var(--accent-warning);
+    border-color: color-mix(in srgb, var(--accent-warning) 35%, transparent);
+  }
   .create-plus:hover {
-    border-color: rgba(27, 217, 106, 0.55);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
     color: var(--text-primary);
     transform: translateY(-1px);
   }
   .create-plus.import:hover {
     border-color: rgba(59, 130, 246, 0.55);
+  }
+  .create-plus.browse:hover {
+    border-color: rgba(245, 158, 11, 0.55);
   }
   .create-plus:disabled {
     opacity: 0.6;
@@ -979,9 +1128,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(27, 217, 106, 0.14);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--accent-primary);
-    border: 1px solid rgba(27, 217, 106, 0.35);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
     flex-shrink: 0;
   }
   .create-trends {
@@ -993,7 +1142,7 @@
     }
   }
   .mini-spinner.dark {
-    border-color: rgba(27, 217, 106, 0.25);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
     border-top-color: var(--accent-primary);
   }
 
@@ -1086,7 +1235,7 @@
     cursor: pointer;
   }
   .provider-toggle button.active {
-    background: rgba(27, 217, 106, 0.14);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--text-primary);
   }
   .search {
@@ -1164,8 +1313,8 @@
     font-weight: 600;
   }
   .path-btn.save {
-    background: rgba(27, 217, 106, 0.12);
-    border-color: rgba(27, 217, 106, 0.35);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--accent-primary);
   }
 
@@ -1196,8 +1345,8 @@
     flex-shrink: 0;
   }
   .provider-badge.modrinth {
-    background: rgba(27, 217, 106, 0.18);
-    color: #1bd96a;
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--accent-primary);
   }
   .provider-badge.curseforge {
     background: rgba(241, 100, 54, 0.18);
@@ -1228,7 +1377,7 @@
     padding: 64px 32px;
     text-align: center;
     background: var(--bg-secondary);
-    border: 2px dashed var(--border-color);
+    border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
     color: var(--text-muted);
   }
@@ -1253,31 +1402,33 @@
     max-width: 320px;
   }
 
-  .error {
+  .error,
+  .catalog-warn {
     padding: 10px 12px;
     border-radius: 10px;
     margin-bottom: 16px;
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid rgba(239, 68, 68, 0.35);
-    color: #fca5a5;
+  }
+  .error {
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 35%, transparent);
+    color: var(--accent-danger);
+  }
+  .catalog-warn {
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
+    color: var(--text-secondary);
   }
 
   @keyframes lib-page-header {
     from { opacity: 0; transform: translateY(-8px); }
     to { opacity: 1; transform: none; }
   }
-  @keyframes lib-icon-spin-in {
-    from { opacity: 0; transform: rotate(-40deg) scale(0.6); }
-    to { opacity: 1; transform: none; }
-  }
 
-  :global(.potato-pc) .lib-header-enter,
-  :global(.potato-pc) .lib-title-icon {
+  :global(.potato-pc) .lib-header-enter {
     animation: none !important;
   }
   @media (prefers-reduced-motion: reduce) {
-    .lib-header-enter,
-    .lib-title-icon {
+    .lib-header-enter {
       animation: none !important;
     }
   }

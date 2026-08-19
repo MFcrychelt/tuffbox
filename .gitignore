@@ -2,11 +2,23 @@
 node_modules/
 fix_mods.py
 patch_mods.sh
+*.pyc
+__pycache__/
+
+# Agent / MCP scratch (may contain project IDs and SQL payloads)
+tmp_mpi_chunks/
+
+# Local Reasonix agent config/scaffold (not part of the project)
+.reasonix/
+reasonix.toml
 
 .cargo/
 dist/
 share/
 *.zip
+
+# Local FTB Quests dataset from `tuffbox modrinth collect-quests`
+dataset/
 
 # JEI companion bridge build output
 bridges/jei-runtime/.gradle/
@@ -15,9 +27,33 @@ bridges/jei-runtime/**/build/
 bridges/jei-runtime/prebuilt/*.jar
 !bridges/jei-runtime/gradle/wrapper/gradle-wrapper.jar
 
+# MCA Selector + OpenJFX (fetched via bridges/mca-selector/fetch-prebuilt.ps1)
+bridges/mca-selector/prebuilt/**
+!bridges/mca-selector/prebuilt/.gitkeep
+
 # Cosmetics bridge build output (keep prebuilt/*.jar for launch inject)
 bridges/cosmetics/.gradle/
 bridges/cosmetics/**/.gradle/
 bridges/cosmetics/**/build/
+bridges/cosmetics/**/bin/
 bridges/cosmetics/.vscode/
+bridges/cosmetics/**/.eclipse/
 !bridges/cosmetics/gradle/wrapper/gradle-wrapper.jar
+
+# Overlay bridge build output
+bridges/overlay/.gradle/
+bridges/overlay/**/.gradle/
+bridges/overlay/**/build/
+bridges/overlay/**/bin/
+
+# Sidecar binaries (keep overlay-hook DLL for inject; ignore other local builds)
+apps/tuffbox-desktop/src-tauri/binaries/*
+!apps/tuffbox-desktop/src-tauri/binaries/.gitkeep
+!apps/tuffbox-desktop/src-tauri/binaries/tuffbox_overlay_hook.dll
+
+# Local example launcher runtime data
+examples/.tuffbox/
+
+# Vendored external projects (not part of TuffBox)
+ServerPackCreator/
+packwiz/

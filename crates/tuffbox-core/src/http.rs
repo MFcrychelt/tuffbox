@@ -140,6 +140,26 @@ static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .expect("Failed to build HTTP client")
 });
 
+static HTTP_ASYNC: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(15))
+        .tcp_keepalive(Duration::from_secs(10))
+        .user_agent("TuffBox-IDE/0.1.0")
+        .build()
+        .expect("Failed to build async HTTP client")
+});
+
+/// Shared blocking HTTP client with connection pooling.
+pub(crate) fn http() -> &'static reqwest::blocking::Client {
+    &HTTP
+}
+
+/// Shared async HTTP client with connection pooling.
+pub(crate) fn http_async() -> &'static reqwest::Client {
+    &HTTP_ASYNC
+}
+
 const MAX_RETRIES: u32 = 3;
 const MAX_RATE_LIMIT_RETRIES: u32 = 4;
 const MAX_REDIRECTS: u8 = 5;

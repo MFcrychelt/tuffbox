@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { GitMerge, ChevronDown, AlertTriangle } from "lucide-svelte";
+  import { GitMerge, ChevronDown, AlertTriangle } from "@lucide/svelte";
 
   type Diagnostic = {
     severity: string;
@@ -24,20 +23,40 @@
     reason: string;
   };
 
-  export let graphDiagnostics: Diagnostic[] = [];
-  export let duplicateJarGroups: DupJarGroup[] = [];
-  export let wrongLoaderJars: WrongLoaderJar[] = [];
-  export let fixingIdx: number | null = null;
-  export let duplicateJarFixing: string | null = null;
-  export let wrongLoaderFixing: string | null = null;
+  let {
+    graphDiagnostics = [],
+    duplicateJarGroups = [],
+    wrongLoaderJars = [],
+    fixingIdx = null,
+    duplicateJarFixing = null,
+    wrongLoaderFixing = null,
+    onFixMissingDependency,
+    onFixDeduplicate,
+    onKeepOneDuplicateJar,
+    onDisableWrongJar,
+    onRemoveWrongJar,
+  }: {
+    graphDiagnostics?: Diagnostic[];
+    duplicateJarGroups?: DupJarGroup[];
+    wrongLoaderJars?: WrongLoaderJar[];
+    fixingIdx?: number | null;
+    duplicateJarFixing?: string | null;
+    wrongLoaderFixing?: string | null;
+    onFixMissingDependency?: (payload: { modId: string; idx: number }) => void;
+    onFixDeduplicate?: (idx: number) => void;
+    onKeepOneDuplicateJar?: (payload: { modId: string; fileName: string }) => void;
+    onDisableWrongJar?: (fileName: string) => void;
+    onRemoveWrongJar?: (fileName: string) => void;
+  } = $props();
 
-  const dispatch = createEventDispatcher<{
-    fixMissingDependency: { modId: string; idx: number };
-    fixDeduplicate: number;
-    keepOneDuplicateJar: { modId: string; fileName: string };
-    disableWrongJar: string;
-    removeWrongJar: string;
-  }>();
+  function missingModIdFromDiag(d: Diagnostic): string {
+    const to = d.relatedNodes?.[1];
+    if (typeof to === "string") return to.replace(/^mod:/i, "").trim();
+    if (to && typeof to === "object" && to !== null && "0" in to) {
+      return String((to as { 0: unknown })[0] ?? "").replace(/^mod:/i, "").trim();
+    }
+    return (d.message.match(/['"`]?([a-z0-9_-]{3,})['"`]?\s*$/i) || [])[1] || "";
+  }
 </script>
 
 <!-- 4. Evidence (secondary) -->
@@ -65,15 +84,15 @@
             </div>
             <div class="diag-actions">
               {#if /MISSING|DEPEND/i.test(d.code + d.message)}
-                {@const mid = (d.message.match(/['"`]?([a-z0-9_-]{3,})['"`]?\s*$/i) || [])[1]}
+                {@const mid = missingModIdFromDiag(d)}
                 {#if mid}
-                  <button class="secondary small" on:click={() => dispatch("fixMissingDependency", { modId: mid, idx })} disabled={fixingIdx === idx}>
+                  <button class="secondary small" onclick={() => onFixMissingDependency?.({ modId: mid, idx })} disabled={fixingIdx === idx}>
                     Install {mid}
                   </button>
                 {/if}
               {/if}
               {#if /DUPLICATE/i.test(d.code)}
-                <button class="secondary small" on:click={() => dispatch("fixDeduplicate", idx)} disabled={fixingIdx === idx || duplicateJarFixing !== null}>
+                <button class="secondary small" onclick={() => onFixDeduplicate?.(idx)} disabled={fixingIdx === idx || duplicateJarFixing !== null}>
                   Keep one jar
                 </button>
               {/if}
@@ -99,7 +118,7 @@
                   <button
                     class="ghost mini"
                     disabled={duplicateJarFixing !== null}
-                    on:click={() => dispatch("keepOneDuplicateJar", { modId: group.modId, fileName: jar.fileName })}
+                    onclick={() => onKeepOneDuplicateJar?.({ modId: group.modId, fileName: jar.fileName })}
                     title="Keep this jar, delete the other copies"
                   >
                     {duplicateJarFixing === `${group.modId}::${jar.fileName}` ? "…" : "Keep this"}
@@ -112,7 +131,7 @@
             <button
               class="secondary small"
               disabled={duplicateJarFixing !== null}
-              on:click={() => dispatch("keepOneDuplicateJar", { modId: group.modId, fileName: group.keepCandidate })}
+              onclick={() => onKeepOneDuplicateJar?.({ modId: group.modId, fileName: group.keepCandidate })}
             >
               Keep newest
             </button>
@@ -129,8 +148,8 @@
             <p>{jar.reason ?? jar.detectedLoader ?? "Wrong loader"}</p>
           </div>
           <div class="diag-actions">
-            <button class="ghost mini" on:click={() => dispatch("disableWrongJar", jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>Disable</button>
-            <button class="ghost mini danger" on:click={() => dispatch("removeWrongJar", jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>Remove</button>
+            <button class="ghost mini" onclick={() => onDisableWrongJar?.(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>Disable</button>
+            <button class="ghost mini danger" onclick={() => onRemoveWrongJar?.(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>Remove</button>
           </div>
         </div>
       {/each}
@@ -141,8 +160,8 @@
 <style>
   .panel { padding: 16px; min-width: 0; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .muted-box { padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color); color: var(--text-muted); font-size: 12px; }
-  .ghost.danger { color: #fca5a5; }
-  .ghost.danger:hover { color: #fecaca; }
+  .ghost.danger { color: var(--accent-danger); }
+  .ghost.danger:hover { color: var(--accent-danger); }
   .collapsible-block {
     margin-bottom: 12px;
     padding: 0;

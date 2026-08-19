@@ -2,11 +2,24 @@
   import { onDestroy, onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
-  import { Sparkles, RefreshCw, Download, AlertTriangle, ExternalLink } from "lucide-svelte";
+  import { Sparkles, RefreshCw, Download, AlertTriangle } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import { toasts } from "../lib/toast";
+  import { getAuthSnapshot } from "../lib/supabaseAuth";
+  import CatalogProjectView from "./CatalogProjectView.svelte";
+  import { trapFocus } from "../lib/focusTrap";
+  import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
 
-  export let swarmEnabled = false;
+  let { swarmEnabled = false, p2pEnabled = false }: { swarmEnabled?: boolean; p2pEnabled?: boolean } =
+    $props();
+
+  const creationReady = $derived(swarmEnabled && p2pEnabled);
+
+  type KudosBalance = {
+    beneficiaryKey?: string;
+    totalKudos?: number;
+    rac?: number;
+  };
 
   type Pair = { modA: string; modB: string; count: number };
   type Group = { mods: string[]; score: number };
@@ -49,23 +62,375 @@
     kind: "modpack" | "mod" | string;
   };
 
-  let pairs: Pair[] = [];
-  let groups: Group[] = [];
-  let suggestions: string[] = [];
-  let popularPacks: MpiHit[] = [];
-  let popularMods: MrHit[] = [];
-  let packCategories: MpiCategory[] = [];
-  let selectedPackCategoryId: number | null = null;
-  let packQuery = "";
+  let pairs = $state<Pair[]>([]);
+  let groups = $state<Group[]>([]);
+  let suggestions = $state<string[]>([]);
+  let popularPacks = $state<MpiHit[]>([]);
+  let popularMods = $state<MrHit[]>([]);
+  let packCategories = $state<MpiCategory[]>([]);
+  let selectedPackCategoryId = $state<number | null>(null);
+  let packQuery = $state("");
   let packSearchTimer: ReturnType<typeof setTimeout> | null = null;
-  let loading = false;
-  let error = "";
-  let previewBusy: string | null = null;
-  let installBusy: string | null = null;
-  let previews: Record<string, Preview | null> = {};
-  let lastKey = "";
+  let loading = $state(false);
+  let error = $state("");
+  let previewBusy = $state<string | null>(null);
+  let installBusy = $state<string | null>(null);
+  let previews = $state<Record<string, Preview | null>>({});
+  let lastKey = $state("");
+  let catalogViewResult = $state<{
+    id: string;
+    slug: string;
+    name: string;
+    description: string;
+    projectType: string;
+    iconUrl?: string | null;
+    author?: string | null;
+    downloads?: number | null;
+    follows?: number | null;
+    categories?: string[];
+    provider?: string;
+  } | null>(null);
+  let catalogInstalling = $state(false);
 
-  $: packThemeCategories = packCategories.filter((c) => c.kind === "modpack");
+  const CREATION_KINDS_FALLBACK = [
+    "kubejs_ore_gen",
+    "quest_scripts",
+    "recipe_balance",
+    "mod_configs",
+    "full_pack_scaffold",
+  ] as const;
+
+  let creationKinds = $state<string[]>([...CREATION_KINDS_FALLBACK]);
+  let creationKind = $state<string>("kubejs_ore_gen");
+  let creationBrief = $state("");
+  let creationMc = $state("");
+  let creationLoader = $state("");
+  let creationModIds = $state<string[]>([]);
+  let creationBusy = $state(false);
+  let creationError = $state("");
+  let creationOutcome = $state<{
+    result: {
+      ok: boolean;
+      jobId?: string;
+      artifacts: { path: string; content: string }[];
+      error?: string | null;
+      claimedConfidence?: number;
+      workerSignerPublicKey?: string | null;
+    };
+    verification: {
+      passed: boolean;
+      checks: { name: string; ok: boolean; detail: string }[];
+      rewardGranted?: boolean;
+    };
+  } | null>(null);
+  let creationAccepted = $state(false);
+  let creationApplied = $state(false);
+  let creationAppliedCount = $state(0);
+  let creationJobId = $state("");
+  let accessToken = $state("");
+  let authUserEmail = $state("");
+  let kudosBalance = $state<KudosBalance | null>(null);
+  let kudosLoading = $state(false);
+
+  const packThemeCategories = $derived(packCategories.filter((c) => c.kind === "modpack"));
+
+  const canAccept = $derived(
+    !!creationOutcome?.verification.passed &&
+      !!creationOutcome?.result.workerSignerPublicKey?.trim() &&
+      !!accessToken &&
+      !creationAccepted &&
+      !creationBusy,
+  );
+
+  const acceptDisabledReason = $derived.by(() => {
+    if (creationAccepted || creationOutcome?.verification.rewardGranted) {
+      return "Already accepted — reward granted";
+    }
+    if (creationBusy) return "Busy…";
+    if (!creationOutcome?.verification.passed) return "Verification must pass first";
+    if (!creationOutcome?.result.workerSignerPublicKey?.trim()) {
+      return "Worker did not report a device signer key";
+    }
+    if (!accessToken) return "Sign in on Crash Votes to Accept and award Kudos";
+    return "";
+  });
+
+  const claimedConfidenceLabel = $derived.by(() => {
+    const c = creationOutcome?.result.claimedConfidence;
+    if (c == null || Number.isNaN(c)) return null;
+    const frac = c <= 1 ? c : c / 100;
+    const pct = Math.round(frac * 100);
+    const scaffold = frac < 0.45 ? " (likely scaffold)" : "";
+    return `${pct}% (${frac.toFixed(2)})${scaffold}`;
+  });
+
+  async function refreshAuth() {
+    try {
+      const snap = await getAuthSnapshot();
+      accessToken = snap.session?.access_token ?? "";
+      authUserEmail = snap.user?.email?.trim() ?? "";
+    } catch {
+      accessToken = "";
+      authUserEmail = "";
+    }
+  }
+
+  async function loadKudos() {
+    if (!swarmEnabled) {
+      kudosBalance = null;
+      return;
+    }
+    kudosLoading = true;
+    try {
+      kudosBalance = await invoke<KudosBalance>("get_local_kudos_balance");
+    } catch {
+      kudosBalance = null;
+    } finally {
+      kudosLoading = false;
+    }
+  }
+
+  function humanizeCreationError(raw: string): string {
+    const s = String(raw ?? "").trim();
+    const lower = s.toLowerCase();
+    if (lower.includes("p2p not enabled")) {
+      return "Enable Prefer local P2P in Settings.";
+    }
+    if (lower.includes("no creation worker available") || lower.includes("no creation worker")) {
+      return "No Creation worker peer online. Enable Creation worker on another node or wait.";
+    }
+    if (lower.includes("timed out") || lower.includes("timeout")) {
+      return "Worker timed out. Try again or shorten the brief.";
+    }
+    if (lower.includes("brief too short")) {
+      return "Brief must be at least 8 characters.";
+    }
+    if (
+      lower.includes("ollama") ||
+      lower.includes("connection refused") ||
+      lower.includes("ai unavailable") ||
+      lower.includes("model missing") ||
+      lower.includes("used scaffold")
+    ) {
+      return s.replace(/^error:\s*/i, "").trim() || s;
+    }
+    return s.replace(/^error:\s*/i, "").trim() || s;
+  }
+
+  const softAiFallback = $derived.by(() => {
+    const err = creationOutcome?.result.error?.trim() ?? "";
+    if (!err) return false;
+    const lower = err.toLowerCase();
+    return (
+      lower.includes("used scaffold") ||
+      lower.includes("ai unavailable") ||
+      lower.includes("ai output failed")
+    );
+  });
+
+  async function loadCreationDefaults() {
+    const path = $projectPath;
+    if (!path) {
+      creationMc = "";
+      creationLoader = "";
+      creationModIds = [];
+      return;
+    }
+    try {
+      const d = await invoke<{
+        mcVersion?: string;
+        loader?: string;
+        modIds?: string[];
+        kinds?: string[];
+      }>("creation_job_defaults", { path });
+      creationMc = d.mcVersion ?? "";
+      creationLoader = d.loader ?? "";
+      creationModIds = d.modIds ?? [];
+      if (d.kinds?.length) {
+        creationKinds = d.kinds;
+        if (!creationKinds.includes(creationKind)) creationKind = creationKinds[0]!;
+      }
+    } catch {
+      /* optional when no project */
+    }
+  }
+
+  async function submitCreation() {
+    creationError = "";
+    creationOutcome = null;
+    creationAccepted = false;
+    creationApplied = false;
+    creationAppliedCount = 0;
+    creationJobId = "";
+    const brief = creationBrief.trim();
+    if (!brief) {
+      creationError = "Brief is required.";
+      return;
+    }
+    if (brief.length < 8) {
+      creationError = "Brief must be at least 8 characters.";
+      return;
+    }
+    if (!swarmEnabled) {
+      creationError = "Enable TuffSwarm in Settings.";
+      return;
+    }
+    if (!p2pEnabled) {
+      creationError = "Enable Prefer local P2P in Settings.";
+      return;
+    }
+    creationBusy = true;
+    try {
+      await loadCreationDefaults();
+      const jobId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `creation-${Date.now()}`;
+      creationJobId = jobId;
+      const outcome = await invoke<{
+        result: {
+          ok: boolean;
+          jobId?: string;
+          artifacts: { path: string; content: string }[];
+          error?: string | null;
+          claimedConfidence?: number;
+          workerSignerPublicKey?: string | null;
+        };
+        verification: {
+          passed: boolean;
+          checks: { name: string; ok: boolean; detail: string }[];
+          rewardGranted?: boolean;
+        };
+      }>("submit_creation_job", {
+        job: {
+          schemaVersion: 1,
+          jobId,
+          kind: creationKind,
+          constraints: {
+            mcVersion: creationMc.trim(),
+            loader: creationLoader.trim(),
+            modIds: creationModIds,
+          },
+          brief,
+          reward: { kind: "kudos", amount: 50 },
+          verify: { syntax: true, testLaunch: false },
+          deadlineMs: 120_000,
+        },
+      });
+      creationOutcome = outcome;
+      await refreshAuth();
+      if (outcome.verification.passed) {
+        toasts.success("CreationJob verified — review artifacts before apply.");
+      } else {
+        toasts.error("CreationJob returned but verification failed.");
+      }
+    } catch (e) {
+      creationError = humanizeCreationError(String(e));
+      toasts.error(creationError);
+    } finally {
+      creationBusy = false;
+    }
+  }
+
+  async function applyCreation() {
+    if (!creationOutcome?.result.artifacts.length) return;
+    if (!$projectPath) {
+      toasts.error("Open a project first.");
+      return;
+    }
+    if (!creationOutcome.verification.passed) {
+      toasts.error("Cannot apply: verification failed.");
+      return;
+    }
+    const n = creationOutcome.result.artifacts.length;
+    if (!confirm(`Write ${n} artifact(s) into the open project?`)) return;
+    creationBusy = true;
+    try {
+      const res = await invoke<{ written: string[] }>("apply_creation_artifacts", {
+        path: $projectPath,
+        artifacts: creationOutcome.result.artifacts,
+      });
+      creationApplied = true;
+      creationAppliedCount = res.written.length;
+      toasts.success(`Applied ${res.written.length} file(s).`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      creationBusy = false;
+    }
+  }
+
+  async function acceptCreation() {
+    if (!creationOutcome?.verification.passed) {
+      toasts.error("Cannot accept: verification failed.");
+      return;
+    }
+    const workerPk = creationOutcome.result.workerSignerPublicKey?.trim() ?? "";
+    if (!workerPk) {
+      toasts.error("Worker did not report a device signer key.");
+      return;
+    }
+    const jobId =
+      creationOutcome.result.jobId?.trim() || creationJobId.trim();
+    if (!jobId) {
+      toasts.error("Missing jobId.");
+      return;
+    }
+    await refreshAuth();
+    if (!accessToken) {
+      toasts.error("Sign in (Crash Votes) to accept and award Kudos.");
+      return;
+    }
+    if (
+      !confirm(
+        "Accept this result and award Kudos to the worker? This cannot be undone for this job.",
+      )
+    ) {
+      return;
+    }
+    creationBusy = true;
+    try {
+      const body = await invoke<{
+        ok?: boolean;
+        kudos?: { awarded?: boolean; amount?: number; totalKudos?: number; rac?: number };
+      }>("accept_creation_result", {
+        jobId,
+        workerSignerPublicKey: workerPk,
+        accessToken,
+        amount: 50,
+      });
+      creationAccepted = true;
+      if (creationOutcome) {
+        creationOutcome = {
+          ...creationOutcome,
+          verification: { ...creationOutcome.verification, rewardGranted: true },
+        };
+      }
+      const k = body.kudos;
+      if (k?.awarded) {
+        toasts.success(
+          `Accepted — awarded ${k.amount ?? 50} Kudos (total ${k.totalKudos ?? "—"} · RAC ${k.rac != null ? Number(k.rac).toFixed(1) : "—"}).`,
+        );
+        if (k.totalKudos != null || k.rac != null) {
+          kudosBalance = {
+            totalKudos: k.totalKudos ?? kudosBalance?.totalKudos,
+            rac: k.rac ?? kudosBalance?.rac,
+          };
+        }
+      } else {
+        toasts.success("Accepted (Kudos already awarded for this job).");
+      }
+      await loadKudos();
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      creationBusy = false;
+    }
+  }
+  function truncateArt(s: string, max = 280): string {
+    const t = s.replace(/\r\n/g, "\n");
+    return t.length <= max ? t : `${t.slice(0, max)}…`;
+  }
 
   function formatCount(n?: number | null): string {
     if (n == null) return "—";
@@ -167,29 +532,101 @@
     void loadPacks();
   }
 
-  $: {
+  $effect(() => {
     const key = `${swarmEnabled}:${$projectPath ?? ""}`;
-    if (key !== lastKey) {
-      lastKey = key;
-      void refresh();
-    }
-  }
+    if (key === lastKey) return;
+    lastKey = key;
+    void refresh();
+  });
 
   onMount(() => {
     void loadCategories();
     void refresh();
+    void refreshAuth();
+    if (swarmEnabled) {
+      void loadCreationDefaults();
+      void loadKudos();
+    }
+    return projectPath.subscribe(() => {
+      if (swarmEnabled) void loadCreationDefaults();
+    });
   });
 
   onDestroy(() => {
     if (packSearchTimer) clearTimeout(packSearchTimer);
   });
 
-  async function openPack(hit: MpiHit) {
-    const url = hit.pageUrl || hit.url;
-    if (!url) {
-      toasts.error("No page URL for this pack");
-      return;
+  function slugFromUrl(url: string): string {
+    const clean = url.replace(/\/$/, "");
+    const parts = clean.split("/");
+    return parts[parts.length - 1] || clean;
+  }
+
+  function openPack(hit: MpiHit) {
+    const links = hit.links ?? {};
+    const mr =
+      links.modrinth ||
+      links.Modrinth ||
+      (hit.pageUrl?.includes("modrinth.com") ? hit.pageUrl : null) ||
+      (hit.url?.includes("modrinth.com") ? hit.url : null);
+    const cf =
+      links.curseforge ||
+      links.CurseForge ||
+      (hit.pageUrl?.includes("curseforge.com") ? hit.pageUrl : null) ||
+      (hit.url?.includes("curseforge.com") ? hit.url : null);
+
+    let provider: "modrinth" | "curseforge" = "modrinth";
+    let id = hit.slug || hit.id;
+    if (cf && !mr) {
+      provider = "curseforge";
+      id = slugFromUrl(cf);
+    } else if (mr) {
+      provider = "modrinth";
+      id = slugFromUrl(mr);
     }
+
+    catalogViewResult = {
+      id,
+      slug: hit.slug || id,
+      name: hit.name,
+      description: hit.description || "",
+      projectType: "modpack",
+      iconUrl: hit.iconUrl ?? null,
+      author: null,
+      downloads: hit.downloads ?? null,
+      follows: null,
+      categories: [],
+      provider,
+    };
+  }
+
+  function openMr(hit: MrHit) {
+    catalogViewResult = {
+      id: hit.id,
+      slug: hit.slug || hit.id,
+      name: hit.name,
+      description: hit.description || "",
+      projectType: hit.projectType || "mod",
+      iconUrl: hit.iconUrl ?? null,
+      author: null,
+      downloads: hit.downloads ?? null,
+      follows: hit.follows ?? null,
+      categories: [],
+      provider: "modrinth",
+    };
+  }
+
+  async function openCatalogExternal() {
+    if (!catalogViewResult) return;
+    const slugOrId = (catalogViewResult.slug || catalogViewResult.id || "").trim();
+    if (!slugOrId) return;
+    const isPack = (catalogViewResult.projectType || "").includes("pack");
+    const url =
+      catalogViewResult.provider === "curseforge"
+        ? /^\d+$/.test(slugOrId)
+          ? `https://www.curseforge.com/projects/${slugOrId}`
+          : `https://www.curseforge.com/minecraft/${isPack ? "modpacks" : "mc-mods"}/${slugOrId}`
+        : `https://modrinth.com/${isPack ? "modpack" : "mod"}/${slugOrId}`;
     try {
       await openExternal(url);
     } catch (e) {
@@ -197,12 +634,67 @@
     }
   }
 
-  async function openMr(hit: MrHit) {
-    const url = `https://modrinth.com/mod/${hit.slug || hit.id}`;
+  async function installFromCatalog() {
+    if (!catalogViewResult) return;
+    const id = catalogViewResult.id || catalogViewResult.slug;
+    if (!id) return;
+    const isPack = (catalogViewResult.projectType || "").toLowerCase().includes("pack");
+    catalogInstalling = true;
     try {
-      await openExternal(url);
+      if (isPack) {
+        let targetDir = "";
+        try {
+          const info = await invoke<{ current: string; default: string }>("get_instances_path_info");
+          targetDir = (info.current || info.default || "").replace(/[\\/]+$/, "");
+        } catch {
+          const home = ((await invoke("get_home_dir").catch(() => "")) as string) || "";
+          if (home) targetDir = `${home.replace(/[\\/]+$/, "")}/TuffBox/instances`;
+        }
+        if (!targetDir) {
+          toasts.error("Could not resolve instances folder.");
+          return;
+        }
+        let source: string;
+        if (catalogViewResult.provider === "curseforge") {
+          const files = await invoke<Array<{ id: number; fileName?: string }>>(
+            "get_curseforge_modpack_files",
+            { modId: Number(catalogViewResult.id) || catalogViewResult.id, gameVersion: null },
+          );
+          const fileId = files?.[0]?.id;
+          if (fileId == null) throw new Error("No CurseForge files for this modpack.");
+          source = `cf:${catalogViewResult.id}:${fileId}`;
+        } else {
+          source = await invoke<string>("get_modrinth_pack_download", { projectId: id });
+        }
+        await invoke("install_modpack", {
+          source,
+          targetDir,
+          instanceName: catalogViewResult.name,
+        });
+        toasts.success(`Installed pack ${catalogViewResult.name}`);
+        catalogViewResult = null;
+        return;
+      }
+      if (!$projectPath) {
+        toasts.error("Open a project first to install mods.");
+        return;
+      }
+      if (catalogViewResult.provider === "curseforge") {
+        toasts.info("Use Library → Discover or Content to install CurseForge mods.");
+        return;
+      }
+      await invoke("add_modrinth_mod_with_dependencies", {
+        path: $projectPath,
+        modId: id,
+        side: "both",
+      });
+      toasts.success(`Installed ${catalogViewResult.name}`);
+      catalogViewResult = null;
+      await refresh();
     } catch (e) {
       toasts.error(String(e));
+    } finally {
+      catalogInstalling = false;
     }
   }
 
@@ -257,12 +749,157 @@
         {#if swarmEnabled} TuffSwarm stats enabled.{/if}
       </p>
     </div>
-    <button class="ghost" disabled={loading} on:click={refresh}>
+    <button class="ghost" disabled={loading} onclick={refresh}>
       <span class:spin={loading} style="display:inline-flex"><RefreshCw size={14} /></span> Refresh
     </button>
   </div>
 
   {#if error}<div class="err">{error}</div>{/if}
+
+  {#if swarmEnabled}
+    <section class="peer-gen">
+      <h3>Request peer generation</h3>
+      {#if kudosLoading || kudosBalance}
+        <div class="kudos-wrap">
+          <KudosBalanceStrip
+            title="Your Kudos"
+            total={Number(kudosBalance?.totalKudos ?? 0)}
+            rac={Number(kudosBalance?.rac ?? 0)}
+            loading={kudosLoading && !kudosBalance}
+            hint="Same device wallet — worker Accept awards here too"
+          />
+        </div>
+      {/if}
+      {#if !p2pEnabled}
+        <p class="muted p2p-cta">
+          Enable Prefer local P2P in Settings to request peer generation.
+        </p>
+      {:else if creationReady}
+        <p class="muted">
+          Submit a CreationJob to a TuffSwarm creation worker. Review artifacts, then apply to the open
+          project (never auto-applied).
+        </p>
+        <div class="peer-form">
+          <label>
+            Kind
+            <select bind:value={creationKind} disabled={creationBusy}>
+              {#each creationKinds as k (k)}
+                <option value={k}>{k}</option>
+              {/each}
+            </select>
+          </label>
+          <label>
+            Minecraft
+            <input bind:value={creationMc} placeholder="1.20.1" disabled={creationBusy} />
+          </label>
+          <label>
+            Loader
+            <input bind:value={creationLoader} placeholder="fabric" disabled={creationBusy} />
+          </label>
+          <label class="span-2">
+            Brief
+            <textarea
+              bind:value={creationBrief}
+              rows="3"
+              placeholder="Describe what to generate…"
+              disabled={creationBusy}
+            ></textarea>
+          </label>
+          {#if creationModIds.length > 0}
+            <p class="muted span-2">Constraints: {creationModIds.length} mod id(s) from inventory</p>
+          {/if}
+          <div class="row span-2">
+            <button
+              type="button"
+              class="primary"
+              disabled={creationBusy || !creationBrief.trim() || creationBrief.trim().length < 8}
+              onclick={submitCreation}
+            >
+              {creationBusy ? "Waiting for worker…" : "Submit CreationJob"}
+            </button>
+          </div>
+        </div>
+        {#if creationError}<div class="err">{creationError}</div>{/if}
+        {#if creationOutcome}
+          <div class="peer-result" class:pass={creationOutcome.verification.passed}>
+            <strong>
+              Verification {creationOutcome.verification.passed ? "passed" : "failed"}
+            </strong>
+            <p class="muted order-hint">
+              Suggested: Apply → try in pack → Accept result (awards Kudos).
+            </p>
+            {#if claimedConfidenceLabel}
+              <p class="muted">Claimed confidence: {claimedConfidenceLabel}</p>
+            {/if}
+            {#if creationOutcome.result.error}
+              <p class={softAiFallback ? "muted warn-line" : "err"}>
+                {#if softAiFallback}<strong>Scaffold fallback:</strong> {/if}
+                {creationOutcome.result.error}
+              </p>
+            {/if}
+            {#if creationOutcome.verification.checks?.length}
+              <ul class="check-list">
+                {#each creationOutcome.verification.checks as check, i (check.name + String(i))}
+                  <li class:ok={check.ok} class:fail={!check.ok}>
+                    <span class="check-status">{check.ok ? "ok" : "fail"}</span>
+                    <span>{check.name}{check.detail ? ` — ${check.detail}` : ""}</span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+            <ul class="art-list">
+              {#each creationOutcome.result.artifacts as art, i (art.path + String(i))}
+                <li>
+                  <code>{art.path}</code>
+                  <pre>{truncateArt(art.content)}</pre>
+                </li>
+              {/each}
+            </ul>
+            {#if creationOutcome.result.artifacts.length === 0}
+              <p class="muted">No artifacts returned.</p>
+            {/if}
+            {#if creationApplied}
+              <p class="muted">Applied {creationAppliedCount} file(s).</p>
+            {/if}
+            <p class="muted auth-line">
+              {#if accessToken}
+                Signed in{authUserEmail ? ` as ${authUserEmail}` : ""}.
+              {:else}
+                Sign in on Crash Votes to Accept and award Kudos.
+              {/if}
+            </p>
+            {#if creationAccepted || creationOutcome.verification.rewardGranted}
+              <p class="muted reward-granted">Reward granted</p>
+            {/if}
+            <div class="row">
+              <button
+                type="button"
+                class="primary"
+                disabled={
+                  creationBusy ||
+                  !creationOutcome.verification.passed ||
+                  creationOutcome.result.artifacts.length === 0
+                }
+                onclick={applyCreation}
+              >
+                Apply to project
+              </button>
+              <button
+                type="button"
+                disabled={!canAccept}
+                onclick={acceptCreation}
+                title={acceptDisabledReason || "Award Kudos to the worker"}
+              >
+                {creationAccepted || creationOutcome.verification.rewardGranted
+                  ? "Accepted"
+                  : "Accept result"}
+              </button>
+            </div>
+          </div>
+        {/if}
+      {/if}
+    </section>
+  {/if}
 
   <section>
     <h3>{packQuery.trim() ? "Search results" : "Popular modpacks · Modpack Index"}</h3>
@@ -273,7 +910,7 @@
             type="button"
             class="tag-chip"
             class:active={selectedPackCategoryId === cat.id}
-            on:click={() => togglePackCategory(cat.id)}
+            onclick={() => togglePackCategory(cat.id)}
           >
             {cat.name}
           </button>
@@ -286,8 +923,8 @@
         bind:value={packQuery}
         placeholder="Search modpacks…"
         aria-label="Search modpacks"
-        on:input={schedulePackSearch}
-        on:keydown={onPackQueryKeydown}
+        oninput={schedulePackSearch}
+        onkeydown={onPackQueryKeydown}
       />
     </div>
     {#if loading && popularPacks.length === 0}
@@ -301,7 +938,7 @@
     {:else}
       <div class="hit-grid">
         {#each popularPacks as hit (hit.id)}
-          <button type="button" class="hit-card" on:click={() => openPack(hit)}>
+          <button type="button" class="hit-card" onclick={() => openPack(hit)}>
             {#if hit.iconUrl}
               <img src={hit.iconUrl} alt="" />
             {:else}
@@ -311,7 +948,6 @@
               <strong>{hit.name}</strong>
               <small><Download size={11} /> {formatCount(hit.downloads)}</small>
             </div>
-            <ExternalLink size={14} />
           </button>
         {/each}
       </div>
@@ -333,7 +969,7 @@
     {:else}
       <div class="hit-grid mods">
         {#each popularMods as hit (hit.id)}
-          <button type="button" class="hit-card compact" on:click={() => openMr(hit)}>
+          <button type="button" class="hit-card compact" onclick={() => openMr(hit)}>
             {#if hit.iconUrl}
               <img src={hit.iconUrl} alt="" />
             {:else}
@@ -402,10 +1038,10 @@
                 <small>{previews[slug]?.name} · {previews[slug]?.version}</small>
               {/if}
               <div class="row">
-                <button class="ghost mini" disabled={previewBusy === slug} on:click={() => previewSlug(slug)}>
+                <button class="ghost mini" disabled={previewBusy === slug} onclick={() => previewSlug(slug)}>
                   {previewBusy === slug ? "…" : "Preview"}
                 </button>
-                <button class="mini" disabled={installBusy === slug} on:click={() => installSlug(slug)}>
+                <button class="mini" disabled={installBusy === slug} onclick={() => installSlug(slug)}>
                   <Download size={12} />
                   {installBusy === slug ? "…" : "Install"}
                 </button>
@@ -417,6 +1053,33 @@
     </section>
   {/if}
 </div>
+
+{#if catalogViewResult}
+  <div
+    class="catalog-backdrop"
+    role="button"
+    tabindex="-1"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) catalogViewResult = null;
+    }}
+    onkeydown={() => {}}
+  >
+    <div
+      class="catalog-modal"
+      role="dialog"
+      aria-modal="true"
+      use:trapFocus={{ onEscape: () => (catalogViewResult = null) }}
+    >
+      <CatalogProjectView
+        result={catalogViewResult}
+        installing={catalogInstalling}
+        onback={() => (catalogViewResult = null)}
+        oninstall={() => void installFromCatalog()}
+        onopenexternal={() => void openCatalogExternal()}
+      />
+    </div>
+  </div>
+{/if}
 
 <style>
   .creation {
@@ -443,6 +1106,74 @@
   .creation-head button {
     margin-left: auto;
   }
+  .peer-gen {
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .kudos-wrap {
+    margin: 8px 0 10px;
+  }
+  .peer-gen h3 {
+    margin: 0 0 4px;
+    font-size: 14px;
+  }
+  .peer-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .peer-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .peer-form .span-2 {
+    grid-column: 1 / -1;
+  }
+  .peer-form input,
+  .peer-form select,
+  .peer-form textarea {
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    padding: 6px 8px;
+  }
+  .peer-result {
+    margin-top: 12px;
+    padding: 10px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+  }
+  .peer-result.pass {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  }
+  .art-list {
+    margin-top: 8px;
+  }
+  .art-list li {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+  .art-list pre {
+    margin: 0;
+    padding: 8px;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--bg-tertiary);
+    border-radius: var(--border-radius-sm);
+    max-height: 140px;
+    overflow: auto;
+  }
   .tag-row {
     display: flex;
     flex-wrap: wrap;
@@ -460,12 +1191,12 @@
   }
   .tag-chip:hover {
     color: var(--text-secondary);
-    border-color: rgba(27, 217, 106, 0.35);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .tag-chip.active {
     color: var(--text-primary);
-    border-color: rgba(27, 217, 106, 0.5);
-    background: rgba(27, 217, 106, 0.08);
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
   .pack-search {
     margin: 0 0 10px;
@@ -508,9 +1239,14 @@
     border-radius: var(--border-radius-sm);
   }
   .err {
-    color: #fecaca;
+    color: var(--accent-danger);
     margin-bottom: 10px;
     font-size: 13px;
+  }
+  .warn-line {
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: var(--accent-warning, #f59e0b);
   }
   section {
     margin-top: 16px;
@@ -551,8 +1287,8 @@
     grid-template-columns: 36px 1fr;
   }
   .hit-card:hover {
-    border-color: rgba(27, 217, 106, 0.4);
-    background: rgba(27, 217, 106, 0.06);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
   .hit-card img,
   .hit-fallback {
@@ -617,6 +1353,41 @@
     color: var(--text-muted);
     font-size: 12px;
   }
+  .p2p-cta {
+    margin: 8px 0 0;
+    padding: 10px;
+    background: var(--bg-elevated);
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+  }
+  .order-hint {
+    margin: 6px 0 0;
+  }
+  .check-list {
+    margin: 8px 0;
+  }
+  .check-list li {
+    font-size: 12px;
+  }
+  .check-list li.ok .check-status {
+    color: var(--accent-primary);
+  }
+  .check-list li.fail .check-status {
+    color: var(--accent-danger);
+  }
+  .check-status {
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+  }
+  .auth-line,
+  .reward-granted {
+    margin: 8px 0;
+  }
+  .reward-granted {
+    color: var(--accent-primary);
+  }
   .suggest-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -637,6 +1408,23 @@
     display: flex;
     gap: 6px;
   }
+  button.primary {
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 50%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  button.primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 28%, transparent);
+  }
+  button.primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
   .mini {
     font-size: 12px;
     padding: 4px 8px;
@@ -648,5 +1436,24 @@
     to {
       transform: rotate(360deg);
     }
+  }
+  .catalog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .catalog-modal {
+    width: min(920px, 96vw);
+    max-height: min(90vh, 900px);
+    overflow: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 18px;
+    padding: 0;
   }
 </style>

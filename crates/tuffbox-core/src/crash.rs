@@ -1,7 +1,9 @@
 use crate::{
+    action_plan::is_invented_vanilla_resource_mod_id,
     change_plan::{ChangeAction, ChangePlan, ChangeRisk},
     diagnostics::{Diagnostic, DiagnosticSeverity},
     graph::{DependencyGraph, NodeId},
+    launch_history::{self, LaunchHistoryEntry},
     manifest::{ModSpec, ProjectManifest},
     resolver::Resolver,
     snapshot::Snapshot,
@@ -17,6 +19,7 @@ use thiserror::Error;
 
 const MAX_REPORT_BYTES: u64 = 4 * 1024 * 1024;
 const LATEST_LOG_TAIL_LINES: usize = 900;
+const DEBUG_LOG_TAIL_LINES: usize = 2400;
 const MAX_EVIDENCE_PER_SUSPECT: usize = 8;
 pub const LATEST_COMPATIBLE_VERSION: &str = "latest-compatible";
 
@@ -95,6 +98,13 @@ pub struct SuspectEvidence {
     pub line_number: usize,
     pub kind: CrashSignalKind,
     pub text: String,
+    /// Positional / channel weight (0–100). Higher = stronger blame signal.
+    #[serde(default = "default_evidence_weight")]
+    pub weight: u8,
+}
+
+fn default_evidence_weight() -> u8 {
+    50
 }
 
 /// How strongly a suspect is implicated in the crash.
@@ -230,11 +240,29 @@ pub struct SupportPackResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ArchivedSessionLog {
+    pub session_id: String,
+    pub started_at: String,
+    pub exit_code: Option<i32>,
+    pub analysis: LatestLogAnalysis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CrashDiagnosis {
     pub reports: Vec<CrashReportSummary>,
     pub selected_report: Option<CrashReportAnalysis>,
     pub latest_log: LatestLogAnalysis,
     pub launcher_log: LatestLogAnalysis,
+    /// `logs/debug.log` when present (longer tail — early crash lines often live here).
+    #[serde(default = "default_empty_log_analysis")]
+    pub debug_log: LatestLogAnalysis,
+    /// Archived logs from crashed launches (newest first).
+    #[serde(default)]
+    pub session_logs: Vec<ArchivedSessionLog>,
+    /// Recent launch journal rows (newest first).
+    #[serde(default)]
+    pub launch_history: Vec<LaunchHistoryEntry>,
     pub suspected_mods: Vec<SuspectedMod>,
     pub hints: Vec<DiagnosisHint>,
     pub recent_snapshots: Vec<Snapshot>,
@@ -264,6 +292,17 @@ pub struct CrashDiagnosis {
 
 fn default_analysis_source() -> String {
     "crash_report".into()
+}
+
+fn default_empty_log_analysis() -> LatestLogAnalysis {
+    LatestLogAnalysis {
+        path: PathBuf::new(),
+        exists: false,
+        tail: String::new(),
+        signals: Vec::new(),
+        suspected_mods: Vec::new(),
+        hints: Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -398,6 +437,7 @@ pub fn analyze_latest_log(
         project_dir.as_ref().join("logs").join("latest.log"),
         "logs/latest.log",
         manifest,
+        LATEST_LOG_TAIL_LINES,
     )
 }
 
@@ -417,13 +457,30 @@ pub fn analyze_launcher_log(
         .find(|path| path.is_file())
         .cloned()
         .unwrap_or_else(|| project_dir.join("logs").join("launcher.log"));
-    analyze_log_file(log_path, "launcher.log", manifest)
+    analyze_log_file(log_path, "launcher.log", manifest, LATEST_LOG_TAIL_LINES)
 }
 
-fn analyze_log_file(path: PathBuf, source: &str, manifest: &ProjectManifest) -> LatestLogAnalysis {
+pub fn analyze_debug_log(
+    project_dir: impl AsRef<Path>,
+    manifest: &ProjectManifest,
+) -> LatestLogAnalysis {
+    analyze_log_file(
+        project_dir.as_ref().join("logs").join("debug.log"),
+        "logs/debug.log",
+        manifest,
+        DEBUG_LOG_TAIL_LINES,
+    )
+}
+
+fn analyze_log_file(
+    path: PathBuf,
+    source: &str,
+    manifest: &ProjectManifest,
+    tail_lines: usize,
+) -> LatestLogAnalysis {
     let exists = path.is_file();
     let tail = if exists {
-        crate::process::read_log_tail(&path, LATEST_LOG_TAIL_LINES).unwrap_or_default()
+        crate::process::read_log_tail(&path, tail_lines).unwrap_or_default()
     } else {
         String::new()
     };
@@ -437,6 +494,27 @@ fn analyze_log_file(path: PathBuf, source: &str, manifest: &ProjectManifest) -> 
         suspected_mods,
         hints,
     }
+}
+
+fn load_archived_session_logs(
+    project_dir: &Path,
+    manifest: &ProjectManifest,
+) -> Vec<ArchivedSessionLog> {
+    launch_history::list_launch_history_default(project_dir)
+        .into_iter()
+        .filter(|e| e.archived)
+        .filter_map(|entry| {
+            let log_path = launch_history::archived_session_log_path(project_dir, &entry.id)?;
+            let source = format!("session/{}", entry.id);
+            let analysis = analyze_log_file(log_path, &source, manifest, DEBUG_LOG_TAIL_LINES);
+            Some(ArchivedSessionLog {
+                session_id: entry.id,
+                started_at: entry.started_at,
+                exit_code: entry.exit_code,
+                analysis,
+            })
+        })
+        .collect()
 }
 
 pub fn build_crash_diagnosis(
@@ -466,17 +544,37 @@ pub fn build_crash_diagnosis(
 
     let latest_log = analyze_latest_log(project_dir, manifest);
     let launcher_log = analyze_launcher_log(project_dir, manifest);
+    let debug_log = analyze_debug_log(project_dir, manifest);
+    let session_logs = load_archived_session_logs(project_dir, manifest);
+    let launch_history = launch_history::list_launch_history_default(project_dir);
+
+    // Archived crashed sessions appear in the source picker alongside crash-reports.
+    for archived in &session_logs {
+        let label = format_session_picker_label(archived);
+        reports.push(CrashReportSummary {
+            id: format!("{}{}", launch_history::SESSION_REPORT_PREFIX, archived.session_id),
+            name: label,
+            path: archived.analysis.path.clone(),
+            size: 0,
+            modified: None,
+        });
+    }
 
     // Explicit user pick always wins. Special id `__latest_log__` forces live-log
     // analysis (AI Explain / Diagnose sidebar) and never auto-selects a crash file.
     // `__launcher_log__` forces launcher.log.
-    // Auto-pick the newest crash report only when latest.log does not supersede it.
+    // `session/<id>` selects an archived crashed-session log.
     let force_latest_log = selected_report_id == Some("__latest_log__");
     let force_launcher_log = selected_report_id == Some("__launcher_log__");
+    let force_archived_session = selected_report_id
+        .filter(|id| launch_history::is_session_report_id(id))
+        .and_then(|id| launch_history::session_id_from_report_id(id).map(str::to_string));
     let explicit = selected_report_id
         .filter(|id| !id.is_empty() && *id != "__latest_log__" && *id != "__launcher_log__")
         .filter(|id| {
-            reports.iter().any(|report| report.id == *id) || validate_report_id(id).is_ok()
+            launch_history::is_session_report_id(id)
+                || reports.iter().any(|report| report.id == *id)
+                || validate_report_id(id).is_ok()
         });
     let newest = reports
         .iter()
@@ -485,7 +583,14 @@ pub fn build_crash_diagnosis(
         .map(|r| latest_log_supersedes_crash(project_dir, Some(r.path.as_path()), &latest_log.tail))
         .unwrap_or(false);
 
-    let selected_id = if force_latest_log || force_launcher_log {
+    let archived_session_analysis = force_archived_session.as_ref().and_then(|sid| {
+        session_logs
+            .iter()
+            .find(|s| s.session_id == *sid)
+            .map(|s| s.analysis.clone())
+    });
+
+    let selected_id = if force_latest_log || force_launcher_log || force_archived_session.is_some() {
         None
     } else if let Some(id) = explicit {
         Some(id)
@@ -496,11 +601,14 @@ pub fn build_crash_diagnosis(
     };
 
     let selected_report = selected_id
+        .filter(|id| !launch_history::is_session_report_id(id))
         .map(|id| analyze_crash_report(project_dir, id, manifest))
         .transpose()?;
 
     let analysis_source = if force_launcher_log {
         "launcher_log".to_string()
+    } else if force_archived_session.is_some() {
+        "archived_session".to_string()
     } else if selected_report
         .as_ref()
         .map(|r| r.summary.id.starts_with("hs_err/"))
@@ -509,6 +617,8 @@ pub fn build_crash_diagnosis(
         "hs_err".to_string()
     } else if selected_report.is_some() {
         "crash_report".to_string()
+    } else if stale && session_logs.first().is_some() {
+        "archived_session".to_string()
     } else {
         "latest_log".to_string()
     };
@@ -516,42 +626,71 @@ pub fn build_crash_diagnosis(
     // Healthy live session (and user did not explicitly open an old crash):
     // suppress crash-log suspects / fix plans so Diagnose doesn't nag about
     // a crash that was already fixed and successfully relaunched.
-    let session_healthy =
-        explicit.is_none() && !force_launcher_log && log_indicates_healthy_session(&latest_log.tail);
+    let session_healthy = explicit.is_none()
+        && force_archived_session.is_none()
+        && !force_launcher_log
+        && log_indicates_healthy_session(&latest_log.tail);
+
+    // When latest.log is a successful relaunch but we archived the crashed session,
+    // use the archived log for suspect/hint analysis (stale crash-report alone is misleading).
+    let archived_fallback = if session_healthy && stale {
+        session_logs.first().map(|s| s.analysis.clone())
+    } else {
+        None
+    };
+
+    let has_archived_crash_context =
+        archived_session_analysis.is_some() || archived_fallback.is_some();
 
     let mut suspect_sets = Vec::new();
     let mut combined_signals = Vec::new();
-    if !session_healthy {
+    let analyze_crash = !session_healthy || has_archived_crash_context;
+
+    if analyze_crash {
         if let Some(report) = &selected_report {
             suspect_sets.push(report.suspected_mods.clone());
             combined_signals.extend(report.signals.clone());
         }
-        if force_launcher_log {
+        if let Some(archived) = archived_session_analysis
+            .clone()
+            .or_else(|| archived_fallback.clone())
+        {
+            suspect_sets.push(archived.suspected_mods.clone());
+            combined_signals.extend(archived.signals.clone());
+        } else if force_launcher_log {
             suspect_sets.push(launcher_log.suspected_mods.clone());
             combined_signals.extend(launcher_log.signals.clone());
-        } else {
+        } else if !session_healthy {
             suspect_sets.push(latest_log.suspected_mods.clone());
-            suspect_sets.push(launcher_log.suspected_mods.clone());
             combined_signals.extend(latest_log.signals.clone());
-            combined_signals.extend(launcher_log.signals.clone());
         }
+        if debug_log.exists && !debug_log.tail.is_empty() {
+            suspect_sets.push(debug_log.suspected_mods.clone());
+            combined_signals.extend(debug_log.signals.clone());
+        }
+        suspect_sets.push(launcher_log.suspected_mods.clone());
+        combined_signals.extend(launcher_log.signals.clone());
     }
+
     let suspected_mods = merge_suspected_mods(suspect_sets.into_iter().flatten());
-    let suspected_mods = if session_healthy {
+    let log_for_enrich = archived_session_analysis
+        .or_else(|| archived_fallback.clone())
+        .unwrap_or_else(|| latest_log.clone());
+    let suspected_mods = if session_healthy && !has_archived_crash_context {
         suspected_mods
     } else {
         enrich_diagnosis_suspects(
             project_dir,
             manifest,
             &selected_report,
-            &latest_log,
+            &log_for_enrich,
             suspected_mods,
         )
     };
 
     let graph = DependencyGraph::from_manifest(manifest);
     let graph_diagnostics = Resolver::analyze_project(manifest, &graph);
-    let fix_plan = if session_healthy {
+    let fix_plan = if session_healthy && !has_archived_crash_context {
         ChangePlan {
             summary: "Minecraft launched successfully — no crash-log fixes needed. Remaining items below are dependency-graph checks only.".to_string(),
             risk: ChangeRisk::Low,
@@ -567,7 +706,7 @@ pub fn build_crash_diagnosis(
         )
     };
 
-    let mut hints = if session_healthy {
+    let mut hints = if session_healthy && !has_archived_crash_context {
         Vec::new()
     } else {
         build_hints(&combined_signals, &suspected_mods)
@@ -577,12 +716,16 @@ pub fn build_crash_diagnosis(
             id: "session-healthy".into(),
             title: "Build launched successfully".into(),
             severity: "info".into(),
-            detail: "latest.log shows a healthy Minecraft session with no fresh crash markers. \
+            detail: if has_archived_crash_context {
+                "latest.log shows a healthy session. Fix suggestions below come from the archived crashed launch — verify before applying.".into()
+            } else {
+                "latest.log shows a healthy Minecraft session with no fresh crash markers. \
                 Historical crash-reports are kept for reference but are not used for fix suggestions."
-                .into(),
+                    .into()
+            },
             steps: vec![
                 "Play normally — no crash-log actions are required.".into(),
-                "Open a crash-report below only if you want to revisit an old failure.".into(),
+                "Open a crash-report or archived session below to revisit a past failure.".into(),
                 "Use Live logs while the game is running to watch the current session.".into(),
             ],
             related_mods: Vec::new(),
@@ -593,17 +736,30 @@ pub fn build_crash_diagnosis(
 
     let world_coords = selected_report
         .as_ref()
-        .and_then(|r| extract_world_coords(&r.content));
+        .and_then(|r| extract_world_coords(&r.content))
+        .or_else(|| {
+            archived_fallback
+                .as_ref()
+                .and_then(|a| extract_world_coords(&a.tail))
+        });
     let memory_hint = selected_report
         .as_ref()
         .and_then(|r| extract_memory_hint(&r.content))
-        .or_else(|| extract_memory_hint(&latest_log.tail));
+        .or_else(|| extract_memory_hint(&latest_log.tail))
+        .or_else(|| {
+            archived_fallback
+                .as_ref()
+                .and_then(|a| extract_memory_hint(&a.tail))
+        });
 
     Ok(CrashDiagnosis {
         reports,
         selected_report,
         latest_log,
         launcher_log,
+        debug_log,
+        session_logs,
+        launch_history,
         suspected_mods,
         hints,
         recent_snapshots,
@@ -616,6 +772,15 @@ pub fn build_crash_diagnosis(
         world_coords,
         memory_hint,
     })
+}
+
+fn format_session_picker_label(archived: &ArchivedSessionLog) -> String {
+    let ts = archived.started_at.chars().take(16).collect::<String>();
+    let code = archived
+        .exit_code
+        .map(|c| format!(" exit {c}"))
+        .unwrap_or_default();
+    format!("Crashed session {ts}{code}")
 }
 
 /// True when `logs/latest.log` is newer than `crash_report_path` and looks like a
@@ -928,6 +1093,138 @@ pub fn parse_crash_mod_entries(
     entries
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogSection {
+    General,
+    ModList,
+    Description,
+    StackTrace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StackContext {
+    Plain,
+    DescriptionLine,
+    PrimaryHead,
+    PrimaryFrame,
+    CausedByHead,
+    CausedByFrame,
+}
+
+fn detect_log_section(line: &str, current: LogSection) -> LogSection {
+    let trimmed = line.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if trimmed.starts_with("-- ") && trimmed.ends_with(" --") {
+        let title = trimmed.trim_matches('-').trim().to_ascii_lowercase();
+        if title.contains("mod list")
+            || title.contains("mods")
+            || title.contains("fabric mods")
+            || title.contains("quilt mods")
+        {
+            return LogSection::ModList;
+        }
+        if title.contains("head") || title.contains("stacktrace") || title.contains("stack trace") {
+            return LogSection::StackTrace;
+        }
+        if title.contains("system details") {
+            return LogSection::General;
+        }
+    }
+    if lower.starts_with("mod list:")
+        || lower.starts_with("fabric mods:")
+        || lower.starts_with("quilt mods:")
+        || lower.contains("| mod id |")
+        || lower.contains("|    mod id    |")
+    {
+        return LogSection::ModList;
+    }
+    if lower.starts_with("description:") {
+        return LogSection::Description;
+    }
+    if trimmed.starts_with('\t') || trimmed.starts_with("at ") || lower.contains("caused by:") {
+        return LogSection::StackTrace;
+    }
+    current
+}
+
+fn is_mod_list_table_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with('|') && trimmed.contains('|') && !trimmed.to_ascii_lowercase().contains("mod id")
+}
+
+/// First mod id from a pipe-formatted `-- Mods --` table row, e.g. `| fabric-api | 0.92.0 |`.
+fn extract_mod_list_id(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('|') {
+        return None;
+    }
+    let cells: Vec<&str> = trimmed
+        .trim_matches('|')
+        .split('|')
+        .map(|c| c.trim())
+        .collect();
+    let id = cells.first()?;
+    if id.is_empty() || id.to_ascii_lowercase().contains("mod id") {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn stack_context_for_line(
+    line: &str,
+    section: LogSection,
+    in_caused_by: bool,
+    primary_frames: usize,
+) -> (StackContext, bool, usize) {
+    let trimmed = line.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if section == LogSection::Description || lower.starts_with("description:") {
+        return (StackContext::DescriptionLine, in_caused_by, primary_frames);
+    }
+    if lower.contains("caused by:") {
+        return (StackContext::CausedByHead, true, 0);
+    }
+    let is_frame = trimmed.starts_with("at ")
+        || trimmed.starts_with("\tat ")
+        || trimmed.contains("knot//")
+        || (trimmed.starts_with('-') && trimmed.contains('('));
+    if is_frame {
+        if in_caused_by {
+            return (StackContext::CausedByFrame, true, primary_frames);
+        }
+        if primary_frames == 0 {
+            return (StackContext::PrimaryHead, false, 1);
+        }
+        return (StackContext::PrimaryFrame, false, primary_frames.saturating_add(1));
+    }
+    if in_caused_by && !is_frame && !lower.contains("exception") {
+        // Plain line after Caused by before frames — still part of caused-by block.
+        return (StackContext::CausedByHead, true, primary_frames);
+    }
+    (StackContext::Plain, false, if is_frame { primary_frames } else { 0 })
+}
+
+fn evidence_weight(ctx: StackContext, section: LogSection) -> u8 {
+    match (ctx, section) {
+        (StackContext::DescriptionLine, _) => 98,
+        (StackContext::CausedByHead, _) => 92,
+        (StackContext::CausedByFrame, _) => 88,
+        (StackContext::PrimaryHead, _) => 85,
+        (StackContext::PrimaryFrame, _) => 72,
+        (_, LogSection::ModList) => 12,
+        (StackContext::Plain, LogSection::StackTrace) => 40,
+        _ => 50,
+    }
+}
+
+fn scaled_confidence(base: u8, weight: u8) -> u8 {
+    ((base as u16 * weight as u16) / 100).min(99) as u8
+}
+
+fn should_skip_token_match(section: LogSection, line: &str) -> bool {
+    section == LogSection::ModList || is_mod_list_table_row(line)
+}
+
 pub fn analyze_text_for_suspects(
     text: &str,
     source: &str,
@@ -936,8 +1233,34 @@ pub fn analyze_text_for_suspects(
     let candidates = build_candidates(manifest);
     let mut signals = Vec::new();
     let mut suspects: BTreeMap<String, SuspectAccumulator> = BTreeMap::new();
+    let mut section = LogSection::General;
+    let mut in_caused_by = false;
+    let mut primary_frames = 0usize;
 
     for (index, line) in text.lines().enumerate() {
+        section = detect_log_section(line, section);
+        if section == LogSection::ModList {
+            if let Some(id) = extract_mod_list_id(line) {
+                if let Some(candidate) = candidates
+                    .iter()
+                    .find(|c| c.module.id == id || c.tokens.iter().any(|t| t == &id))
+                {
+                    let line_number = index + 1;
+                    add_manifest_suspect(
+                        &mut suspects,
+                        candidate.module,
+                        evidence_weighted(source, line_number, CrashSignalKind::SuspectedMods, line, 12),
+                        scaled_confidence(confidence_for_kind(CrashSignalKind::SuspectedMods), 12),
+                    );
+                }
+            }
+            continue;
+        }
+        let (stack_ctx, next_caused, next_primary_frames) =
+            stack_context_for_line(line, section, in_caused_by, primary_frames);
+        in_caused_by = next_caused;
+        primary_frames = next_primary_frames;
+
         let line_number = index + 1;
         let Some(kind) = classify_signal_line(line) else {
             continue;
@@ -950,6 +1273,9 @@ pub fn analyze_text_for_suspects(
             text: line.trim().to_string(),
         };
         signals.push(signal);
+
+        let weight = evidence_weight(stack_ctx, section);
+        let skip_tokens = should_skip_token_match(section, line);
 
         if matches!(
             kind,
@@ -965,40 +1291,38 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence(source, line_number, kind, line),
-                        96,
+                        evidence_weighted(source, line_number, kind, line, weight),
+                        scaled_confidence(96, weight),
                     );
                 } else if !is_noise_token(&mod_id) {
                     add_inferred_suspect(
                         &mut suspects,
                         &mod_id,
                         None,
-                        evidence(source, line_number, kind, line),
-                        82,
+                        evidence_weighted(source, line_number, kind, line, weight),
+                        scaled_confidence(82, weight),
                     );
                 }
             }
         }
 
-        if !matches!(
-            kind,
-            CrashSignalKind::Performance | CrashSignalKind::ResourceWarning
-        ) {
+        if !skip_tokens
+            && !matches!(
+                kind,
+                CrashSignalKind::Performance | CrashSignalKind::ResourceWarning
+            )
+        {
             for candidate in &candidates {
                 if candidate_matches_line(candidate, line) {
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence(source, line_number, kind, line),
-                        confidence_for_kind(kind),
+                        evidence_weighted(source, line_number, kind, line, weight),
+                        scaled_confidence(confidence_for_kind(kind), weight),
                     );
                 }
             }
 
-            // Stack-trace FQN / mixin package attribution: `knot//
-            // net.earthcomputer.clientcommands...PlayerRandCracker` or
-            // `dev.isxander.controlify.mixins...` map to the mod whose id/name
-            // matches the package component, without blind substring matches.
             if matches!(
                 kind,
                 CrashSignalKind::Exception
@@ -1009,11 +1333,12 @@ pub fn analyze_text_for_suspects(
                 for pkg in extract_java_packages(line) {
                     for candidate in &candidates {
                         if candidate_matches_java_package(candidate, &pkg) {
+                            let pkg_weight = weight.max(80);
                             add_manifest_suspect(
                                 &mut suspects,
                                 candidate.module,
-                                evidence(source, line_number, kind, line),
-                                88,
+                                evidence_weighted(source, line_number, kind, line, pkg_weight),
+                                scaled_confidence(88, pkg_weight),
                             );
                             if let Some(entry) =
                                 suspects.get_mut(&normalize_token(&candidate.module.id))
@@ -1035,8 +1360,8 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence(source, line_number, kind, line),
-                        92,
+                        evidence_weighted(source, line_number, kind, line, weight.max(100)),
+                        scaled_confidence(92, weight.max(100)),
                     );
                 } else {
                     let inferred = infer_id_from_jar(&jar_name);
@@ -1045,10 +1370,26 @@ pub fn analyze_text_for_suspects(
                             &mut suspects,
                             &inferred,
                             Some(jar_name),
-                            evidence(source, line_number, kind, line),
-                            68,
+                            evidence_weighted(source, line_number, kind, line, weight),
+                            scaled_confidence(68, weight),
                         );
                     }
+                }
+            }
+        }
+
+        if matches!(kind, CrashSignalKind::Entrypoint) {
+            for mod_id in extract_quoted_mod_ids(line) {
+                if let Some(candidate) = candidates
+                    .iter()
+                    .find(|candidate| candidate.tokens.iter().any(|t| t == &mod_id))
+                {
+                    add_manifest_suspect(
+                        &mut suspects,
+                        candidate.module,
+                        evidence_weighted(source, line_number, kind, line, weight.max(100)),
+                        scaled_confidence(confidence_for_kind(kind), weight.max(100)),
+                    );
                 }
             }
         }
@@ -1069,16 +1410,18 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence(source, line_number, kind, line),
-                        confidence_for_kind(kind),
+                        evidence_weighted(source, line_number, kind, line, weight.max(100)),
+                        scaled_confidence(confidence_for_kind(kind), weight.max(100)),
                     );
-                } else if !is_noise_token(&mod_id) {
+                } else if !is_noise_token(&mod_id)
+                    && !is_invented_vanilla_resource_mod_id(&mod_id)
+                {
                     add_inferred_suspect(
                         &mut suspects,
                         &mod_id,
                         None,
-                        evidence(source, line_number, kind, line),
-                        confidence_for_kind(kind).saturating_sub(8),
+                        evidence_weighted(source, line_number, kind, line, weight),
+                        scaled_confidence(confidence_for_kind(kind).saturating_sub(8), weight),
                     );
                 }
             }
@@ -1086,7 +1429,7 @@ pub fn analyze_text_for_suspects(
 
         if matches!(
             kind,
-            CrashSignalKind::Mixin | CrashSignalKind::SuspectedMods
+            CrashSignalKind::Mixin | CrashSignalKind::SuspectedMods | CrashSignalKind::CausedBy
         ) {
             for token in tokenize(line) {
                 if token.len() < 3 || is_noise_token(&token) {
@@ -1099,8 +1442,8 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence(source, line_number, kind, line),
-                        confidence_for_kind(kind),
+                        evidence_weighted(source, line_number, kind, line, weight.max(90)),
+                        scaled_confidence(confidence_for_kind(kind), weight.max(90)),
                     );
                 }
             }
@@ -1164,9 +1507,20 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
                 entry.evidence.push(evidence);
             }
         }
-        entry.confidence = entry
-            .confidence
-            .saturating_add((entry.evidence.len().saturating_sub(1) as u8).min(7));
+        let strong_count = entry
+            .evidence
+            .iter()
+            .filter(|e| e.weight >= 70 || is_strong_match_source(&match_source_for_kind(e.kind)))
+            .count();
+        entry.confidence = entry.confidence.saturating_add((strong_count.saturating_sub(1) as u8).min(5));
+        let distinct_sources: HashSet<String> = entry
+            .evidence
+            .iter()
+            .map(|e| e.source.clone())
+            .collect();
+        if distinct_sources.len() >= 2 {
+            entry.confidence = entry.confidence.saturating_add(4).min(99);
+        }
     }
 
     let mut out = by_id
@@ -1424,31 +1778,66 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
     }
 
     if kinds.contains(&CrashSignalKind::MissingDependency) {
-        let names: Vec<String> = suspects.iter().map(|s| s.id.clone()).collect();
-        push(DiagnosisHint {
-            id: "missing-dependency".into(),
-            title: "Missing mod dependency".into(),
-            severity: "high".into(),
-            detail: "One or more mods require another mod that is not installed (or could not be \
-                loaded). The loader reports it as a ModResolutionException / missing dependency."
-                .into(),
-            steps: vec![
-                "Install the missing dependency mod for the same Minecraft + loader version.".into(),
-                "If the dependency is present, it may be the wrong version — update it.".into(),
-                "For JIJ (jar-in-jar) dependencies, update the parent mod.".into(),
-            ],
-            related_mods: names.clone(),
-            fix: if names.is_empty() {
-                None
-            } else {
-                Some(FixAction {
+        // Prefer ids explicitly marked missing in loader text ("… (sodium), which is missing").
+        // Fall back to suspects that are not already in the pack manifest.
+        let mut missing_ids: Vec<String> = Vec::new();
+        let push_missing = |ids: &mut Vec<String>, id: String| {
+            if is_invented_vanilla_resource_mod_id(&id) {
+                return;
+            }
+            if !ids.iter().any(|x| x == &id) {
+                ids.push(id);
+            }
+        };
+        for signal in signals.iter().filter(|s| s.kind == CrashSignalKind::MissingDependency) {
+            for id in extract_missing_dependency_ids(&signal.text) {
+                push_missing(&mut missing_ids, id);
+            }
+        }
+        if missing_ids.is_empty() {
+            for s in suspects.iter().filter(|s| !s.known_in_manifest) {
+                push_missing(&mut missing_ids, s.id.clone());
+            }
+        }
+        if missing_ids.is_empty() {
+            for s in suspects {
+                push_missing(&mut missing_ids, s.id.clone());
+            }
+        }
+
+        // Only invent Install buttons for real mod ids. Vanilla resource paths
+        // compacted into fake slugs must not surface as missing dependencies.
+        if !missing_ids.is_empty() {
+            let fixes: Vec<FixAction> = missing_ids
+                .iter()
+                .map(|id| FixAction {
                     kind: "installDependency".into(),
-                    label: "Try to install missing dependencies".into(),
-                    mod_id: names.into_iter().next(),
+                    label: format!("Install {id}"),
+                    mod_id: Some(id.clone()),
                 })
-            },
-            fixes: vec![],
-        });
+                .collect();
+
+            push(DiagnosisHint {
+                id: "missing-dependency".into(),
+                title: if missing_ids.len() > 1 {
+                    format!("{} missing mod dependencies", missing_ids.len())
+                } else {
+                    "Missing mod dependency".into()
+                },
+                severity: "high".into(),
+                detail: "One or more mods require another mod that is not installed (or could not be \
+                    loaded). The loader reports it as a ModResolutionException / missing dependency."
+                    .into(),
+                steps: vec![
+                    "Install each missing dependency for the same Minecraft + loader version.".into(),
+                    "If the dependency is present, it may be the wrong version — update it.".into(),
+                    "For JIJ (jar-in-jar) dependencies, update the parent mod.".into(),
+                ],
+                related_mods: missing_ids.clone(),
+                fix: fixes.first().cloned(),
+                fixes,
+            });
+        }
     }
 
     if kinds.contains(&CrashSignalKind::ModVersionMismatch) {
@@ -1721,7 +2110,7 @@ pub fn create_crash_fix_plan(
         .any(|signal| signal.kind == CrashSignalKind::OpenGl)
     {
         return ChangePlan {
-            summary: "OpenGL render pipeline errors detected (`GL_INVALID_OPERATION`). Treat this as a graphics/rendering compatibility issue first: update GPU drivers, disable shaders, then test without render optimization or visual mods such as Sodium/Iris/Voxy/ETF/MCEF/Litematica one group at a time.".to_string(),
+            summary: "Graphics / resource-pack shader failure detected (OpenGL errors, missing `minecraft:core/rendertype_*` shaders, or resource packs stripped on load). Disable resource packs and shader packs first, update GPU drivers, then test without render mods such as Sodium/Iris/Oculus/Voxy one group at a time. Do not install invented mods named after vanilla resource paths.".to_string(),
             risk: ChangeRisk::Medium,
             actions: Vec::new(),
             requires_snapshot: true,
@@ -1893,9 +2282,14 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
 
     // ---- Dependency / version / loader resolution errors ----
     // These are the most actionable crash causes, so they take priority.
-    let is_resolution_error = lower.contains("which is missing")
-        || lower.contains("is missing!")
-        || (lower.contains("missing") && lower.contains("mod"))
+    // Avoid bare `contains("mod")` / `contains("missing mod")` — the latter
+    // matches "missing model" and invents Install minecraftbuiltinentity.
+    let mentions_missing_mod = contains_missing_mod_phrase(&lower)
+        || lower.contains("mod is missing")
+        || lower.contains("mods are missing")
+        || lower.contains("which is missing")
+        || lower.contains("is missing!");
+    let is_resolution_error = mentions_missing_mod
         || lower.contains("missing dependency")
         || lower.contains("could not be loaded")
         || lower.contains("dependency")
@@ -1933,8 +2327,7 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
             || lower.contains("conflict");
 
         // Explicit missing-dependency markers win over generic loader checks.
-        if lower.contains("which is missing")
-            || lower.contains("is missing!")
+        if mentions_missing_mod
             || lower.contains("modresolutionexception")
             || lower.contains("missing dependency")
             || lower.contains("could not be loaded")
@@ -1981,6 +2374,11 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
         || lower.contains("gl_invalid_operation")
         || lower.contains("gl_invalid_")
         || lower.contains("blaze3d.opengl.gldebug")
+        || lower.contains("failed to load required shader programs")
+        || lower.contains("could not find shader:")
+        || lower.contains("caught error loading resourcepacks")
+        || (lower.contains("removing all selected resourcepacks")
+            && (lower.contains("error") || lower.contains("failed")))
     {
         return Some(CrashSignalKind::OpenGl);
     }
@@ -2234,6 +2632,8 @@ fn is_strong_match_source(source: &str) -> bool {
             | "class_in_jar"
             | "mixin"
             | "package"
+            | "missing_dependency"
+            | "caused_by"
     )
 }
 
@@ -2245,7 +2645,9 @@ fn assign_blame_roles(suspects: &mut [SuspectedMod]) {
             .filter(|src| is_strong_match_source(src))
             .count();
         // Multi-signal agreement → primary; single strong → secondary; else related.
-        if strong >= 2 || (s.confidence >= 92 && strong >= 1) {
+        let has_caused = s.evidence.iter().any(|e| e.kind == CrashSignalKind::CausedBy);
+        let has_entry = s.match_sources.iter().any(|src| src == "entrypoint");
+        if has_caused || has_entry || (s.confidence >= 92 && strong >= 1) {
             s.blame_role = BlameRole::Primary;
             s.confidence = s.confidence.saturating_add(4).min(99);
         } else if strong == 1 || s.confidence >= 75 {
@@ -2299,6 +2701,7 @@ fn enrich_diagnosis_suspects(
                             line_number: signal.line_number,
                             kind: CrashSignalKind::SuspectedMods,
                             text: signal.text.clone(),
+                            weight: 97,
                         },
                         97,
                         "suspected_mods_line",
@@ -2322,6 +2725,7 @@ fn enrich_diagnosis_suspects(
                             line_number: signal.line_number,
                             kind: CrashSignalKind::SuspectedMods,
                             text: signal.text.clone(),
+                            weight: 90,
                         }],
                         authors: Vec::new(),
                         blame_role: BlameRole::Related,
@@ -2399,6 +2803,7 @@ fn enrich_diagnosis_suspects(
                     line_number: 0,
                     kind: CrashSignalKind::Exception,
                     text: format!("{} provided by {}", hit.class_name, hit.file_name.as_deref().unwrap_or(&hit.mod_id)),
+                    weight: 93,
                 };
                 if let Some(module) = manifest.mods.iter().find(|m| {
                     normalize_token(&m.id) == normalize_token(&hit.mod_id)
@@ -2507,17 +2912,19 @@ fn push_evidence(entry: &mut SuspectAccumulator, evidence: SuspectEvidence) {
     }
 }
 
-fn evidence(
+fn evidence_weighted(
     source: &str,
     line_number: usize,
     kind: CrashSignalKind,
     line: &str,
+    weight: u8,
 ) -> SuspectEvidence {
     SuspectEvidence {
         source: source.to_string(),
         line_number,
         kind,
         text: line.trim().to_string(),
+        weight,
     }
 }
 
@@ -2549,6 +2956,59 @@ fn confidence_for_kind(kind: CrashSignalKind) -> u8 {
         CrashSignalKind::ResourceWarning => 35,
         CrashSignalKind::Performance => 25,
     }
+}
+
+/// Extract mod ids that the loader says are missing, e.g.
+/// `Mod 'Lithium' (lithium) requires ... of mod 'Sodium' (sodium), which is missing!`
+fn extract_missing_dependency_ids(text: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for line in text.lines() {
+        let lower = line.to_lowercase();
+        if let Some(idx) = lower.find("which is missing") {
+            let before = &line[..idx];
+            if let Some(open) = before.rfind('(') {
+                if let Some(close) = before[open..].find(')') {
+                    let id = normalize_token(&before[open + 1..open + close]);
+                    if !id.is_empty()
+                        && !is_noise_token(&id)
+                        && !is_invented_vanilla_resource_mod_id(&id)
+                        && id.len() >= 2
+                    {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+        // `requires missing dependency mod:foo` / `missing dependency mod:bar`
+        for marker in ["missing dependency mod:", "missing dependency mod "] {
+            let mut search = lower.as_str();
+            while let Some(pos) = search.find(marker) {
+                let after = &search[pos + marker.len()..];
+                let raw = after
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                    .next()
+                    .unwrap_or("");
+                let id = normalize_token(raw);
+                if !id.is_empty()
+                    && !is_noise_token(&id)
+                    && !is_invented_vanilla_resource_mod_id(&id)
+                {
+                    ids.push(id);
+                }
+                search = &after[raw.len().min(after.len())..];
+            }
+        }
+    }
+    ids.retain(|id| {
+        !is_noise_token(id) && !is_invented_vanilla_resource_mod_id(id)
+    });
+    let mut uniq = Vec::new();
+    for id in ids {
+        if !uniq.iter().any(|x| x == &id) {
+            uniq.push(id);
+        }
+    }
+    uniq
 }
 
 fn extract_quoted_mod_ids(line: &str) -> Vec<String> {
@@ -2620,7 +3080,9 @@ fn extract_named_mods(line: &str) -> Vec<String> {
             }
         }
     }
-    ids.retain(|id| !is_noise_token(id) && id.len() >= 3);
+    ids.retain(|id| {
+        !is_noise_token(id) && id.len() >= 3 && !is_invented_vanilla_resource_mod_id(id)
+    });
     ids
 }
 
@@ -2732,6 +3194,36 @@ fn is_noise_token(token: &str) -> bool {
             | "unknown"
             | "null"
     )
+}
+
+/// True for loader phrases like `missing mod` / `missing mods`, but not
+/// `missing model` (resource/model errors that invent fake install targets).
+fn contains_missing_mod_phrase(lower: &str) -> bool {
+    let mut search = lower;
+    while let Some(idx) = search.find("missing mod") {
+        let after = &search[idx + "missing mod".len()..];
+        let ok = match after.chars().next() {
+            None => true,
+            Some('s') => {
+                // `missing mods` ok; `missing modsFoo` not a real phrase but
+                // treat non-alnum after optional `s` as boundary.
+                let rest = &after[1..];
+                rest.is_empty()
+                    || !rest
+                        .chars()
+                        .next()
+                        .map(|c| c.is_ascii_alphanumeric())
+                        .unwrap_or(false)
+            }
+            Some(c) if !c.is_ascii_alphanumeric() => true,
+            Some(_) => false, // e.g. "missing model"
+        };
+        if ok {
+            return true;
+        }
+        search = &search[idx + 1..];
+    }
+    false
 }
 
 fn validate_report_id(report_id: &str) -> Result<PathBuf, CrashError> {
@@ -3325,6 +3817,19 @@ mod tests {
     }
 
     #[test]
+    fn detects_shader_resourcepack_failure_as_render_signal() {
+        let text = "Caught error loading resourcepacks, removing all selected resourcepacks\n\
+Failed to load required shader programs:\n\
+ - minecraft:core/rendertype_entity_translucent: Could not find shader: minecraft:rendertype_entity_translucent (VERTEX)";
+        let (signals, _) = analyze_text_for_suspects(text, "logs/latest.log", &manifest());
+        assert!(
+            signals.iter().any(|s| s.kind == CrashSignalKind::OpenGl),
+            "expected OpenGl signal, got {:?}",
+            signals.iter().map(|s| &s.kind).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn detects_missing_dependency_with_named_mod() {
         let mut manifest = manifest();
         manifest.mods.push(ModSpec {
@@ -3356,6 +3861,86 @@ mod tests {
         assert_eq!(signals[0].kind, CrashSignalKind::MissingDependency);
         assert!(suspects.iter().any(|s| s.id == "lithium"));
         assert!(suspects.iter().any(|s| s.id == "sodium"));
+
+        let missing = extract_missing_dependency_ids(text);
+        assert_eq!(missing, vec!["sodium".to_string()]);
+
+        let hints = build_hints(&signals, &suspects);
+        let hint = hints
+            .iter()
+            .find(|h| h.id == "missing-dependency")
+            .expect("missing-dependency hint");
+        assert!(
+            hint.fixes.iter().any(|f| f.mod_id.as_deref() == Some("sodium")),
+            "expected per-mod Install for sodium, got {:?}",
+            hint.fixes
+        );
+        assert!(
+            !hint.fixes.iter().any(|f| f.mod_id.as_deref() == Some("lithium")),
+            "requester lithium must not get an Install button"
+        );
+    }
+
+    #[test]
+    fn missing_model_builtin_entity_does_not_suggest_fake_install() {
+        // `missing` + substring `mod` inside `model` used to classify this as
+        // MissingDependency and invent Install minecraftbuiltinentity.
+        let text = "Missing model 'minecraft:builtin/entity' referenced from: item/foo";
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "logs/latest.log", &manifest());
+        assert!(
+            !signals
+                .iter()
+                .any(|s| s.kind == CrashSignalKind::MissingDependency),
+            "resource model lines must not be MissingDependency, got {:?}",
+            signals.iter().map(|s| &s.kind).collect::<Vec<_>>()
+        );
+        assert!(
+            !suspects
+                .iter()
+                .any(|s| s.id == "minecraftbuiltinentity"
+                    || crate::action_plan::is_invented_vanilla_resource_mod_id(&s.id)),
+            "must not invent suspects from vanilla resource paths, got {:?}",
+            suspects.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+
+        let hints = build_hints(&signals, &suspects);
+        assert!(
+            !hints.iter().any(|h| h.id == "missing-dependency"),
+            "must not emit missing-dependency Install hint, got {:?}",
+            hints
+        );
+        assert!(
+            !hints.iter().any(|h| {
+                h.fixes.iter().any(|f| {
+                    f.mod_id
+                        .as_deref()
+                        .is_some_and(crate::action_plan::is_invented_vanilla_resource_mod_id)
+                }) || h
+                    .related_mods
+                    .iter()
+                    .any(|id| crate::action_plan::is_invented_vanilla_resource_mod_id(id))
+            }),
+            "no Install for invented vanilla resource ids"
+        );
+    }
+
+    #[test]
+    fn invented_vanilla_resource_id_filtered_from_missing_dep_extract() {
+        let text = "Mod 'Foo' (foo) requires version 1.0.0 or later of mod 'minecraft:builtin/entity' (minecraft:builtin/entity), which is missing!";
+        let missing = extract_missing_dependency_ids(text);
+        assert!(
+            !missing
+                .iter()
+                .any(|id| crate::action_plan::is_invented_vanilla_resource_mod_id(id)),
+            "extract must drop compacted vanilla paths, got {missing:?}"
+        );
+        assert!(
+            !extract_named_mods(text)
+                .iter()
+                .any(|id| crate::action_plan::is_invented_vanilla_resource_mod_id(id)),
+            "named-mod extract must drop compacted vanilla paths"
+        );
     }
 
     #[test]
@@ -3843,6 +4428,120 @@ Caused by: java.lang.IllegalStateException: boom
         assert_eq!(c.label, "Entity");
         let mem = extract_memory_hint(text).expect("mem");
         assert!(mem.contains("2048"));
+    }
+
+    fn multi_mod_manifest() -> ProjectManifest {
+        let mut m = manifest();
+        for (id, name, jar) in [
+            ("fabric-api", "Fabric API", "fabric-api-0.92.0.jar"),
+            ("create", "Create", "create-0.5.1.jar"),
+            ("indium", "Indium", "indium-1.0.27.jar"),
+            ("sodium", "Sodium", "sodium-0.5.8.jar"),
+        ] {
+            m.mods.push(ModSpec {
+                id: id.to_string(),
+                name: name.to_string(),
+                source: ModSource {
+                    kind: SourceKind::Modrinth,
+                    project_id: Some(id.to_string()),
+                    file_id: None,
+                    url: None,
+                    path: None,
+                    icon_url: None,
+                    categories: Vec::new(),
+                },
+                version: "1.0.0".to_string(),
+                file_name: Some(jar.to_string()),
+                hashes: None,
+                side: Side::Both,
+                dependencies: Vec::new(),
+                status: Vec::new(),
+                content_type: crate::manifest::ContentType::Mod,
+                authors: Vec::new(),
+                option: None,
+            });
+        }
+        m
+    }
+
+    #[test]
+    fn mod_list_dump_does_not_promote_every_mod_to_primary() {
+        let manifest = multi_mod_manifest();
+        let text = "\
+---- Minecraft Crash Report ----
+Description: create failed during tick
+
+-- Mods --
+| Mod id       | Version |
+| fabric-api   | 0.92.0  |
+| create       | 0.5.1   |
+| indium       | 1.0.27  |
+| sodium       | 0.5.8   |
+
+java.lang.RuntimeException: Tick failed
+Caused by: java.lang.IllegalStateException: create broke
+\tat knot//com.simibubi.create.content.kinetics.base.KineticBlockEntity.tick(KineticBlockEntity.java:88)
+";
+        let (_signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        let create = suspects.iter().find(|s| s.id == "create").expect("create");
+        assert_eq!(create.blame_role, BlameRole::Primary);
+        for id in ["fabric-api", "indium", "sodium"] {
+            let s = suspects.iter().find(|x| x.id == id).expect(id);
+            assert_ne!(
+                s.blame_role,
+                BlameRole::Primary,
+                "{id} must not be primary from mod-list dump alone"
+            );
+        }
+    }
+
+    #[test]
+    fn mixin_conflict_ranks_both_mods_secondary_not_random_primary() {
+        let manifest = multi_mod_manifest();
+        let text = "\
+Mixin apply failed indium.mixins.json:MixinItemRenderer failed
+Mixin apply failed sodium.mixins.json:MixinWorldRenderer failed
+Caused by: org.spongepowered.asm.mixin.transformer.throwables.MixinTransformerError
+";
+        let (_signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        let primaries: Vec<_> = suspects
+            .iter()
+            .filter(|s| s.blame_role == BlameRole::Primary)
+            .collect();
+        assert!(
+            primaries.len() <= 1,
+            "mixin conflict should not invent multiple primaries: {:?}",
+            primaries.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+        assert!(suspects.iter().any(|s| s.id == "indium" || s.id == "sodium"));
+    }
+
+    #[test]
+    fn description_beats_library_mod_in_stack() {
+        let manifest = multi_mod_manifest();
+        let text = "\
+Description: create tick failure near contraption
+
+java.lang.RuntimeException: wrapper
+\tat knot//net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.lambda$static$0(ServerTickEvents.java:12)
+Caused by: java.lang.IllegalStateException: create entity stuck
+\tat knot//com.simibubi.create.content.contraptions.Contraption.tick(Contraption.java:44)
+";
+        let (_signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        let create = suspects.iter().find(|s| s.id == "create").expect("create");
+        assert!(
+            create.confidence >= 80,
+            "create should rank above fabric-api library frame"
+        );
+        if let Some(fapi) = suspects.iter().find(|s| s.id == "fabric-api") {
+            assert!(
+                create.confidence > fapi.confidence,
+                "content mod in Caused by should beat library API frame"
+            );
+        }
     }
 }
 

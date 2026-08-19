@@ -2,7 +2,7 @@ name: Build Windows EXE
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "feat/svelte-5-migration" ]
   pull_request:
     branches: [ "master" ]
   workflow_dispatch:
@@ -122,21 +122,31 @@ jobs:
         $candidates = @(
           "target/release/tuffbox-desktop.exe",
           "target/x86_64-pc-windows-msvc/release/tuffbox-desktop.exe",
+          "apps/tuffbox-desktop/src-tauri/target/release/tuffbox-desktop.exe",
+          "apps/tuffbox-desktop/src-tauri/target/x86_64-pc-windows-msvc/release/tuffbox-desktop.exe",
           "target/debug/tuffbox-desktop.exe",
           "target/x86_64-pc-windows-msvc/debug/tuffbox-desktop.exe"
         )
         $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
         if (-not $exe) {
+          Write-Host "===== searching for any tuffbox-desktop.exe ====="
+          Get-ChildItem -Recurse -Filter "tuffbox-desktop.exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 20 FullName, Length | Format-Table -AutoSize
           Write-Error "tuffbox-desktop.exe not found in any expected target dir"
           exit 1
         }
-        Write-Host "Found exe at: $exe"
-        "EXE_PATH=$exe" | Out-File -Append -FilePath $env:GITHUB_ENV
+        Write-Host "Found exe at: $exe ($((Get-Item $exe).Length) bytes)"
+        New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+        Copy-Item -Force $exe "artifacts/tuffbox-desktop.exe"
+        if (-not (Test-Path "artifacts/tuffbox-desktop.exe")) {
+          Write-Error "failed to copy exe into artifacts/"
+          exit 1
+        }
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: tuffbox-desktop-windows
-        path: |
-          ${{ env.EXE_PATH }}
-        if-no-files-found: warn
+        name: tuffbox-desktop-windows-${{ github.sha }}
+        path: artifacts/tuffbox-desktop.exe
+        if-no-files-found: error
+        retention-days: 14

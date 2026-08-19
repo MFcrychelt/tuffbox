@@ -1,41 +1,95 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { Search, X } from "lucide-svelte";
+  import { Search, X } from "@lucide/svelte";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { api } from "../../lib/api";
   import { projectPath } from "../../lib/store";
+  import { trapFocus } from "../../lib/focusTrap";
 
-  export let open = false;
-  export let onPick: (itemId: string) => void;
-  export let onClose: () => void;
+  let {
+    open = false,
+    onPick,
+    onClose,
+  }: {
+    open?: boolean;
+    onPick: (itemId: string) => void;
+    onClose: () => void;
+  } = $props();
 
-  let query = "";
-  let loading = false;
-  let error = "";
-  let catalog: string[] = [];
-  let icons: Record<string, string | null> = {};
-  let loaded = false;
+  let query = $state("");
+  let loading = $state(false);
+  let error = $state("");
+  let catalog = $state<string[]>([]);
+  let icons = $state<Record<string, string | null>>({});
+  let loadedForPath = $state<string | null>(null);
+  let searchInput = $state<HTMLInputElement | null>(null);
+  let wasOpen = $state(false);
 
-  $: filtered = filterCatalog(catalog, query).slice(0, 120);
+  let filtered = $derived(filterCatalog(catalog, query).slice(0, 120));
 
-  onMount(() => {
-    // noop — load when opened
+  $effect(() => {
+    const path = $projectPath;
+    if (!path) return;
+    if (loadedForPath !== null && path !== loadedForPath) {
+      loadedForPath = null;
+      catalog = [];
+      error = "";
+    }
   });
 
-  $: if (open && !loaded && $projectPath) {
-    void loadCatalog();
-  }
+  $effect(() => {
+    if (open && $projectPath && loadedForPath !== $projectPath) {
+      void loadCatalog();
+    }
+  });
+
+  $effect(() => {
+    if (!open) return;
+    let cancelled = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen("catalog-ready", () => {
+      if (cancelled || !$projectPath) return;
+      void loadCatalog();
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  });
+
+  $effect(() => {
+    if (open && filtered.length) {
+      void preloadIcons(filtered.slice(0, 48));
+    }
+  });
+
+  $effect(() => {
+    const justOpened = open && !wasOpen;
+    wasOpen = open;
+    if (!justOpened) return;
+    query = "";
+    queueMicrotask(() => searchInput?.focus({ preventScroll: true }));
+  });
 
   async function loadCatalog() {
+    const path = $projectPath;
+    if (!path) return;
     loading = true;
     error = "";
     try {
-      catalog = await api.quests.itemCatalog($projectPath!);
-      loaded = true;
+      const entries = await api.recipes.listItemCatalog(path);
+      catalog = (entries ?? []).map((entry) => entry.id).sort();
+      if (catalog.length === 0) {
+        const fallback = await api.quests.itemCatalog(path);
+        catalog = (fallback ?? []).slice().sort();
+      }
+      loadedForPath = path;
     } catch (e) {
       error = String(e);
-      // Fallback: recipe scan client-side
       try {
-        const scan = await api.recipes.scan($projectPath!);
+        const scan = await api.recipes.scan(path);
         const set = new Set<string>();
         for (const r of scan.recipes ?? []) {
           if (r.outputId && !r.outputId.startsWith("#")) set.add(r.outputId);
@@ -44,8 +98,8 @@
           }
         }
         catalog = [...set].sort();
-        loaded = true;
-        error = "";
+        loadedForPath = path;
+        error = catalog.length ? "" : String(e);
       } catch (e2) {
         error = String(e2);
       }
@@ -54,14 +108,10 @@
     }
   }
 
-  $: if (open && filtered.length) {
-    void preloadIcons(filtered.slice(0, 48));
-  }
-
   async function preloadIcons(ids: string[]) {
     const need = ids.filter((id) => icons[id] === undefined);
     if (!need.length || !$projectPath) return;
-    for (const id of need) icons[id] = null; // mark in-flight
+    for (const id of need) icons[id] = null;
     icons = icons;
     try {
       const batch = await api.recipes.itemIconsBatch(need, $projectPath);
@@ -88,23 +138,30 @@
     onPick(id);
     onClose();
   }
-
-  function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") onClose();
-  }
 </script>
 
 {#if open}
-  <div class="overlay" role="dialog" aria-modal="true" on:keydown={onKey}>
-    <button type="button" class="backdrop" aria-label="Close" on:click={onClose}></button>
-    <div class="panel">
+  <div class="overlay">
+    <button type="button" class="backdrop" aria-label="Close item picker" onclick={onClose}></button>
+    <div
+      class="panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="item-picker-title"
+      tabindex="-1"
+      use:trapFocus={{ onEscape: onClose }}
+    >
       <div class="panel-h">
-        <strong>Pick item</strong>
-        <button type="button" class="ico" on:click={onClose}><X size={14} /></button>
+        <strong id="item-picker-title">Pick item</strong>
+        <button type="button" class="ico" onclick={onClose} aria-label="Close"><X size={14} /></button>
       </div>
       <div class="search">
         <Search size={14} />
-        <input bind:value={query} placeholder="Search id… (@mod, name)" autofocus />
+        <input
+          bind:this={searchInput}
+          bind:value={query}
+          placeholder="Search id… (@mod, name)"
+        />
       </div>
       {#if loading}
         <p class="muted">Loading catalog…</p>
@@ -113,7 +170,7 @@
       {:else}
         <div class="grid">
           {#each filtered as id (id)}
-            <button type="button" class="cell" title={id} on:click={() => pick(id)}>
+            <button type="button" class="cell" title={id} onclick={() => pick(id)}>
               {#if icons[id]}
                 <img src={icons[id]} alt="" />
               {:else}
@@ -153,8 +210,8 @@
     max-height: min(70vh, 640px);
     display: flex;
     flex-direction: column;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-border);
     border-radius: 2px;
     box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
     overflow: hidden;
@@ -165,14 +222,14 @@
     justify-content: space-between;
     align-items: center;
     padding: 12px 14px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
   }
   .search {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 10px 14px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
     color: var(--ftbq-text-muted, #9a9aa0);
   }
   .search input {
@@ -197,8 +254,8 @@
     gap: 4px;
     padding: 8px 6px;
     border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: var(--ftbq-bg, #1a1a1e);
+    border: 1px solid var(--ftbq-border);
+    background: var(--ftbq-bg);
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;
     min-height: 72px;
@@ -221,7 +278,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--ftbq-node-fill, #18181c);
+    background: var(--ftbq-node-fill);
     border-radius: 2px;
     font-weight: 800;
     color: var(--ftbq-title-gold, #f2c94c);
@@ -239,7 +296,7 @@
     color: var(--ftbq-text-muted, #9a9aa0);
   }
   .err {
-    color: #fca5a5;
+    color: var(--accent-danger);
   }
   .ico {
     width: 28px;
@@ -248,7 +305,7 @@
     align-items: center;
     justify-content: center;
     border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     background: transparent;
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;

@@ -1,290 +1,118 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
-  import { Maximize2, Plus } from "lucide-svelte";
-  import type { QuestData, QuestValidationIssue, QuestProgressStatus } from "../../lib/api";
+  import {
+    SvelteFlow,
+    Background,
+    Controls,
+    MiniMap,
+    BackgroundVariant,
+    useSvelteFlow,
+    type Node,
+    type Edge,
+    type Connection,
+  } from "@xyflow/svelte";
+  import "@xyflow/svelte/dist/style.css";
+  import { tick } from "svelte";
+  import { Maximize2, Plus } from "@lucide/svelte";
+  import {
+    iconDisplayId,
+    type QuestChapter,
+    type QuestData,
+    type QuestValidationIssue,
+    type QuestProgressStatus,
+  } from "../../lib/api";
   import { projectPath } from "../../lib/store";
-  import QuestItemIcon from "./QuestItemIcon.svelte";
   import { preloadItemIcons } from "./iconCache";
+  import QuestNode from "./QuestNode.svelte";
+  import { getWorldCoordinates, rectsIntersect } from "./coords";
 
-  export let quests: QuestData[];
-  export let selectedId: string | null = null;
-  export let issues: QuestValidationIssue[] = [];
-  /** questId → progress status when overlay is on */
-  export let progressStatuses: Record<string, QuestProgressStatus> = {};
-  export let progressOverlay = false;
-  /** Shown when quests array is empty (filter miss vs true empty chapter). */
-  export let emptyHint = "Double-click to add a quest";
-  export let onSelect: (q: QuestData | null) => void;
-  export let onMove: (q: QuestData, x: number, y: number) => void;
-  export let onAddAt: (x: number, y: number) => void;
-  export let onLink: (fromId: string, toDepId: string) => void;
-  /** Bump to force fitView (e.g. chapter change). */
-  export let fitToken = 0;
+  let {
+    quests,
+    chapters = [],
+    selectedId = null,
+    selectedIds = new Set<string>(),
+    issues,
+    progressStatuses = {},
+    progressOverlay = false,
+    emptyHint = "Double-click to add a quest",
+    showEmptyAddCta = false,
+    onSelect,
+    onMove,
+    onAddAt,
+    onLink,
+    onUnlink = undefined,
+    onEdgeSelect = undefined,
+    onOpenChapter = undefined,
+    onSelectMultiple = () => {},
+    fitToken = 0,
+    addQuestToken = 0,
+    questFilter = "",
+    filterTotal = 0,
+    onQuestFilterChange = undefined,
+    onApplyLayout = undefined,
+  }: {
+    quests: QuestData[];
+    chapters?: QuestChapter[];
+    selectedId?: string | null;
+    selectedIds?: Set<string>;
+    issues: QuestValidationIssue[];
+    progressStatuses?: Record<string, QuestProgressStatus>;
+    progressOverlay?: boolean;
+    emptyHint?: string;
+    showEmptyAddCta?: boolean;
+    onSelect: (q: QuestData | null, e?: MouseEvent) => void;
+    onMove: (q: QuestData, x: number, y: number) => void;
+    onAddAt: (x: number, y: number) => void;
+    onLink: (fromId: string, toDepId: string) => void;
+    /** Remove dependency edge: questId lists depId in dependencies. */
+    onUnlink?: (questId: string, depId: string) => void;
+    /** Fired when a dependency edge is selected or cleared. */
+    onEdgeSelect?: (edge: { questId: string; depId: string } | null) => void;
+    /** Open another chapter (cross-chapter ghost click). */
+    onOpenChapter?: (chapterId: string, questId?: string) => void;
+    onSelectMultiple?: (ids: string[]) => void;
+    fitToken?: number;
+    addQuestToken?: number;
+    questFilter?: string;
+    filterTotal?: number;
+    onQuestFilterChange?: (value: string) => void;
+    onApplyLayout?: (kind: "tree" | "grid" | "circle") => void;
+  } = $props();
 
   const BASE = 24;
-  const MIN_ZOOM = 0.25;
-  const MAX_ZOOM = 4;
+  const nodeTypes = { quest: QuestNode };
 
-  let viewport: HTMLDivElement;
-  let zoom = 1;
-  let panX = 0;
-  let panY = 0;
+  let issueIds = $derived(new Set(issues.map((i) => i.questId)));
+  let iconRevision = $state(0);
+  let selectedEdgeId = $state<string | null>(null);
 
-  let mode: "idle" | "pan" | "drag" | "link" = "idle";
-  let panLast: { x: number; y: number } | null = null;
-  let dragQuest: QuestData | null = null;
-  let dragMoved = false;
-  /** World-space offset from quest origin to pointer at grab time (avoids jump-to-center). */
-  let dragOffset = { x: 0, y: 0 };
-  /** Bumps on each drag move so Svelte re-renders without parent chapter copy. */
-  let dragTick = 0;
-  let linkFrom: QuestData | null = null;
-  let linkCursor: { x: number; y: number } | null = null;
-  let spaceDown = false;
-  let lastFitToken = -1;
-  let iconRevision = 0;
+  const { screenToFlowPosition, fitView: flowFitView, getViewport } = useSvelteFlow();
 
-  $: unit = BASE * zoom;
-  $: issueIds = new Set(issues.map((i) => i.questId));
-  $: if (fitToken !== lastFitToken && quests) {
-    lastFitToken = fitToken;
-    void refit();
-  }
-  $: if (quests && $projectPath) {
-    void preloadChapterIcons(quests);
-  }
+  let nodes = $state<Node[]>([]);
+  let edges = $state<Edge[]>([]);
+  let viewportEl = $state<HTMLDivElement | null>(null);
+
+  /** Marquee in flow/world px (same space as node.position). */
+  let marqueeWorld = $state<null | { x1: number; y1: number; x2: number; y2: number }>(null);
+  /** Overlay box in container-local CSS px for drawing. */
+  let marqueeScreen = $state<null | { left: number; top: number; width: number; height: number }>(
+    null,
+  );
+  let marqueeOriginScreen = $state<null | { x: number; y: number }>(null);
+  let marqueeActive = $state(false);
+
+  $effect(() => {
+    if (quests && $projectPath) {
+      void preloadChapterIcons(quests);
+    }
+  });
 
   async function preloadChapterIcons(list: QuestData[]) {
-    const ids = list.map((q) => q.icon).filter(Boolean) as string[];
+    const ids = list
+      .map((q) => iconDisplayId(q.icon))
+      .filter((id): id is string => !!id);
     if (!ids.length || !$projectPath) return;
     await preloadItemIcons(ids, $projectPath);
     iconRevision += 1;
-  }
-
-  $: unit = BASE * zoom;
-  $: issueIds = new Set(issues.map((i) => i.questId));
-  $: if (fitToken !== lastFitToken && quests) {
-    lastFitToken = fitToken;
-    void refit();
-  }
-
-  onMount(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !(e.target as HTMLElement)?.closest?.("input,textarea,select")) {
-        spaceDown = true;
-        e.preventDefault();
-      }
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space") spaceDown = false;
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("keyup", onKeyUp);
-    void refit();
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("keyup", onKeyUp);
-    };
-  });
-
-  async function refit() {
-    await tick();
-    fitView();
-  }
-
-  function snap(v: number) {
-    return Math.round(v * 2) / 2;
-  }
-
-  function nodeSize(q: QuestData) {
-    return BASE * (q.size && q.size > 0 ? q.size : 1) * zoom;
-  }
-
-  function screenPos(q: QuestData) {
-    const s = nodeSize(q);
-    return {
-      left: panX + q.x * unit - s / 2,
-      top: panY + q.y * unit - s / 2,
-      size: s,
-    };
-  }
-
-  function clientToWorld(clientX: number, clientY: number) {
-    const rect = viewport.getBoundingClientRect();
-    return {
-      x: (clientX - rect.left - panX) / unit,
-      y: (clientY - rect.top - panY) / unit,
-    };
-  }
-
-  function fitView() {
-    if (!viewport) return;
-    const vw = viewport.clientWidth || 800;
-    const vh = viewport.clientHeight || 500;
-    if (quests.length === 0) {
-      zoom = 1;
-      panX = vw / 2;
-      panY = vh / 2;
-      return;
-    }
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-    for (const q of quests) {
-      const half = (q.size && q.size > 0 ? q.size : 1) / 2;
-      minX = Math.min(minX, q.x - half);
-      minY = Math.min(minY, q.y - half);
-      maxX = Math.max(maxX, q.x + half);
-      maxY = Math.max(maxY, q.y + half);
-    }
-    const pad = 1.5;
-    const w = Math.max(maxX - minX + pad * 2, 4);
-    const h = Math.max(maxY - minY + pad * 2, 4);
-    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(vw / (w * BASE), vh / (h * BASE)) * 0.9));
-    const u = BASE * zoom;
-    panX = (vw - (minX + maxX) * u) / 2;
-    panY = (vh - (minY + maxY) * u) / 2;
-  }
-
-  function questAt(clientX: number, clientY: number): QuestData | null {
-    const rect = viewport.getBoundingClientRect();
-    const sx = clientX - rect.left;
-    const sy = clientY - rect.top;
-    // Top-most hit (reverse paint order) — icon only (label is not a grab target)
-    for (let i = quests.length - 1; i >= 0; i--) {
-      const q = quests[i];
-      const p = screenPos(q);
-      if (sx >= p.left && sx <= p.left + p.size && sy >= p.top && sy <= p.top + p.size) {
-        return q;
-      }
-    }
-    return null;
-  }
-
-  function onPointerDown(e: PointerEvent) {
-    if (!viewport) return;
-    const hit = questAt(e.clientX, e.clientY);
-    const wantPan = e.button === 1 || spaceDown || (e.button === 0 && !hit);
-
-    if (wantPan && e.button !== 2) {
-      if (!hit) onSelect(null);
-      mode = "pan";
-      panLast = { x: e.clientX, y: e.clientY };
-      viewport.setPointerCapture(e.pointerId);
-      e.preventDefault();
-      return;
-    }
-
-    if (e.button === 0 && hit) {
-      if (e.shiftKey) {
-        mode = "link";
-        linkFrom = hit;
-        linkCursor = clientToWorld(e.clientX, e.clientY);
-        onSelect(hit);
-        viewport.setPointerCapture(e.pointerId);
-        e.preventDefault();
-        return;
-      }
-      mode = "drag";
-      dragQuest = hit;
-      dragMoved = false;
-      {
-        const w = clientToWorld(e.clientX, e.clientY);
-        dragOffset = { x: w.x - hit.x, y: w.y - hit.y };
-      }
-      onSelect(hit);
-      viewport.setPointerCapture(e.pointerId);
-      e.preventDefault();
-    }
-  }
-
-  function onPointerMove(e: PointerEvent) {
-    if (mode === "pan" && panLast) {
-      panX += e.clientX - panLast.x;
-      panY += e.clientY - panLast.y;
-      panLast = { x: e.clientX, y: e.clientY };
-      return;
-    }
-    if (mode === "drag" && dragQuest) {
-      const w = clientToWorld(e.clientX, e.clientY);
-      dragMoved = true;
-      // Mutate locally + snap during drag (FTB half-grid); commit dirty once on pointerup.
-      dragQuest.x = snap(w.x - dragOffset.x);
-      dragQuest.y = snap(w.y - dragOffset.y);
-      dragTick += 1;
-      return;
-    }
-    if (mode === "link" && linkFrom) {
-      linkCursor = clientToWorld(e.clientX, e.clientY);
-    }
-  }
-
-  function onPointerUp(e: PointerEvent) {
-    if (mode === "drag" && dragQuest) {
-      if (dragMoved) {
-        onMove(dragQuest, snap(dragQuest.x), snap(dragQuest.y));
-      }
-    }
-    if (mode === "link" && linkFrom) {
-      const hit = questAt(e.clientX, e.clientY);
-      if (hit && hit.id !== linkFrom.id) {
-        onLink(linkFrom.id, hit.id);
-      }
-    }
-    mode = "idle";
-    panLast = null;
-    dragQuest = null;
-    dragMoved = false;
-    dragOffset = { x: 0, y: 0 };
-    linkFrom = null;
-    linkCursor = null;
-    try {
-      viewport.releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-  }
-
-  function onWheel(e: WheelEvent) {
-    e.preventDefault();
-    const rect = viewport.getBoundingClientRect();
-    const sx = e.clientX - rect.left;
-    const sy = e.clientY - rect.top;
-    const before = { x: (sx - panX) / unit, y: (sy - panY) / unit };
-    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
-    const u = BASE * zoom;
-    panX = sx - before.x * u;
-    panY = sy - before.y * u;
-  }
-
-  function onDblClick(e: MouseEvent) {
-    if (questAt(e.clientX, e.clientY)) return;
-    const w = clientToWorld(e.clientX, e.clientY);
-    onAddAt(snap(w.x), snap(w.y));
-  }
-
-  function centerOf(q: QuestData) {
-    return { x: panX + q.x * unit, y: panY + q.y * unit };
-  }
-
-  function depTarget(depId: string) {
-    const direct = quests.find((q) => q.id === depId);
-    if (direct) return direct;
-    // FTB: dependency may be a task id — resolve to owning quest in this chapter.
-    return (
-      quests.find((q) => q.tasks?.some((t) => t.id === depId)) ?? null
-    );
-  }
-
-  function glyph(q: QuestData) {
-    const icon = q.icon?.trim();
-    if (icon) {
-      const leaf = icon.includes(":") ? icon.split(":").pop()! : icon;
-      return (leaf[0] || "?").toUpperCase();
-    }
-    return (q.title[0] || "?").toUpperCase();
   }
 
   function progressOf(q: QuestData): QuestProgressStatus | null {
@@ -292,135 +120,600 @@
     return progressStatuses[q.id] ?? "unknown";
   }
 
-  function nodeShape(q: QuestData): string {
-    const s = q.shape?.trim();
-    if (s && s !== "none") return s;
-    return "rsquare";
+  function findExternalDep(
+    depId: string,
+  ): { quest: QuestData; chapterTitle: string; chapterId: string } | null {
+    for (const ch of chapters) {
+      const direct = ch.quests.find((oq) => oq.id === depId);
+      if (direct && !quests.some((q) => q.id === direct.id)) {
+        return {
+          quest: direct,
+          chapterTitle: ch.title || ch.filename || ch.id.slice(0, 8),
+          chapterId: ch.id,
+        };
+      }
+      const owner = ch.quests.find((oq) => oq.tasks?.some((t) => t.id === depId));
+      if (owner && !quests.some((q) => q.id === owner.id)) {
+        return {
+          quest: owner,
+          chapterTitle: ch.title || ch.filename || ch.id.slice(0, 8),
+          chapterId: ch.id,
+        };
+      }
+    }
+    return null;
   }
 
-  function shapeClass(q: QuestData): string {
-    return `shape-${nodeShape(q)}`;
+  $effect(() => {
+    const rev = iconRevision;
+    void chapters;
+    const newNodes: Node[] = quests.map((q) => ({
+      id: q.id,
+      type: "quest",
+      position: { x: q.x * BASE, y: q.y * BASE },
+      data: {
+        quest: q,
+        isIssue: issueIds.has(q.id),
+        isSelected: selectedId === q.id || selectedIds.has(q.id),
+        baseSize: BASE,
+        progress: progressOf(q),
+        iconRevision: rev,
+      },
+      selected: selectedId === q.id || selectedIds.has(q.id),
+    }));
+
+    const ghosts = new Map<string, Node>();
+    const newEdges: Edge[] = [];
+    for (const q of quests) {
+      for (const depId of q.dependencies) {
+        // FTB may store a task id as dependency — resolve to owning quest node.
+        let sourceId = depId;
+        let targetExists = quests.some((oq) => oq.id === depId);
+        let external = false;
+        if (!targetExists) {
+          const owner = quests.find((oq) => oq.tasks?.some((t) => t.id === depId));
+          if (owner) {
+            sourceId = owner.id;
+            targetExists = true;
+          }
+        }
+
+        if (!targetExists) {
+          const ext = findExternalDep(depId);
+          if (ext) {
+            sourceId = `ext:${ext.quest.id}`;
+            targetExists = true;
+            external = true;
+            if (!ghosts.has(sourceId)) {
+              ghosts.set(sourceId, {
+                id: sourceId,
+                type: "quest",
+                position: {
+                  x: q.x * BASE - BASE * 3,
+                  y: q.y * BASE - BASE * 3,
+                },
+                draggable: false,
+                selectable: true,
+                data: {
+                  quest: ext.quest,
+                  isIssue: false,
+                  isSelected: false,
+                  baseSize: BASE,
+                  progress: null,
+                  iconRevision: rev,
+                  external: true,
+                  chapterTitle: ext.chapterTitle,
+                  chapterId: ext.chapterId,
+                },
+              });
+            }
+          }
+        }
+
+        const depDone =
+          progressOverlay &&
+          (progressStatuses[sourceId.replace(/^ext:/, "")] === "completed" ||
+            progressStatuses[depId] === "completed");
+
+        let style =
+          "stroke: var(--ftbq-line, #5c8a9e); stroke-width: 3; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));";
+        if (!targetExists || external) {
+          style =
+            "stroke: var(--ftbq-quest-started, #f2c94c); stroke-width: 2.5; stroke-dasharray: 6 4; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));";
+        } else if (depDone) {
+          style =
+            "stroke: var(--ftbq-line-done, #55c95a); stroke-width: 3.5; filter: drop-shadow(0 0 3px rgba(85,201,90,0.6));";
+        }
+
+        newEdges.push({
+          id: `e-${depId}-${q.id}`,
+          source: sourceId,
+          target: q.id,
+          type: "step",
+          style,
+          selectable: !external,
+          data: { depId, dependentId: q.id },
+          selected: selectedEdgeId === `e-${depId}-${q.id}`,
+        });
+      }
+    }
+
+    nodes = [...newNodes, ...ghosts.values()];
+    edges = newEdges;
+  });
+
+  // Sync marquee / multi-select from Svelte Flow back to parent
+  let lastMultiSelection = $state<readonly string[]>([]);
+  $effect(() => {
+    const selectedNodes = nodes.filter((n) => n.selected && !n.id.startsWith("ext:"));
+    if (selectedNodes.length > 1) {
+      const ids = selectedNodes.map((n) => n.id);
+      const changed =
+        ids.length !== lastMultiSelection.length ||
+        ids.some((id) => !lastMultiSelection.includes(id));
+      lastMultiSelection = ids;
+      if (changed) onSelectMultiple(ids);
+    } else {
+      lastMultiSelection = [];
+    }
+  });
+
+  let lastFitToken = $state(-1);
+  $effect(() => {
+    if (fitToken !== lastFitToken) {
+      lastFitToken = fitToken;
+      tick().then(() => flowFitView({ padding: 0.2 }));
+    }
+  });
+
+  let lastAddQuestToken = $state(0);
+  $effect(() => {
+    if (addQuestToken !== lastAddQuestToken && addQuestToken > 0) {
+      lastAddQuestToken = addQuestToken;
+      tick().then(() => addAtCenter());
+    }
+  });
+
+  function snap(v: number) {
+    return Math.round(v * 2) / 2;
+  }
+
+  function flowContainer(): HTMLElement | null {
+    if (!viewportEl) return null;
+    return (
+      (viewportEl.querySelector(".svelte-flow") as HTMLElement | null) ??
+      (viewportEl.querySelector(".react-flow") as HTMLElement | null) ??
+      viewportEl
+    );
+  }
+
+  function isEmptyPaneTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    if (target.closest(".xyflow__node, .svelte-flow__node, .react-flow__node")) return false;
+    if (target.closest(".xyflow__edge, .svelte-flow__edge, .react-flow__edge")) return false;
+    if (target.closest(".xyflow__controls, .svelte-flow__controls, .react-flow__controls"))
+      return false;
+    if (target.closest(".xyflow__minimap, .svelte-flow__minimap, button, a, input, textarea"))
+      return false;
+    return !!(
+      target.closest(".xyflow__pane, .svelte-flow__pane, .react-flow__pane") ||
+      target.closest(".svelte-flow, .react-flow") ||
+      target === viewportEl
+    );
+  }
+
+  function nodeFlowSize(n: Node): number {
+    const q = (n.data as { quest?: QuestData; baseSize?: number } | undefined)?.quest;
+    const base = (n.data as { baseSize?: number } | undefined)?.baseSize ?? BASE;
+    const scale = q?.size && q.size > 0 ? q.size : 1;
+    return base * scale;
+  }
+
+  function finishMarquee(additive: boolean) {
+    if (!marqueeWorld) {
+      marqueeActive = false;
+      marqueeScreen = null;
+      marqueeOriginScreen = null;
+      return;
+    }
+    const box = marqueeWorld;
+    const hit: string[] = [];
+    for (const n of nodes) {
+      if (n.id.startsWith("ext:")) continue;
+      const size = nodeFlowSize(n);
+      const nb = {
+        x1: n.position.x,
+        y1: n.position.y,
+        x2: n.position.x + size,
+        y2: n.position.y + size,
+      };
+      if (rectsIntersect(box, nb)) hit.push(n.id);
+    }
+    marqueeActive = false;
+    marqueeWorld = null;
+    marqueeScreen = null;
+    marqueeOriginScreen = null;
+    if (hit.length > 0) {
+      onSelectMultiple(hit);
+    } else if (!additive) {
+      onSelect(null);
+    }
+  }
+
+  function focusCanvas() {
+    viewportEl?.focus({ preventScroll: true });
+  }
+
+  function onMarqueePointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    if (!isEmptyPaneTarget(e.target)) return;
+    focusCanvas();
+    // Let middle/right pan alone; left on empty pane = marquee.
+    const container = flowContainer();
+    if (!container) return;
+    const { x: panX, y: panY, zoom } = getViewport();
+    const world = getWorldCoordinates(e, container, panX, panY, zoom);
+    const rect = container.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    marqueeActive = true;
+    marqueeWorld = { x1: world.x, y1: world.y, x2: world.x, y2: world.y };
+    marqueeOriginScreen = { x: sx, y: sy };
+    marqueeScreen = { left: sx, top: sy, width: 0, height: 0 };
+    try {
+      viewportEl?.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function onMarqueePointerMove(e: PointerEvent) {
+    if (!marqueeActive || !marqueeWorld || !marqueeOriginScreen) return;
+    const container = flowContainer();
+    if (!container) return;
+    const { x: panX, y: panY, zoom } = getViewport();
+    const world = getWorldCoordinates(e, container, panX, panY, zoom);
+    const rect = container.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const ox = marqueeOriginScreen.x;
+    const oy = marqueeOriginScreen.y;
+    marqueeWorld = { ...marqueeWorld, x2: world.x, y2: world.y };
+    marqueeScreen = {
+      left: Math.min(ox, sx),
+      top: Math.min(oy, sy),
+      width: Math.abs(sx - ox),
+      height: Math.abs(sy - oy),
+    };
+  }
+
+  function onMarqueePointerUp(e: PointerEvent) {
+    if (!marqueeActive) return;
+    try {
+      viewportEl?.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    const dragged =
+      marqueeScreen != null && (marqueeScreen.width > 3 || marqueeScreen.height > 3);
+    if (dragged) {
+      finishMarquee(e.shiftKey || e.ctrlKey || e.metaKey);
+    } else {
+      marqueeActive = false;
+      marqueeWorld = null;
+      marqueeScreen = null;
+      marqueeOriginScreen = null;
+    }
+  }
+
+  function onCanvasDblClick(e: MouseEvent) {
+    if (!isEmptyPaneTarget(e.target)) return;
+    const container = flowContainer();
+    if (!container) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const { x: panX, y: panY, zoom } = getViewport();
+    const world = getWorldCoordinates(e, container, panX, panY, zoom);
+    onAddAt(snap(world.x / BASE), snap(world.y / BASE));
+  }
+
+  function handleNodeDragStop({
+    targetNode,
+    nodes: flowNodes,
+  }: {
+    targetNode: Node | null;
+    nodes: Node[];
+    event: MouseEvent | TouchEvent;
+  }) {
+    // Persist all selected nodes (multi-drag) plus the primary target.
+    const toPersist = new Set<string>();
+    if (targetNode && !targetNode.id.startsWith("ext:")) toPersist.add(targetNode.id);
+    for (const n of flowNodes) {
+      if (n.selected && !n.id.startsWith("ext:")) toPersist.add(n.id);
+    }
+    for (const n of flowNodes) {
+      if (!toPersist.has(n.id)) continue;
+      const q = quests.find((item) => item.id === n.id);
+      if (q) {
+        onMove(q, snap(n.position.x / BASE), snap(n.position.y / BASE));
+      }
+    }
+  }
+
+  function handleConnect(connection: Connection) {
+    if (connection.source && connection.target) {
+      const src = connection.source.startsWith("ext:")
+        ? connection.source.slice(4)
+        : connection.source;
+      const tgt = connection.target.startsWith("ext:")
+        ? connection.target.slice(4)
+        : connection.target;
+      // Edge is prereq (source) → dependent (target); dependent lists prereq in dependencies.
+      onLink(tgt, src);
+    }
+  }
+
+  function isValidConnection(connection: Edge | Connection | null | undefined): boolean {
+    if (!connection?.source || !connection?.target) return false;
+    if (connection.source === connection.target) return false;
+    // Dependent (target) must be a local chapter quest — cannot depend "into" a ghost.
+    if (connection.target.startsWith("ext:")) return false;
+    const src = connection.source.startsWith("ext:")
+      ? connection.source.slice(4)
+      : connection.source;
+    const dependentId = connection.target;
+    if (!quests.some((q) => q.id === dependentId)) return false;
+    if (src === dependentId) return false;
+    const dependent = quests.find((q) => q.id === dependentId);
+    if (dependent?.dependencies?.includes(src)) return false;
+    return true;
+  }
+
+  function clearEdgeSelection() {
+    if (!selectedEdgeId) return;
+    selectedEdgeId = null;
+    edges = edges.map((ed) => (ed.selected ? { ...ed, selected: false } : ed));
+    onEdgeSelect?.(null);
+  }
+
+  function handleEdgeClick({ edge }: { edge: Edge }) {
+    const depId = (edge.data as { depId?: string } | undefined)?.depId;
+    const dependentId = (edge.data as { dependentId?: string } | undefined)?.dependentId;
+    if (!depId || !dependentId) return;
+    selectedEdgeId = edge.id;
+    edges = edges.map((ed) => ({
+      ...ed,
+      selected: ed.id === edge.id,
+      style:
+        ed.id === edge.id
+          ? `${String(ed.style ?? "").replace(/stroke:[^;]+;?/g, "").replace(/stroke-width:[^;]+;?/g, "")} stroke: var(--ftbq-accent-teal, #3db8a8); stroke-width: 4;`
+          : ed.style,
+    }));
+    onEdgeSelect?.({ questId: dependentId, depId });
+    onSelect(null);
+  }
+
+  function handlePaneClick({ event }: { event: MouseEvent }) {
+    // Double-click create is handled via ondblclick on the viewport (getWorldCoordinates).
+    if (event.detail >= 2) return;
+    if (marqueeActive) return;
+    clearEdgeSelection();
+    focusCanvas();
+    onSelect(null, event);
+  }
+
+  function handleNodeClick({ node, event }: { node: Node; event: MouseEvent | TouchEvent }) {
+    if (node.id.startsWith("ext:")) {
+      const chapterId = (node.data as { chapterId?: string } | undefined)?.chapterId;
+      const questId = (node.data as { quest?: QuestData } | undefined)?.quest?.id;
+      if (chapterId && onOpenChapter) {
+        onOpenChapter(chapterId, questId);
+      }
+      return;
+    }
+    clearEdgeSelection();
+    const q = quests.find((item) => item.id === node.id);
+    if (q) {
+      focusCanvas();
+      onSelect(q, event instanceof MouseEvent ? event : undefined);
+    }
+  }
+
+  function addAtCenter() {
+    const container = flowContainer();
+    if (container) {
+      const rect = container.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const { x: panX, y: panY, zoom } = getViewport();
+      const world = getWorldCoordinates({ clientX: cx, clientY: cy }, container, panX, panY, zoom);
+      onAddAt(snap(world.x / BASE), snap(world.y / BASE));
+    } else {
+      const pos = screenToFlowPosition({
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2,
+      });
+      onAddAt(snap(pos.x / BASE), snap(pos.y / BASE));
+    }
+  }
+
+  /** Move selection among chapter quests (list order). */
+  function selectQuestByIndex(index: number) {
+    if (!quests.length) return;
+    const clamped = Math.max(0, Math.min(index, quests.length - 1));
+    onSelect(quests[clamped]);
+  }
+
+  function handleCanvasKeydown(e: KeyboardEvent) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    switch (e.key) {
+      case "Escape": {
+        e.preventDefault();
+        e.stopPropagation();
+        onSelect(null);
+        return;
+      }
+      case "Home": {
+        if (!quests.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        selectQuestByIndex(0);
+        return;
+      }
+      case "End": {
+        if (!quests.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        selectQuestByIndex(quests.length - 1);
+        return;
+      }
+      case "ArrowRight":
+      case "ArrowDown": {
+        if (!quests.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        {
+          const idx = selectedId ? quests.findIndex((q) => q.id === selectedId) : -1;
+          selectQuestByIndex(idx < 0 ? 0 : Math.min(idx + 1, quests.length - 1));
+        }
+        return;
+      }
+      case "ArrowLeft":
+      case "ArrowUp": {
+        if (!quests.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        {
+          const idx = selectedId ? quests.findIndex((q) => q.id === selectedId) : -1;
+          selectQuestByIndex(idx < 0 ? quests.length - 1 : Math.max(idx - 1, 0));
+        }
+        return;
+      }
+      default:
+        return;
+    }
   }
 </script>
 
 <div class="canvas-wrap ftbq-canvas">
   <div class="canvas-toolbar">
-    <button type="button" class="tb" title="Fit view" on:click={fitView}><Maximize2 size={14} /> Fit</button>
-    <button
-      type="button"
-      class="tb"
-      title="Add quest at center"
-      on:click={() => {
-        const rect = viewport?.getBoundingClientRect();
-        if (!rect) {
-          onAddAt(0, 0);
-          return;
-        }
-        const w = clientToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
-        onAddAt(snap(w.x), snap(w.y));
-      }}
-    >
-      <Plus size={14} /> Add quest
+    {#if onQuestFilterChange}
+      <input
+        type="search"
+        class="tb-filter"
+        placeholder="Filter…"
+        title="Hide nodes that don’t match (canvas filter). Ctrl+F searches fields and jumps."
+        aria-label="Filter quests on canvas"
+        value={questFilter}
+        oninput={(e) => onQuestFilterChange?.((e.currentTarget as HTMLInputElement).value)}
+        onkeydown={(e) => {
+          if (e.key === "Escape") {
+            onQuestFilterChange?.("");
+          }
+          if (e.key === "Enter") {
+            e.preventDefault();
+            const first = quests[0];
+            if (first) onSelect(first);
+          }
+        }}
+      />
+      {#if questFilter}
+        <span class="filt-count">{quests.length}/{filterTotal}</span>
+      {/if}
+    {/if}
+    <button type="button" class="tb" title="Fit view" aria-label="Fit view" onclick={() => flowFitView({ padding: 0.2 })}>
+      <Maximize2 size={14} class="flex-shrink-0" /> Fit
     </button>
-    <span class="hint">Drag · Space/MMB pan · Wheel zoom · Shift+drag link · Dbl-click add</span>
+    <button type="button" class="tb" title="Add quest at center (N or double-click)" aria-label="Add quest at center" onclick={addAtCenter}>
+      <Plus size={14} class="flex-shrink-0" /> Add quest
+    </button>
+    {#if onApplyLayout}
+      <div class="layout-btns" title="Auto-layout current chapter">
+        <button type="button" class="tb" onclick={() => onApplyLayout?.("tree")}>Tree</button>
+        <button type="button" class="tb" onclick={() => onApplyLayout?.("grid")}>Grid</button>
+        <button type="button" class="tb" onclick={() => onApplyLayout?.("circle")}>Circle</button>
+      </div>
+    {/if}
   </div>
 
+  <!-- Focusable canvas widget: arrow/Home/End/Escape selection via existing onSelect -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="viewport"
-    class:panning={mode === "pan" || spaceDown}
-    class:linking={mode === "link"}
-    bind:this={viewport}
-    on:pointerdown={onPointerDown}
-    on:pointermove={onPointerMove}
-    on:pointerup={onPointerUp}
-    on:pointercancel={onPointerUp}
-    on:wheel={onWheel}
-    on:dblclick={onDblClick}
     role="application"
-    aria-label="Quest canvas"
+    tabindex="0"
+    aria-label="Quest canvas. Arrow keys select next or previous quest. Home and End jump. Escape clears selection. Shift+Arrow outside canvas nudges selected quests."
+    bind:this={viewportEl}
+    onpointerdown={onMarqueePointerDown}
+    onpointermove={onMarqueePointerMove}
+    onpointerup={onMarqueePointerUp}
+    onpointercancel={onMarqueePointerUp}
+    ondblclick={onCanvasDblClick}
+    onkeydown={handleCanvasKeydown}
   >
-    <svg class="edges" width="100%" height="100%">
-      {#each quests as q (q.id)}
-        {@const _e = dragTick}
-        {#each q.dependencies as depId}
-          {@const target = depTarget(depId)}
-          {@const from = centerOf(q)}
-          {#if target}
-            {@const to = centerOf(target)}
-            {@const tProg = progressOf(target)}
-            <line
-              x1={from.x}
-              y1={from.y}
-              x2={to.x}
-              y2={to.y}
-              class="dep"
-              class:broken={false}
-              class:dep-done={progressOverlay && tProg === "completed"}
-            />
-          {:else}
-            <line
-              x1={from.x}
-              y1={from.y}
-              x2={from.x + 40}
-              y2={from.y - 30}
-              class="dep broken"
-            />
-          {/if}
-        {/each}
-      {/each}
-      {#if mode === "link" && linkFrom && linkCursor}
-        {@const from = centerOf(linkFrom)}
-        <line
-          x1={from.x}
-          y1={from.y}
-          x2={panX + linkCursor.x * unit}
-          y2={panY + linkCursor.y * unit}
-          class="dep link-preview"
-        />
-      {/if}
-    </svg>
-
-    {#each quests as q (q.id)}
-      {@const _drag = dragTick}
-      {@const p = screenPos(q)}
-      {@const prog = progressOf(q)}
-      {@const shape = nodeShape(q)}
-      {@const clipped = shape === "diamond" || shape === "hexagon" || shape === "pentagon" || shape === "gear"}
-      <div
-        class="node-wrap"
-        class:sel={selectedId === q.id}
-        class:issue={issueIds.has(q.id)}
-        style={`left:${p.left}px; top:${p.top}px; width:${p.size}px;`}
-        title={q.title}
-      >
-        <div
-          class="node-icon {shapeClass(q)}"
-          class:clipped
-          class:optional={q.optional}
-          class:prog-completed={prog === "completed"}
-          class:prog-started={prog === "started"}
-          class:prog-available={prog === "available"}
-          class:prog-locked={prog === "locked"}
-          style={`width:${p.size}px; height:${p.size}px;`}
-        >
-          <div class="node-face {shapeClass(q)}">
-            <QuestItemIcon
-              itemId={q.icon}
-              fallback={glyph(q)}
-              size={Math.max(12, Math.floor(p.size * 0.62))}
-              revision={iconRevision}
-            />
-          </div>
-          {#if q.optional}<span class="opt">?</span>{/if}
-          {#if prog === "completed"}<span class="check" title="Completed">✓</span>{/if}
-        </div>
-        <span class="node-label">{q.title}</span>
-      </div>
-    {/each}
-
     {#if quests.length === 0}
-      <div class="empty-hint">{emptyHint}</div>
+      <div class="empty-hint">
+        {#if showEmptyAddCta}
+          <button type="button" class="empty-add" onclick={(e) => { e.stopPropagation(); addAtCenter(); }}>
+            + Add first quest
+          </button>
+          <span class="empty-sub">Double-click canvas · Press N · Use toolbar button</span>
+        {:else}
+          <span>{emptyHint}</span>
+        {/if}
+      </div>
     {/if}
+
+    <SvelteFlow
+      bind:nodes
+      bind:edges
+      {nodeTypes}
+      panOnScroll
+      selectionOnDrag={false}
+      panOnDrag={[1, 2]}
+      deleteKey={null}
+      onnodeclick={handleNodeClick}
+      onpaneclick={handlePaneClick}
+      onnodedragstop={handleNodeDragStop}
+      onconnect={handleConnect}
+      isValidConnection={isValidConnection}
+      onedgeclick={handleEdgeClick}
+      fitView
+      fitViewOptions={{ padding: 0.2 }}
+      defaultEdgeOptions={{
+        type: "step",
+        style:
+          "stroke: var(--ftbq-line, #5c8a9e); stroke-width: 3; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));",
+      }}
+    >
+      <Background
+        variant={BackgroundVariant.Dots}
+        gap={20}
+        size={1}
+        patternColor="rgba(255,255,255,0.07)"
+      />
+      <Controls />
+      <MiniMap
+        pannable
+        zoomable
+        nodeStrokeWidth={2}
+        maskColor="rgba(0, 0, 0, 0.45)"
+        bgColor="var(--ftbq-bg-panel, #1a1a1e)"
+        nodeColor={() => "var(--ftbq-accent-teal, #3db8a8)"}
+        ariaLabel="Chapter minimap"
+      />
+    </SvelteFlow>
+
+    {#if marqueeScreen && (marqueeScreen.width > 0 || marqueeScreen.height > 0)}
+      <div
+        class="marquee-box"
+        style="left:{marqueeScreen.left}px; top:{marqueeScreen.top}px; width:{marqueeScreen.width}px; height:{marqueeScreen.height}px;"
+      ></div>
+    {/if}
+    <div class="vignette" aria-hidden="true"></div>
   </div>
 </div>
 
@@ -430,10 +723,10 @@
     flex-direction: column;
     min-height: 0;
     height: 100%;
-    background: var(--ftbq-bg-canvas, #2b2b30);
+    background: var(--ftbq-bg-canvas);
     border: none;
-    border-left: 1px solid var(--ftbq-border, #3a3a42);
-    border-right: 1px solid var(--ftbq-border, #3a3a42);
+    border-left: 1px solid var(--ftbq-frame);
+    border-right: 1px solid var(--ftbq-frame);
     overflow: hidden;
   }
   .canvas-toolbar {
@@ -441,263 +734,175 @@
     align-items: center;
     gap: 6px;
     padding: 5px 8px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
-    background: var(--ftbq-bg-panel, #212126);
+    border-bottom: 1px solid var(--ftbq-frame);
+    background: var(--ftbq-bg-panel);
     flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .tb-filter {
+    min-width: 120px;
+    flex: 1;
+    max-width: 220px;
+    font-size: 12px;
+    padding: 4px 8px;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
+    color: var(--ftbq-text, #e8e8e8);
+    border-radius: 4px;
+  }
+  .canvas-toolbar .tb-filter:focus {
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+  .canvas-toolbar .tb:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 80%, #fff);
+    outline-offset: 1px;
+  }
+  .filt-count {
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .layout-btns {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: auto;
+  }
+  .layout-btns .tb {
+    opacity: 0.85;
+    transition: opacity 0.15s ease, background 0.15s ease;
+  }
+  .layout-btns .tb:hover {
+    opacity: 1;
   }
   .tb {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     padding: 4px 10px;
-    border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    border: 1px solid var(--ftbq-frame);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
     color: var(--ftbq-text, #e8e8e8);
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    text-shadow: none;
+    box-shadow: none;
   }
   .tb:hover {
-    border-color: var(--ftbq-accent-teal, #3db8a8);
-    background: rgba(61, 184, 168, 0.12);
+    border-color: var(--ftbq-frame);
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
     color: var(--ftbq-text, #e8e8e8);
   }
-  .hint {
-    margin-left: auto;
-    font-size: 9px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    letter-spacing: 0.02em;
+  .tb:active {
+    background: var(--bg-active, var(--ftbq-btn-hover-bottom));
+    box-shadow: none;
   }
   .viewport {
     position: relative;
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    cursor: default;
-    background-color: var(--ftbq-bg-canvas, #2b2b30);
-    background-image:
-      repeating-linear-gradient(
-        0deg,
-        transparent,
-        transparent 15px,
-        rgba(255, 255, 255, 0.03) 15px,
-        rgba(255, 255, 255, 0.03) 16px
-      ),
-      repeating-linear-gradient(
-        90deg,
-        transparent,
-        transparent 15px,
-        rgba(255, 255, 255, 0.03) 15px,
-        rgba(255, 255, 255, 0.03) 16px
-      );
-    touch-action: none;
-    user-select: none;
   }
-  .viewport.panning {
-    cursor: grabbing;
+  .viewport:focus {
+    outline: none;
   }
-  .viewport.linking {
-    cursor: crosshair;
-  }
-  .edges {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: 1;
-  }
-  .dep {
-    stroke: var(--ftbq-line, #5c8a9e);
-    stroke-width: 3;
-    stroke-linecap: round;
-  }
-  .dep.dep-done {
-    stroke: var(--ftbq-line-done, #55c95a);
-    stroke-width: 3.5;
-  }
-  .dep.broken {
-    stroke: var(--ftbq-quest-started, #f2c94c);
-    stroke-dasharray: 6 4;
-    stroke-width: 2.5;
-  }
-  .dep.link-preview {
-    stroke: var(--ftbq-accent-teal, #3db8a8);
-    stroke-dasharray: 6 4;
-    stroke-width: 2.5;
-    opacity: 0.85;
-  }
-  .node-wrap {
-    position: absolute;
-    z-index: 2;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 3px;
-    pointer-events: none;
-    cursor: grab;
-  }
-  .node-wrap.sel .node-icon {
-    outline: 2px solid var(--ftbq-accent-green, #55c95a);
-    outline-offset: 1px;
-  }
-  .node-wrap.issue .node-icon {
-    border-color: var(--ftbq-quest-started, #f2c94c);
-  }
-  .node-icon {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    border: 2px solid var(--ftbq-quest-default, #ffffff);
-    background: transparent;
-    color: var(--ftbq-text, #e8e8e8);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  }
-  /* Clipped shapes: border on outer box (no clip); face carries clip-path fill */
-  .node-icon.clipped {
-    border-color: transparent;
-    box-shadow: none;
-    background: transparent;
-  }
-  .node-face {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--ftbq-node-fill, #18181c);
-    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.5);
-  }
-  /* FTB quest shapes */
-  .node-icon.shape-circle,
-  .node-face.shape-circle {
-    border-radius: 50%;
-  }
-  .node-icon.shape-square,
-  .node-face.shape-square {
-    border-radius: 0;
-  }
-  .node-icon.shape-rsquare,
-  .node-face.shape-rsquare {
-    border-radius: 4px;
-  }
-  .node-face.shape-diamond {
-    border-radius: 0;
-    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
-  }
-  .node-face.shape-hexagon {
-    clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
-    border-radius: 0;
-  }
-  .node-face.shape-pentagon {
-    clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%);
-    border-radius: 0;
-  }
-  .node-face.shape-gear {
-    border-radius: 3px;
-    clip-path: polygon(
-      50% 0%,
-      61% 8%,
-      75% 4%,
-      82% 18%,
-      96% 25%,
-      92% 39%,
-      100% 50%,
-      92% 61%,
-      96% 75%,
-      82% 82%,
-      75% 96%,
-      61% 92%,
-      50% 100%,
-      39% 92%,
-      25% 96%,
-      18% 82%,
-      4% 75%,
-      8% 61%,
-      0% 50%,
-      8% 39%,
-      4% 25%,
-      18% 18%,
-      25% 4%,
-      39% 8%
-    );
-  }
-  .node-icon.optional:not(.clipped) {
-    border-style: dashed;
-  }
-  .node-face :global(.qii),
-  .node-face :global(.qii-ph) {
-    max-width: 70%;
-    max-height: 70%;
-  }
-  .node-label {
-    font-size: clamp(8px, 10px, 11px);
-    line-height: 1.15;
-    max-width: calc(100% + 24px);
-    min-width: 100%;
-    text-align: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    pointer-events: none;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
-  }
-  .node-wrap.sel .node-label {
-    color: var(--ftbq-text, #e8e8e8);
-  }
-  .opt {
-    position: absolute;
-    top: -3px;
-    right: -3px;
-    font-size: 9px;
-    color: var(--ftbq-quest-started, #f2c94c);
-    font-weight: 900;
-    text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
-  }
-  .check {
-    position: absolute;
-    bottom: -4px;
-    right: -4px;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--ftbq-quest-completed, #55c95a);
-    color: #0a1a0c;
-    font-size: 10px;
-    font-weight: 900;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
-  }
-  /* Progress overlay border colors */
-  .node-icon.prog-completed {
-    border-color: var(--ftbq-quest-completed, #55c95a);
-  }
-  .node-icon.prog-started {
-    border-color: var(--ftbq-quest-started, #f2c94c);
-  }
-  .node-icon.prog-available {
-    border-color: var(--ftbq-quest-default, #ffffff);
-  }
-  .node-icon.prog-locked {
-    border-color: var(--ftbq-quest-locked, #6b6b6b);
-    opacity: 0.55;
-    filter: grayscale(0.4);
+  .viewport:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 80%, #fff);
+    outline-offset: -2px;
   }
   .empty-hint {
     position: absolute;
     inset: 0;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 10px;
+    pointer-events: none;
+    z-index: 10;
     color: var(--ftbq-text-muted, #9a9aa0);
     font-size: 12px;
+    font-weight: 600;
+    text-shadow: none;
+  }
+  .empty-add {
+    pointer-events: auto;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    border: 1px solid var(--ftbq-accent-teal, #3db8a8);
+    border-radius: 2px;
+    background: rgba(61, 184, 168, 0.15);
+    color: var(--ftbq-accent-teal, #3db8a8);
+    cursor: pointer;
+    text-shadow: none;
+  }
+  .empty-add:hover {
+    background: rgba(61, 184, 168, 0.28);
+  }
+  .empty-sub {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .vignette {
+    position: absolute;
+    inset: 0;
     pointer-events: none;
-    z-index: 0;
+    z-index: 5;
+    box-shadow: inset 0 0 64px rgba(0, 0, 0, 0.38);
+  }
+
+  .marquee-box {
+    position: absolute;
+    z-index: 8;
+    pointer-events: none;
+    border: 1px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 85%, #fff);
+    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 18%, transparent);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  }
+
+  :global(.flex-shrink-0) {
+    flex-shrink: 0;
+  }
+
+  :global(.svelte-flow__background) {
+    background-color: var(--ftbq-bg-canvas);
+  }
+  :global(.svelte-flow__edge path) {
+    stroke-width: 3;
+  }
+  :global(.svelte-flow__edge:hover path) {
+    stroke: var(--ftbq-line-hover, #7fb3c8);
+  }
+  :global(.svelte-flow__minimap) {
+    display: none !important;
+  }
+  :global(.svelte-flow__controls) {
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 3px;
+    overflow: hidden;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 4px 10px rgba(0, 0, 0, 0.45);
+  }
+  :global(.svelte-flow__controls button) {
+    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
+    border: none;
+    border-bottom: 1px solid var(--ftbq-frame);
+    color: var(--ftbq-text, #e8e8e8);
+  }
+  :global(.svelte-flow__controls button:hover) {
+    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
+  }
+  :global(.svelte-flow__controls button svg),
+  :global(.ftbq-canvas .tb svg),
+  :global(.ftbq-canvas .flex-shrink-0) {
+    flex-shrink: 0;
+    fill: var(--ftbq-text, #e8e8e8);
+  }
+  :global(.svelte-flow__attribution) {
+    display: none;
   }
 </style>

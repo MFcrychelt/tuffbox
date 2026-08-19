@@ -1,43 +1,238 @@
 <script lang="ts">
-  import { Trash2, Link2, AlertTriangle } from "lucide-svelte";
-  import type { QuestData, QuestValidationIssue } from "../../lib/api";
+  import { Trash2, Link2, AlertTriangle, Copy, Check } from "@lucide/svelte";
+  import type { QuestChapter, QuestData, QuestValidationIssue } from "../../lib/api";
+  import { DEP_REQUIREMENT_OPTIONS, SHAPE_OPTIONS } from "../../lib/questTypeLabels";
+  import {
+    localeValueAsString,
+    type LocaleMap,
+  } from "../../lib/questLocale";
   import TaskRewardEditor from "./TaskRewardEditor.svelte";
+  import ItemStackEditor from "./ItemStackEditor.svelte";
 
-  export let quest: QuestData;
-  export let chapterQuests: QuestData[];
-  export let issues: QuestValidationIssue[] = [];
-  export let rewardTableIds: string[] = [];
-  export let onDirty: () => void;
-  export let onRemove: () => void;
-  export let onAddDep: (depId: string) => void;
-  export let onRemoveDep: (depId: string) => void;
+  let {
+    quest,
+    chapterQuests,
+    chapters = [],
+    issues = [],
+    rewardTableIds = [],
+    activeLocale = null,
+    compareLocale = null,
+    compareMap = null,
+    availableLocales = [],
+    onDirty,
+    onCompareDirty,
+    onCompareLocaleChange,
+    onCompareMapChange,
+    onRemove,
+    onAddDep,
+    onRemoveDep,
+    onOpenKubeJs,
+    focusFieldToken = 0,
+    focusField = null as string | null,
+  }: {
+    quest: QuestData;
+    chapterQuests: QuestData[];
+    chapters?: QuestChapter[];
+    issues?: QuestValidationIssue[];
+    rewardTableIds?: string[];
+    activeLocale?: string | null;
+    compareLocale?: string | null;
+    compareMap?: LocaleMap | null;
+    availableLocales?: string[];
+    onDirty: () => void;
+    onCompareDirty?: (code: string) => void;
+    onCompareLocaleChange?: (code: string | null) => void;
+    onCompareMapChange?: (code: string, map: LocaleMap) => void;
+    onRemove: () => void;
+    onAddDep: (depId: string) => void;
+    onRemoveDep: (depId: string) => void;
+    onOpenKubeJs?: (id: string) => void;
+    /** Increment to focus `focusField` (title | tasks | icon). */
+    focusFieldToken?: number;
+    focusField?: string | null;
+  } = $props();
 
-  const SHAPES = ["", "circle", "square", "rsquare", "diamond", "hexagon", "pentagon", "gear", "none"];
-  const DEP_REQ = ["", "all_completed", "one_completed", "all_started", "one_started"];
+  let depPick = $state("");
+  let depFilter = $state("");
+  let descText = $state("");
+  let descEl = $state<HTMLTextAreaElement | null>(null);
+  let extraKey = $state("");
+  let idCopied = $state(false);
+  let idCopyTimer: ReturnType<typeof setTimeout> | null = null;
+  let titleInputEl = $state<HTMLInputElement | null>(null);
+  let lastFocusToken = $state(0);
 
-  let depPick = "";
-  let descText = "";
-  let extraKey = "";
-  let extraVal = "";
-  let showAdvanced = false;
+  async function copyQuestId() {
+    try {
+      await navigator.clipboard.writeText(quest.id);
+      idCopied = true;
+      if (idCopyTimer) clearTimeout(idCopyTimer);
+      idCopyTimer = setTimeout(() => {
+        idCopied = false;
+        idCopyTimer = null;
+      }, 1500);
+    } catch {
+      /* clipboard may be unavailable */
+    }
+  }
+  let extraVal = $state("");
+  let showAdvanced = $state(false);
+  let cmpTitle = $state("");
+  let cmpSubtitle = $state("");
+  let cmpDesc = $state("");
 
-  $: depOptions = buildDepOptions(chapterQuests, quest);
-  $: myIssues = issues.filter((i) => i.questId === quest.id);
-  $: descText = (quest.description ?? []).join("\n");
+  // Locale gap jump sets compareLocale — open More so compare columns are visible.
+  $effect(() => {
+    if (showCompare) showAdvanced = true;
+  });
 
-  function buildDepOptions(list: QuestData[], current: QuestData) {
-    const opts: { id: string; label: string }[] = [];
-    for (const q of list) {
-      if (q.id === current.id) continue;
-      if (!current.dependencies.includes(q.id)) {
-        opts.push({ id: q.id, label: q.title });
+  $effect(() => {
+    if (!focusFieldToken || focusFieldToken === lastFocusToken) return;
+    lastFocusToken = focusFieldToken;
+    const field = focusField;
+    queueMicrotask(() => {
+      if (field === "title" || field === "icon") {
+        titleInputEl?.focus();
+        titleInputEl?.select();
+      } else if (field === "tasks" || field === "item") {
+        document.getElementById("quest-how-to-prove")?.scrollIntoView({ block: "nearest" });
       }
-      for (const t of q.tasks ?? []) {
-        if (!t.id || current.dependencies.includes(t.id)) continue;
-        opts.push({
-          id: t.id,
-          label: `${q.title} · ${t.title || t.type || "task"}`,
-        });
+    });
+  });
+
+  let depOptions = $derived(buildDepOptions(chapters, chapterQuests, quest));
+  let filteredDepOptions = $derived.by(() => {
+    const q = depFilter.trim().toLowerCase();
+    if (!q) return depOptions;
+    return depOptions.filter(
+      (o) =>
+        o.label.toLowerCase().includes(q) ||
+        o.id.toLowerCase().includes(q),
+    );
+  });
+  let myIssues = $derived(issues.filter((i) => i.questId === quest.id));
+  let showCompare = $derived(
+    !!compareLocale &&
+      !!compareMap &&
+      compareLocale !== activeLocale &&
+      availableLocales.length > 1,
+  );
+
+  function normalizeDescLines(text: string): string[] {
+    const lines = text
+      .split("\n")
+      .map((s) => s.trimEnd())
+      .filter((s, i, arr) => s.length > 0 || i < arr.length - 1);
+    while (lines.length && lines[lines.length - 1] === "") lines.pop();
+    return lines;
+  }
+
+  function commitDescriptionTo(target: QuestData, text: string): boolean {
+    const lines = normalizeDescLines(text);
+    const prev = (target.description ?? []).join("\n");
+    const next = lines.join("\n");
+    if (prev === next) return false;
+    target.description = lines;
+    target.descriptionFromSnbt = true;
+    onDirty();
+    return true;
+  }
+
+  function commitDescription() {
+    commitDescriptionTo(quest, descText);
+  }
+
+  /** Flush pending description when leaving a quest (deselect / switch) before resync. */
+  $effect(() => {
+    const target = quest;
+    void target.id;
+    descText = (target.description ?? []).join("\n");
+    return () => {
+      commitDescriptionTo(target, descText);
+    };
+  });
+
+  $effect(() => {
+    const id = quest.id;
+    const map = compareMap;
+    const code = compareLocale;
+    if (!map || !code) {
+      cmpTitle = "";
+      cmpSubtitle = "";
+      cmpDesc = "";
+      return;
+    }
+    cmpTitle = localeValueAsString(map, `quest.${id}.title`);
+    cmpSubtitle = localeValueAsString(map, `quest.${id}.quest_subtitle`);
+    cmpDesc = localeValueAsString(map, `quest.${id}.quest_desc`);
+    return () => {
+      if (!code || !map) return;
+      const lines = normalizeDescLines(cmpDesc);
+      const key = `quest.${id}.quest_desc`;
+      const prev = localeValueAsString(map, key);
+      if (prev === lines.join("\n")) return;
+      const next: LocaleMap = { ...map };
+      for (const [k, v] of Object.entries(next)) {
+        if (Array.isArray(v)) next[k] = [...v];
+      }
+      next[key] = lines;
+      onCompareMapChange?.(code, next);
+      onCompareDirty?.(code);
+    };
+  });
+
+  function patchCompare(mutator: (map: LocaleMap) => void) {
+    if (!compareLocale || !compareMap) return;
+    const next: LocaleMap = { ...compareMap };
+    for (const [k, v] of Object.entries(next)) {
+      if (Array.isArray(v)) next[k] = [...v];
+    }
+    mutator(next);
+    onCompareMapChange?.(compareLocale, next);
+    onCompareDirty?.(compareLocale);
+  }
+
+  function commitCompareDesc() {
+    const lines = normalizeDescLines(cmpDesc);
+    patchCompare((map) => {
+      map[`quest.${quest.id}.quest_desc`] = lines;
+    });
+  }
+
+  function buildDepOptions(
+    allChapters: QuestChapter[],
+    sameChapter: QuestData[],
+    current: QuestData,
+  ) {
+    const opts: { id: string; label: string }[] = [];
+    const walk: { title: string; same: boolean; quests: QuestData[] }[] =
+      allChapters.length > 0
+        ? (() => {
+            const currentChId = allChapters.find((ch) =>
+              ch.quests.some((q) => q.id === current.id),
+            )?.id;
+            return allChapters.map((ch) => ({
+              title: ch.title || ch.filename || ch.id.slice(0, 8),
+              same: ch.id === currentChId,
+              quests: ch.quests,
+            }));
+          })()
+        : [{ title: "", same: true, quests: sameChapter }];
+
+    for (const ch of walk) {
+      for (const q of ch.quests) {
+        if (q.id === current.id) continue;
+        const base = ch.same ? q.title : `${ch.title} · ${q.title}`;
+        if (!current.dependencies.includes(q.id)) {
+          opts.push({ id: q.id, label: base });
+        }
+        for (const t of q.tasks ?? []) {
+          if (!t.id || current.dependencies.includes(t.id)) continue;
+          opts.push({
+            id: t.id,
+            label: `${base} · ${t.title || t.type || "task"}`,
+          });
+        }
       }
     }
     return opts;
@@ -51,6 +246,15 @@
       const task = viaTask.tasks.find((t) => t.id === id);
       return `${viaTask.title}${task?.title ? ` · ${task.title}` : " (task)"}`;
     }
+    for (const ch of chapters) {
+      const q = ch.quests.find((x) => x.id === id);
+      if (q) return `${ch.title || ch.filename || ch.id.slice(0, 8)} · ${q.title}`;
+      const owner = ch.quests.find((x) => x.tasks?.some((t) => t.id === id));
+      if (owner) {
+        const task = owner.tasks.find((t) => t.id === id);
+        return `${ch.title || ch.filename || ch.id.slice(0, 8)} · ${owner.title}${task?.title ? ` · ${task.title}` : " (task)"}`;
+      }
+    }
     return id;
   }
 
@@ -58,22 +262,49 @@
     if (!depPick) return;
     onAddDep(depPick);
     depPick = "";
+    depFilter = "";
   }
 
-  function commitDescription() {
-    quest.description = descText
-      .split("\n")
-      .map((s) => s.trimEnd())
-      .filter((s, i, arr) => s.length > 0 || i < arr.length - 1);
-    while (quest.description.length && quest.description[quest.description.length - 1] === "") {
-      quest.description.pop();
+  function applyDepFromFilter() {
+    if (depPick) {
+      applyDep();
+      return;
     }
-    onDirty();
+    const first = filteredDepOptions[0];
+    if (!first) return;
+    onAddDep(first.id);
+    depPick = "";
+    depFilter = "";
   }
 
   function wrapFmt(code: string) {
-    descText = `${descText}${descText && !descText.endsWith("\n") ? "" : ""}${code}`;
+    const el = descEl;
+    const text = descText;
+    const selStart = el ? el.selectionStart : text.length;
+    const selEnd = el ? el.selectionEnd : text.length;
+    const start = selStart ?? text.length;
+    const end = selEnd ?? text.length;
+    const selected = text.slice(start, end);
+    const head = text.slice(0, start);
+    const tail = text.slice(end);
+    let applied: string;
+    let cursorAt: number;
+    if (selected && end > start) {
+      // Wrap the selection in the format code + reset, preserving the text.
+      applied = `${head}${code}${selected}&r${tail}`;
+      cursorAt = start + code.length + selected.length; // before &r — keep typing formatted
+    } else {
+      // Just insert the format code at the cursor.
+      applied = `${head}${code}${tail}`;
+      cursorAt = start + code.length;
+    }
+    descText = applied;
     commitDescription();
+    queueMicrotask(() => {
+      if (!descEl) return;
+      descEl.focus();
+      descEl.setSelectionRange(cursorAt, cursorAt);
+    });
   }
 
   function insertTemplate(kind: string) {
@@ -89,7 +320,7 @@
 
   function tri(field: keyof QuestData, e: Event) {
     const s = (e.target as HTMLSelectElement).value;
-    (quest as Record<string, unknown>)[field as string] =
+    (quest as unknown as Record<string, unknown>)[field as string] =
       s === "true" ? true : s === "false" ? false : null;
     onDirty();
   }
@@ -135,94 +366,290 @@
   function textareaVal(e: Event): string {
     return (e.currentTarget as HTMLTextAreaElement).value;
   }
+
+  function autoGrowDescription(e: Event) {
+    const el = e.currentTarget as HTMLTextAreaElement;
+    descText = el.value;
+    el.style.height = "auto";
+    el.style.height = `${Math.max(100, el.scrollHeight)}px`;
+  }
 </script>
 
 <aside class="insp ftbq-view">
   <div class="insp-h">
-    <h3 title={quest.id}>{quest.title}</h3>
-    <button type="button" class="ico danger" title="Delete quest" on:click={onRemove}>
+    <h3 title={quest.id}>{quest.title || "Untitled quest"}</h3>
+    <button
+      type="button"
+      class="qid-mini"
+      title={idCopied ? "Copied" : "Copy quest id"}
+      onclick={() => void copyQuestId()}
+    >
+      {#if idCopied}
+        <Check size={12} />
+      {:else}
+        <Copy size={12} />
+      {/if}
+      <code>{quest.id.slice(0, 8)}</code>
+    </button>
+    <button type="button" class="ico danger" title="Delete quest" aria-label="Delete quest" onclick={onRemove}>
       <Trash2 size={14} />
     </button>
   </div>
-  <code class="qid">{quest.id}</code>
 
   {#if myIssues.length > 0}
     <div class="val-warn">
-      {#each myIssues as issue}
+      {#each myIssues as issue (issue.message)}
         <div><AlertTriangle size={12} /> {issue.message}</div>
       {/each}
     </div>
   {/if}
 
-  <div class="fields">
-    <label>Title<input bind:value={quest.title} on:input={onDirty} /></label>
-    <label
-      >Subtitle<input bind:value={quest.subtitle} on:input={onDirty} placeholder="Optional" /></label
-    >
-    <label
-      >Description
-      <div class="fmt-bar">
-        <button type="button" class="ghost" on:click={() => wrapFmt("&l")}>Bold</button>
-        <button type="button" class="ghost" on:click={() => wrapFmt("&a")}>Green</button>
-        <button type="button" class="ghost" on:click={() => wrapFmt("&7")}>Gray</button>
-        <button type="button" class="ghost" on:click={() => wrapFmt("&e")}>Gold</button>
-        <button type="button" class="ghost" on:click={() => insertTemplate("objective")}>Objective</button>
-        <button type="button" class="ghost" on:click={() => insertTemplate("story")}>Story</button>
+  <!-- 1. What to do -->
+  <section class="block">
+    <h4 class="block-h">What to do</h4>
+    <div class="fields">
+      <div class="title-icon">
+        <label class="grow"
+          >Title<input
+            bind:this={titleInputEl}
+            bind:value={quest.title}
+            oninput={() => {
+              quest.titleFromSnbt = true;
+              onDirty();
+            }}
+          /></label
+        >
+        <div class="icon-slot">
+          <ItemStackEditor
+            label="Icon"
+            value={quest.icon ?? null}
+            allowFilters={false}
+            onChange={(v) => {
+              quest.icon = v;
+              onDirty();
+            }}
+          />
+        </div>
       </div>
-      <textarea
-        rows="4"
-        value={descText}
-        on:input={(e) => (descText = textareaVal(e))}
-        on:change={commitDescription}
-        placeholder="One line per paragraph · & codes · JSON text lines ok"
-      ></textarea>
-      <small class="fmt-hint">Lines starting with {"{"} or [ are treated as raw JSON text by FTB Quests.</small>
-    </label>
-    <label class="checkbox">
-      <input type="checkbox" bind:checked={quest.optional} on:change={onDirty} />
-      Optional quest
-    </label>
-    <label
-      >Shape
-      <select
-        value={quest.shape ?? ""}
-        on:change={(e) => {
-          quest.shape = selectVal(e) || null;
-          onDirty();
-        }}
+      <label
+        >Subtitle<input
+          bind:value={quest.subtitle}
+          oninput={() => {
+            quest.subtitleFromSnbt = true;
+            onDirty();
+          }}
+          placeholder="Optional"
+        /></label
       >
-        {#each SHAPES as s}
-          <option value={s}>{s || "(chapter default)"}</option>
+      <label
+        >Description
+        <details class="fmt-details">
+          <summary>Formatting</summary>
+          <div class="fmt-bar">
+            <button type="button" onclick={() => wrapFmt("&l")}>Bold</button>
+            <button type="button" onclick={() => wrapFmt("&a")}>Green</button>
+            <button type="button" onclick={() => wrapFmt("&7")}>Gray</button>
+            <button type="button" onclick={() => wrapFmt("&e")}>Gold</button>
+            <button type="button" onclick={() => insertTemplate("objective")}>Objective</button>
+            <button type="button" onclick={() => insertTemplate("story")}>Story</button>
+          </div>
+        </details>
+        <textarea
+          rows="3"
+          bind:this={descEl}
+          value={descText}
+          oninput={autoGrowDescription}
+          onchange={commitDescription}
+          onblur={commitDescription}
+          placeholder="What the player should do…"
+        ></textarea>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={quest.optional} onchange={onDirty} />
+        Optional quest
+      </label>
+    </div>
+  </section>
+
+  <!-- 2–3. How to prove / What you get -->
+  <TaskRewardEditor {quest} {onDirty} {rewardTableIds} {onOpenKubeJs} />
+
+  <!-- 4. What unlocks it -->
+  <section class="block">
+    <h4 class="block-h"><Link2 size={12} /> What unlocks it</h4>
+    <div class="deps">
+      {#each quest.dependencies as dep (dep)}
+        <span class="dep-tag" title={dep}>
+          {titleOf(dep)}
+          <button type="button" class="dep-rm" onclick={() => onRemoveDep(dep)}>×</button>
+        </span>
+      {/each}
+      {#if quest.dependencies.length === 0}
+        <span class="deps-empty">No dependencies — available immediately</span>
+      {/if}
+    </div>
+    <div class="dep-add">
+      <input
+        type="search"
+        class="dep-filter"
+        placeholder="Filter quests…"
+        bind:value={depFilter}
+        onkeydown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            applyDepFromFilter();
+          }
+        }}
+      />
+      <select bind:value={depPick}>
+        <option value="">Add dependency…</option>
+        {#each filteredDepOptions as o (o.id)}
+          <option value={o.id}>{o.label}</option>
         {/each}
       </select>
-    </label>
-    <label
-      >Size<input
-        type="number"
-        step="0.25"
-        min="0.25"
-        bind:value={quest.size}
-        on:input={onDirty}
-        placeholder="1"
-      /></label
-    >
-    <label
-      >Position (quest space)
-      <div class="xy">
-        <input type="number" step="0.5" bind:value={quest.x} on:input={onDirty} />
-        <input type="number" step="0.5" bind:value={quest.y} on:input={onDirty} />
-      </div>
-    </label>
-  </div>
+      <button
+        type="button"
+        class="add-btn"
+        disabled={!depPick && filteredDepOptions.length === 0}
+        onclick={applyDepFromFilter}>Add</button
+      >
+    </div>
+  </section>
 
-  <button type="button" class="adv-tog" on:click={() => (showAdvanced = !showAdvanced)}>
-    {showAdvanced ? "▾" : "▸"} FTB flags
+  <!-- More: appearance, flags, locale -->
+  <button
+    type="button"
+    class="adv-tog"
+    aria-expanded={showAdvanced}
+    aria-controls="quest-more"
+    onclick={() => (showAdvanced = !showAdvanced)}
+  >
+    {showAdvanced ? "▾" : "▸"} More
   </button>
   {#if showAdvanced}
-    <div class="fields flags">
+    <div class="fields flags" id="quest-more">
+      {#if availableLocales.length > 1}
+        <label class="compare-pick"
+          >Compare locale
+          <select
+            value={compareLocale ?? ""}
+            onchange={(e) => {
+              const v = (e.currentTarget as HTMLSelectElement).value;
+              onCompareLocaleChange?.(v || null);
+            }}
+          >
+            <option value="">(off)</option>
+            {#each availableLocales as c (c)}
+              {#if c !== activeLocale}
+                <option value={c}>{c}</option>
+              {/if}
+            {/each}
+          </select>
+        </label>
+      {/if}
+
+      {#if showCompare}
+        <div class="locale-cols">
+          <div class="locale-col">
+            <span class="col-h">{activeLocale ?? "active"}</span>
+            <label
+              >Title<input
+                bind:value={quest.title}
+                oninput={() => {
+                  quest.titleFromSnbt = true;
+                  onDirty();
+                }}
+              /></label
+            >
+            <label
+              >Subtitle<input
+                bind:value={quest.subtitle}
+                oninput={() => {
+                  quest.subtitleFromSnbt = true;
+                  onDirty();
+                }}
+              /></label
+            >
+            <label
+              >Description
+              <textarea
+                rows="3"
+                value={descText}
+                oninput={autoGrowDescription}
+                onchange={commitDescription}
+                onblur={commitDescription}
+              ></textarea>
+            </label>
+          </div>
+          <div class="locale-col">
+            <span class="col-h">{compareLocale}</span>
+            <label
+              >Title<input
+                bind:value={cmpTitle}
+                oninput={() =>
+                  patchCompare((map) => {
+                    map[`quest.${quest.id}.title`] = cmpTitle;
+                  })}
+              /></label
+            >
+            <label
+              >Subtitle<input
+                bind:value={cmpSubtitle}
+                oninput={() =>
+                  patchCompare((map) => {
+                    map[`quest.${quest.id}.quest_subtitle`] = cmpSubtitle;
+                  })}
+              /></label
+            >
+            <label
+              >Description
+              <textarea
+                rows="3"
+                bind:value={cmpDesc}
+                onchange={commitCompareDesc}
+                onblur={commitCompareDesc}
+              ></textarea>
+            </label>
+          </div>
+        </div>
+      {/if}
+
+      <label
+        >Shape
+        <select
+          value={quest.shape ?? ""}
+          onchange={(e) => {
+            quest.shape = selectVal(e) || null;
+            onDirty();
+          }}
+        >
+          {#each SHAPE_OPTIONS as s (s.id || "_default")}
+            <option value={s.id}>{s.label}</option>
+          {/each}
+        </select>
+      </label>
+      <label
+        >Size<input
+          type="number"
+          step="0.25"
+          min="0.25"
+          bind:value={quest.size}
+          oninput={onDirty}
+          placeholder="1"
+        /></label
+      >
+      <label
+        >Position
+        <div class="xy">
+          <input type="number" step="0.5" bind:value={quest.x} oninput={onDirty} />
+          <input type="number" step="0.5" bind:value={quest.y} oninput={onDirty} />
+        </div>
+      </label>
+
+      <h4 class="sub-h">FTB flags</h4>
       <label
         >Hide dependency lines
-        <select value={triVal(quest.hideDependencyLines)} on:change={(e) => tri("hideDependencyLines", e)}>
+        <select value={triVal(quest.hideDependencyLines)} onchange={(e) => tri("hideDependencyLines", e)}>
           <option value="">unset</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -230,7 +657,7 @@
       </label>
       <label
         >Hide dependent lines
-        <select value={triVal(quest.hideDependentLines)} on:change={(e) => tri("hideDependentLines", e)}>
+        <select value={triVal(quest.hideDependentLines)} onchange={(e) => tri("hideDependentLines", e)}>
           <option value="">unset</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -238,7 +665,7 @@
       </label>
       <label
         >Can repeat
-        <select value={triVal(quest.canRepeat)} on:change={(e) => tri("canRepeat", e)}>
+        <select value={triVal(quest.canRepeat)} onchange={(e) => tri("canRepeat", e)}>
           <option value="">unset</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -246,7 +673,7 @@
       </label>
       <label
         >Invisible
-        <select value={triVal(quest.invisible)} on:change={(e) => tri("invisible", e)}>
+        <select value={triVal(quest.invisible)} onchange={(e) => tri("invisible", e)}>
           <option value="">unset</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -254,7 +681,7 @@
       </label>
       <label
         >Disable toast
-        <select value={triVal(quest.disableToast)} on:change={(e) => tri("disableToast", e)}>
+        <select value={triVal(quest.disableToast)} onchange={(e) => tri("disableToast", e)}>
           <option value="">unset</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -265,7 +692,7 @@
           type="number"
           min="0"
           value={quest.minRequiredDependencies ?? ""}
-          on:input={(e) => {
+          oninput={(e) => {
             const v = inputVal(e);
             quest.minRequiredDependencies = v === "" ? null : Number(v);
             onDirty();
@@ -276,288 +703,566 @@
         >Dependency requirement
         <select
           value={quest.dependencyRequirement ?? ""}
-          on:change={(e) => {
+          onchange={(e) => {
             quest.dependencyRequirement = selectVal(e) || null;
             onDirty();
           }}
         >
-          {#each DEP_REQ as d}
-            <option value={d}>{d || "(default)"}</option>
+          {#each DEP_REQUIREMENT_OPTIONS as d (d.id || "_default")}
+            <option value={d.id}>{d.label}</option>
           {/each}
         </select>
       </label>
 
-      <h4>Extra SNBT</h4>
+      <h4 class="sub-h">Extra SNBT</h4>
       {#each Object.entries(quest.extras ?? {}) as [k, v] (k)}
         <div class="extra-row">
           <code>{k}</code>
           <span>{typeof v === "string" ? v : JSON.stringify(v)}</span>
-          <button type="button" on:click={() => removeExtra(k)}>×</button>
+          <button type="button" onclick={() => removeExtra(k)}>×</button>
         </div>
       {/each}
       <div class="extra-add">
         <input placeholder="key" bind:value={extraKey} />
         <input placeholder="value / JSON" bind:value={extraVal} />
-        <button type="button" on:click={addExtra}>Add</button>
+        <button type="button" onclick={addExtra}>Add</button>
       </div>
     </div>
   {/if}
-
-  <TaskRewardEditor {quest} {onDirty} {rewardTableIds} />
-
-  <h4><Link2 size={12} /> Dependencies</h4>
-  <p class="hint">Quest or task id (FTB allows both).</p>
-  <div class="deps">
-    {#each quest.dependencies as dep}
-      <span class="dep-tag" title={dep}>
-        {titleOf(dep)}
-        <button type="button" class="dep-rm" on:click={() => onRemoveDep(dep)}>×</button>
-      </span>
-    {/each}
-  </div>
-  <div class="dep-add">
-    <select bind:value={depPick}>
-      <option value="">Add dependency…</option>
-      {#each depOptions as o}
-        <option value={o.id}>{o.label}</option>
-      {/each}
-    </select>
-    <button type="button" class="add-btn" disabled={!depPick} on:click={applyDep}>Add</button>
-  </div>
 </aside>
 
 <style>
+  /* Modern typography system for quest inspector */
   .insp {
-    background: var(--ftbq-bg-panel, #212126);
-    border-left: 1px solid var(--ftbq-border, #3a3a42);
-    padding: 0;
+    background: var(--ftbq-bg-panel);
+    border-left: 1px solid var(--ftbq-frame);
+    min-width: 0;
+    min-height: 0;
     max-height: 100%;
     overflow: auto;
     overflow-x: hidden;
-    min-height: 0;
-    min-width: 0;
     display: flex;
     flex-direction: column;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+
   .insp-h {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 8px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.2);
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--ftbq-frame);
+    background: var(--ftbq-bg-panel);
   }
   .insp-h h3 {
     margin: 0;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 700;
-    color: var(--ftbq-title-gold, #f2c94c);
+    color: var(--text-primary, var(--ftbq-text, #1a1a2e));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    letter-spacing: -0.01em;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
   }
-  .qid {
-    display: block;
-    font-size: 9px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    margin: 0;
-    padding: 4px 12px 8px;
-    word-break: break-all;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
-  }
-  .val-warn {
-    padding: 8px 10px;
-    margin: 8px 12px 0;
-    border-radius: 2px;
-    background: rgba(242, 201, 76, 0.1);
-    border: 1px solid rgba(242, 201, 76, 0.3);
+
+  .qid-mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+    margin-left: auto;
     font-size: 11px;
-    color: #fde68a;
-    display: grid;
-    gap: 4px;
+    font-weight: 500;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    color: var(--ftbq-text-muted, #6b7280);
+    padding: 4px 8px;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    letter-spacing: 0.02em;
   }
+  .qid-mini:hover {
+    color: var(--ftbq-text, #e8e8e8);
+    background: rgba(0, 0, 0, 0.25);
+  }
+  .qid-mini code {
+    font-size: inherit;
+    color: inherit;
+    font-family: inherit;
+  }
+
+  .block {
+    display: grid;
+    gap: 0;
+  }
+  .block-h {
+    margin: 0;
+    padding: 12px 14px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ftbq-accent-teal, #3db8a8);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: color-mix(in srgb, var(--ftbq-bg) 40%, transparent);
+    border-top: 1px solid var(--ftbq-frame);
+    border-bottom: 1px solid var(--ftbq-frame);
+  }
+  .block-h :global(svg) {
+    flex-shrink: 0;
+    opacity: 0.85;
+  }
+
+  .title-icon {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    align-items: start;
+  }
+  .title-icon .grow {
+    min-width: 0;
+  }
+  .icon-slot {
+    min-width: 120px;
+  }
+
   .fields {
     display: grid;
     gap: 8px;
     margin: 0;
-    padding: 10px 12px;
+    padding: 10px 14px;
   }
+  .compare-pick {
+    text-transform: none !important;
+  }
+
   .fields label {
     display: grid;
-    gap: 4px;
-    font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    gap: 5px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ftbq-text-muted, #6b7280);
+    letter-spacing: 0;
+    line-height: 1.4;
   }
-  .fields input,
+
+  .fields input[type="text"],
+  .fields input[type="number"],
+  .fields input[type="search"],
   .fields textarea,
   .fields select {
-    font-size: 12px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
-    text-transform: none;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 400;
+    background: var(--ftbq-input-bg) !important;
+    border: 1px solid var(--ftbq-frame);
+    color: var(--ftbq-text, #1a1a2e);
+    border-radius: var(--border-radius-sm);
+    padding: 9px 12px;
+    outline: none;
+    transition: all 0.15s ease;
+    line-height: 1.4;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
   }
+  .fields input::placeholder,
+  .fields textarea::placeholder {
+    color: var(--ftbq-text-muted, #9ca3af);
+    opacity: 0.7;
+  }
+  .fields input:hover,
+  .fields textarea:hover,
+  .fields select:hover {
+    border-color: color-mix(in srgb, var(--ftbq-text-muted) 40%, var(--ftbq-frame));
+  }
+  .fields input:focus,
+  .fields textarea:focus,
+  .fields select:focus {
+    border-color: var(--ftbq-accent-teal, #3db8a8);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 20%, transparent),
+      inset 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+
+  .fields textarea {
+    min-height: 100px;
+    field-sizing: content;
+    resize: vertical;
+    line-height: 1.55;
+    overflow-y: auto;
+  }
+
   .checkbox {
     display: flex !important;
     flex-direction: row !important;
     align-items: center;
-    gap: 8px;
-    text-transform: none;
-    color: var(--ftbq-text, #e8e8e8);
+    gap: 10px;
+    color: var(--ftbq-text, #374151);
+    font-weight: 500;
+    padding: 4px 0;
   }
+  .checkbox input[type="checkbox"] {
+    width: 17px;
+    height: 17px;
+    accent-color: var(--ftbq-accent-teal, #3db8a8);
+    cursor: pointer;
+    border-radius: 4px;
+  }
+
+  .fmt-details {
+    margin: 0 0 8px;
+  }
+  .fmt-details summary {
+    cursor: pointer;
+    list-style: none;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ftbq-accent-teal, #3db8a8);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 4px 0;
+  }
+  .fmt-details summary::-webkit-details-marker {
+    display: none;
+  }
+  .fmt-details summary::before {
+    content: '▸ ';
+    font-weight: 400;
+  }
+  .fmt-details[open] summary::before {
+    content: '▾ ';
+  }
+
+  .fmt-bar {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+    padding: 4px;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: var(--border-radius-sm);
+    background: var(--ftbq-input-bg);
+  }
+  .fmt-bar button {
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ftbq-text, #374151);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .fmt-bar button:hover {
+    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 15%, transparent);
+    color: var(--ftbq-accent-teal, #3db8a8);
+  }
+  .fmt-bar button:active {
+    transform: scale(0.97);
+  }
+  .fmt-bar button:focus-visible {
+    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline-offset: 1px;
+  }
+
   .xy {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 6px;
+    gap: 8px;
   }
+
+  .deps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 10px 14px;
+  }
+  .deps-empty {
+    font-size: 12px;
+    color: var(--ftbq-text-muted, #9ca3af);
+    font-style: italic;
+    padding: 4px 0;
+  }
+  .dep-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ftbq-text, #374151);
+    transition: all 0.15s ease;
+  }
+  .dep-tag:hover {
+    border-color: var(--ftbq-accent-teal, #3db8a8);
+    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 8%, transparent);
+    color: var(--ftbq-accent-teal, #3db8a8);
+  }
+  .dep-rm {
+    border: none;
+    background: transparent;
+    color: var(--ftbq-text-muted, #9ca3af);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 400;
+    transition: all 0.15s ease;
+    line-height: 1;
+  }
+  .dep-rm:hover {
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+  }
+
+  .dep-add {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0 14px 14px;
+  }
+  .dep-filter {
+    width: 100%;
+    font-family: inherit;
+    font-size: 12px;
+    padding: 9px 12px;
+    background: var(--ftbq-input-bg) !important;
+    border: 1px solid var(--ftbq-frame);
+    color: var(--ftbq-text, #1a1a2e);
+    border-radius: var(--border-radius-sm);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
+    outline: none;
+    transition: all 0.15s ease;
+  }
+  .dep-filter:focus {
+    border-color: var(--ftbq-accent-teal, #3db8a8);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 20%, transparent);
+  }
+  .dep-add select {
+    width: 100%;
+    font-family: inherit;
+    font-size: 12px;
+    background: var(--ftbq-input-bg) !important;
+    border: 1px solid var(--ftbq-frame);
+    color: var(--ftbq-text, #1a1a2e);
+    border-radius: var(--border-radius-sm);
+    padding: 9px 12px;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
+    outline: none;
+    transition: all 0.15s ease;
+  }
+  .dep-add select:focus {
+    border-color: var(--ftbq-accent-teal, #3db8a8);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 20%, transparent);
+  }
+
+  .add-btn {
+    align-self: flex-end;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 9px 18px;
+    border-radius: var(--border-radius-sm);
+    border: none;
+    background: var(--ftbq-accent-teal, #3db8a8);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .add-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 85%, #000);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  }
+  .add-btn:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  }
+  .add-btn:focus-visible {
+    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline-offset: 2px;
+  }
+  .add-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
   .adv-tog {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
     background: transparent;
     border: none;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    font-size: 11px;
+    border-top: 1px solid var(--ftbq-border);
+    color: var(--ftbq-text-muted, #6b7280);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
     text-align: left;
-    padding: 6px 12px;
+    padding: 12px 14px;
     cursor: pointer;
-    border-top: 1px solid var(--ftbq-border, #3a3a42);
+    transition: all 0.15s ease;
   }
   .adv-tog:hover {
-    color: var(--ftbq-text, #e8e8e8);
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--ftbq-text, #1a1a2e);
   }
+  .adv-tog:focus-visible {
+    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline-offset: -2px;
+  }
+
   .flags {
     padding-top: 0;
     border-top: none;
   }
+  .sub-h,
   .flags h4 {
-    margin: 8px 0 0;
-    font-size: 10px;
-    text-transform: uppercase;
-    color: var(--ftbq-accent-teal, #3db8a8);
-    letter-spacing: 0.05em;
+    margin: 12px 0 0 !important;
+    padding: 0 !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    color: var(--ftbq-accent-teal, #3db8a8) !important;
+    border: none !important;
+    background: transparent !important;
   }
+
   .extra-row {
     display: grid;
-    grid-template-columns: 1fr 1fr auto;
-    gap: 4px;
+    grid-template-columns: auto 1fr auto;
+    gap: 8px;
     align-items: center;
+    font-size: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--ftbq-border);
+  }
+  .extra-row code {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
     font-size: 11px;
+    color: var(--ftbq-accent-teal, #3db8a8);
+    background: rgba(61, 184, 168, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
   }
   .extra-add {
     display: grid;
     grid-template-columns: 1fr 1fr auto;
-    gap: 4px;
+    gap: 8px;
+    margin-top: 8px;
   }
-  .hint {
-    margin: 0 0 6px;
-    padding: 0 12px;
-    font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-  }
+
   h4 {
     margin: 0;
-    padding: 8px 12px 6px;
+    padding: 12px 14px 10px;
     font-size: 11px;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--ftbq-accent-teal, #3db8a8);
     display: flex;
     align-items: center;
-    gap: 6px;
-    background: rgba(0, 0, 0, 0.15);
-    border-top: 1px solid var(--ftbq-border, #3a3a42);
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    gap: 8px;
+    background: color-mix(in srgb, var(--ftbq-bg) 40%, transparent);
+    border-top: 1px solid var(--ftbq-frame);
+    border-bottom: 1px solid var(--ftbq-frame);
+  }
+
+  .locale-cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 10px 14px;
+  }
+  .locale-col {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+  .col-h {
+    font-size: 11px;
     font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ftbq-accent-teal, #3db8a8);
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--ftbq-border);
   }
-  .deps {
+
+  .val-warn {
+    padding: 10px 14px;
+    margin: 10px 14px 0;
+    border-radius: var(--border-radius-sm);
+    background: color-mix(in srgb, var(--accent-warning) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent);
+    font-size: 12px;
+    color: var(--accent-warning);
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 6px;
-    margin: 8px 12px;
   }
-  .dep-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: 2px;
-    background: rgba(92, 138, 158, 0.15);
-    border: 1px solid rgba(92, 138, 158, 0.35);
-    font-size: 11px;
-    color: var(--ftbq-text, #e8e8e8);
-  }
-  .dep-rm {
-    border: none;
-    background: transparent;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    cursor: pointer;
-  }
-  .dep-rm:hover {
-    color: #f87171;
-  }
-  .dep-add {
+  .val-warn div {
     display: flex;
+    align-items: flex-start;
     gap: 6px;
-    padding: 0 12px 12px;
+    line-height: 1.4;
   }
-  .dep-add select {
-    flex: 1;
-    font-size: 11px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
+  .val-warn :global(svg) {
+    flex-shrink: 0;
+    margin-top: 2px;
   }
-  .add-btn {
-    font-size: 11px;
-    padding: 4px 10px;
-    border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.25);
-    color: var(--ftbq-text, #e8e8e8);
-    cursor: pointer;
-  }
-  .add-btn:hover:not(:disabled) {
-    border-color: var(--ftbq-accent-teal, #3db8a8);
-  }
-  .add-btn:disabled {
-    opacity: 0.4;
-  }
-  .fmt-bar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-bottom: 6px;
-  }
-  .fmt-bar button {
-    font-size: 10px;
-    padding: 2px 6px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.25);
-    color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
-    font-weight: 600;
-    cursor: pointer;
-    box-shadow: none;
-  }
-  .fmt-bar button:hover {
-    border-color: var(--ftbq-accent-green, #55c95a);
-  }
-  .fmt-hint {
-    color: var(--ftbq-text-muted, #9a9aa0);
-    font-size: 10px;
-    font-weight: 500;
-  }
+
   .ico {
-    border: none;
-    background: transparent;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--ftbq-frame);
+    background: var(--ftbq-input-bg);
+    color: var(--ftbq-text-muted, #6b7280);
     cursor: pointer;
+    transition: all 0.15s ease;
   }
-  .ico.danger:hover {
-    color: #f87171;
+  .ico.danger:hover,
+  .ico:hover {
+    border-color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 10%, transparent);
+    color: var(--accent-danger);
+  }
+  .ico:active {
+    transform: scale(0.95);
+  }
+  .ico:focus-visible {
+    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline-offset: 1px;
+  }
+
+  .insp :global(input:not([type="checkbox"]):not([type="radio"])),
+  .insp :global(textarea),
+  .insp :global(select) {
+    font-family: inherit;
+    background: var(--ftbq-input-bg) !important;
+    border-color: var(--ftbq-frame);
+    color-scheme: inherit;
   }
 </style>

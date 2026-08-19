@@ -1,3 +1,5 @@
+mod dataset_ftb_quests;
+
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -37,6 +39,11 @@ enum Command {
     Modrinth {
         #[command(subcommand)]
         command: ModrinthCommand,
+    },
+    /// CurseForge provider / dataset commands.
+    Curseforge {
+        #[command(subcommand)]
+        command: CurseforgeCommand,
     },
     /// Launch a test instance.
     Launch {
@@ -257,6 +264,35 @@ enum ModrinthCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum CurseforgeCommand {
+    /// Collect FTB Quests `.snbt` from popular CurseForge modpacks into a local dataset.
+    ///
+    /// Downloads each modpack `.zip` into RAM only (never written to disk), extracts
+    /// files under `config/ftbquests/` / `overrides/config/ftbquests/`, and saves
+    /// them as `[slug]_[name].snbt` under the output directory.
+    ///
+    /// Default search: modpacks in the CurseForge **Quests** category (`4478`),
+    /// sorted by downloads. Packs without FTB Quests SNBT are skipped.
+    CollectQuests {
+        /// Max number of most-downloaded modpacks to process.
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+        /// Directory for extracted `.snbt` files.
+        #[arg(long, default_value = "./dataset/raw")]
+        out: PathBuf,
+        /// Max concurrent zip downloads (lower = less RAM).
+        #[arg(long, default_value_t = 3)]
+        concurrency: usize,
+        /// Optional CurseForge search filter (name/author).
+        #[arg(long)]
+        query: Option<String>,
+        /// Category: `quests` (default, id 4478), numeric category id, or `none`.
+        #[arg(long, default_value = "quests")]
+        category: String,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -437,6 +473,39 @@ fn main() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&versions)?);
             }
         },
+        Command::Curseforge { command } => match command {
+            CurseforgeCommand::CollectQuests {
+                limit,
+                out,
+                concurrency,
+                query,
+                category,
+            } => {
+                let category_id = dataset_ftb_quests::parse_category_arg(&category)?;
+                let stats = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .context("start tokio runtime")?
+                    .block_on(dataset_ftb_quests::collect_ftb_quests(
+                        dataset_ftb_quests::CollectOptions {
+                            limit,
+                            out_dir: out.clone(),
+                            concurrency,
+                            query,
+                            category_id,
+                        },
+                    ))?;
+                println!(
+                    "Done. modpacks={} ok={} skipped={} failed={} snbt_written={} out={}",
+                    stats.modpacks_found,
+                    stats.modpacks_ok,
+                    stats.modpacks_skipped,
+                    stats.modpacks_failed,
+                    stats.snbt_written,
+                    out.display()
+                );
+            }
+        },
         Command::Launch { manifest, profile } => {
             let manifest_path = manifest.clone();
             let manifest = load_manifest(manifest)?;
@@ -501,6 +570,10 @@ fn main() -> anyhow::Result<()> {
             let result = tuffbox_core::LaunchResult {
                 exit_code: status.code(),
                 log_path,
+                pid: None,
+                instance_id: None,
+                profile_id: None,
+                started_at: None,
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
         }

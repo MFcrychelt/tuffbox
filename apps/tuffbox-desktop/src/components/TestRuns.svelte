@@ -4,14 +4,17 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
     PlayCircle, RefreshCw, Terminal, TimerReset, XCircle,
-    Shield, Server, Square, Cpu, HardDrive, Activity, Stethoscope, Zap,
+    Shield, Server, Square, Stethoscope, Zap,
     Camera, FolderOpen,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { onDestroy, onMount, tick } from "svelte";
   import { ideStageRequest, openLaunchLog, projectPath, projectInfo } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
+  import TestHardwareCard from "./test/TestHardwareCard.svelte";
+  import TestLoadChart from "./test/TestLoadChart.svelte";
   import { launchWithFeedback } from "../lib/launch";
   import type { TestRunRecord } from "../lib/api";
+  import { gb1, peaksFromSamples, pushLoadSample, type LoadSample } from "../lib/testLoad";
 
   type Profile = {
     id: string;
@@ -69,83 +72,83 @@
   const DEFAULT_TIMEOUT_S = 180;
   const LOG_TAIL_LINES = 500;
 
-  let documentVisible = true;
+  let documentVisible = $state(true);
 
   let profiles: Profile[] = [];
   let selectedProfile = "client";
   let log = "";
-  let running = false;
-  let watching = false;
-  let loading = false;
+  let running = $state(false);
+  let watching = $state(false);
+  let loading = $state(false);
   let error: string | null = null;
   let message: string | null = null;
   let startedAt: number | null = null;
   let lastLoadedPath: string | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
-  let now = Date.now();
+  let now = $state(Date.now())
   let validationReport: any = null;
-  let validationLoading = false;
+  let validationLoading = $state(false);
   let validationError: string | null = null;
-  let autoScroll = true;
+  let autoScroll = $state(true);
   let logEl: HTMLPreElement | null = null;
-  let live: LiveDebugStats | null = null;
-  let killing = false;
+  let live = $state<LiveDebugStats | null>(null);
+  let killing = $state(false);
   let launchStats: any = null;
-  let forceRun = false;
-  let autoSnapshot = false;
+  let forceRun = $state(false);
+  let autoSnapshot = $state(false);
   let levelSeed = "";
-  let onlineModeOff = true;
-  let timeoutSeconds = DEFAULT_TIMEOUT_S;
-  let livePhase: LivePhase = "idle";
+  let onlineModeOff = $state(true);
+  let timeoutSeconds = $state(DEFAULT_TIMEOUT_S);
+  let livePhase = $state<LivePhase>("idle");
   let verdictReason: string | null = null;
   let startupSeconds: number | null = null;
   let activeRunId: string | null = null;
-  let finalizeInFlight = false;
-  let sawProcess = false;
+  let finalizeInFlight = $state(false);
+  let sawProcess = $state(false);
   let historyFilter: "all" | "pass" | "fail" | "crashed" = "all";
   let worlds: { name: string }[] = [];
   let quickPlayWorld = "";
-  let matrixDetailsOpen = false;
+  let matrixDetailsOpen = $state(false);
   let matrixIds: Record<string, boolean> = {};
-  let matrixRunning = false;
-  let matrixStopOnFail = true;
+  let matrixRunning = $state(false);
+  let matrixStopOnFail = $state(true);
   let matrixSummary: MatrixRow[] = [];
-  let matrixAbort = false;
+  let matrixAbort = $state(false);
   let serverDir = "";
   let activeLogRoot: string | null = null;
 
   let runs: TestRunRecord[] = [];
   let capturedRunIds: Record<string, boolean> = {};
 
-  $: selected = profiles.find((p) => p.id === selectedProfile);
-  $: elapsed = startedAt ? Math.floor((now - startedAt) / 1000) : 0;
-  $: hostRamPct = live && live.hostMemoryTotalMb > 0
-    ? pct(live.hostMemoryUsedMb, live.hostMemoryTotalMb)
-    : 0;
-  $: procRamCap = selected?.memoryMb ?? 4096;
-  $: procRamPct = live?.instance ? pct(live.instance.memoryMb, procRamCap) : 0;
-  $: validationCritical = !!validationReport && (
+  let loadSamples = $state<LoadSample[]>([]);
+  let activeXmxMb = $state(4096);
+  const potatoPc = typeof document !== "undefined"
+    && document.documentElement.classList.contains("potato-pc");
+
+  const selected = $derived(profiles.find((p) => p.id === selectedProfile));
+  const elapsed = $derived(startedAt ? Math.floor((now - startedAt) / 1000) : 0);
+  const validationCritical = $derived(!!validationReport && (
     !validationReport.passed
     || (validationReport.graphErrors ?? 0) > 0
     || (validationReport.jsonErrors?.length ?? 0) > 0
-  );
-  $: validationBadge = !validationReport
+  ));
+  const validationBadge = $derived(!validationReport
     ? null
     : validationReport.passed
       ? { ok: true, label: "OK" }
       : {
           ok: false,
           label: `${(validationReport.graphErrors ?? 0) + (validationReport.jsonErrors?.length ?? 0)} errors`,
-        };
-  $: filteredRuns = runs.filter((r) => {
+        });
+  const filteredRuns = $derived(runs.filter((r) => {
     if (historyFilter === "all") return true;
     const s = normalizeStatus(r.status);
     if (historyFilter === "pass") return s === "pass" || s === "finished";
     if (historyFilter === "fail") return s === "fail" || s === "failed" || s === "timedOut";
     if (historyFilter === "crashed") return s === "crashed";
     return true;
-  });
-  $: statusLabel = (() => {
+  }));
+  const statusLabel = $derived((() => {
     switch (livePhase) {
       case "launching": return "Launching…";
       case "bootstrapping": return `Bootstrapping… ${elapsed}s`;
@@ -155,11 +158,13 @@
       case "crashed": return "Crashed";
       default: return live?.instance || running ? `${elapsed}s` : "idle";
     }
-  })();
-  $: if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
-  $: displayLog = tailLogLines(log, LOG_TAIL_LINES);
-  $: logLineCount = log ? log.split("\n").length : 0;
-  $: logTruncated = logLineCount > LOG_TAIL_LINES;
+  })());
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
+  });
+  const displayLog = $derived(tailLogLines(log, LOG_TAIL_LINES));
+  const logLineCount = $derived(log ? log.split("\n").length : 0);
+  const logTruncated = $derived(logLineCount > LOG_TAIL_LINES);
 
   function tailLogLines(text: string, maxLines: number): string {
     if (!text) return "";
@@ -196,17 +201,6 @@
     // Early Stopping! before any pass is fail-ish
     if (slice.includes("Stopping!") && !detectPass(text)) return "Stopping!";
     return null;
-  }
-
-  function pct(n: number | null | undefined, max = 100) {
-    if (!Number.isFinite(n as number)) return 0;
-    return Math.max(0, Math.min(100, ((n as number) / max) * 100));
-  }
-
-  function fmtMb(n: number | null | undefined) {
-    if (!Number.isFinite(n as number)) return "—";
-    const v = n as number;
-    return v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`;
   }
 
   function formatRunTime(value: string) {
@@ -386,6 +380,9 @@
     sawProcess = false;
     finalizeInFlight = false;
     startedAt = Date.now();
+    loadSamples = [];
+    const profile = profiles.find((p) => p.id === opts.profile);
+    activeXmxMb = opts.memoryMbOverride ?? profile?.memoryMb ?? 4096;
     error = null;
     message = null;
     log = "";
@@ -419,7 +416,7 @@
           onlineMode: onlineModeOff ? false : true,
         },
         {
-          openLog: true,
+          openLog: false,
           logPath: activeLogRoot,
           logTitle: opts.openServerConsole ? "Server console" : null,
         },
@@ -518,12 +515,19 @@
     running = false;
     if ($projectPath && runId) {
       try {
+        const peaks = peaksFromSamples(loadSamples);
         await invoke("finalize_test_run", {
           path: $projectPath,
           runId,
           status: verdict,
           durationSeconds: duration,
           verdictReason: reason,
+          peakProcMb: peaks ? Math.round(peaks.peakProcMb) : null,
+          peakHostMb: peaks ? Math.round(peaks.peakHostMb) : null,
+          hostTotalMb: peaks
+            ? Math.round(peaks.lastHostTotalMb)
+            : (live?.hostMemoryTotalMb ?? null),
+          xmxMb: Math.round(activeXmxMb),
         });
       } catch {
         // ignore
@@ -802,7 +806,16 @@
     if (!watching || !documentVisible) return;
     now = Date.now();
     refreshLog();
-    refreshLive();
+    void refreshLive().then(() => {
+      if (!watching || startedAt == null || !live) return;
+      pushLoadSample(loadSamples, {
+        tSec: (Date.now() - startedAt) / 1000,
+        hostUsedMb: live.hostMemoryUsedMb,
+        hostTotalMb: live.hostMemoryTotalMb,
+        procRssMb: live.instance?.memoryMb ?? 0,
+        hostCpuPct: live.hostCpuPercent,
+      });
+    });
   }
 
   function stopWatching() {
@@ -832,28 +845,6 @@
 <div class="test-runs">
   <div class="toolbar">
     <div class="title"><PlayCircle size={18} /> Test · launch lab</div>
-    <div class="actions">
-      <button class="ghost" on:click={() => loadProfiles(true)} disabled={!$projectPath || loading}>
-        <RefreshCw size={16} class={loading ? "spin" : ""} />
-        Refresh
-      </button>
-      <button class="secondary" on:click={refreshLog} disabled={!$projectPath}>
-        <Terminal size={16} /> Tail log
-      </button>
-      <button class="secondary" on:click={runValidation} disabled={!$projectPath || validationLoading}>
-        <Shield size={16} />
-        {validationLoading ? "Checking…" : "Validate"}
-      </button>
-      {#if validationBadge}
-        <span class="val-badge" class:ok={validationBadge.ok} class:bad={!validationBadge.ok}>
-          {validationBadge.label}
-        </span>
-      {/if}
-      <button class="danger" on:click={killInstance} disabled={!$projectPath || !live?.instance || killing} title="Kill game/server process">
-        <Square size={16} />
-        {killing ? "Stopping…" : "Kill"}
-      </button>
-    </div>
   </div>
 
   {#if error}<div class="notice error">{error}</div>{/if}
@@ -864,6 +855,18 @@
     <EmptyState icon={PlayCircle} title="No project selected" description="Open a project to run test profiles." />
   {:else}
     <div class="terminal-body">
+      <div class="status-strip">
+        <div class="status" class:running={!!live?.instance || running} class:pass={livePhase === "pass"} class:fail={livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut"}>
+          <TimerReset size={16} />
+          {statusLabel}
+        </div>
+        {#if live?.instance}
+          <button class="danger" onclick={killInstance} disabled={killing} title="Kill game/server process">
+            <Square size={16} />
+            {killing ? "Stopping…" : "Kill"}
+          </button>
+        {/if}
+      </div>
       <div class="launch-bar">
         <label class="profile-select">
           Profile
@@ -874,60 +877,71 @@
           </select>
         </label>
         <div class="launch-actions">
-          <button class="preset primary" on:click={smokeClient} disabled={running || matrixRunning || !selectedProfile}>
+          <button class="preset primary" onclick={smokeClient} disabled={running || matrixRunning || !selectedProfile}>
             <PlayCircle size={16} /> Smoke client
           </button>
-          <button class="preset" on:click={runServer} disabled={running || matrixRunning} title="Stage both+server mods into a folder and open Server console">
+          <button class="preset" onclick={runServer} disabled={running || matrixRunning} title="Stage both+server mods into a folder and open Server console">
             <Server size={16} /> Run server
           </button>
-          <button class="preset" on:click={runClient4Ram} disabled={running || matrixRunning} title={`Launch client with ${CLIENT_4G_MEMORY_MB} MB RAM`}>
+          <button class="preset" onclick={runClient4Ram} disabled={running || matrixRunning} title={`Launch client with ${CLIENT_4G_MEMORY_MB} MB RAM`}>
             <Zap size={16} /> Run client 4 RAM
           </button>
         </div>
-        <div class="status" class:running={!!live?.instance || running} class:pass={livePhase === "pass"} class:fail={livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut"}>
-          <TimerReset size={16} />
-          {statusLabel}
-        </div>
       </div>
 
-      <div class="log-panel">
-        <div class="log-tools">
-          <label class="auto-scroll">
-            <input type="checkbox" bind:checked={autoScroll} /> Auto-scroll
-          </label>
-          <div class="log-tools-right">
-            {#if activeLogRoot && activeLogRoot !== $projectPath}
-              <span class="log-trunc-hint">Server console</span>
-              <button class="ghost mini" on:click={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}>
-                <Terminal size={12} /> Open server console
-              </button>
-            {/if}
-            {#if logTruncated}
-              <span class="log-trunc-hint">Showing last {LOG_TAIL_LINES} of {logLineCount} lines</span>
-            {/if}
-            {#if !documentVisible && watching}
-              <span class="log-paused-hint">Poll paused (tab hidden)</span>
-            {/if}
-            <button class="ghost mini" on:click={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
-            {#if watching}
-              <button class="ghost mini" on:click={stopWatching}>Stop watching</button>
-            {:else if running || live?.instance}
-              <button class="ghost mini" on:click={startPolling}>Watch log</button>
-            {/if}
+      <div class="work">
+        <div class="load-panel">
+          <h3>Load</h3>
+          <TestLoadChart samples={loadSamples} xmxMb={activeXmxMb} potato={potatoPc} />
+          <TestHardwareCard samples={loadSamples} xmxMb={activeXmxMb} />
+        </div>
+        <div class="log-panel">
+          <div class="log-tools">
+            <label class="auto-scroll">
+              <input type="checkbox" bind:checked={autoScroll} /> Auto-scroll
+            </label>
+            <div class="log-tools-right">
+              {#if activeLogRoot && activeLogRoot !== $projectPath}
+                <span class="log-trunc-hint">Server console</span>
+                <button class="ghost mini" onclick={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}>
+                  <Terminal size={12} /> Open server console
+                </button>
+              {/if}
+              {#if logTruncated}
+                <span class="log-trunc-hint">Showing last {LOG_TAIL_LINES} of {logLineCount} lines</span>
+              {/if}
+              {#if !documentVisible && watching}
+                <span class="log-paused-hint">Poll paused (tab hidden)</span>
+              {/if}
+              <button class="ghost mini" onclick={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
+              {#if watching}
+                <button class="ghost mini" onclick={stopWatching}>Stop watching</button>
+              {:else if running || live?.instance}
+                <button class="ghost mini" onclick={startPolling}>Watch log</button>
+              {/if}
+            </div>
           </div>
+          <pre class="log" bind:this={logEl}>{displayLog || "latest.log will appear here after the first run."}</pre>
         </div>
-        <pre class="log" bind:this={logEl}>{displayLog || "latest.log will appear here after the first run."}</pre>
-        {#if live?.instance}
-          <button class="secondary stop danger-outline" on:click={killInstance} disabled={killing}>
-            <Square size={16} /> {killing ? "Stopping…" : "Kill process"}
-          </button>
-        {/if}
       </div>
 
-      <details class="secondary-panel" on:toggle={onSecondaryToggle}>
-        <summary>Preflight &amp; options</summary>
+      <details class="secondary-panel" ontoggle={onSecondaryToggle}>
+        <summary>Options</summary>
         <div class="secondary-body">
           <div class="preflight">
+            <button class="ghost" onclick={() => loadProfiles(true)} disabled={!$projectPath || loading}>
+              <RefreshCw size={16} class={loading ? "spin" : ""} />
+              Refresh
+            </button>
+            <button class="secondary" onclick={runValidation} disabled={!$projectPath || validationLoading}>
+              <Shield size={16} />
+              {validationLoading ? "Checking…" : "Validate"}
+            </button>
+            {#if validationBadge}
+              <span class="val-badge" class:ok={validationBadge.ok} class:bad={!validationBadge.ok}>
+                {validationBadge.label}
+              </span>
+            {/if}
             <label class="chk" title="Allow launch even when validation has errors">
               <input type="checkbox" bind:checked={forceRun} /> Force run
             </label>
@@ -961,7 +975,7 @@
                 {/if}
               </select>
             </label>
-            <button class="secondary" on:click={quickPlay} disabled={running || matrixRunning || !quickPlayWorld}>
+            <button class="secondary" onclick={quickPlay} disabled={running || matrixRunning || !quickPlayWorld}>
               Launch Quick Play
             </button>
           </div>
@@ -970,10 +984,10 @@
               Server folder
               <input type="text" placeholder="Where the server instance will be staged" bind:value={serverDir} />
             </label>
-            <button class="secondary" on:click={async () => { await ensureServerDir(); }} disabled={!$projectPath}>
+            <button class="secondary" onclick={async () => { await ensureServerDir(); }} disabled={!$projectPath}>
               <FolderOpen size={14} /> Browse…
             </button>
-            <button class="ghost" on:click={() => (serverDir = defaultServerDir())} disabled={!$projectPath}>
+            <button class="ghost" onclick={() => (serverDir = defaultServerDir())} disabled={!$projectPath}>
               Default
             </button>
           </div>
@@ -985,7 +999,7 @@
             <label class="chk">
               <input type="checkbox" bind:checked={onlineModeOff} /> online-mode=false
             </label>
-            <button class="ghost" on:click={async () => {
+            <button class="ghost" onclick={async () => {
               try {
                 const dir = serverDir.trim() || defaultServerDir();
                 await invoke("generate_server_properties", {
@@ -1015,55 +1029,21 @@
                   <strong>{validationReport.circularDeps?.length ?? 0}</strong><span>cycles</span>
                 </div>
               </div>
-              <button class="ghost" on:click={() => (validationReport = null)}>Hide</button>
+              <button class="ghost" onclick={() => (validationReport = null)}>Hide</button>
             </div>
           {/if}
         </div>
       </details>
 
-      <details class="secondary-panel" on:toggle={onSecondaryToggle}>
-        <summary>Live stats</summary>
-        <div class="secondary-body">
-          <div class="meters">
-            <div class="meter">
-              <div class="meter-head"><Cpu size={14} /> Host CPU <strong>{live ? live.hostCpuPercent.toFixed(0) : "—"}%</strong></div>
-              <div class="bar"><i style="width: {live ? pct(live.hostCpuPercent) : 0}%"></i></div>
-            </div>
-            <div class="meter">
-              <div class="meter-head"><HardDrive size={14} /> Host RAM <strong>{live ? `${fmtMb(live.hostMemoryUsedMb)} / ${fmtMb(live.hostMemoryTotalMb)}` : "—"}</strong></div>
-              <div class="bar"><i style="width: {hostRamPct}%"></i></div>
-            </div>
-            <div class="meter" class:dim={!live?.instance}>
-              <div class="meter-head"><Activity size={14} /> Process CPU <strong>{live?.instance ? `${live.instance.cpuPercent.toFixed(0)}%` : "—"}</strong></div>
-              <div class="bar proc"><i style="width: {live?.instance ? pct(live.instance.cpuPercent) : 0}%"></i></div>
-            </div>
-            <div class="meter" class:dim={!live?.instance}>
-              <div class="meter-head"><HardDrive size={14} /> Process RAM <strong>{live?.instance ? `${fmtMb(live.instance.memoryMb)} / ${fmtMb(procRamCap)}` : "—"}</strong></div>
-              <div class="bar proc"><i style="width: {procRamPct}%"></i></div>
-            </div>
-          </div>
-          {#if live?.instance}
-            <div class="live-meta">
-              <span>RSS {fmtMb(live.instance.memoryMb)}</span>
-              <span>Virt {fmtMb(live.instance.virtualMemoryMb)}</span>
-              <span>cap {fmtMb(procRamCap)}</span>
-              {#if !watching}
-                <button class="ghost mini" on:click={startPolling}>Resume poll</button>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      </details>
-
-      <details class="secondary-panel" bind:open={matrixDetailsOpen} on:toggle={onSecondaryToggle}>
+      <details class="secondary-panel" bind:open={matrixDetailsOpen} ontoggle={onSecondaryToggle}>
         <summary>Profile matrix</summary>
         <div class="secondary-body">
           <div class="matrix-panel">
             <div class="matrix-head">
               <label class="chk"><input type="checkbox" bind:checked={matrixStopOnFail} /> Stop on fail</label>
-              <button class="secondary" on:click={runMatrix} disabled={running || matrixRunning}>Run matrix</button>
+              <button class="secondary" onclick={runMatrix} disabled={running || matrixRunning}>Run matrix</button>
               {#if matrixRunning}
-                <button class="danger" on:click={stopMatrix}>Stop queue</button>
+                <button class="danger" onclick={stopMatrix}>Stop queue</button>
               {/if}
             </div>
             <div class="matrix-checks">
@@ -1093,7 +1073,7 @@
         </div>
       </details>
 
-      <details class="secondary-panel" on:toggle={onSecondaryToggle}>
+      <details class="secondary-panel" ontoggle={onSecondaryToggle}>
         <summary>Profiles &amp; run history</summary>
         <div class="secondary-body profiles-panel">
           {#if profiles.length === 0}
@@ -1104,7 +1084,7 @@
                 <button
                   class="profile-card"
                   class:selected={selectedProfile === profile.id}
-                  on:click={() => (selectedProfile = profile.id)}
+                  onclick={() => (selectedProfile = profile.id)}
                 >
                   <strong>{profile.name}</strong>
                   <span>{profile.id} · {profile.side}</span>
@@ -1126,10 +1106,10 @@
           <div class="history-head">
             <h2>Run history</h2>
             <div class="filters">
-              <button class="ghost mini" class:active={historyFilter === "all"} on:click={() => (historyFilter = "all")}>All</button>
-              <button class="ghost mini" class:active={historyFilter === "pass"} on:click={() => (historyFilter = "pass")}>Pass</button>
-              <button class="ghost mini" class:active={historyFilter === "fail"} on:click={() => (historyFilter = "fail")}>Fail</button>
-              <button class="ghost mini" class:active={historyFilter === "crashed"} on:click={() => (historyFilter = "crashed")}>Crashed</button>
+              <button class="ghost mini" class:active={historyFilter === "all"} onclick={() => (historyFilter = "all")}>All</button>
+              <button class="ghost mini" class:active={historyFilter === "pass"} onclick={() => (historyFilter = "pass")}>Pass</button>
+              <button class="ghost mini" class:active={historyFilter === "fail"} onclick={() => (historyFilter = "fail")}>Fail</button>
+              <button class="ghost mini" class:active={historyFilter === "crashed"} onclick={() => (historyFilter = "crashed")}>Crashed</button>
             </div>
           </div>
           {#if filteredRuns.length === 0}
@@ -1145,17 +1125,25 @@
                   <span>{formatRunTime(run.startedAt)}</span>
                   <small>
                     {run.durationSeconds != null ? `${run.durationSeconds}s` : "—"}
+                    {#if run.peakProcMb}
+                      · <span
+                        class="peak-badge"
+                        title={run.recommendedRamGb
+                          ? `Players need ${run.recommendedRamGb} GB RAM`
+                          : undefined}
+                      >{gb1(run.peakProcMb)} GB peak</span>
+                    {/if}
                     {#if run.verdictReason} · {run.verdictReason}{/if}
                   </small>
                   <div class="run-actions">
-                    <button class="ghost mini" on:click={() => openRunLogs(run)}>Open logs</button>
+                    <button class="ghost mini" onclick={() => openRunLogs(run)}>Open logs</button>
                     {#if !capturedRunIds[run.id]}
-                      <button class="ghost mini" on:click={() => captureRunLogs(run)}>Capture</button>
+                      <button class="ghost mini" onclick={() => captureRunLogs(run)}>Capture</button>
                     {/if}
-                    <button class="ghost mini" on:click={openDiagnose} title="Open Diagnose stage">
+                    <button class="ghost mini" onclick={openDiagnose} title="Open Diagnose stage">
                       <Stethoscope size={12} /> Diagnose
                     </button>
-                    <button class="ghost mini" on:click={() => reRun(run)} disabled={running || matrixRunning}>Re-run</button>
+                    <button class="ghost mini" onclick={() => reRun(run)} disabled={running || matrixRunning}>Re-run</button>
                   </div>
                 </div>
               {/each}
@@ -1177,10 +1165,9 @@
     max-width: none;
     width: 100%;
   }
-  .toolbar, .actions, .title, .status, .meter-head, .log-tools, .live-meta, .preflight, .opts-row, .matrix-head, .run-top, .run-actions, .history-head, .filters, .log-tools-right, .launch-bar, .launch-actions { display: flex; align-items: center; }
+  .toolbar, .title, .status, .status-strip, .log-tools, .preflight, .opts-row, .matrix-head, .run-top, .run-actions, .history-head, .filters, .log-tools-right, .launch-bar, .launch-actions { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 8px; flex-shrink: 0; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
-  .actions { gap: 10px; flex-wrap: wrap; }
   .terminal-body {
     flex: 1;
     min-height: 0;
@@ -1190,6 +1177,7 @@
     overflow-y: auto;
     gap: 8px;
   }
+  .status-strip { flex-shrink: 0; gap: 10px; flex-wrap: wrap; }
   .launch-bar {
     flex-shrink: 0;
     gap: 12px;
@@ -1209,17 +1197,36 @@
   .profile-select select { min-width: 180px; }
   .launch-actions { gap: 8px; flex-wrap: wrap; flex: 1; }
   .preset { display: inline-flex; align-items: center; gap: 8px; }
-  .preset.primary { background: rgba(27, 217, 106, 0.18); border-color: rgba(27, 217, 106, 0.45); color: var(--accent-primary); font-weight: 700; }
+  .preset.primary { background: color-mix(in srgb, var(--accent-primary) 18%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); color: var(--accent-primary); font-weight: 700; }
+  .work {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.1fr);
+    gap: 8px;
+  }
+  .load-panel,
   .log-panel {
-    /* Fill free space when collapsibles are closed; never shrink when they open below. */
-    flex: 1 0 min(70vh, 640px);
-    min-height: min(70vh, 640px);
+    min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
+  }
+  .load-panel {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .load-panel h3 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    flex-shrink: 0;
   }
   .secondary-panel {
     flex: 0 0 auto;
@@ -1255,8 +1262,8 @@
   .hint { color: var(--text-secondary); }
   .metric { color: var(--accent-primary); font-weight: 700; }
   .val-badge { font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border-color); }
-  .val-badge.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.08); }
-  .val-badge.bad { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
+  .val-badge.ok { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
+  .val-badge.bad { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); }
   .opts-row { gap: 12px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .opts-row label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-muted); }
   .opts-row input[type="text"], .opts-row select { min-width: 180px; }
@@ -1266,16 +1273,16 @@
   .matrix-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .matrix-table th, .matrix-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border-color); }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 8px; border: 1px solid var(--border-color); flex-shrink: 0; }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .profile-card { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-color); padding: 12px; text-align: left; }
-  .profile-card:hover, .profile-card.selected { transform: none; border-color: rgba(27, 217, 106, 0.4); background: rgba(27, 217, 106, 0.08); }
+  .profile-card:hover, .profile-card.selected { transform: none; border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   .profile-card strong { color: var(--text-primary); }
   .profile-card span, .profile-card small, .muted { color: var(--text-muted); }
   .history-head { margin-top: 12px; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
   .history-head h2 { margin: 0; font-size: 15px; }
   .filters { gap: 4px; flex-wrap: wrap; }
-  .filters .active { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.35); }
+  .filters .active { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
   .run-history { display: grid; gap: 8px; margin-top: 10px; }
   .run-row { display: grid; gap: 3px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .run-row strong { color: var(--text-primary); }
@@ -1283,68 +1290,59 @@
   .run-top { justify-content: space-between; gap: 8px; }
   .run-actions { gap: 4px; flex-wrap: wrap; margin-top: 4px; }
   .run-row.fail, .run-row.failed { border-color: rgba(239, 68, 68, .35); }
-  .run-row.pass, .run-row.finished { border-color: rgba(27, 217, 106, .28); }
+  .run-row.pass, .run-row.finished { border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent); }
   .run-row.crashed { border-color: rgba(248, 113, 113, .55); }
   .run-row.timedOut { border-color: rgba(245, 158, 11, .45); }
   .run-row.started { border-color: rgba(245, 158, 11, .28); }
   .vbadge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border-color); }
-  .vbadge.pass, .vbadge.finished { color: var(--accent-primary); border-color: rgba(27, 217, 106, .4); }
-  .vbadge.fail, .vbadge.failed { color: #fca5a5; border-color: rgba(239, 68, 68, .4); }
-  .vbadge.crashed { color: #fecaca; background: rgba(239, 68, 68, .12); }
-  .vbadge.timedOut { color: #fbbf24; border-color: rgba(245, 158, 11, .4); }
-  .vbadge.started, .vbadge.running { color: #93c5fd; }
+  .vbadge.pass, .vbadge.finished { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
+  .vbadge.fail, .vbadge.failed { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 40%, transparent); }
+  .vbadge.crashed { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 12%, transparent); }
+  .vbadge.timedOut { color: var(--accent-warning); border-color: color-mix(in srgb, var(--accent-warning) 40%, transparent); }
+  .vbadge.started, .vbadge.running { color: var(--accent-secondary); }
   .vbadge.skipped { color: var(--text-muted); }
   .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
-  .status { gap: 8px; color: var(--text-muted); background: var(--bg-tertiary); border-radius: 999px; padding: 8px 12px; margin-left: auto; }
+  .peak-badge { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .status { gap: 8px; color: var(--text-muted); background: var(--bg-tertiary); border-radius: 999px; padding: 8px 12px; }
   .status.running { color: var(--accent-primary); }
   .status.pass { color: var(--accent-primary); }
-  .status.fail { color: #fca5a5; }
-  .meters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .meter { display: grid; gap: 6px; }
-  .meter.dim { opacity: 0.45; }
-  .meter-head { justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: 11px; }
-  .meter-head :global(svg) { flex-shrink: 0; }
-  .meter-head strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
-  .bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
-  .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #34d399, #1bd96a); transition: width 280ms ease; }
-  .bar.proc i { background: linear-gradient(90deg, #60a5fa, #a78bfa); }
-  .live-meta { gap: 12px; margin-top: 10px; color: var(--text-muted); font-size: 11px; flex-wrap: wrap; }
+  .status.fail { color: var(--accent-danger); }
   .log-tools { justify-content: space-between; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
   .log-tools-right { gap: 6px; flex-wrap: wrap; }
   .log-trunc-hint, .log-paused-hint { font-size: 11px; color: var(--text-muted); }
-  .log-paused-hint { color: #fbbf24; }
+  .log-paused-hint { color: var(--accent-warning); }
   .auto-scroll { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
   .auto-scroll input { width: auto; }
-  .log { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 18px; background: #09090b; color: #d4d4d8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
-  .stop { margin: 12px; flex-shrink: 0; }
-  .danger { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
-  .danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
-  .danger-outline { border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
+  .log { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 18px; background: var(--bg-elevated); color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+  .danger { background: color-mix(in srgb, var(--accent-danger) 18%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 40%, transparent); color: var(--accent-danger); }
+  .danger:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
   .launch-stats-card { padding: 12px; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); background: var(--bg-tertiary); margin-bottom: 14px; display: grid; gap: 6px; }
   .launch-stats-card h3 { color: var(--text-secondary); font-size: 12px; margin: 0 0 4px; text-transform: uppercase; letter-spacing: .04em; }
   .ls-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
   .ls-row span { color: var(--text-muted); }
   .ls-row strong { color: var(--text-primary); font-size: 16px; }
-  .ls-row strong.danger { color: #fca5a5; }
+  .ls-row strong.danger { color: var(--accent-danger); }
   .ls-row span:last-child { font-size: 10px; color: var(--text-muted); }
 
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @media (max-width: 920px) {
-    .meters { grid-template-columns: 1fr; }
+  @media (max-width: 1099px) {
+    .work {
+      grid-template-columns: 1fr;
+      grid-template-rows: minmax(160px, 32vh) minmax(0, 1fr);
+    }
     .launch-bar { flex-direction: column; align-items: stretch; }
-    .status { margin-left: 0; align-self: flex-start; }
   }
 
   .validation-report { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 14px; }
   .validation-report.compact { padding: 12px; }
   .val-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 8px; }
   .val-header h3 { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-primary); margin: 0; }
-  .val-failed { display: flex; align-items: center; gap: 6px; color: #fca5a5; font-weight: 700; font-size: 12px; }
+  .val-failed { display: flex; align-items: center; gap: 6px; color: var(--accent-danger); font-weight: 700; font-size: 12px; }
   .val-stats { display: grid; grid-template-columns: repeat(3, minmax(70px, 1fr)); gap: 8px; margin-bottom: 8px; }
   .val-stat { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 8px; display: grid; gap: 2px; text-align: center; }
   .val-stat strong { font-size: 18px; color: var(--text-primary); }
   .val-stat span { font-size: 11px; color: var(--text-muted); }
   .val-stat.danger { border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.06); }
-  .val-stat.danger strong { color: #fca5a5; }
+  .val-stat.danger strong { color: var(--accent-danger); }
 </style>

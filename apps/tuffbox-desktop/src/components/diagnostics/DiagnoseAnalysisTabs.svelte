@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { Zap, MessageCircle } from "lucide-svelte";
+  import { Zap, MessageCircle } from "@lucide/svelte";
 
   type FixAction = {
     kind: string;
@@ -10,27 +9,40 @@
     modId: string | null;
   };
 
-  /** Rule-based findings vs AI analysis, as tabs. Parent (Diagnostics.svelte)
-   *  owns the crash-analysis pipeline (invoke calls, AI plan review) — this
-   *  component is purely the tab chrome + read-only rendering of results. */
-  export let crashFindings: any[] = [];
-  export let crashLoading = false;
-  export let aiAnalysis: any = null;
-  export let aiLoading = false;
-  export let aiSoftError: string | null = null;
-  export let aiApplyBusy = false;
-  export let aiFeedbackBusy = false;
-  export let aiFeedbackMsg: string | null = null;
-  export let applyingHintId: string | null = null;
+  let {
+    crashFindings = [],
+    crashLoading = false,
+    aiAnalysis = null,
+    aiLoading = false,
+    aiSoftError = null,
+    aiApplyBusy = false,
+    aiFeedbackBusy = false,
+    aiFeedbackMsg = null,
+    applyingHintId = null,
+    cascadeLabel = null,
+    onApplyFindingFix,
+    onRetryAi,
+    onApplyAiPlan,
+    onFeedback,
+  }: {
+    crashFindings?: any[];
+    crashLoading?: boolean;
+    aiAnalysis?: any;
+    aiLoading?: boolean;
+    aiSoftError?: string | null;
+    aiApplyBusy?: boolean;
+    aiFeedbackBusy?: boolean;
+    aiFeedbackMsg?: string | null;
+    applyingHintId?: string | null;
+    cascadeLabel?: string | null;
+    onApplyFindingFix?: (payload: { finding: any; action: FixAction }) => void;
+    onRetryAi?: () => void;
+    onApplyAiPlan?: () => void;
+    onFeedback?: (helpful: boolean) => void;
+  } = $props();
 
-  const dispatch = createEventDispatcher<{
-    applyFindingFix: { finding: any; action: FixAction };
-    retryAi: void;
-    applyAiPlan: void;
-    feedback: boolean;
-  }>();
-
-  let detailTab: "rules" | "ai" = "rules";
+  let detailTab: "rules" | "ai" = $state("rules");
+  const sourceBadge = $derived(cascadeLabel || aiAnalysis?.source || null);
 
   function severityChip(sev: string): string {
     if (sev === "critical") return "Fix this first";
@@ -89,7 +101,7 @@
       class="dx-tab"
       class:active={detailTab === "rules"}
       aria-selected={detailTab === "rules"}
-      on:click={() => (detailTab = "rules")}
+      onclick={() => (detailTab = "rules")}
     >
       <Zap size={14} /> Rules
       {#if crashFindings.length}<span class="count">{crashFindings.length}</span>{/if}
@@ -101,10 +113,10 @@
       class="dx-tab"
       class:active={detailTab === "ai"}
       aria-selected={detailTab === "ai"}
-      on:click={() => (detailTab = "ai")}
+      onclick={() => (detailTab = "ai")}
     >
       <MessageCircle size={14} /> AI
-      {#if aiAnalysis?.source}<span class="ai-source-badge">{aiAnalysis.source}</span>{/if}
+      {#if sourceBadge}<span class="ai-source-badge">{sourceBadge}</span>{/if}
       {#if aiLoading}<span class="analyzing-pill">…</span>{/if}
     </button>
   </div>
@@ -129,7 +141,7 @@
                 {#if f.fixes?.length}
                   <div class="finding-actions">
                     {#each f.fixes.slice(0, 3) as action (action.kind + (action.modId ?? "") + action.label)}
-                      <button class="secondary small" on:click={() => dispatch("applyFindingFix", { finding: f, action })} disabled={applyingHintId !== null}>
+                      <button class="secondary small" onclick={() => onApplyFindingFix?.({ finding: f, action })} disabled={applyingHintId !== null}>
                         {action.label}
                       </button>
                     {/each}
@@ -146,8 +158,12 @@
           <div class="muted-box">AI is reading this crash…</div>
         {:else if !aiAnalysis}
           <div class="muted-box">
-            {aiSoftError ? "AI failed — use Rules, or fix Ollama." : "No AI result yet."}
-            <button class="ghost mini" type="button" on:click={() => dispatch("retryAi")}>Retry AI</button>
+            {#if aiSoftError}
+              AI failed — {aiSoftError}
+            {:else}
+              No AI result yet.
+            {/if}
+            <button class="ghost mini" type="button" onclick={() => onRetryAi?.()}>Retry AI</button>
           </div>
         {:else}
           <p class="ai-human">{aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation}</p>
@@ -189,11 +205,11 @@
             </div>
           {/if}
           <div class="ai-feedback">
-            <button class="secondary small" disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)} on:click={() => dispatch("applyAiPlan")}>
+            <button class="secondary small" disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)} onclick={() => onApplyAiPlan?.()}>
               {aiApplyBusy ? "Applying…" : "Review & apply AI plan"}
             </button>
-            <button class="ghost mini" disabled={aiFeedbackBusy} on:click={() => dispatch("feedback", true)}>Helped</button>
-            <button class="ghost mini" disabled={aiFeedbackBusy} on:click={() => dispatch("feedback", false)}>Wrong</button>
+            <button class="ghost mini" disabled={aiFeedbackBusy} onclick={() => onFeedback?.(true)}>Helped</button>
+            <button class="ghost mini" disabled={aiFeedbackBusy} onclick={() => onFeedback?.(false)}>Wrong</button>
             {#if aiFeedbackMsg}<small>{aiFeedbackMsg}</small>{/if}
           </div>
         {/if}
@@ -206,7 +222,7 @@
   .panel { padding: 16px; min-width: 0; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .muted-box { padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color); color: var(--text-muted); font-size: 12px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
-  .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); }
+  .notice.warning { color: var(--accent-warning); background: color-mix(in srgb, var(--accent-warning) 8%, transparent); border-color: color-mix(in srgb, var(--accent-warning) 28%, transparent); }
   .notice.tight { padding: 8px 10px; margin-bottom: 10px; font-size: 12px; }
   .risk-pill {
     font-size: 10px;
@@ -222,7 +238,7 @@
     align-items: center;
     padding: 2px 8px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
     font-size: 11px;
     font-weight: 700;
@@ -239,10 +255,10 @@
     color: var(--text-muted);
     background: rgba(148, 163, 184, 0.15);
   }
-  .sev-chip.critical { color: #fecaca; background: rgba(239, 68, 68, 0.18); }
-  .sev-chip.error { color: #fed7aa; background: rgba(249, 115, 22, 0.16); }
-  .sev-chip.warning { color: #fde68a; background: rgba(245, 158, 11, 0.14); }
-  .sev-chip.info { color: #bae6fd; background: rgba(56, 189, 248, 0.12); }
+  .sev-chip.critical { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 18%, transparent); }
+  .sev-chip.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 16%, transparent); }
+  .sev-chip.warning { color: var(--accent-warning); background: color-mix(in srgb, var(--accent-warning) 14%, transparent); }
+  .sev-chip.info { color: var(--accent-secondary); background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); }
   .dx-tabs { padding: 0; overflow: hidden; margin-bottom: 14px; }
   .dx-tabbar {
     display: flex;
@@ -292,7 +308,6 @@
   }
   .finding-card header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
   .finding-card header strong { color: var(--text-primary); }
-  .finding-card header code { color: var(--text-muted); font-size: 11px; }
   .finding-card p { margin: 0 0 6px; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
   .finding-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .ai-hint, .auto-fix { font-size: 12px; color: var(--text-muted); }
@@ -300,7 +315,7 @@
     display: inline-flex;
     padding: 2px 7px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
     font-size: 10px;
     font-weight: 800;

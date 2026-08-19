@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { fade, fly, scale, slide } from "svelte/transition";
-  import { quintOut, backOut } from "svelte/easing";
+  import { fade, fly, slide } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
   import {
     Plus,
     Folder,
@@ -11,7 +11,6 @@
     RefreshCw,
     Play,
     Square,
-    Pencil,
     Tags,
     Share2,
     Copy,
@@ -22,7 +21,8 @@
     Package,
     Wrench,
     Minus,
-  } from "lucide-svelte";
+    Compass,
+  } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
   import { open as openShell } from "@tauri-apps/plugin-shell";
@@ -31,17 +31,19 @@
     projectPath,
     projectInfo,
     ideStageRequest,
-    newProjectOpen,
+    openAddInstance,
     runningInstances,
     isProjectRunning,
     formatPlaytime,
     authState,
     skinPath,
     loginTypeLabel,
+    loginModalOpen,
     type RecentProject,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
+  import { copyText } from "../lib/clipboard";
   import { launchWithFeedback, killWithFeedback } from "../lib/launch";
   import {
     DEFAULT_GROUP,
@@ -54,66 +56,54 @@
     folderFromDrop,
     type GroupMap,
   } from "../lib/libraryGroups";
+  import { portal } from "../lib/portal";
   import PromptDialog from "./PromptDialog.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
 
-  export let currentView:
-    | "dashboard"
-    | "ide"
-    | "mods"
-    | "graph"
-    | "diagnostics"
-    | "snapshots"
-    | "configs"
-    | "settings"
-    | "project-settings"
-    | "ore-gen"
-    | "recipes"
-    | "quests"
-    | "library"
-    | "chats"
-    | "me"
-    | "world";
+  let {
+    currentView = $bindable(),
+    onDiscover = undefined,
+    onCreate = undefined,
+  }: {
+    currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world";
+    onDiscover?: () => void;
+    onCreate?: () => void;
+  } = $props();
 
   const LONG_PRESS_MS = 420;
   const MOVE_CANCEL_PX = 10;
 
-  let selectedPath: string | null = $projectPath;
-  let launching: string | null = null;
-  let actionBusy = false;
-  let exportMenuOpen = false;
-  let addMenuOpen = false;
-  let foldersMenuOpen = false;
-  let groupMap: GroupMap = loadGroupMap();
-  let collapsed = loadCollapsedGroups();
-  let projectStats: Record<string, { playtime: number }> = {};
-  let refreshing = false;
+  let selectedPath = $state<string | null>($projectPath);
+  let launching = $state<string | null>(null);
+  let actionBusy = $state(false);
+  let exportMenuOpen = $state(false);
+  let addMenuOpen = $state(false);
+  let foldersMenuOpen = $state(false);
+  let groupMap = $state<GroupMap>(loadGroupMap());
+  let collapsed = $state(loadCollapsedGroups());
+  let projectStats = $state<Record<string, { playtime: number }>>({});
+  let refreshing = $state(false);
 
-  let showClonePrompt = false;
-  let cloneTarget: RecentProject | null = null;
-  let clonePromptName = "";
+  let showClonePrompt = $state(false);
+  let cloneTarget = $state<RecentProject | null>(null);
+  let clonePromptName = $state("");
 
-  let showGroupPrompt = false;
-  let groupTarget: RecentProject | null = null;
-  let groupPromptName = DEFAULT_GROUP;
+  let showGroupPrompt = $state(false);
+  let groupTarget = $state<RecentProject | null>(null);
+  let groupPromptName = $state(DEFAULT_GROUP);
 
-  let ctxMenu: { x: number; y: number; project: RecentProject } | null = null;
+  let ctxMenu = $state<{ x: number; y: number; project: RecentProject } | null>(null);
 
   /** Android-style long-press → drag onto another tile to make a folder. */
-  let dragSource: RecentProject | null = null;
-  let dropTargetPath: string | null = null;
-  let dropTargetGroup: string | null = null;
-  let dragGhost: { x: number; y: number; letter: string; colorA: string; colorB: string } | null =
-    null;
-  let suppressNextClick = false;
-  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-  let pressOrigin: { x: number; y: number; project: RecentProject } | null = null;
-  let dragging = false;
-  /** Path that just received a folder merge — brief celebrate pulse. */
-  let celebratePath: string | null = null;
-  let celebrateGroup: string | null = null;
-  let celebrateTimer: ReturnType<typeof setTimeout> | null = null;
-  let holdingPath: string | null = null;
+  let dragSource = $state<RecentProject | null>(null);
+  let dropTargetPath = $state<string | null>(null);
+  let dropTargetGroup = $state<string | null>(null);
+  let dragGhost = $state<{ x: number; y: number; letter: string; colorA: string; colorB: string } | null>(null);
+  let suppressNextClick = $state(false);
+  let longPressTimer = $state<ReturnType<typeof setTimeout> | null>(null);
+  let pressOrigin = $state<{ x: number; y: number; project: RecentProject } | null>(null);
+  let dragging = $state(false);
+  let holdingPath = $state<string | null>(null);
 
   function prefersReducedMotion(): boolean {
     if (typeof document === "undefined") return true;
@@ -121,51 +111,41 @@
     return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   }
 
-  function tileIntro(node: Element, params: { i?: number }) {
+  function tileIntro(node: Element) {
     if (prefersReducedMotion()) return { duration: 0 };
-    const i = params.i ?? 0;
-    return scale(node, {
-      start: 0.86,
-      duration: 380,
-      delay: Math.min(i, 14) * 42,
-      opacity: 0,
-      easing: backOut,
-    });
+    return fade(node, { duration: 160 });
   }
 
   function sideIntro(node: Element) {
     if (prefersReducedMotion()) return { duration: 0 };
-    return fly(node, { x: 18, duration: 280, opacity: 0, easing: quintOut });
+    return fly(node, { x: 12, duration: 200, opacity: 0, easing: quintOut });
   }
 
   function groupBodyIntro(node: Element) {
     if (prefersReducedMotion()) return { duration: 0 };
-    return slide(node, { duration: 260, easing: quintOut });
+    return slide(node, { duration: 200, easing: quintOut });
   }
 
-  function pulseCelebrate(path: string | null, groupName: string) {
-    if (celebrateTimer) clearTimeout(celebrateTimer);
-    celebratePath = path;
-    celebrateGroup = groupName;
-    celebrateTimer = setTimeout(() => {
-      celebratePath = null;
-      celebrateGroup = null;
-      celebrateTimer = null;
-    }, 900);
-  }
+  const selected = $derived($recentProjects.find((p) => p.path === selectedPath) ?? null);
+  const selectedRunning = $derived(
+    isProjectRunning(selectedPath, $runningInstances),
+  );
+  let selectingPath = false;
+  $effect(() => {
+    const recent = $recentProjects;
+    const current = $projectPath;
+    if (selectingPath) return;
+    if (selectedPath && !recent.some((p) => p.path === selectedPath)) {
+      selectedPath = recent[0]?.path ?? null;
+      return;
+    }
+    if (!selectedPath && recent.length) {
+      selectedPath =
+        current && recent.some((p) => p.path === current) ? current : recent[0].path;
+    }
+  });
 
-  $: selected = $recentProjects.find((p) => p.path === selectedPath) ?? null;
-  $: selectedRunning = isProjectRunning(selectedPath, $runningInstances);
-  $: if (selectedPath && !$recentProjects.some((p) => p.path === selectedPath)) {
-    selectedPath = $recentProjects[0]?.path ?? null;
-  }
-  $: if (!selectedPath && $recentProjects.length) {
-    selectedPath = $projectPath && $recentProjects.some((p) => p.path === $projectPath)
-      ? $projectPath
-      : $recentProjects[0].path;
-  }
-
-  $: grouped = (() => {
+  const grouped = $derived((() => {
     const byGroup = new Map<string, RecentProject[]>();
     for (const p of $recentProjects) {
       const g = getGroup(groupMap, p.path);
@@ -182,15 +162,15 @@
       projects: byGroup.get(name) ?? [],
       collapsed: collapsed.has(name),
     }));
-  })();
+  })());
 
-  $: existingGroups = listGroupNames(
+  const existingGroups = $derived(listGroupNames(
     groupMap,
     $recentProjects.map((p) => p.path),
-  );
+  ));
 
   function gradientFrom(name: string) {
-    const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
+    const colors = ["var(--accent-primary)", "var(--accent-secondary)", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
@@ -214,40 +194,78 @@
     }
   }
 
-  $: ensureStats($recentProjects.map((p) => p.path));
+  $effect(() => {
+    ensureStats($recentProjects.map((p) => p.path));
+  });
 
-  function selectInstance(project: RecentProject) {
+  async function selectInstance(
+    project: RecentProject,
+    opts?: { keepMenus?: boolean },
+  ): Promise<string> {
+    if (!opts?.keepMenus) closeMenus();
+    selectingPath = true;
+    // Optimistic select so tiles feel clickable even while validate runs.
     selectedPath = project.path;
-    projectPath.set(project.path);
-    projectInfo.set(project.info);
-    closeMenus();
+    try {
+      const info = (await invoke("validate_project", {
+        path: project.path,
+      })) as RecentProject["info"] & { manifestPath?: string };
+      const manifestPath = info.manifestPath || project.path;
+      recentProjects.add(
+        { path: manifestPath, info },
+        {
+          reorder: false,
+          ...(manifestPath !== project.path
+            ? { replacePath: project.path }
+            : {}),
+        },
+      );
+      selectedPath = manifestPath;
+      projectPath.set(manifestPath);
+      projectInfo.set(info);
+      return manifestPath;
+    } catch {
+      selectedPath = project.path;
+      projectPath.set(project.path);
+      projectInfo.set(project.info);
+      return project.path;
+    } finally {
+      selectingPath = false;
+    }
   }
 
   function openInIde(project: RecentProject) {
-    selectInstance(project);
+    void selectInstance(project);
     ideStageRequest.set("content");
     currentView = "ide";
   }
 
   function openEdit(project: RecentProject) {
-    selectInstance(project);
-    currentView = "project-settings";
+    // Edit = open the pack in IDE Content (mods), not Setup.
+    openInIde(project);
   }
 
   async function launchInstance(project: RecentProject) {
     closeMenus();
-    if (isProjectRunning(project.path, $runningInstances)) {
-      await killWithFeedback(project.path);
+    if (
+      isProjectRunning(project.path, $runningInstances)
+    ) {
       return;
     }
     launching = project.path;
     try {
-      await invoke("set_last_opened_project", { path: project.path });
-      selectInstance(project);
-      await launchWithFeedback({ path: project.path, profile: "client" });
+      const path = await selectInstance(project);
+      if (
+        isProjectRunning(path, $runningInstances) ||
+        isProjectRunning(project.path, $runningInstances)
+      ) {
+        return;
+      }
+      await invoke("set_last_opened_project", { path });
+      await launchWithFeedback({ path, profile: "client" });
     } finally {
       launching = null;
-      void loadStats(project.path);
+      void loadStats(selectedPath ?? project.path);
     }
   }
 
@@ -318,22 +336,30 @@
   function hitTestDrop(clientX: number, clientY: number) {
     dropTargetPath = null;
     dropTargetGroup = null;
-    const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
-    if (!el || !dragSource) return;
-    const tile = el.closest?.(".inst-tile") as HTMLElement | null;
-    if (tile) {
+    if (!dragSource) return;
+
+    // Prefer rect hit-testing over elementFromPoint — CSS `zoom` on `.app-shell`
+    // can desync the latter from the visual cursor in Chromium/Electron.
+    const tiles = document.querySelectorAll<HTMLElement>(".prism-lib .inst-tile[data-path]");
+    for (const tile of tiles) {
+      const r = tile.getBoundingClientRect();
+      if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
       const path = tile.dataset.path ?? null;
       if (path && path !== dragSource.path) {
         dropTargetPath = path;
         return;
       }
     }
-    const header = el.closest?.(".group-header") as HTMLElement | null;
-    if (header) {
+
+    const headers = document.querySelectorAll<HTMLElement>(".prism-lib .group-header[data-group]");
+    for (const header of headers) {
+      const r = header.getBoundingClientRect();
+      if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
       const name = header.dataset.group ?? null;
       if (name && name !== getGroup(groupMap, dragSource.path)) {
         dropTargetGroup = name;
       }
+      return;
     }
   }
 
@@ -354,7 +380,6 @@
       if (collapsed.has(result.groupName)) {
         collapsed = toggleCollapsed(collapsed, result.groupName);
       }
-      pulseCelebrate(target.path, result.groupName);
       toasts.success(
         result.created
           ? `Folder “${result.groupName}” created`
@@ -368,7 +393,6 @@
       if (collapsed.has(name)) {
         collapsed = toggleCollapsed(collapsed, name);
       }
-      pulseCelebrate(null, name);
       toasts.success(
         name === DEFAULT_GROUP ? "Removed from folder" : `Moved into “${name}”`,
       );
@@ -449,14 +473,15 @@
     }
     e.preventDefault();
     e.stopPropagation();
-    selectInstance(project);
     const pad = 8;
     const menuW = 230;
     const menuH = 420;
+    // Zoom is on <html> — clientX/Y and position:fixed share one frame.
     let x = e.clientX;
     let y = e.clientY;
     if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad;
     if (y + menuH > window.innerHeight - pad) y = window.innerHeight - menuH - pad;
+    void selectInstance(project, { keepMenus: true });
     ctxMenu = { x: Math.max(pad, x), y: Math.max(pad, y), project };
   }
 
@@ -631,8 +656,12 @@
         actionBusy = true;
         try {
           const exported = await api.export.modrinthPack(null, project.path);
-          await navigator.clipboard.writeText(exported.path);
-          toasts.success(`Exported .mrpack: ${exported.path}`);
+          try {
+            await copyText(exported.path);
+            toasts.success(`Exported .mrpack — path copied: ${exported.path}`);
+          } catch {
+            toasts.success(`Exported .mrpack: ${exported.path}`);
+          }
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -643,8 +672,12 @@
         actionBusy = true;
         try {
           const exported = await api.export.prismInstance(null, project.path);
-          await navigator.clipboard.writeText(exported.path);
-          toasts.success(`Exported Prism zip: ${exported.path}`);
+          try {
+            await copyText(exported.path);
+            toasts.success(`Exported Prism zip — path copied: ${exported.path}`);
+          } catch {
+            toasts.success(`Exported Prism zip: ${exported.path}`);
+          }
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -660,7 +693,7 @@
         actionBusy = true;
         try {
           const path = await api.files.createDesktopShortcut(project.path);
-          toasts.success(`Shortcut created: ${path}`);
+          toasts.success(`Desktop shortcut created — double-click to launch: ${path}`);
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -672,8 +705,9 @@
         break;
       case "copy-path":
         try {
-          await navigator.clipboard.writeText(project.path);
-          toasts.success("Path copied");
+          const dir = await api.project.getDir(project.path);
+          await copyText(dir);
+          toasts.success("Instance folder path copied");
         } catch (e) {
           toasts.error(String(e));
         }
@@ -776,7 +810,6 @@
 
   onDestroy(() => {
     clearLongPressTimer();
-    if (celebrateTimer) clearTimeout(celebrateTimer);
     endDrag();
   });
 </script>
@@ -789,7 +822,7 @@
           type="button"
           class="tb-btn primary"
           title="Add instance"
-          on:click|stopPropagation={() => (addMenuOpen = !addMenuOpen)}
+          onclick={(e) => { e.stopPropagation(); (addMenuOpen = !addMenuOpen);  }}
         >
           <Plus size={16} />
           <span>Add Instance</span>
@@ -797,13 +830,13 @@
         </button>
         {#if addMenuOpen}
           <div class="tb-menu" role="menu">
-            <button type="button" role="menuitem" on:click={() => { addMenuOpen = false; newProjectOpen.set(true); }}>
+            <button type="button" role="menuitem" onclick={() => { addMenuOpen = false; openAddInstance("blank"); }}>
               <Plus size={14} /> Create new…
             </button>
-            <button type="button" role="menuitem" on:click={importPackFile} disabled={actionBusy}>
+            <button type="button" role="menuitem" onclick={importPackFile} disabled={actionBusy}>
               <FolderOpen size={14} /> Import file (.mrpack / .zip)
             </button>
-            <button type="button" role="menuitem" on:click={importInstanceFolder} disabled={actionBusy}>
+            <button type="button" role="menuitem" onclick={importInstanceFolder} disabled={actionBusy}>
               <Folder size={14} /> Import instance folder
             </button>
           </div>
@@ -815,18 +848,18 @@
           type="button"
           class="tb-btn"
           title="Folders"
-          on:click|stopPropagation={() => (foldersMenuOpen = !foldersMenuOpen)}
+          onclick={(e) => { e.stopPropagation(); (foldersMenuOpen = !foldersMenuOpen);  }}
         >
           <Folder size={16} />
           <span>Folders</span>
         </button>
         {#if foldersMenuOpen}
           <div class="tb-menu" role="menu">
-            <button type="button" role="menuitem" on:click={openInstancesFolder}>
+            <button type="button" role="menuitem" onclick={openInstancesFolder}>
               <FolderOpen size={14} /> Instances folder
             </button>
             {#if selected}
-              <button type="button" role="menuitem" on:click={() => { foldersMenuOpen = false; void openSelectedFolder(selected); }}>
+              <button type="button" role="menuitem" onclick={() => { foldersMenuOpen = false; void openSelectedFolder(selected); }}>
                 <Folder size={14} /> Selected instance
               </button>
             {/if}
@@ -834,7 +867,20 @@
         {/if}
       </div>
 
-      <button type="button" class="tb-btn" title="Settings" on:click={() => (currentView = "settings")}>
+      {#if onDiscover}
+        <button type="button" class="tb-btn" title="Discover" onclick={() => onDiscover()}>
+          <Compass size={16} />
+          <span>Discover</span>
+        </button>
+      {/if}
+      {#if onCreate}
+        <button type="button" class="tb-btn" title="Create" onclick={() => onCreate()}>
+          <Plus size={16} />
+          <span>Create</span>
+        </button>
+      {/if}
+
+      <button type="button" class="tb-btn" title="Settings" onclick={() => (currentView = "settings")}>
         <Settings size={16} />
         <span>Settings</span>
       </button>
@@ -842,7 +888,7 @@
         type="button"
         class="tb-btn"
         title="Help"
-        on:click={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
+        onclick={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
       >
         <HelpCircle size={16} />
         <span>Help</span>
@@ -852,7 +898,7 @@
         class="tb-btn"
         title="Refresh"
         disabled={refreshing}
-        on:click={() => void refreshAll()}
+        onclick={() => void refreshAll()}
       >
         <span class:spinning={refreshing}><RefreshCw size={16} /></span>
         <span>Update</span>
@@ -865,7 +911,7 @@
           type="button"
           class="tb-account"
           title="Account"
-          on:click={() => (currentView = "me")}
+          onclick={() => (currentView = "me")}
         >
           <HeadAvatar skinSrc={$skinPath} size={28} alt={$authState.profile.name} />
           <span class="tb-account-name">{$authState.profile.name}</span>
@@ -877,8 +923,8 @@
           </span>
         </button>
       {:else}
-        <button type="button" class="tb-btn" on:click={() => (currentView = "me")}>
-          Account
+        <button type="button" class="tb-btn" onclick={() => loginModalOpen.set(true)}>
+          Sign in
         </button>
       {/if}
     </div>
@@ -890,7 +936,7 @@
         <div class="empty-state">
           <h3>No instances yet</h3>
           <p>Create or import a pack to build your library.</p>
-          <button type="button" class="empty-cta" on:click={() => newProjectOpen.set(true)}>
+          <button type="button" class="empty-cta" onclick={() => openAddInstance("blank")}>
             <Plus size={16} /> Add Instance
           </button>
         </div>
@@ -898,18 +944,14 @@
         <p class="drag-hint" class:visible={dragging}>
           Drop on another instance to make a folder
         </p>
-        {#each grouped as group, gi (group.name)}
-          <section
-            class="inst-group"
-            class:celebrate={celebrateGroup === group.name}
-            style={`--gi: ${gi}`}
-          >
+        {#each grouped as group (group.name)}
+          <section class="inst-group">
             <button
               type="button"
               class="group-header"
               class:drop-target={dragging && dropTargetGroup === group.name}
               data-group={group.name}
-              on:click={() => toggleGroup(group.name)}
+              onclick={() => toggleGroup(group.name)}
               aria-expanded={!group.collapsed}
             >
               {#if group.collapsed}
@@ -922,7 +964,7 @@
             </button>
             {#if !group.collapsed}
               <div class="inst-grid" transition:groupBodyIntro>
-                {#each group.projects as project, pi (project.path)}
+                {#each group.projects as project (project.path)}
                   <div
                     class="inst-tile"
                     class:selected={selectedPath === project.path}
@@ -930,22 +972,19 @@
                     class:dragging={dragSource?.path === project.path}
                     class:drop-target={dropTargetPath === project.path}
                     class:holding={holdingPath === project.path && !dragging}
-                    class:celebrate={celebratePath === project.path || (celebrateGroup === group.name && !celebratePath)}
-                    class:jiggle={dragging && dragSource?.path !== project.path}
                     data-path={project.path}
-                    style={`--i: ${pi}; --jiggle-delay: ${pi * 40}ms`}
                     role="button"
                     tabindex="0"
-                    title="Hold and drag onto another instance to create a folder"
-                    in:tileIntro={{ i: pi }}
-                    on:click={() => onTileClick(project)}
-                    on:dblclick={() => !dragging && void launchInstance(project)}
-                    on:keydown={(e) => e.key === "Enter" && selectInstance(project)}
-                    on:contextmenu={(e) => openCtxMenu(e, project)}
-                    on:pointerdown={(e) => onTilePointerDown(e, project)}
-                    on:pointermove={onTilePointerMove}
-                    on:pointerup={onTilePointerUp}
-                    on:pointercancel={onTilePointerCancel}
+                    aria-label={`${project.info.name}. Hold and drag onto another instance to create a folder`}
+                    in:tileIntro
+                    onclick={() => onTileClick(project)}
+                    ondblclick={() => !dragging && void launchInstance(project)}
+                    onkeydown={(e) => e.key === "Enter" && selectInstance(project)}
+                    oncontextmenu={(e) => openCtxMenu(e, project)}
+                    onpointerdown={(e) => onTilePointerDown(e, project)}
+                    onpointermove={onTilePointerMove}
+                    onpointerup={onTilePointerUp}
+                    onpointercancel={onTilePointerCancel}
                   >
                     <div class="hold-ring" aria-hidden="true"></div>
                     <div
@@ -962,7 +1001,10 @@
                         {project.info.name[0]?.toUpperCase() ?? "?"}
                       {/if}
                     </div>
-                    <span class="inst-name tb-truncate" title={project.info.name}>{project.info.name}</span>
+                    <span
+                      class="inst-name"
+                      title={project.info.name}
+                    >{project.info.name}</span>
                   </div>
                 {/each}
               </div>
@@ -970,6 +1012,23 @@
           </section>
         {/each}
       {/if}
+      <div class="lib-footer" aria-live="polite">
+        <span>
+          {#if selected}
+            Minecraft {selected.info.minecraftVersion} · {selected.info.loaderKind}
+            {#if projectStats[selected.path]?.playtime}
+              · {formatPlaytime(projectStats[selected.path].playtime)} played
+            {/if}
+          {:else}
+            —
+          {/if}
+        </span>
+        <span>
+          Total playtime: {formatPlaytime(
+            Object.values(projectStats).reduce((s, p) => s + (p?.playtime ?? 0), 0),
+          )}
+        </span>
+      </div>
     </div>
 
     <aside class="prism-side lib-side-enter" aria-label="Instance actions">
@@ -983,7 +1042,7 @@
               >
                 {selected.info.name[0]?.toUpperCase() ?? "?"}
               </div>
-              <div class="side-title tb-truncate-2" title={selected.info.name}>{selected.info.name}</div>
+              <div class="side-title" title={selected.info.name}>{selected.info.name}</div>
               <div class="side-meta">
                 {selected.info.minecraftVersion} · {selected.info.loaderKind}
               </div>
@@ -992,32 +1051,27 @@
             <div class="side-actions">
               <button
                 type="button"
-                class="side-btn launch"
-                disabled={actionBusy || launching === selected.path || selectedRunning}
-                on:click={() => void runAction("launch", selected)}
+                class={["side-btn", "launch", { stop: selectedRunning }]}
+                disabled={actionBusy || launching === selected.path}
+                onclick={() => void runAction(selectedRunning ? "stop" : "launch", selected)}
               >
                 {#if launching === selected.path}
                   <span class="mini-spinner"></span> Launching…
+                {:else if selectedRunning}
+                  <Square size={14} /> Stop
                 {:else}
-                  <Play size={16} fill="currentColor" /> Launch
+                  <Play size={16} fill="currentColor" /> Play
                 {/if}
               </button>
-              <button
-                type="button"
-                class="side-btn"
-                disabled={!selectedRunning || actionBusy}
-                on:click={() => void runAction("stop", selected)}
-              >
-                <Square size={14} /> Stop
-              </button>
-              <button type="button" class="side-btn" disabled={actionBusy} on:click={() => runAction("edit", selected)}>
-                <Pencil size={14} /> Edit
+              <div class="side-sep" aria-hidden="true"></div>
+              <button type="button" class="side-btn" disabled={actionBusy} onclick={() => runAction("open-ide", selected)}>
+                <Package size={14} /> Open IDE
               </button>
               <button
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                on:click={() => void runAction("change-group", selected)}
+                onclick={() => void runAction("change-group", selected)}
               >
                 <Tags size={14} /> Change Group
               </button>
@@ -1025,7 +1079,7 @@
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                on:click={() => void runAction("folder", selected)}
+                onclick={() => void runAction("folder", selected)}
               >
                 <Folder size={14} /> Folder
               </button>
@@ -1035,16 +1089,16 @@
                   type="button"
                   class="side-btn"
                   disabled={actionBusy}
-                  on:click|stopPropagation={() => (exportMenuOpen = !exportMenuOpen)}
+                  onclick={(e) => { e.stopPropagation(); (exportMenuOpen = !exportMenuOpen);  }}
                 >
                   <Share2 size={14} /> Export <ChevronDown size={12} />
                 </button>
                 {#if exportMenuOpen}
                   <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
-                    <button type="button" role="menuitem" on:click={() => void runAction("export-mrpack", selected)}>
+                    <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", selected)}>
                       Export .mrpack
                     </button>
-                    <button type="button" role="menuitem" on:click={() => void runAction("export-prism", selected)}>
+                    <button type="button" role="menuitem" onclick={() => void runAction("export-prism", selected)}>
                       Export Prism zip
                     </button>
                   </div>
@@ -1055,7 +1109,7 @@
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                on:click={() => void runAction("copy", selected)}
+                onclick={() => void runAction("copy", selected)}
               >
                 <Copy size={14} /> Copy
               </button>
@@ -1063,7 +1117,7 @@
                 type="button"
                 class="side-btn danger"
                 disabled={actionBusy}
-                on:click={() => void runAction("delete", selected)}
+                onclick={() => void runAction("delete", selected)}
               >
                 <Trash2 size={14} /> Delete
               </button>
@@ -1071,7 +1125,7 @@
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                on:click={() => void runAction("shortcut", selected)}
+                onclick={() => void runAction("shortcut", selected)}
               >
                 <Link2 size={14} /> Create Shortcut
               </button>
@@ -1083,29 +1137,13 @@
       {/if}
     </aside>
   </div>
-
-  <div class="prism-status">
-    <span>
-      {#if selected}
-        Minecraft {selected.info.minecraftVersion}
-      {:else}
-        —
-      {/if}
-    </span>
-    <span>
-      {#if selected}
-        Total playtime: {formatPlaytime(projectStats[selected.path]?.playtime ?? 0)}
-      {:else}
-        Total playtime: —
-      {/if}
-    </span>
-  </div>
 </div>
 
 {#if dragGhost}
   <div
     class="drag-ghost"
-    style={`left:${dragGhost.x}px; top:${dragGhost.y}px; background: linear-gradient(135deg, ${dragGhost.colorA}, ${dragGhost.colorB})`}
+    use:portal
+    style={`position:fixed; left:${dragGhost.x}px; top:${dragGhost.y}px; z-index:10000; background: linear-gradient(135deg, ${dragGhost.colorA}, ${dragGhost.colorB})`}
     aria-hidden="true"
   >
     <span class="ghost-letter">{dragGhost.letter}</span>
@@ -1115,44 +1153,55 @@
 
 {#if ctxMenu}
   {@const menuProject = ctxMenu.project}
-  <div class="pack-ctx-menu" style={`left:${ctxMenu.x}px; top:${ctxMenu.y}px`} role="menu">
-    <button type="button" role="menuitem" on:click={() => void runAction("launch", menuProject)} disabled={actionBusy}>
+  <div
+    class="pack-ctx-menu"
+    use:portal
+    style={`position:fixed; left:${ctxMenu.x}px; top:${ctxMenu.y}px; z-index:10000`}
+    role="menu"
+  >
+    <button
+      type="button"
+      role="menuitem"
+      onclick={() =>
+        void runAction(
+          isProjectRunning(menuProject.path, $runningInstances) ? "stop" : "launch",
+          menuProject,
+        )}
+      disabled={actionBusy}
+    >
       {#if isProjectRunning(menuProject.path, $runningInstances)}
         <Square size={14} /> Stop
       {:else}
-        <Play size={14} /> Launch
+        <Play size={14} /> Play
       {/if}
     </button>
-    <button type="button" role="menuitem" on:click={() => runAction("edit", menuProject)}>
-      <Pencil size={14} /> Edit
+    <button type="button" role="menuitem" onclick={() => runAction("open-ide", menuProject)}>
+      <Package size={14} /> Open IDE
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("change-group", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("change-group", menuProject)}>
       <Tags size={14} /> Change Group
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("folder", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("folder", menuProject)}>
       <Folder size={14} /> Folder
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("copy", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("copy", menuProject)}>
       <Copy size={14} /> Copy
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("shortcut", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("shortcut", menuProject)}>
       <Link2 size={14} /> Create Shortcut
     </button>
     <div class="menu-sep"></div>
-    <button type="button" role="menuitem" on:click={() => runAction("open-ide", menuProject)}>
-      <Package size={14} /> Open in IDE → Mods
-    </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("copy-path", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("copy-path", menuProject)}>
       <Copy size={14} /> Copy path
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("repair", menuProject)} disabled={actionBusy}>
+    <button type="button" role="menuitem" onclick={() => void runAction("repair", menuProject)} disabled={actionBusy}>
       <Wrench size={14} /> Repair
     </button>
     <div class="menu-sep"></div>
-    <button type="button" role="menuitem" on:click={() => void runAction("remove", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("remove", menuProject)}>
       <Minus size={14} /> Remove from library
     </button>
-    <button type="button" role="menuitem" class="danger" on:click={() => void runAction("delete", menuProject)}>
+    <button type="button" role="menuitem" class="danger" onclick={() => void runAction("delete", menuProject)}>
       <Trash2 size={14} /> Delete from disk
     </button>
   </div>
@@ -1165,8 +1214,8 @@
     mode="text"
     defaultValue={clonePromptName}
     confirmLabel="Copy"
-    on:confirm={(e) => confirmClone(e.detail)}
-    on:cancel={() => {
+    onconfirm={(v) => confirmClone(v)}
+    oncancel={() => {
       showClonePrompt = false;
       cloneTarget = null;
     }}
@@ -1174,63 +1223,64 @@
 {/if}
 
 {#if showGroupPrompt && groupTarget}
-  <div class="group-dialog-backdrop" role="presentation" on:click={() => { showGroupPrompt = false; groupTarget = null; }}>
+  <div
+    class="group-dialog-backdrop"
+    use:portal
+    style="position:fixed; inset:0; z-index:10000;"
+    role="presentation"
+    onclick={() => { showGroupPrompt = false; groupTarget = null; }}
+  >
     <div
       class="group-dialog"
       role="dialog"
       aria-labelledby="group-dlg-title"
-      on:click|stopPropagation
-      on:keydown|stopPropagation
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
     >
       <h3 id="group-dlg-title">Change Group</h3>
       <p>Move “{groupTarget.info.name}” into a group.</p>
       <div class="group-chips">
         {#each existingGroups as g (g)}
-          <button type="button" class="chip" class:active={groupPromptName === g} on:click={() => applyExistingGroup(g)}>
+          <button type="button" class="chip" class:active={groupPromptName === g} onclick={() => applyExistingGroup(g)}>
             {g}
           </button>
         {/each}
       </div>
       <label class="group-new-label" for="group-new-input">Or type a new name</label>
-      <input id="group-new-input" bind:value={groupPromptName} on:keydown={(e) => e.key === "Enter" && confirmGroup(groupPromptName)} />
+      <input id="group-new-input" bind:value={groupPromptName} onkeydown={(e) => e.key === "Enter" && confirmGroup(groupPromptName)} />
       <div class="group-dlg-actions">
-        <button type="button" class="ghost" on:click={() => { showGroupPrompt = false; groupTarget = null; }}>Cancel</button>
-        <button type="button" class="accent" on:click={() => confirmGroup(groupPromptName)}>Apply</button>
+        <button type="button" class="ghost" onclick={() => { showGroupPrompt = false; groupTarget = null; }}>Cancel</button>
+        <button type="button" class="accent" onclick={() => confirmGroup(groupPromptName)}>Apply</button>
       </div>
     </div>
   </div>
 {/if}
 
-<svelte:window on:mousedown={onGlobalPointerDown} on:keydown={onGlobalKeydown} />
+<svelte:window onmousedown={onGlobalPointerDown} onkeydown={onGlobalKeydown} />
 
 <style>
   .prism-lib {
     display: flex;
     flex-direction: column;
-    min-height: min(70vh, 640px);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    background: var(--bg-secondary);
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    background: transparent;
     overflow: hidden;
     position: relative;
   }
   .prism-lib.lib-motion::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background:
-      radial-gradient(ellipse 80% 40% at 20% -10%, rgba(27, 217, 106, 0.08), transparent 55%),
-      radial-gradient(ellipse 60% 30% at 100% 0%, rgba(139, 92, 246, 0.06), transparent 50%);
-    opacity: 0;
-    animation: lib-ambient-in var(--motion-enter) var(--ease-out) 80ms both;
+    display: none;
   }
 
   .lib-toolbar-enter {
-    animation: lib-toolbar-in var(--motion-enter) var(--ease-spring) both;
+    animation: lib-toolbar-in 160ms var(--ease-out) both;
   }
   .lib-side-enter {
-    animation: lib-side-in var(--motion-enter) var(--ease-spring) 60ms both;
+    animation: lib-side-in 160ms var(--ease-out) both;
   }
 
   .prism-toolbar {
@@ -1238,7 +1288,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 8px 10px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     flex-wrap: wrap;
@@ -1279,12 +1329,12 @@
     transform: scale(0.94);
   }
   .tb-btn.primary {
-    background: rgba(27, 217, 106, 0.14);
-    border-color: rgba(27, 217, 106, 0.35);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--accent-primary);
   }
   .tb-btn.primary:hover {
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.25), 0 6px 16px rgba(27, 217, 106, 0.12);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 25%, transparent), 0 6px 16px color-mix(in srgb, var(--accent-primary) 12%, transparent);
   }
   .tb-btn:disabled { opacity: 0.5; cursor: default; }
   .tb-add-wrap,
@@ -1324,7 +1374,7 @@
     cursor: pointer;
   }
   .tb-menu button:hover {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
   .tb-account {
@@ -1365,9 +1415,22 @@
   }
 
   .prism-grid-pane {
-    padding: 12px 14px 16px;
+    padding: 8px 10px 12px;
     overflow: auto;
-    min-height: 280px;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .lib-footer {
+    margin-top: auto;
+    padding-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--text-muted);
   }
   .drag-hint {
     margin: 0 0 10px;
@@ -1385,11 +1448,6 @@
   }
   .inst-group {
     margin-bottom: 14px;
-    animation: lib-group-in var(--motion-enter) var(--ease-spring) both;
-    animation-delay: calc(var(--gi, 0) * 50ms);
-  }
-  .inst-group.celebrate {
-    animation: lib-group-celebrate 700ms var(--ease-spring);
   }
   .group-header {
     display: inline-flex;
@@ -1407,15 +1465,13 @@
     transition:
       color var(--motion-fast) var(--ease-out),
       background var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-fast) var(--ease-out),
-      transform var(--motion-fast) var(--ease-spring);
+      box-shadow var(--motion-fast) var(--ease-out);
   }
-  .group-header:hover { color: var(--text-primary); transform: translateX(2px); }
+  .group-header:hover { color: var(--text-primary); }
   .group-header.drop-target {
-    background: rgba(27, 217, 106, 0.18);
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
     color: var(--accent-primary);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.4);
-    animation: lib-drop-pulse 0.9s ease-in-out infinite;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 40%, transparent);
   }
   .group-count {
     font-size: 11px;
@@ -1439,61 +1495,75 @@
     cursor: pointer;
     text-align: center;
     outline: none;
-    touch-action: none;
+    touch-action: manipulation;
     position: relative;
     transition:
-      transform var(--motion-med) var(--ease-spring),
+      transform var(--motion-fast) var(--ease-out),
       background var(--motion-fast) var(--ease-out),
       border-color var(--motion-fast) var(--ease-out),
       opacity var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-med) var(--ease-out);
+      box-shadow var(--motion-fast) var(--ease-out);
   }
-  .inst-tile:hover { background: var(--bg-hover); transform: translateY(-3px); }
   .inst-tile:hover .inst-icon {
-    transform: translateY(-2px) scale(1.06);
-    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.35);
+    transform: translateY(-1px);
+    filter: brightness(1.04);
   }
-  .inst-tile.selected {
-    background: rgba(27, 217, 106, 0.16);
-    border-color: rgba(27, 217, 106, 0.35);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.18);
+  .inst-tile:hover:not(.selected) .inst-name {
+    background: color-mix(in srgb, var(--bg-hover) 90%, transparent);
   }
   .inst-tile.selected .inst-icon {
-    animation: lib-select-ring 1.8s var(--ease-out) infinite;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+  }
+  .inst-tile.selected .inst-name {
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    color: var(--accent-primary);
   }
   .inst-tile.running .inst-icon {
-    box-shadow: 0 0 0 2px rgba(27, 217, 106, 0.55);
-    animation: lib-running-glow 2.2s ease-in-out infinite;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+  }
+  .inst-tile.running::after {
+    content: "";
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--bg-primary, transparent);
+    z-index: 3;
   }
   .inst-tile.dragging {
     opacity: 0.28;
-    transform: scale(0.88);
     filter: saturate(0.7);
   }
+  .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+    opacity: 0.7;
+  }
   .inst-tile.drop-target {
-    background: rgba(27, 217, 106, 0.22);
-    border-color: rgba(27, 217, 106, 0.55);
-    transform: scale(1.08);
+    background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
     z-index: 2;
-    animation: lib-drop-pulse 0.85s ease-in-out infinite;
   }
   .inst-tile.holding .inst-icon {
-    transform: scale(0.94);
+    filter: brightness(0.96);
   }
   .inst-tile.holding .hold-ring {
     opacity: 1;
     animation: lib-hold-ring 420ms linear forwards;
   }
-  .inst-tile.jiggle {
-    animation: lib-jiggle 0.55s ease-in-out infinite;
-    animation-delay: var(--jiggle-delay, 0ms);
-  }
-  .inst-tile.celebrate {
-    animation: lib-tile-celebrate 720ms var(--ease-spring);
-  }
   .inst-tile:focus-visible {
-    outline: 2px solid var(--accent-primary);
-    outline-offset: 2px;
+    outline: none;
+  }
+  .inst-tile:focus-visible .inst-icon {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--accent-primary) 70%, transparent),
+      0 0 0 4px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  }
+  .inst-tile:focus-visible .inst-name {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    outline-offset: 1px;
   }
 
   .hold-ring {
@@ -1512,8 +1582,8 @@
       var(--accent-primary) var(--hold),
       transparent 0
     );
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
     z-index: 1;
   }
 
@@ -1532,13 +1602,13 @@
     position: relative;
     z-index: 2;
     transition:
-      transform var(--motion-med) var(--ease-spring),
-      border-radius var(--motion-med) var(--ease-spring),
-      box-shadow var(--motion-med) var(--ease-out);
+      transform var(--motion-fast) var(--ease-out),
+      border-radius var(--motion-fast) var(--ease-out),
+      box-shadow var(--motion-fast) var(--ease-out),
+      filter var(--motion-fast) var(--ease-out);
   }
   .inst-icon.folder-preview {
-    border-radius: 18px;
-    animation: lib-folder-morph 380ms var(--ease-spring) both;
+    border-radius: var(--border-radius-lg);
   }
   .folder-stack {
     position: relative;
@@ -1550,24 +1620,37 @@
     position: absolute;
     width: 34px;
     height: 34px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-sm);
     background: rgba(0, 0, 0, 0.28);
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 16px;
     font-weight: 800;
-    animation: lib-stack-pop 320ms var(--ease-spring) both;
   }
   .folder-stack .stack-a { top: 10px; left: 10px; }
-  .folder-stack .stack-b { bottom: 10px; right: 10px; animation-delay: 60ms; }
+  .folder-stack .stack-b { bottom: 10px; right: 10px; }
   .inst-name {
     font-size: 12px;
     font-weight: 600;
     color: var(--text-primary);
     max-width: 100%;
+    width: fit-content;
     line-height: 1.3;
-    transition: color var(--motion-fast) var(--ease-out);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    box-sizing: border-box;
+    transition:
+      color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out),
+      border-color var(--motion-fast) var(--ease-out);
   }
   .inst-tile.drop-target .inst-name { color: var(--accent-primary); }
 
@@ -1585,17 +1668,17 @@
     font-weight: 900;
     color: #fff;
     pointer-events: none;
-    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(27, 217, 106, 0.35);
-    animation: lib-ghost-in 220ms var(--ease-spring) both;
-    will-change: transform, left, top;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+    opacity: 0.95;
+    will-change: left, top;
   }
   .ghost-letter { position: relative; z-index: 1; }
   .ghost-ring {
     position: absolute;
-    inset: -6px;
+    inset: -5px;
     border-radius: 50%;
-    border: 2px solid rgba(27, 217, 106, 0.45);
-    animation: lib-ghost-ring 1s ease-out infinite;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    opacity: 0.7;
   }
 
   .prism-side {
@@ -1608,7 +1691,7 @@
     overflow: auto;
   }
   .side-panel { display: flex; flex-direction: column; gap: 12px; }
-  .side-hero { text-align: center; }
+  .side-hero { text-align: center; min-width: 0; }
   .side-icon {
     width: 64px;
     height: 64px;
@@ -1620,40 +1703,28 @@
     font-size: 24px;
     font-weight: 900;
     color: #fff;
-    animation: lib-side-icon-in 420ms var(--ease-spring) both;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
   }
   .side-title {
     font-size: 13px;
     font-weight: 700;
     color: var(--text-primary);
     margin-bottom: 4px;
-    animation: lib-fade-up 280ms var(--ease-out) 40ms both;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
   }
   .side-meta {
     font-size: 11px;
     color: var(--text-muted);
     text-transform: capitalize;
-    animation: lib-fade-up 280ms var(--ease-out) 80ms both;
   }
   .side-actions {
     display: flex;
     flex-direction: column;
     gap: 4px;
   }
-  .side-actions .side-btn {
-    animation: lib-fade-up 260ms var(--ease-out) both;
-    animation-delay: calc(100ms + var(--bi, 0) * 28ms);
-  }
-  .side-actions .side-btn:nth-child(1) { --bi: 0; }
-  .side-actions .side-btn:nth-child(2) { --bi: 1; }
-  .side-actions .side-btn:nth-child(3) { --bi: 2; }
-  .side-actions .side-btn:nth-child(4) { --bi: 3; }
-  .side-actions .side-btn:nth-child(5) { --bi: 4; }
-  .side-actions .side-btn:nth-child(6) { --bi: 5; }
-  .side-actions .side-btn:nth-child(7) { --bi: 6; }
-  .side-actions .side-btn:nth-child(8) { --bi: 7; }
-  .side-actions .side-btn:nth-child(9) { --bi: 8; }
   .side-btn {
     display: inline-flex;
     align-items: center;
@@ -1669,30 +1740,36 @@
     cursor: pointer;
     text-align: left;
     transition:
-      transform var(--motion-fast) var(--ease-spring),
       background var(--motion-fast) var(--ease-out),
       color var(--motion-fast) var(--ease-out),
       border-color var(--motion-fast) var(--ease-out);
   }
   .side-btn:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--accent-primary);
-    transform: translateX(3px);
   }
-  .side-btn:active:not(:disabled) { transform: scale(0.97) translateX(2px); }
+  .side-btn:active:not(:disabled) { opacity: 0.9; }
   .side-btn:disabled { opacity: 0.4; cursor: default; }
   .side-btn.launch {
-    background: rgba(27, 217, 106, 0.16);
-    border-color: rgba(27, 217, 106, 0.3);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
     color: var(--accent-primary);
     margin-bottom: 4px;
   }
   .side-btn.launch:hover:not(:disabled) {
-    box-shadow: 0 6px 16px rgba(27, 217, 106, 0.18);
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  }
+  .side-btn.launch.stop {
+    background: color-mix(in srgb, var(--accent-danger, #ef4444) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger, #ef4444) 30%, transparent);
+    color: var(--accent-danger, #f87171);
+  }
+  .side-btn.launch.stop:hover:not(:disabled) {
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-danger, #ef4444) 18%, transparent);
   }
   .side-btn.danger:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.12);
-    color: #f87171;
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    color: var(--accent-danger);
   }
   .side-empty {
     padding: 24px 8px;
@@ -1701,16 +1778,10 @@
     font-size: 13px;
   }
 
-  .prism-status {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 6px 12px;
-    border-top: 1px solid var(--border-color);
-    background: var(--bg-elevated, #141820);
-    font-size: 11px;
-    color: var(--text-muted);
-    animation: lib-status-in var(--motion-enter) var(--ease-spring) 100ms both;
+  .side-sep {
+    height: 1px;
+    margin: 4px 2px;
+    background: var(--border-color);
   }
 
   .empty-state {
@@ -1733,7 +1804,7 @@
     border: none;
     border-radius: 10px;
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent, #000);
     font-weight: 700;
     font-size: 13px;
     cursor: pointer;
@@ -1741,7 +1812,7 @@
 
   .pack-ctx-menu {
     position: fixed;
-    z-index: 90;
+    z-index: 200;
     min-width: 210px;
     padding: 6px;
     border-radius: 10px;
@@ -1768,13 +1839,13 @@
     text-align: left;
   }
   .pack-ctx-menu button:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
   .pack-ctx-menu button:disabled { opacity: 0.45; cursor: default; }
   .pack-ctx-menu button.danger:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.12);
-    color: #f87171;
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    color: var(--accent-danger);
   }
   .pack-ctx-menu .menu-sep {
     height: 1px;
@@ -1820,9 +1891,9 @@
   }
   .chip.active,
   .chip:hover {
-    border-color: rgba(27, 217, 106, 0.4);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
   .group-new-label {
     display: block;
@@ -1863,7 +1934,7 @@
     border-radius: var(--border-radius-sm);
     border: none;
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent, #000);
     cursor: pointer;
     font-weight: 700;
     font-size: 12px;
@@ -1872,7 +1943,7 @@
   .mini-spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid rgba(27, 217, 106, 0.25);
+    border: 2px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
     border-top-color: var(--accent-primary);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -1898,129 +1969,46 @@
     from { --hold: 0deg; opacity: 1; }
     to { --hold: 360deg; opacity: 1; }
   }
-  @keyframes lib-ambient-in {
+  @keyframes lib-toolbar-in {
     from { opacity: 0; }
     to { opacity: 1; }
   }
-  @keyframes lib-toolbar-in {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: none; }
-  }
   @keyframes lib-side-in {
-    from { opacity: 0; transform: translateX(16px); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-status-in {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-group-in {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-group-celebrate {
-    0% { box-shadow: inset 0 0 0 0 rgba(27, 217, 106, 0); }
-    35% { box-shadow: inset 0 0 0 2px rgba(27, 217, 106, 0.35); }
-    100% { box-shadow: inset 0 0 0 0 rgba(27, 217, 106, 0); }
-  }
-  @keyframes lib-jiggle {
-    0%, 100% { transform: rotate(-1.4deg); }
-    50% { transform: rotate(1.4deg); }
-  }
-  @keyframes lib-drop-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(27, 217, 106, 0.35); }
-    50% { box-shadow: 0 0 0 8px rgba(27, 217, 106, 0); }
-  }
-  @keyframes lib-select-ring {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(27, 217, 106, 0.35); }
-    50% { box-shadow: 0 0 0 6px rgba(27, 217, 106, 0); }
-  }
-  @keyframes lib-running-glow {
-    0%, 100% { filter: brightness(1); box-shadow: 0 0 0 2px rgba(27, 217, 106, 0.45); }
-    50% { filter: brightness(1.08); box-shadow: 0 0 12px 2px rgba(27, 217, 106, 0.55); }
-  }
-  @keyframes lib-tile-celebrate {
-    0% { transform: scale(1); }
-    35% { transform: scale(1.12); }
-    70% { transform: scale(0.96); }
-    100% { transform: scale(1); }
-  }
-  @keyframes lib-folder-morph {
-    from { border-radius: 50%; transform: scale(0.9); }
-    to { border-radius: 18px; transform: scale(1); }
-  }
-  @keyframes lib-stack-pop {
-    from { opacity: 0; transform: scale(0.6); }
-    to { opacity: 1; transform: scale(1); }
-  }
-  @keyframes lib-ghost-in {
-    from { opacity: 0; transform: scale(0.7) rotate(-8deg); }
-    to { opacity: 0.95; transform: scale(1.05) rotate(0deg); }
-  }
-  @keyframes lib-ghost-ring {
-    from { transform: scale(1); opacity: 0.8; }
-    to { transform: scale(1.45); opacity: 0; }
-  }
-  @keyframes lib-side-icon-in {
-    from { opacity: 0; transform: scale(0.7) rotate(-12deg); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-fade-up {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: none; }
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   .drag-mode .prism-grid-pane {
-    background: radial-gradient(ellipse at center, rgba(27, 217, 106, 0.04), transparent 70%);
+    background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent-primary) 3%, transparent), transparent 70%);
   }
 
   :global(.potato-pc) .lib-motion::before,
   :global(.potato-pc) .lib-toolbar-enter,
   :global(.potato-pc) .lib-side-enter,
-  :global(.potato-pc) .inst-group,
-  :global(.potato-pc) .inst-tile.jiggle,
-  :global(.potato-pc) .inst-tile.selected .inst-icon,
-  :global(.potato-pc) .inst-tile.running .inst-icon,
-  :global(.potato-pc) .drag-ghost,
-  :global(.potato-pc) .ghost-ring,
-  :global(.potato-pc) .side-icon,
-  :global(.potato-pc) .side-title,
-  :global(.potato-pc) .side-meta,
-  :global(.potato-pc) .side-actions .side-btn,
-  :global(.potato-pc) .prism-status {
+  :global(.potato-pc) .hold-ring {
     animation: none !important;
   }
-  :global(.potato-pc) .inst-tile:hover,
-  :global(.potato-pc) .inst-tile:hover .inst-icon,
-  :global(.potato-pc) .side-btn:hover:not(:disabled) {
+  :global(.potato-pc) .inst-tile:hover .inst-icon {
     transform: none !important;
+    filter: none !important;
+  }
+  :global(.potato-pc) .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+    opacity: 1;
   }
 
   @media (prefers-reduced-motion: reduce) {
     .lib-motion::before,
     .lib-toolbar-enter,
     .lib-side-enter,
-    .inst-group,
-    .inst-tile.jiggle,
-    .inst-tile.selected .inst-icon,
-    .inst-tile.running .inst-icon,
-    .inst-tile.celebrate,
-    .inst-tile.drop-target,
-    .group-header.drop-target,
-    .drag-ghost,
-    .ghost-ring,
-    .side-icon,
-    .side-title,
-    .side-meta,
-    .side-actions .side-btn,
-    .prism-status,
     .hold-ring {
       animation: none !important;
     }
-    .inst-tile:hover,
-    .inst-tile:hover .inst-icon,
-    .side-btn:hover:not(:disabled) {
+    .inst-tile:hover .inst-icon {
       transform: none !important;
+      filter: none !important;
+    }
+    .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+      opacity: 1;
     }
   }
 </style>

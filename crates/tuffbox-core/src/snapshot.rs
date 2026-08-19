@@ -81,6 +81,11 @@ pub struct Snapshot {
     pub actions_summary: Vec<String>,
     #[serde(default)]
     pub actor: Option<String>,
+    /// Total on-disk size (bytes) of the snapshot directory, including the
+    /// copied manifest, lockfile and `changed_files`. 0 when unknown for
+    /// snapshots written by older versions.
+    #[serde(default)]
+    pub size_bytes: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -187,6 +192,7 @@ impl SnapshotStore {
             operation: meta.operation,
             actions_summary: meta.actions_summary,
             actor: meta.actor,
+            size_bytes: dir_size_bytes(&snapshot_dir),
         };
 
         let meta_path = snapshot_dir.join("snapshot.json");
@@ -294,6 +300,97 @@ impl SnapshotStore {
         })
     }
 
+    /// Diff the stored contents of `id` against the current on-disk project
+    /// state. Each of the snapshot's tracked relative files is compared
+    /// against `project_dir/<relative>` by content; missing-on-disk -> added
+    /// semantics is expressed through the calling layer, here the result
+    /// reports whether the current file differs (or is now gone -> treated
+    /// as a mismatch).
+    pub fn diff_current(&self, id: impl AsRef<str>) -> Result<SnapshotDiff, SnapshotError> {
+        let snapshot = self
+            .get(&id)?
+            .ok_or_else(|| SnapshotError::SnapshotNotFound {
+                id: id.as_ref().to_string(),
+            })?;
+
+        let stored_dir = self.snapshots_dir.join(&snapshot.id).join("changed_files");
+        let mut removed_files = Vec::new();
+        let mut modified_files = Vec::new();
+
+        // Files the snapshot stored but that now differ (or are missing) on disk.
+        for relative in &snapshot.changed_files {
+            let stored = stored_dir.join(relative);
+            let current = self.project_dir.join(relative);
+            if !current.is_file() {
+                // Tracked in snapshot but gone from the live project -> the
+                // "current" side is effectively removed.
+                removed_files.push(relative.clone());
+                continue;
+            }
+            if files_differ(&stored, &current).map_err(SnapshotError::ReadMetadata)? {
+                modified_files.push(relative.clone());
+            }
+        }
+
+        // Files that appeared since the checkpoint cannot be discovered
+        // reliably without knowing the snapshot's tracked roots, so the
+        // "added" set is intentionally empty; manifest-level additions are
+        // reported separately through the manifest comparison.
+        Ok(SnapshotDiff {
+            added_files: Vec::new(),
+            removed_files,
+            modified_files,
+        })
+    }
+
+    /// Backfill `size_bytes` for snapshots written before the field existed,
+    /// persisting the updated metadata. Returns the number of snapshots whose
+    /// metadata was rewritten.
+    pub fn ensure_sizes(&self) -> Result<usize, SnapshotError> {
+        let mut updated = 0;
+        for mut snapshot in self.list()? {
+            if snapshot.size_bytes == 0 {
+                snapshot.size_bytes = dir_size_bytes(&self.snapshots_dir.join(&snapshot.id));
+                self.update_meta(&snapshot)?;
+                updated += 1;
+            }
+        }
+        Ok(updated)
+    }
+
+    /// Delete `auto`-kind snapshots (created by the launcher / AI / scan) that
+    /// are older than `older_than_days`, leaving user/`manual` and
+    /// `crash_fix` snapshots untouched. Returns the ids that were removed and
+    /// the total freed bytes.
+    pub fn prune_auto_snapshots(
+        &self,
+        older_than_days: u64,
+    ) -> Result<(Vec<String>, u64), SnapshotError> {
+        use std::time::{Duration, SystemTime};
+        let cutoff = SystemTime::now() - Duration::from_secs(older_than_days * 86_400);
+        let mut removed = Vec::new();
+        let mut freed = 0u64;
+        for snapshot in self.list()? {
+            let is_auto = snapshot.name.starts_with("auto-")
+                || matches!(snapshot.actor.as_deref(), Some("launcher" | "ai" | "scan"));
+            let is_crash = snapshot.tags.iter().any(|t| t == "crash_fix")
+                || snapshot.name.contains("crash");
+            let is_manual = snapshot.actor.as_deref() == Some("user") || snapshot.operation == "manual";
+            if !is_auto || is_crash || is_manual {
+                continue;
+            }
+            let created = crate::time_util::parse_rfc3339_unix_secs(&snapshot.created_at)
+                .unwrap_or(u64::MAX);
+            let created_time = SystemTime::UNIX_EPOCH + Duration::from_secs(created);
+            if created_time < cutoff {
+                freed += snapshot.size_bytes;
+                self.delete(&snapshot.id)?;
+                removed.push(snapshot.id.clone());
+            }
+        }
+        Ok((removed, freed))
+    }
+
     pub fn rollback(&self, id: impl AsRef<str>) -> Result<Snapshot, SnapshotError> {
         let snapshot = self
             .get(&id)?
@@ -361,6 +458,28 @@ fn copy_file(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<(), Snapsho
         source,
     })?;
     Ok(())
+}
+
+/// Sum of the `len()` of every file under `dir`, recursing into
+/// subdirectories. Missing/unreadable entries are skipped; the walker never
+/// fails for a store-level helper.
+fn dir_size_bytes(dir: &Path) -> u64 {
+    fn walk(dir: &Path, acc: &mut u64) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, acc);
+            } else if let Ok(meta) = entry.metadata() {
+                *acc += meta.len();
+            }
+        }
+    }
+    let mut total = 0;
+    walk(dir, &mut total);
+    total
 }
 
 fn slugify(name: &str) -> String {

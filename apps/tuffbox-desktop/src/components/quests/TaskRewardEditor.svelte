@@ -1,44 +1,31 @@
 <script lang="ts">
-  import { Trash2, Package } from "lucide-svelte";
+  import { Trash2 } from "@lucide/svelte";
   import type { QuestData, QuestReward, QuestTask } from "../../lib/api";
-  import ItemPicker from "./ItemPicker.svelte";
-  import QuestItemIcon from "./QuestItemIcon.svelte";
+  import {
+    REWARD_TYPE_OPTIONS,
+    TASK_TYPE_OPTIONS,
+    TASK_TYPES,
+    REWARD_TYPES,
+    OBSERVATION_TYPE_OPTIONS,
+    ITEM_COMPLETE_OPTIONS,
+    rewardTypeLabel,
+    taskTypeLabel,
+  } from "../../lib/questTypeLabels";
+  import type { ItemValue } from "../../lib/itemStack";
+  import { isItemObject, readCount, stackDisplayId } from "../../lib/itemStack";
+  import ItemStackEditor from "./ItemStackEditor.svelte";
 
-  export let quest: QuestData;
-  export let onDirty: () => void;
-  export let rewardTableIds: string[] = [];
-
-  const TASK_TYPES = [
-    "item",
-    "checkmark",
-    "kill",
-    "dimension",
-    "biome",
-    "xp",
-    "advancement",
-    "stat",
-    "stage",
-    "fluid",
-    "location",
-    "observation",
-    "structure",
-    "custom",
-  ];
-
-  const REWARD_TYPES = [
-    "item",
-    "xp",
-    "xp_levels",
-    "command",
-    "random",
-    "choice",
-    "stage",
-    "toast",
-    "custom",
-  ];
-
-  let pickerOpen = false;
-  let pickerTarget: { kind: "task" | "reward" | "icon"; index: number } | null = null;
+  let {
+    quest,
+    onDirty,
+    rewardTableIds = [],
+    onOpenKubeJs,
+  }: {
+    quest: QuestData;
+    onDirty: () => void;
+    rewardTableIds?: string[];
+    onOpenKubeJs?: (id: string) => void;
+  } = $props();
 
   function newId(len = 12) {
     return crypto.randomUUID().replace(/-/g, "").slice(0, len);
@@ -49,30 +36,6 @@
     return obj.properties;
   }
 
-  function getItemId(props: Record<string, unknown> | undefined): string {
-    const v = props?.item;
-    if (typeof v === "string") return v;
-    if (!v || typeof v !== "object") return "";
-    const obj = v as Record<string, unknown>;
-    if (typeof obj.id === "string" && !String(obj.id).startsWith("itemfilters:")) {
-      return String(obj.id);
-    }
-    // itemfilters:or / and — show first nested concrete item
-    const tag = obj.tag as { items?: unknown[] } | undefined;
-    const items = tag?.items ?? (obj.items as unknown[] | undefined);
-    if (Array.isArray(items)) {
-      for (const it of items) {
-        if (typeof it === "string" && it.includes(":")) return it;
-        if (it && typeof it === "object" && "id" in (it as object)) {
-          const id = String((it as { id: unknown }).id ?? "");
-          if (id && !id.startsWith("itemfilters:")) return id;
-        }
-      }
-    }
-    if (typeof obj.id === "string") return obj.id;
-    return "";
-  }
-
   function setProp(obj: { properties?: Record<string, unknown> }, key: string, value: unknown) {
     const p = ensureProps(obj);
     if (value === "" || value == null) delete p[key];
@@ -81,15 +44,221 @@
     onDirty();
   }
 
+  /** FTB stores item count as a sibling `count` field, not ItemStack.Count. */
+  function setItemValue(
+    obj: { properties?: Record<string, unknown> },
+    next: ItemValue | null,
+  ) {
+    const p = ensureProps(obj);
+    if (next == null || next === "") {
+      delete p.item;
+    } else if (typeof next === "string") {
+      p.item = next;
+    } else if (isItemObject(next)) {
+      const cleaned = { ...next };
+      const embedded = cleaned.Count ?? cleaned.count;
+      if (typeof embedded === "number" && Number.isFinite(embedded) && embedded > 0) {
+        if (p.count == null) p.count = embedded;
+      }
+      delete cleaned.Count;
+      delete cleaned.count;
+      p.item = cleaned;
+    } else {
+      p.item = next;
+    }
+    obj.properties = { ...p };
+    onDirty();
+  }
+
+  function itemValueOf(props: Record<string, unknown> | undefined): ItemValue | null {
+    const v = props?.item;
+    if (typeof v === "string") return v;
+    if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+    return null;
+  }
+
+  function itemCountOf(props: Record<string, unknown> | undefined): number {
+    const c = props?.count;
+    if (typeof c === "number" && Number.isFinite(c) && c > 0) return c;
+    if (typeof c === "string" && c !== "" && !Number.isNaN(Number(c))) {
+      const n = Number(c);
+      if (n > 0) return n;
+    }
+    const item = itemValueOf(props);
+    if (item) return readCount(item, 1);
+    return 1;
+  }
+
+  function setItemCount(obj: { properties?: Record<string, unknown> }, n: number) {
+    const count = Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
+    const p = ensureProps(obj);
+    p.count = count;
+    const item = p.item;
+    if (isItemObject(item)) {
+      const cleaned = { ...item };
+      delete cleaned.Count;
+      delete cleaned.count;
+      p.item = cleaned;
+    }
+    obj.properties = { ...p };
+    onDirty();
+  }
+
+  type ItemCompleteMode = "inventory" | "consume" | "craft" | "task_screen";
+
+  function itemCompleteMode(props: Record<string, unknown> | undefined): ItemCompleteMode {
+    if (props?.task_screen_only === true || props?.task_screen_only === "true") {
+      return "task_screen";
+    }
+    const craft = props?.only_from_crafting;
+    if (craft === true || craft === "TRUE" || craft === "true") return "craft";
+    const consume = props?.consume_items;
+    if (consume === true || consume === "TRUE" || consume === "true") return "consume";
+    return "inventory";
+  }
+
+  function setItemCompleteMode(
+    task: QuestTask,
+    mode: ItemCompleteMode,
+  ) {
+    const p = ensureProps(task);
+    delete p.consume_items;
+    delete p.only_from_crafting;
+    delete p.task_screen_only;
+    if (mode === "consume") p.consume_items = true;
+    else if (mode === "craft") p.only_from_crafting = true;
+    else if (mode === "task_screen") p.task_screen_only = true;
+    task.properties = { ...p };
+    onDirty();
+  }
+
+  /** User-facing choice: obtain item vs target a block (observation). */
+  type GoalKind = "item" | "block";
+
+  function goalKind(task: QuestTask): GoalKind {
+    return task.type === "observation" ? "block" : "item";
+  }
+
+  function setGoalKind(task: QuestTask, kind: GoalKind) {
+    if (kind === "block" && task.type !== "observation") {
+      const fromItem =
+        stackDisplayId(itemValueOf(task.properties)) ??
+        String(task.properties?.to_observe ?? "minecraft:stone");
+      task.type = "observation";
+      task.properties = {
+        timer: 0,
+        observation_type: "block",
+        to_observe: fromItem.replace(/^#/, "") || "minecraft:stone",
+      };
+      onDirty();
+      return;
+    }
+    if (kind === "item" && task.type === "observation") {
+      const block = String(task.properties?.to_observe ?? "minecraft:stone");
+      task.type = "item";
+      task.properties = {
+        item: block.startsWith("#") ? "minecraft:stone" : block,
+        count: 1,
+      };
+      onDirty();
+    }
+  }
+
+  function defaultsForTask(type: string): Partial<QuestTask> {
+    switch (type) {
+      case "item":
+        return { properties: { count: 1 } };
+      case "kill":
+        return { properties: { entity: "minecraft:zombie", value: 1 } };
+      case "dimension":
+        return { properties: { dimension: "minecraft:overworld" } };
+      case "biome":
+        return { properties: { biome: "minecraft:plains" } };
+      case "advancement":
+        return { properties: { advancement: "minecraft:story/root" } };
+      case "stat":
+        return { properties: { stat: "minecraft:walk_one_cm", value: 100 } };
+      case "fluid":
+        return { properties: { fluid: "minecraft:water", amount: 1000 } };
+      case "location":
+        return {
+          properties: {
+            dimension: "minecraft:overworld",
+            ignore_dimension: false,
+            x: 0,
+            y: 64,
+            z: 0,
+            w: 1,
+            h: 1,
+            d: 1,
+          },
+        };
+      case "structure":
+        return { properties: { structure: "minecraft:village" } };
+      case "gamestage":
+      case "stage":
+        return { properties: { stage: "" } };
+      case "observation":
+        return {
+          properties: {
+            timer: 0,
+            observation_type: "block",
+            to_observe: "minecraft:stone",
+          },
+        };
+      case "xp":
+        return { value: 1, properties: { points: false } };
+      case "forge_energy":
+      case "techreborn_energy":
+      case "energy":
+        return { value: 1000 };
+      case "custom":
+        return { properties: { max_progress: 1, enable_button: false } };
+      default:
+        return { properties: {} };
+    }
+  }
+
+  function defaultsForReward(type: string): Record<string, unknown> {
+    switch (type) {
+      case "item":
+        return { item: "minecraft:diamond", count: 1 };
+      case "xp":
+        return { xp: 10 };
+      case "xp_levels":
+        return { xp_levels: 1 };
+      case "command":
+        return { command: "say hello", permission_level: 0, silent: false };
+      case "random":
+      case "choice":
+        return { table: rewardTableIds[0] ?? "" };
+      case "loot":
+        return { loot_crate: "" };
+      case "all_table":
+      case "all_tables":
+        return {};
+      case "gamestage":
+      case "stage":
+        return { stage: "" };
+      case "toast":
+        return { description: "" };
+      case "advancement":
+        return { advancement: "minecraft:story/root", criterion: "" };
+      case "currency":
+        return { currency: "", amount: 1 };
+      default:
+        return {};
+    }
+  }
+
   function addTask(type = "item") {
+    const defaults = defaultsForTask(type);
     const t: QuestTask = {
       id: newId(),
       type,
-      properties: type === "item" ? { item: "minecraft:stone", count: 1 } : {},
+      properties: defaults.properties ?? {},
+      ...(defaults.value != null ? { value: defaults.value } : {}),
     };
-    if (type === "kill") t.properties = { entity: "minecraft:zombie", value: 1 };
-    if (type === "dimension") t.properties = { dimension: "minecraft:overworld" };
-    if (type === "xp") t.value = 1;
     quest.tasks = [...quest.tasks, t];
     onDirty();
   }
@@ -99,22 +268,20 @@
     onDirty();
   }
 
+  function changeTaskType(task: QuestTask, type: string) {
+    const defaults = defaultsForTask(type);
+    task.type = type;
+    task.properties = { ...(defaults.properties ?? {}) };
+    if (defaults.value != null) task.value = defaults.value;
+    else delete task.value;
+    onDirty();
+  }
+
   function addReward(type = "item") {
     const r: QuestReward = {
       id: newId(),
       type,
-      properties:
-        type === "item"
-          ? { item: "minecraft:diamond", count: 1 }
-          : type === "xp"
-            ? { xp: 10 }
-            : type === "xp_levels"
-              ? { xp_levels: 1 }
-              : type === "command"
-                ? { command: "say hello" }
-                : type === "random"
-                  ? { table: rewardTableIds[0] ?? "" }
-                  : {},
+      properties: defaultsForReward(type),
     };
     quest.rewards = [...quest.rewards, r];
     onDirty();
@@ -125,24 +292,10 @@
     onDirty();
   }
 
-  function openPicker(kind: "task" | "reward" | "icon", index: number) {
-    pickerTarget = { kind, index };
-    pickerOpen = true;
-  }
-
-  function onPickItem(itemId: string) {
-    if (!pickerTarget) return;
-    if (pickerTarget.kind === "icon") {
-      quest.icon = itemId;
-      onDirty();
-    } else if (pickerTarget.kind === "task") {
-      const t = quest.tasks[pickerTarget.index];
-      if (t) setProp(t, "item", itemId);
-    } else {
-      const r = quest.rewards[pickerTarget.index];
-      if (r) setProp(r, "item", itemId);
-    }
-    pickerTarget = null;
+  function changeRewardType(reward: QuestReward, type: string) {
+    reward.type = type;
+    reward.properties = defaultsForReward(type);
+    onDirty();
   }
 
   function numProp(props: Record<string, unknown> | undefined, key: string, fallback = 1): number {
@@ -152,7 +305,11 @@
     return fallback;
   }
 
-  // Svelte 4 markup can't parse TS `as` — keep casts in script helpers
+  function boolProp(props: Record<string, unknown> | undefined, key: string): boolean {
+    const v = props?.[key];
+    return v === true || v === "true" || v === "TRUE";
+  }
+
   function inputVal(e: Event): string {
     return (e.currentTarget as HTMLInputElement).value;
   }
@@ -184,16 +341,36 @@
       el.value = "";
     }
   }
+
+  function isItemishTask(type: string) {
+    return type === "item" || type === "observation";
+  }
+
+  function isEnergyTask(type: string) {
+    return type === "forge_energy" || type === "techreborn_energy" || type === "energy";
+  }
+
+  function isStageTask(type: string) {
+    return type === "gamestage" || type === "stage";
+  }
+
+  function isStageReward(type: string) {
+    return type === "gamestage" || type === "stage";
+  }
+
+  function isAllTablesReward(type: string) {
+    return type === "all_table" || type === "all_tables";
+  }
 </script>
 
-<section class="tr ftbq-tr">
+<section class="tr ftbq-tr" id="quest-how-to-prove">
   <div class="tr-h">
-    <h4>Tasks</h4>
+    <h4>How to prove</h4>
     <div class="add-row">
-      <select on:change={onPickTaskType}>
-        <option value="">+ Task type…</option>
-        {#each TASK_TYPES as t}
-          <option value={t}>{t}</option>
+      <select onchange={onPickTaskType}>
+        <option value="">+ Task…</option>
+        {#each TASK_TYPE_OPTIONS as t (t.id)}
+          <option value={t.id}>{t.label}</option>
         {/each}
       </select>
     </div>
@@ -204,46 +381,124 @@
       <div class="card-h">
         <select
           value={task.type}
-          on:change={(e) => {
-            task.type = selectVal(e);
-            onDirty();
-          }}
+          onchange={(e) => changeTaskType(task, selectVal(e))}
         >
-          {#each TASK_TYPES as t}
-            <option value={t}>{t}</option>
+          {#each TASK_TYPE_OPTIONS as t (t.id)}
+            <option value={t.id}>{t.label}</option>
           {/each}
+          {#if !TASK_TYPES.includes(task.type)}
+            <option value={task.type}>{taskTypeLabel(task.type)}</option>
+          {/if}
         </select>
-        <button type="button" class="ico danger" on:click={() => removeTask(i)}><Trash2 size={12} /></button>
+        <button type="button" class="ico danger" aria-label="Remove task" title="Remove task" onclick={() => removeTask(i)}
+          ><Trash2 size={12} /></button
+        >
       </div>
 
-      {#if task.type === "item"}
+      {#if isItemishTask(task.type)}
         <label
-          >Item
-          <div class="item-row">
-            <input
-              value={getItemId(task.properties)}
-              on:input={(e) => setProp(task, "item", inputVal(e))}
-              placeholder="modid:item"
-            />
-            <button type="button" class="pick" on:click={() => openPicker("task", i)}
-              ><Package size={12} /></button
-            >
-          </div>
+          >Complete by
+          <select
+            value={goalKind(task)}
+            onchange={(e) => setGoalKind(task, selectVal(e) as GoalKind)}
+          >
+            <option value="item">Obtain item in inventory</option>
+            <option value="block">Observe / target a block</option>
+          </select>
         </label>
+      {/if}
+
+      {#if task.type === "item"}
+        <ItemStackEditor
+          value={itemValueOf(task.properties)}
+          allowFilters={true}
+          emphasizeEmpty={true}
+          emptyCta="Choose item"
+          onChange={(v) => setItemValue(task, v)}
+        />
         <label
           >Count<input
             type="number"
             min="1"
-            value={numProp(task.properties, "count", 1)}
-            on:input={(e) => setProp(task, "count", inputNum(e) || 1)}
+            value={itemCountOf(task.properties)}
+            oninput={(e) => setItemCount(task, inputNum(e) || 1)}
           /></label
+        >
+        <label
+          >Completion mode
+          <select
+            value={itemCompleteMode(task.properties)}
+            onchange={(e) => setItemCompleteMode(task, selectVal(e) as ItemCompleteMode)}
+          >
+            {#each ITEM_COMPLETE_OPTIONS as opt (opt.id)}
+              <option value={opt.id}>{opt.label}</option>
+            {/each}
+          </select>
+        </label>
+        <details class="raw">
+          <summary>Advanced</summary>
+          <p class="hint">
+            Tip: “mine N blocks” in FTB Quests is usually an Item task with Count = N (drops enter
+            inventory). Native break-block tracking needs an addon (e.g. QNaturals).
+          </p>
+          <label
+            >Match components
+            <select
+              value={String(task.properties?.match_components ?? "none")}
+              onchange={(e) => {
+                const v = selectVal(e);
+                setProp(task, "match_components", v === "none" ? null : v);
+              }}
+            >
+              <option value="none">None / default</option>
+              <option value="fuzzy">Fuzzy</option>
+              <option value="strict">Strict</option>
+            </select>
+          </label>
+        </details>
+      {:else if task.type === "observation"}
+        <label
+          >Observation type
+          <select
+            value={String(task.properties?.observation_type ?? "block")}
+            onchange={(e) => setProp(task, "observation_type", selectVal(e))}
+          >
+            {#each OBSERVATION_TYPE_OPTIONS as opt (opt.id)}
+              <option value={opt.id}>{opt.label}</option>
+            {/each}
+          </select>
+        </label>
+        <label
+          >Target (to_observe)<input
+            value={String(task.properties?.to_observe ?? "")}
+            oninput={(e) => setProp(task, "to_observe", inputVal(e))}
+            placeholder="minecraft:stone or #minecraft:logs"
+          /></label
+        >
+        <label
+          >Timer (ticks)<input
+            type="number"
+            min="0"
+            value={numProp(task.properties, "timer", 0)}
+            oninput={(e) => setProp(task, "timer", inputNum(e) || 0)}
+          /></label
+        >
+        <label
+          >Title<input bind:value={task.title} oninput={onDirty} placeholder="Look at…" /></label
         >
       {:else if task.type === "kill"}
         <label
           >Entity<input
             value={String(task.properties?.entity ?? "")}
-            on:input={(e) => setProp(task, "entity", inputVal(e))}
+            oninput={(e) => setProp(task, "entity", inputVal(e))}
             placeholder="minecraft:zombie"
+          /></label
+        >
+        <label
+          >Entity type tag<input
+            value={String(task.properties?.entityTypeTag ?? "")}
+            oninput={(e) => setProp(task, "entityTypeTag", inputVal(e))}
+            placeholder="minecraft:zombies (optional)"
           /></label
         >
         <label
@@ -251,14 +506,28 @@
             type="number"
             min="1"
             value={numProp(task.properties, "value", 1)}
-            on:input={(e) => setProp(task, "value", inputNum(e) || 1)}
+            oninput={(e) => setProp(task, "value", inputNum(e) || 1)}
+          /></label
+        >
+        <label
+          >Custom name<input
+            value={String(task.properties?.custom_name ?? "")}
+            oninput={(e) => setProp(task, "custom_name", inputVal(e))}
+            placeholder="Optional name tag / player name"
+          /></label
+        >
+        <label
+          >NBT filter<input
+            value={String(task.properties?.nbt_filter ?? "")}
+            oninput={(e) => setProp(task, "nbt_filter", inputVal(e))}
+            placeholder={'{CustomName:"…"}'}
           /></label
         >
       {:else if task.type === "dimension"}
         <label
           >Dimension<input
             value={String(task.properties?.dimension ?? "")}
-            on:input={(e) => setProp(task, "dimension", inputVal(e))}
+            oninput={(e) => setProp(task, "dimension", inputVal(e))}
             placeholder="minecraft:the_nether"
           /></label
         >
@@ -266,36 +535,47 @@
         <label
           >Biome<input
             value={String(task.properties?.biome ?? "")}
-            on:input={(e) => setProp(task, "biome", inputVal(e))}
+            oninput={(e) => setProp(task, "biome", inputVal(e))}
             placeholder="minecraft:plains"
           /></label
         >
       {:else if task.type === "xp"}
         <label
-          >XP<input
+          >Amount<input
             type="number"
             min="1"
-            value={typeof task.value === "number" ? task.value : Number(task.value) || 1}
-            on:input={(e) => {
-              task.value = inputNum(e) || 1;
-              onDirty();
+            value={typeof task.value === "number"
+              ? task.value
+              : numProp(task.properties, "value", Number(task.value) || 1)}
+            oninput={(e) => {
+              const n = inputNum(e) || 1;
+              task.value = n;
+              setProp(task, "value", n);
             }}
           /></label
         >
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={boolProp(task.properties, "points")}
+            onchange={(e) => setProp(task, "points", inputChecked(e))}
+          />
+          Consume XP points (not levels)
+        </label>
       {:else if task.type === "checkmark"}
-        <p class="hint">Manual checkmark — no extra fields.</p>
-      {:else if task.type === "stage"}
+        <p class="hint">Manual checkmark — player clicks to complete. No extra fields.</p>
+      {:else if isStageTask(task.type)}
         <label
           >Stage<input
             value={String(task.properties?.stage ?? "")}
-            on:input={(e) => setProp(task, "stage", inputVal(e))}
+            oninput={(e) => setProp(task, "stage", inputVal(e))}
           /></label
         >
       {:else if task.type === "advancement"}
         <label
           >Advancement<input
             value={String(task.properties?.advancement ?? "")}
-            on:input={(e) => setProp(task, "advancement", inputVal(e))}
+            oninput={(e) => setProp(task, "advancement", inputVal(e))}
             placeholder="minecraft:story/mine_stone"
           /></label
         >
@@ -303,118 +583,169 @@
         <label
           >Stat<input
             value={String(task.properties?.stat ?? "")}
-            on:input={(e) => setProp(task, "stat", inputVal(e))}
+            oninput={(e) => setProp(task, "stat", inputVal(e))}
             placeholder="minecraft:walk_one_cm"
           /></label
         >
         <label
           >Value<input
             type="number"
+            min="1"
             value={numProp(task.properties, "value", 1)}
-            on:input={(e) => setProp(task, "value", inputNum(e) || 1)}
+            oninput={(e) => setProp(task, "value", inputNum(e) || 1)}
           /></label
         >
       {:else if task.type === "fluid"}
         <label
           >Fluid<input
             value={String(task.properties?.fluid ?? task.properties?.fluid_name ?? "")}
-            on:input={(e) => setProp(task, "fluid", inputVal(e))}
+            oninput={(e) => setProp(task, "fluid", inputVal(e))}
             placeholder="minecraft:water"
           /></label
         >
         <label
           >Amount (mB)<input
             type="number"
+            min="1"
             value={numProp(task.properties, "amount", 1000)}
-            on:input={(e) => setProp(task, "amount", inputNum(e) || 1)}
+            oninput={(e) => setProp(task, "amount", inputNum(e) || 1)}
           /></label
         >
       {:else if task.type === "location"}
         <label
           >Dimension<input
             value={String(task.properties?.dimension ?? "")}
-            on:input={(e) => setProp(task, "dimension", inputVal(e))}
+            oninput={(e) => setProp(task, "dimension", inputVal(e))}
             placeholder="minecraft:overworld"
           /></label
         >
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={boolProp(task.properties, "ignore_dimension")}
+            onchange={(e) => setProp(task, "ignore_dimension", inputChecked(e))}
+          />
+          Ignore dimension
+        </label>
         <label
-          >Position / radius
+          >Position (x y z)
           <div class="item-row">
             <input
               type="number"
               title="x"
               value={numProp(task.properties, "x", 0)}
-              on:input={(e) => setProp(task, "x", inputNum(e))}
+              oninput={(e) => setProp(task, "x", inputNum(e))}
             />
             <input
               type="number"
               title="y"
               value={numProp(task.properties, "y", 0)}
-              on:input={(e) => setProp(task, "y", inputNum(e))}
+              oninput={(e) => setProp(task, "y", inputNum(e))}
             />
             <input
               type="number"
               title="z"
               value={numProp(task.properties, "z", 0)}
-              on:input={(e) => setProp(task, "z", inputNum(e))}
+              oninput={(e) => setProp(task, "z", inputNum(e))}
             />
           </div>
         </label>
-      {:else if task.type === "observation"}
         <label
-          >Observe timer (ticks)<input
-            type="number"
-            value={numProp(task.properties, "timer", 0)}
-            on:input={(e) => setProp(task, "timer", inputNum(e) || 0)}
-          /></label
-        >
-        <label
-          >Title<input
-            bind:value={task.title}
-            on:input={onDirty}
-            placeholder="Look at…"
-          /></label
-        >
+          >Size (w h d)
+          <div class="item-row">
+            <input
+              type="number"
+              min="1"
+              title="w"
+              value={numProp(task.properties, "w", 1)}
+              oninput={(e) => setProp(task, "w", inputNum(e) || 1)}
+            />
+            <input
+              type="number"
+              min="1"
+              title="h"
+              value={numProp(task.properties, "h", 1)}
+              oninput={(e) => setProp(task, "h", inputNum(e) || 1)}
+            />
+            <input
+              type="number"
+              min="1"
+              title="d"
+              value={numProp(task.properties, "d", 1)}
+              oninput={(e) => setProp(task, "d", inputNum(e) || 1)}
+            />
+          </div>
+        </label>
       {:else if task.type === "structure"}
         <label
           >Structure<input
             value={String(task.properties?.structure ?? "")}
-            on:input={(e) => setProp(task, "structure", inputVal(e))}
+            oninput={(e) => setProp(task, "structure", inputVal(e))}
             placeholder="minecraft:village"
           /></label
         >
+      {:else if isEnergyTask(task.type)}
+        <label
+          >Energy amount<input
+            type="number"
+            min="1"
+            value={typeof task.value === "number"
+              ? task.value
+              : numProp(task.properties, "value", Number(task.value) || 1000)}
+            oninput={(e) => {
+              const n = inputNum(e) || 1;
+              task.value = n;
+              setProp(task, "value", n);
+            }}
+          /></label
+        >
+        <p class="hint">Submitted via Task Screen (FE/RF or Tech Reborn energy).</p>
       {:else if task.type === "custom"}
         <label
-          >Title<input bind:value={task.title} on:input={onDirty} placeholder="Custom task" /></label
+          >Title<input bind:value={task.title} oninput={onDirty} placeholder="Custom task" /></label
         >
+        <label
+          >Max progress<input
+            type="number"
+            min="1"
+            value={numProp(task.properties, "max_progress", 1)}
+            oninput={(e) => setProp(task, "max_progress", inputNum(e) || 1)}
+          /></label
+        >
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={boolProp(task.properties, "enable_button")}
+            onchange={(e) => setProp(task, "enable_button", inputChecked(e))}
+          />
+          Enable button
+        </label>
+        {#if onOpenKubeJs}
+          <div class="kjs-row">
+            <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(task.id)}
+              >Open KubeJS</button
+            >
+          </div>
+          <p class="hint">Custom task stub — implement FTBQuestsEvents.customTask in Book → KubeJS.</p>
+        {:else}
+          <p class="hint">Wire logic in Book → KubeJS (FTBQuestsEvents.customTask).</p>
+        {/if}
       {:else}
         <label
           >Title<input
             bind:value={task.title}
-            on:input={onDirty}
+            oninput={onDirty}
             placeholder="Optional title"
           /></label
         >
       {/if}
 
-      {#if task.type === "item"}
-        <label class="checkbox">
-          <input
-            type="checkbox"
-            checked={!!task.properties?.consume_items}
-            on:change={(e) =>
-              setProp(task, "consume_items", inputChecked(e))}
-          />
-          Consume items
-        </label>
-      {/if}
-
       <details class="raw">
-        <summary>Raw properties</summary>
+        <summary>Advanced · raw properties</summary>
         <textarea
           rows="3"
           value={JSON.stringify(task.properties ?? {}, null, 0)}
-          on:change={(e) => {
+          onchange={(e) => {
             try {
               task.properties = JSON.parse(textareaVal(e));
               onDirty();
@@ -428,12 +759,12 @@
   {/each}
 
   <div class="tr-h">
-    <h4>Rewards</h4>
+    <h4>What you get</h4>
     <div class="add-row">
-      <select on:change={onPickRewardType}>
+      <select onchange={onPickRewardType}>
         <option value="">+ Reward type…</option>
-        {#each REWARD_TYPES as t}
-          <option value={t}>{t}</option>
+        {#each REWARD_TYPE_OPTIONS as t (t.id)}
+          <option value={t.id}>{t.label}</option>
         {/each}
       </select>
     </div>
@@ -444,49 +775,57 @@
       <div class="card-h">
         <select
           value={reward.type}
-          on:change={(e) => {
-            reward.type = selectVal(e);
-            onDirty();
-          }}
+          onchange={(e) => changeRewardType(reward, selectVal(e))}
         >
-          {#each REWARD_TYPES as t}
-            <option value={t}>{t}</option>
+          {#each REWARD_TYPE_OPTIONS as t (t.id)}
+            <option value={t.id}>{t.label}</option>
           {/each}
+          {#if !REWARD_TYPES.includes(reward.type)}
+            <option value={reward.type}>{rewardTypeLabel(reward.type)}</option>
+          {/if}
         </select>
-        <button type="button" class="ico danger" on:click={() => removeReward(i)}
+        <button type="button" class="ico danger" aria-label="Remove reward" title="Remove reward" onclick={() => removeReward(i)}
           ><Trash2 size={12} /></button
         >
       </div>
 
       {#if reward.type === "item"}
-        <label
-          >Item
-          <div class="item-row">
-            <input
-              value={getItemId(reward.properties)}
-              on:input={(e) => setProp(reward, "item", inputVal(e))}
-              placeholder="modid:item"
-            />
-            <button type="button" class="pick" on:click={() => openPicker("reward", i)}
-              ><Package size={12} /></button
-            >
-          </div>
-        </label>
+        <ItemStackEditor
+          value={itemValueOf(reward.properties)}
+          allowFilters={true}
+          onChange={(v) => setItemValue(reward, v)}
+        />
         <label
           >Count<input
             type="number"
             min="1"
-            value={numProp(reward.properties, "count", 1)}
-            on:input={(e) => setProp(reward, "count", inputNum(e) || 1)}
+            value={itemCountOf(reward.properties)}
+            oninput={(e) => setItemCount(reward, inputNum(e) || 1)}
           /></label
         >
+        <label
+          >Random bonus<input
+            type="number"
+            min="0"
+            value={numProp(reward.properties, "random_bonus", 0)}
+            oninput={(e) => setProp(reward, "random_bonus", inputNum(e) || 0)}
+          /></label
+        >
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={boolProp(reward.properties, "only_one")}
+            onchange={(e) => setProp(reward, "only_one", inputChecked(e))}
+          />
+          Only one (skip if already owned)
+        </label>
       {:else if reward.type === "xp"}
         <label
           >XP<input
             type="number"
             min="1"
             value={numProp(reward.properties, "xp", 10)}
-            on:input={(e) => setProp(reward, "xp", inputNum(e) || 1)}
+            oninput={(e) => setProp(reward, "xp", inputNum(e) || 1)}
           /></label
         >
       {:else if reward.type === "xp_levels"}
@@ -495,69 +834,141 @@
             type="number"
             min="1"
             value={numProp(reward.properties, "xp_levels", 1)}
-            on:input={(e) =>
-              setProp(reward, "xp_levels", inputNum(e) || 1)}
+            oninput={(e) => setProp(reward, "xp_levels", inputNum(e) || 1)}
           /></label
         >
       {:else if reward.type === "command"}
         <label
           >Command<input
             value={String(reward.properties?.command ?? "")}
-            on:input={(e) => setProp(reward, "command", inputVal(e))}
+            oninput={(e) => setProp(reward, "command", inputVal(e))}
             placeholder="/say hi"
           /></label
         >
-      {:else if reward.type === "random"}
+        <label
+          >Permission level<input
+            type="number"
+            min="0"
+            max="4"
+            value={numProp(reward.properties, "permission_level", 0)}
+            oninput={(e) => setProp(reward, "permission_level", inputNum(e) || 0)}
+          /></label
+        >
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={boolProp(reward.properties, "silent")}
+            onchange={(e) => setProp(reward, "silent", inputChecked(e))}
+          />
+          Silent
+        </label>
+        <label
+          >Feedback message<input
+            value={String(reward.properties?.feedback_message ?? "")}
+            oninput={(e) => setProp(reward, "feedback_message", inputVal(e))}
+          /></label
+        >
+      {:else if reward.type === "random" || reward.type === "choice"}
         <label
           >Reward table
           <select
             value={String(reward.properties?.table ?? "")}
-            on:change={(e) => setProp(reward, "table", selectVal(e))}
+            onchange={(e) => setProp(reward, "table", selectVal(e))}
           >
             <option value="">Select table…</option>
-            {#each rewardTableIds as tid}
+            {#each rewardTableIds as tid (tid)}
               <option value={tid}>{tid}</option>
             {/each}
           </select>
         </label>
-      {:else if reward.type === "stage"}
+      {:else if reward.type === "loot"}
+        <label
+          >Loot crate id<input
+            value={String(
+              reward.properties?.loot_crate ?? reward.properties?.table ?? "",
+            )}
+            oninput={(e) => setProp(reward, "loot_crate", inputVal(e))}
+            placeholder="crate_id"
+          /></label
+        >
+      {:else if isAllTablesReward(reward.type)}
+        <p class="hint">Grants a roll from every reward table in the book.</p>
+      {:else if isStageReward(reward.type)}
         <label
           >Stage<input
             value={String(reward.properties?.stage ?? "")}
-            on:input={(e) => setProp(reward, "stage", inputVal(e))}
+            oninput={(e) => setProp(reward, "stage", inputVal(e))}
           /></label
         >
-      {:else if reward.type === "choice"}
-        <label
-          >Table / choices
-          <select
-            value={String(reward.properties?.table ?? "")}
-            on:change={(e) => setProp(reward, "table", selectVal(e))}
-          >
-            <option value="">Select table…</option>
-            {#each rewardTableIds as tid}
-              <option value={tid}>{tid}</option>
-            {/each}
-          </select>
-        </label>
       {:else if reward.type === "toast"}
         <label
           >Description<input
             value={String(reward.properties?.description ?? reward.title ?? "")}
-            on:input={(e) => setProp(reward, "description", inputVal(e))}
+            oninput={(e) => setProp(reward, "description", inputVal(e))}
           /></label
         >
+      {:else if reward.type === "advancement"}
+        <label
+          >Advancement<input
+            value={String(reward.properties?.advancement ?? "")}
+            oninput={(e) => setProp(reward, "advancement", inputVal(e))}
+            placeholder="minecraft:story/root"
+          /></label
+        >
+        <label
+          >Criterion<input
+            value={String(reward.properties?.criterion ?? "")}
+            oninput={(e) => setProp(reward, "criterion", inputVal(e))}
+            placeholder="Optional criterion id"
+          /></label
+        >
+      {:else if reward.type === "currency"}
+        <label
+          >Currency id<input
+            value={String(reward.properties?.currency ?? "")}
+            oninput={(e) => setProp(reward, "currency", inputVal(e))}
+          /></label
+        >
+        <label
+          >Amount<input
+            type="number"
+            min="1"
+            value={numProp(reward.properties, "amount", 1)}
+            oninput={(e) => setProp(reward, "amount", inputNum(e) || 1)}
+          /></label
+        >
+      {:else if reward.type === "custom"}
+        <label
+          >Title<input bind:value={reward.title} oninput={onDirty} placeholder="Custom reward" /></label
+        >
+        <label
+          >Description<input
+            value={String(reward.properties?.description ?? "")}
+            oninput={(e) => setProp(reward, "description", inputVal(e))}
+            placeholder="Optional note for stub"
+          /></label
+        >
+        {#if onOpenKubeJs}
+          <div class="kjs-row">
+            <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(reward.id)}
+              >Open KubeJS</button
+            >
+          </div>
+          <p class="hint">Custom reward stub — implement FTBQuestsEvents.customReward in Book → KubeJS.</p>
+        {:else}
+          <p class="hint">Wire logic in Book → KubeJS (FTBQuestsEvents.customReward).</p>
+        {/if}
       {:else}
         <label
-          >Title<input bind:value={reward.title} on:input={onDirty} placeholder="Optional" /></label
+          >Title<input bind:value={reward.title} oninput={onDirty} placeholder="Optional" /></label
         >
       {/if}
       <details class="raw">
-        <summary>Raw properties</summary>
+        <summary>Advanced · raw properties</summary>
         <textarea
           rows="3"
           value={JSON.stringify(reward.properties ?? {}, null, 0)}
-          on:change={(e) => {
+          onchange={(e) => {
             try {
               reward.properties = JSON.parse(textareaVal(e));
               onDirty();
@@ -569,29 +980,7 @@
       </details>
     </div>
   {/each}
-
-  <div class="icon-row">
-    <label
-      >Quest icon
-      <div class="item-row">
-        <QuestItemIcon itemId={quest.icon} fallback="?" size={28} />
-        <input bind:value={quest.icon} on:input={onDirty} placeholder="modid:item" />
-        <button type="button" class="pick" on:click={() => openPicker("icon", 0)}
-          ><Package size={12} /></button
-        >
-      </div>
-    </label>
-  </div>
 </section>
-
-<ItemPicker
-  open={pickerOpen}
-  onPick={onPickItem}
-  onClose={() => {
-    pickerOpen = false;
-    pickerTarget = null;
-  }}
-/>
 
 <style>
   .tr {
@@ -604,67 +993,111 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 8px 12px 6px;
-    background: rgba(0, 0, 0, 0.15);
-    border-top: 1px solid var(--ftbq-border, #3a3a42);
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    padding: 10px 12px 8px;
+    background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
+    border-top: 1px solid var(--ftbq-frame);
+    border-bottom: 1px solid var(--ftbq-frame);
   }
   .tr-h h4 {
     margin: 0;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
     color: var(--ftbq-accent-teal, #3db8a8);
-    font-weight: 700;
+    font-weight: 600;
   }
-  .tr-h:first-child h4 {
-    color: var(--ftbq-accent-teal, #3db8a8);
+  .add-row {
+    display: flex;
+    gap: 6px;
   }
   .add-row select {
-    font-size: 10px;
-    max-width: 130px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    font-size: 11px;
+    padding: 6px 10px;
+    min-width: 140px;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
+  .add-row select:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
+  }
+  .add-row select:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+
   .card {
     display: grid;
-    gap: 6px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.1);
+    gap: 8px;
+    padding: 12px;
+    border-bottom: 1px solid var(--ftbq-border);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    margin: 0;
+    transition: background 0.12s ease;
+  }
+  .card:hover {
+    background: color-mix(in srgb, var(--ftbq-bg-panel) 95%, var(--bg-hover, #1a1a1a) 5%);
   }
   .card-h {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .card-h select {
     flex: 1;
     font-size: 12px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    padding: 8px 10px;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
+  .card-h select:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
+  }
+  .card-h select:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+
   .card label {
     display: grid;
-    gap: 3px;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
+    gap: 4px;
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--ftbq-text-muted, #9a9aa0);
   }
-  .card input,
+
+  .card input[type="text"],
+  .card input[type="number"],
   .card select {
     font-size: 12px;
     text-transform: none;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    padding: 7px 10px;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
+    border-radius: 6px;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
+  .card input[type="text"]:hover,
+  .card input[type="number"]:hover,
+  .card select:hover {
+    border-color: color-mix(in srgb, var(--ftbq-text-muted) 50%, var(--ftbq-frame));
+  }
+  .card input[type="text"]:focus,
+  .card input[type="number"]:focus,
+  .card select:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+
   .item-row {
     display: flex;
     gap: 4px;
@@ -673,75 +1106,127 @@
   .item-row input {
     flex: 1;
     min-width: 0;
+    padding: 7px 8px;
   }
-  .pick,
+
   .ico {
-    width: 26px;
-    height: 26px;
+    width: 34px;
+    height: 34px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    border: 1px solid var(--ftbq-frame);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;
     flex-shrink: 0;
+    transition: all 0.12s ease;
   }
-  .pick:hover {
-    color: var(--ftbq-text, #e8e8e8);
-    border-color: var(--ftbq-accent-teal, #3db8a8);
+  .ico.danger:hover,
+  .ico:hover {
+    border-color: color-mix(in srgb, var(--accent-danger) 45%, var(--ftbq-frame));
+    background: color-mix(in srgb, var(--accent-danger) 10%, transparent);
+    color: var(--accent-danger);
   }
-  .ico.danger:hover {
-    color: #f87171;
-    background: rgba(239, 68, 68, 0.1);
+  .ico:active {
+    transform: scale(0.95);
   }
+  .ico:focus-visible {
+    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline-offset: 1px;
+  }
+
   .hint {
     margin: 0;
+    padding: 8px 10px;
     font-size: 11px;
     color: var(--ftbq-text-muted, #9a9aa0);
     text-transform: none;
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 4px;
+    border-left: 2px solid var(--ftbq-accent-teal, #3db8a8);
   }
-  .icon-row {
-    margin: 0;
-    padding: 8px 12px 12px;
-    border-top: 1px solid var(--ftbq-border, #3a3a42);
-  }
-  .icon-row label {
-    display: grid;
-    gap: 3px;
-    font-size: 10px;
-    text-transform: uppercase;
-    color: var(--ftbq-text-muted, #9a9aa0);
-  }
-  .icon-row input {
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
-  }
+
   .raw {
     margin-top: 4px;
     font-size: 10px;
     color: var(--ftbq-text-muted, #9a9aa0);
     text-transform: none;
   }
+  .raw summary {
+    cursor: pointer;
+    padding: 4px 0;
+    list-style: none;
+  }
+  .raw summary::-webkit-details-marker {
+    display: none;
+  }
+  .raw summary::before {
+    content: "▸ ";
+  }
+  .raw[open] summary::before {
+    content: "▾ ";
+  }
   .raw textarea {
     width: 100%;
     font-family: ui-monospace, monospace;
     font-size: 10px;
     text-transform: none;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg);
+    border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
+    border-radius: 4px;
+    padding: 8px;
   }
+  .raw textarea:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+
   .checkbox {
     display: flex !important;
     flex-direction: row !important;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     text-transform: none;
     color: var(--ftbq-text, #e8e8e8);
+    padding: 4px 0;
+  }
+  .checkbox input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--ftbq-accent-teal, #3db8a8);
+    cursor: pointer;
+  }
+
+  .kjs-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding-top: 4px;
+  }
+  .kjs-btn {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--ftbq-accent-teal, #3db8a8);
+    background: rgba(61, 184, 168, 0.12);
+    color: var(--ftbq-accent-teal, #3db8a8);
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+  .kjs-btn:hover {
+    background: rgba(61, 184, 168, 0.22);
+    border-color: var(--ftbq-accent-teal, #3db8a8);
+  }
+  .kjs-btn:active {
+    transform: scale(0.98);
+  }
+  .kjs-btn:focus-visible {
+    outline: 2px solid var(--ftbq-accent-teal, #3db8a8);
+    outline-offset: 1px;
   }
 </style>

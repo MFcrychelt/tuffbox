@@ -24,12 +24,61 @@
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-minecraft: "Press Start 2P", "Minecraft", ui-monospace, monospace;
+  --font-base: 14px;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
 
-  /* Interface scale (Settings → Appearance). Chromium `zoom` on .app-shell. */
+  /* Text on primary accent surfaces (Launch / CTA). */
+  --on-accent: #000;
+
+  /* Minecraft-style nick labels (skin panel, account lists). */
+  --mc-nick-color: #fff;
+  --mc-nick-shadow:
+    2px 2px 0 #3f3f3f,
+    -1px 0 0 #000,
+    1px 0 0 #000,
+    0 -1px 0 #000,
+    0 1px 0 #000;
+  --mc-nick-shadow-soft: 1px 1px 0 #3f3f3f;
+
+  /* Account / type badges — readable on dark chrome by default. */
+  --badge-ms-fg: #93c5fd;
+  --badge-ms-bg: rgba(59, 130, 246, 0.15);
+  --badge-ms-border: rgba(59, 130, 246, 0.35);
+  --badge-offline-fg: #fde68a;
+  --badge-offline-bg: rgba(245, 158, 11, 0.12);
+  --badge-offline-border: rgba(245, 158, 11, 0.3);
+  --badge-ygg-fg: #e9d5ff;
+  --badge-ygg-bg: rgba(168, 85, 247, 0.15);
+  --badge-ygg-border: rgba(168, 85, 247, 0.35);
+
+  /* Interface scale (Settings → Appearance). Applied as CSS zoom on <html>
+     so fixed overlays, pointer hit-tests, and layout share one coordinate space.
+     (Zoom only on .app-shell used to offset Library menus / folder drag.) */
   --ui-scale: 1;
+
+  /* Poster-home: glass only over pack art; overlay type stays light on the photo. */
+  --glass-bg: rgba(11, 11, 13, 0.42);
+  --glass-border: color-mix(in srgb, #fff 14%, var(--border-color));
+  --glass-blur: 14px;
+  --glass-saturate: 140%;
+  --glass-highlight: color-mix(in srgb, #fff 14%, transparent);
+  --hero-fg: #fafafa;
+  --hero-fg-muted: color-mix(in srgb, #fafafa 72%, transparent);
+  --hero-scrim:
+    linear-gradient(90deg, rgba(11, 11, 13, 0.72) 0%, transparent 55%),
+    linear-gradient(0deg, rgba(11, 11, 13, 0.68) 0%, transparent 52%);
+  --play-glow: 0 8px 28px color-mix(in srgb, var(--accent-primary) 38%, transparent);
+  --play-glow-hover: 0 12px 36px color-mix(in srgb, var(--accent-primary) 52%, transparent);
+}
+
+/* Fill the viewport after html zoom shrinks/enlarges CSS pixels. */
+html[data-ui-scaled="1"],
+html[data-ui-scaled="1"] body,
+html[data-ui-scaled="1"] #app {
+  width: calc(100vw / var(--ui-scale, 1));
+  height: calc(100vh / var(--ui-scale, 1));
 }
 
 @font-face {
@@ -40,62 +89,125 @@
   font-display: swap;
 }
 
-/* Light theme */
-[data-theme="light"] {
-  --bg-primary: #f8f9fa;
+/* Light theme — warm green-gray canvas (intentional light UI, not inverted dark). */
+[data-theme="light"],
+[data-theme="tuffbox-light"] {
+  --bg-primary: #f3f5f1;
   --bg-secondary: #ffffff;
-  --bg-tertiary: #f1f3f5;
-  --bg-elevated: #e9ecef;
-  --bg-hover: #dee2e6;
-  --bg-active: #ced4da;
+  --bg-tertiary: #e9eee8;
+  --bg-elevated: #e2e8df;
+  --bg-hover: #d5ddd1;
+  --bg-active: #c5d0bf;
 
-  --text-primary: #212529;
-  --text-secondary: #495057;
-  --text-muted: #868e96;
+  --text-primary: #152019;
+  --text-secondary: #3a4a40;
+  --text-muted: #5f7166;
 
-  --accent-primary: #0ca84c;
-  --accent-hover: #09913f;
-  --accent-secondary: #6d3cd6;
+  --accent-primary: #0a9a44;
+  --accent-hover: #088038;
+  --accent-secondary: #5c33c4;
+  --accent-danger: #dc2626;
+  --accent-warning: #c2410c;
 
-  --border-color: #dee2e6;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.10);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
+  --border-color: #cfd8cf;
+  --shadow-sm: 0 1px 2px rgba(21, 40, 28, 0.06);
+  --shadow-md: 0 4px 14px rgba(21, 40, 28, 0.09);
+  --shadow-lg: 0 14px 36px rgba(21, 40, 28, 0.12);
+
+  --on-accent: #ffffff;
+
+  /* Soft MC nick on light panels / studio backdrop — no harsh black outline. */
+  --mc-nick-color: #152019;
+  --mc-nick-shadow:
+    0 1px 0 color-mix(in srgb, #fff 75%, transparent),
+    1px 1px 0 color-mix(in srgb, #152019 16%, transparent);
+  --mc-nick-shadow-soft:
+    0 1px 0 color-mix(in srgb, #fff 70%, transparent),
+    1px 1px 0 color-mix(in srgb, #152019 12%, transparent);
+
+  --badge-ms-fg: #1d4ed8;
+  --badge-ms-bg: rgba(37, 99, 235, 0.1);
+  --badge-ms-border: rgba(37, 99, 235, 0.28);
+  --badge-offline-fg: #b45309;
+  --badge-offline-bg: rgba(217, 119, 6, 0.12);
+  --badge-offline-border: rgba(180, 83, 9, 0.28);
+  --badge-ygg-fg: #6d28d9;
+  --badge-ygg-bg: rgba(109, 40, 217, 0.1);
+  --badge-ygg-border: rgba(109, 40, 217, 0.28);
+
+  --glass-bg: rgba(11, 11, 13, 0.65);
+  --glass-highlight: color-mix(in srgb, #fff 40%, var(--bg-primary));
+  --glass-border: color-mix(in srgb, #fff 24%, var(--border-color));
+  --glass-blur: 14px;
+  --glass-saturate: 140%;
+  --hero-fg: #ffffff;
+  --hero-fg-muted: color-mix(in srgb, #ffffff 78%, transparent);
+  --hero-scrim:
+    linear-gradient(90deg, rgba(11, 11, 13, 0.72) 0%, rgba(11, 11, 13, 0.38) 55%, rgba(11, 11, 13, 0.28) 75%, transparent 100%),
+    linear-gradient(0deg, rgba(11, 11, 13, 0.72) 0%, rgba(11, 11, 13, 0.42) 52%, rgba(11, 11, 13, 0.24) 78%, transparent 100%);
+  --play-glow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  --play-glow-hover: 0 12px 32px color-mix(in srgb, var(--accent-primary) 32%, transparent);
 }
 
-[data-theme="light"] button {
-  color: #fff;
+[data-theme="win95"] {
+  --on-accent: #fff;
+  --mc-nick-color: #000;
+  --mc-nick-shadow: 1px 1px 0 #fff, 2px 2px 0 #808080;
+  --mc-nick-shadow-soft: 1px 1px 0 #fff;
+  --badge-ms-fg: #000080;
+  --badge-ms-bg: #fff;
+  --badge-ms-border: #000;
+  --badge-offline-fg: #000;
+  --badge-offline-bg: #ffff80;
+  --badge-offline-border: #808000;
+  --badge-ygg-fg: #000080;
+  --badge-ygg-bg: #c0c0ff;
+  --badge-ygg-border: #000080;
+}
+
+[data-theme="light"] button,
+[data-theme="tuffbox-light"] button {
+  color: var(--on-accent);
 }
 
 [data-theme="light"] button.secondary,
-[data-theme="light"] button.ghost {
+[data-theme="light"] button.ghost,
+[data-theme="tuffbox-light"] button.secondary,
+[data-theme="tuffbox-light"] button.ghost {
   color: var(--text-secondary);
 }
 
 [data-theme="light"] button.secondary:hover,
-[data-theme="light"] button.ghost:hover {
+[data-theme="light"] button.ghost:hover,
+[data-theme="tuffbox-light"] button.secondary:hover,
+[data-theme="tuffbox-light"] button.ghost:hover {
   color: var(--text-primary);
 }
 
 [data-theme="light"] pre,
-[data-theme="light"] textarea {
-  background: #f1f3f5;
-  color: #212529;
+[data-theme="light"] textarea,
+[data-theme="tuffbox-light"] pre,
+[data-theme="tuffbox-light"] textarea {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
-[data-theme="light"] .sidebar {
-  background: #ffffff;
-  border-color: #dee2e6;
+[data-theme="light"] .sidebar,
+[data-theme="tuffbox-light"] .sidebar {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
 }
 
-[data-theme="light"] .header {
-  background: rgba(255, 255, 255, 0.85);
-  border-color: #dee2e6;
+[data-theme="light"] .header,
+[data-theme="tuffbox-light"] .header {
+  background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  border-color: var(--border-color);
 }
 
-[data-theme="light"] code {
+[data-theme="light"] code,
+[data-theme="tuffbox-light"] code {
   color: var(--accent-primary);
-  background: #e9ecef;
+  background: var(--bg-elevated);
 }
 
 
@@ -110,6 +222,8 @@ body,
 #app {
   height: 100%;
   width: 100%;
+  /* One scroll owner: panes inside .app-shell — never the document. */
+  overflow: hidden;
 }
 
 body {
@@ -117,7 +231,7 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
-  font-size: 14px;
+  font-size: var(--font-base, 14px);
   line-height: 1.5;
 }
 
@@ -128,7 +242,7 @@ button {
   border-radius: var(--border-radius-md);
   padding: 10px 18px;
   background: var(--accent-primary);
-  color: #000;
+  color: var(--on-accent, #000);
   font-weight: 700;
   font-size: 14px;
   transition: all 0.15s ease;
@@ -234,6 +348,14 @@ textarea:focus-visible,
 /* ── Reduced motion ───────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
+  html {
+    --glass-blur: 0;
+    --glass-saturate: 100%;
+    --stagger-step: 0;
+    --play-glow: 0 4px 16px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    --play-glow-hover: 0 4px 16px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  }
+
   *,
   *::before,
   *::after {
@@ -254,7 +376,8 @@ h4 {
 
 /* Text fields only — radio/checkbox/range break if padded like text inputs */
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]),
-select {
+select,
+textarea {
   font-family: inherit;
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
@@ -266,8 +389,14 @@ select {
 }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--accent-primary);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-hover) var(--bg-elevated, rgba(255, 255, 255, 0.04));
 }
 
 ::-webkit-scrollbar {
@@ -276,7 +405,7 @@ select:focus {
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
 }
 
 ::-webkit-scrollbar-thumb {
@@ -308,7 +437,31 @@ select:focus {
   overflow: hidden;
 }
 
+/* Frosted glass surface — panels and cards over textured/ambient shell. */
+.glass-panel {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow:
+    var(--shadow-md),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+/* Text selection follows active theme accent (not fixed TuffBox green). */
+::selection {
+  background: color-mix(in srgb, var(--accent-primary) 38%, transparent);
+  color: var(--text-primary);
+}
+
 /* Potato PC mode — strip motion cost on weak machines. */
+html.potato-pc {
+  --glass-blur: 0;
+  --glass-saturate: 100%;
+  --play-glow: none;
+  --play-glow-hover: none;
+}
+
 html.potato-pc *,
 html.potato-pc *::before,
 html.potato-pc *::after {
@@ -317,15 +470,112 @@ html.potato-pc *::after {
   scroll-behavior: auto !important;
 }
 
-/* Subtle press feedback on interactive controls */
+/* Keep indeterminate loaders spinning even in potato-pc / reduced-motion.
+   !important: many Svelte components redefine :global(.spin) with scoped
+   @keyframes names that never match, which freezes the icon. */
+@keyframes tb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: tb-spin 900ms linear infinite !important;
+}
+
+html.potato-pc .spin,
+html.potato-pc .spin * {
+  animation: tb-spin 900ms linear infinite !important;
+}
+
+/* Subtle press feedback on interactive controls (calm: delayed hover, instant press). */
 button {
   transition: transform var(--motion-fast, 160ms) var(--ease-spring, ease),
-    background 160ms ease, border-color 160ms ease, color 160ms ease;
+    background var(--motion-fast, 160ms) ease,
+    border-color var(--motion-fast, 160ms) ease,
+    color var(--motion-fast, 160ms) ease,
+    box-shadow var(--motion-med, 240ms) var(--ease-out, ease),
+    filter var(--motion-fast, 160ms) ease;
+  transition-delay: 0ms;
+}
+button:hover:not(:disabled) {
+  transition-delay: var(--motion-hover-delay, 70ms);
 }
 button:active:not(:disabled) {
   transform: scale(0.97);
+  transition-delay: 0ms;
 }
 html.potato-pc button:active:not(:disabled) {
   transform: none;
+}
+
+/* ── Search fields with overlaid glyph ─────────────────────────────
+   Absolute icon + input without extra left padding = placeholder
+   colliding with the magnifying glass (common project bug). */
+.search-glyph {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  pointer-events: none;
+  z-index: 1;
+  flex-shrink: 0;
+  line-height: 0;
+}
+.search:has(> .search-glyph),
+.search-field:has(> .search-glyph),
+.toolbar-search:has(> .search-glyph) {
+  position: relative;
+}
+.search:has(> .search-glyph) > input,
+.search-field:has(> .search-glyph) > input,
+.toolbar-search:has(> .search-glyph) > input {
+  /* Beat local `padding:` shorthands that wipe padding-left */
+  padding-left: 40px !important;
+}
+.search.mini:has(> .search-glyph) > .search-glyph {
+  left: 8px;
+}
+.search.mini:has(> .search-glyph) > input {
+  padding-left: 30px !important;
+}
+
+/* Prefer in-flow icon (no overlay). Use on new search UIs. */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  box-sizing: border-box;
+}
+.search-box > input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 10px 0;
+  outline: none;
+  font: inherit;
+}
+.search-box > input::placeholder {
+  color: var(--text-muted);
+}
+.search-box.mini {
+  padding: 0 8px;
+  gap: 6px;
+}
+.search-box.mini > input {
+  padding: 6px 0;
+  font-size: 12px;
 }
 

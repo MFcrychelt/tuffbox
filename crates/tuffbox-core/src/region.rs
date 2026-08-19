@@ -177,6 +177,8 @@ pub fn read_world_map_cached(
     let mut max_rx = i32::MIN;
     let mut max_rz = i32::MIN;
     let mut total_present = 0usize;
+    let mut mca_on_disk = 0usize;
+    let mut parse_errors: Vec<String> = Vec::new();
 
     let entries = std::fs::read_dir(&region_dir).map_err(|e| e.to_string())?;
     let mut names: Vec<PathBuf> = Vec::new();
@@ -202,15 +204,18 @@ pub fn read_world_map_cached(
             Ok(v) => v,
             Err(_) => continue,
         };
-        let info = if let Some(ref cdir) = cache_dir {
-            match read_region_cached(&path, rx, rz, cdir) {
-                Ok(info) => info,
-                Err(_) => continue,
-            }
-        } else {
-            match read_region(&path, rx, rz) {
-                Ok(info) => info,
-                Err(_) => continue,
+        mca_on_disk += 1;
+        let info = match load_region_info(&path, rx, rz, cache_dir.as_deref()) {
+            Ok(info) => info,
+            Err(e) => {
+                if parse_errors.len() < 3 {
+                    let label = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("region");
+                    parse_errors.push(format!("{label}: {e}"));
+                }
+                continue;
             }
         };
         total_present += info.present;
@@ -222,7 +227,17 @@ pub fn read_world_map_cached(
     }
 
     if regions.is_empty() {
-        return Err("no region files found".into());
+        if mca_on_disk == 0 {
+            return Err("no region files found".into());
+        }
+        let detail = if parse_errors.is_empty() {
+            "unknown parse errors".to_string()
+        } else {
+            parse_errors.join("; ")
+        };
+        return Err(format!(
+            "no region files found ({mca_on_disk} .mca on disk, 0 parsed: {detail})"
+        ));
     }
 
     regions.sort_by(|a, b| (a.region_z, a.region_x).cmp(&(b.region_z, b.region_x)));
@@ -338,6 +353,25 @@ fn mca_fingerprint(path: &Path) -> Result<(u64, u64), String> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     Ok((modified, meta.len()))
+}
+
+/// Load region metadata; on cache-path failure retry raw MCA so a bad cache
+/// fingerprint cannot hide a readable region file.
+fn load_region_info(
+    path: &Path,
+    region_x: i32,
+    region_z: i32,
+    cache_dir: Option<&Path>,
+) -> Result<RegionInfo, String> {
+    if let Some(cdir) = cache_dir {
+        match read_region_cached(path, region_x, region_z, cdir) {
+            Ok(info) => return Ok(info),
+            Err(_) => {
+                // Fall through: fingerprint / IO on cache path must not blank the map.
+            }
+        }
+    }
+    read_region(path, region_x, region_z)
 }
 
 fn read_region_cached(
@@ -2115,5 +2149,28 @@ mod tests {
                 assert_eq!((ox, oz), (cx, cz));
             }
         }
+    }
+
+    #[test]
+    fn empty_map_error_reports_mca_count_when_parse_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let world = dir.path().join("world");
+        let region = world.join("region");
+        std::fs::create_dir_all(&region).expect("mkdir");
+        std::fs::write(region.join("r.0.0.mca"), b"too small").expect("write mca");
+        let err = read_world_map_cached(&world, Some("overworld"), false).unwrap_err();
+        assert!(
+            err.contains("1 .mca on disk") && err.contains("0 parsed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_region_folder_keeps_simple_message() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let world = dir.path().join("world");
+        std::fs::create_dir_all(world.join("region")).expect("mkdir");
+        let err = read_world_map_cached(&world, Some("overworld"), false).unwrap_err();
+        assert_eq!(err, "no region files found");
     }
 }

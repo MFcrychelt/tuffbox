@@ -1,35 +1,41 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy } from "svelte";
+  import { onDestroy } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Loader2, Copy, Check, LogIn, X, User, Monitor, Globe, Shield } from "lucide-svelte";
+  import { Loader2, Copy, Check, LogIn, X, User, Monitor, Globe, Shield, ExternalLink, Link2, ChevronRight } from "@lucide/svelte";
   import { api } from "../lib/api";
   import { authState, skinPath, loginTypeLabel, type SkinSource, type YggdrasilPreset } from "../lib/store";
   import { toasts } from "../lib/toast";
 
-  const dispatch = createEventDispatcher();
+  let { onclose }: { onclose?: () => void } = $props();
 
-  let mode: "select" | "microsoft-code" | "microsoft-polling" | "microsoft-url" | "offline-form" | "yggdrasil-form" = "select";
-  let deviceCode: { userCode: string; verificationUri: string } | null = null;
-  let polling = false;
-  let errorMsg = "";
-  let copied = false;
+  let mode = $state<"select" | "microsoft-webview" | "microsoft-code" | "microsoft-polling" | "microsoft-url" | "offline-form" | "yggdrasil-form">("select");
+  let deviceCode = $state<{
+    userCode: string;
+    verificationUri: string;
+    loginUrl: string;
+    interval?: number;
+  } | null>(null);
+  let polling = $state(false);
+  let errorMsg = $state("");
+  let copied = $state(false);
+  let copiedLink = $state(false);
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
-  let authUrlPaste = "";
-  let msAuthorizeUrl = "";
+  let authUrlPaste = $state("");
+  let msAuthorizeUrl = $state("");
 
   // Offline form
-  let offlineUsername = "";
-  let skinSource: SkinSource = "mojang";
-  let loggingIn = false;
+  let offlineUsername = $state("");
+  let skinSource = $state<SkinSource>("mojang");
+  let loggingIn = $state(false);
 
   // Yggdrasil form
-  let yggPresets: YggdrasilPreset[] = [];
-  let yggPresetId = "elyby";
-  let yggAuthority = "";
-  let yggUsername = "";
-  let yggPassword = "";
+  let yggPresets = $state<YggdrasilPreset[]>([]);
+  let yggPresetId = $state("elyby");
+  let yggAuthority = $state("");
+  let yggUsername = $state("");
+  let yggPassword = $state("");
 
-  $: existingAccounts = $authState.accounts ?? [];
+  const existingAccounts = $derived($authState.accounts ?? []);
 
   async function switchExisting(uuid: string) {
     loggingIn = true;
@@ -45,7 +51,7 @@
         }
       }
       toasts.success(`Switched to ${state.profile?.name ?? "account"}`);
-      setTimeout(() => dispatch("close"), 400);
+      setTimeout(() => onclose?.(), 400);
     } catch (e) {
       errorMsg = String(e);
     } finally {
@@ -54,17 +60,73 @@
   }
 
   async function startMicrosoftLogin() {
+    clearPollTimer();
+    polling = false;
+    mode = "microsoft-webview";
+    errorMsg = "";
+    loggingIn = true;
+    try {
+      const result = await api.mcAuth.startMicrosoftWebviewAuth();
+      const state = await api.mcAuth.getAuthStatus();
+      authState.set(state);
+      if (result.profile.uuid) {
+        try {
+          skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
+        } catch {
+          skinPath.set(null);
+        }
+      }
+      toasts.success(`Logged in as ${result.profile.name}`);
+      mode = "select";
+      setTimeout(() => onclose?.(), 600);
+    } catch (e) {
+      const msg = String(e);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        errorMsg = msg;
+      } else {
+        errorMsg = "";
+      }
+      mode = "select";
+    } finally {
+      loggingIn = false;
+    }
+  }
+
+  async function startDeviceCodeLogin() {
     mode = "microsoft-code";
     errorMsg = "";
     try {
       const info = await api.mcAuth.startDeviceCode();
-      deviceCode = info;
+      deviceCode = {
+        userCode: info.userCode,
+        verificationUri: info.verificationUri,
+        loginUrl: info.loginUrl || `${info.verificationUri}?otc=${encodeURIComponent(info.userCode)}`,
+        interval: info.interval,
+      };
       mode = "microsoft-polling";
       startPolling();
-      try { await open(info.verificationUri); } catch {}
+      try {
+        await open(deviceCode.loginUrl);
+      } catch {
+        try {
+          await open(deviceCode.verificationUri);
+        } catch {
+          /* ignore */
+        }
+      }
     } catch (e) {
       errorMsg = String(e);
       mode = "select";
+    }
+  }
+
+  async function reopenLoginLink() {
+    const url = deviceCode?.loginUrl || deviceCode?.verificationUri;
+    if (!url) return;
+    try {
+      await open(url);
+    } catch {
+      /* ignore */
     }
   }
 
@@ -116,7 +178,7 @@
       toasts.success(`Logged in as ${result.profile.name}`);
       mode = "select";
       authUrlPaste = "";
-      setTimeout(() => dispatch("close"), 600);
+      setTimeout(() => onclose?.(), 600);
     } catch (e) {
       errorMsg = String(e);
     } finally {
@@ -124,8 +186,8 @@
     }
   }
 
-  let pollInFlight = false;
-  let pollIntervalMs = 3500;
+  let pollInFlight = $state(false);
+  let pollIntervalMs = $state(3500);
 
   function scheduleNextPoll() {
     if (pollTimer) clearTimeout(pollTimer);
@@ -151,7 +213,7 @@
         }
         toasts.success(`Logged in as ${result.profile.name}`);
         mode = "select";
-        setTimeout(() => dispatch("close"), 800);
+        setTimeout(() => onclose?.(), 800);
       } catch (e) {
         const msg = String(e);
         if (msg.includes("slow_down")) {
@@ -211,7 +273,7 @@
       }
       toasts.success(`Playing as ${result.profile.name}`);
       mode = "select";
-      setTimeout(() => dispatch("close"), 600);
+      setTimeout(() => onclose?.(), 600);
     } catch (e) {
       errorMsg = String(e);
     } finally {
@@ -271,7 +333,7 @@
       toasts.success(`Logged in as ${result.profile.name}`);
       mode = "select";
       yggPassword = "";
-      setTimeout(() => dispatch("close"), 600);
+      setTimeout(() => onclose?.(), 600);
     } catch (e) {
       errorMsg = String(e);
     } finally {
@@ -286,6 +348,17 @@
     setTimeout(() => (copied = false), 2000);
   }
 
+  async function copyLoginLink() {
+    if (!deviceCode?.loginUrl) return;
+    try {
+      await navigator.clipboard.writeText(deviceCode.loginUrl);
+      copiedLink = true;
+      setTimeout(() => (copiedLink = false), 2000);
+    } catch {
+      /* ignore */
+    }
+  }
+
   function clearPollTimer() {
     if (pollTimer) {
       clearTimeout(pollTimer);
@@ -296,7 +369,7 @@
   function close() {
     clearPollTimer();
     polling = false;
-    dispatch("close");
+    onclose?.();
   }
 
   onDestroy(() => {
@@ -304,9 +377,14 @@
   });
 </script>
 
-<!-- svelte-ignore a11y-click-events-have-key-events -->
-<!-- svelte-ignore a11y-no-static-element-interactions -->
-<div class="overlay" on:click|self={close}>
+<div
+  class="overlay"
+  role="button"
+  tabindex="-1"
+  aria-label="Close sign-in dialog"
+  onclick={(e) => e.target === e.currentTarget && close()}
+  onkeydown={(e) => e.key === "Enter" && close()}
+>
   <div class="modal">
     <div class="modal-header">
       <div class="modal-title">
@@ -314,12 +392,13 @@
         <h3>
           {#if mode === "offline-form"}Offline Login
           {:else if mode === "yggdrasil-form"}Yggdrasil Login
-          {:else if mode === "microsoft-polling"}Microsoft Login
+          {:else if mode === "microsoft-webview"}Microsoft Login
+          {:else if mode === "microsoft-polling"}Microsoft — link
           {:else if mode === "microsoft-url"}Microsoft Login (URL)
           {:else}Sign In{/if}
         </h3>
       </div>
-      <button class="close-btn" on:click={close} aria-label="Close">
+      <button class="close-btn" onclick={close} aria-label="Close">
         <X size={18} />
       </button>
     </div>
@@ -334,7 +413,7 @@
                 class="account-row"
                 class:active={account.uuid === $authState.activeAccountUuid}
                 disabled={loggingIn}
-                on:click={() => switchExisting(account.uuid)}
+                onclick={() => switchExisting(account.uuid)}
               >
                 <div class="account-ico" class:ms={account.loginType === "microsoft"} class:ygg={account.loginType === "yggdrasil"}>
                   {#if account.loginType === "microsoft"}
@@ -366,29 +445,29 @@
         {/if}
 
         <div class="login-options">
-          <button class="login-option" on:click={startMicrosoftLogin}>
+          <button class="login-option" onclick={startDeviceCodeLogin} disabled={loggingIn}>
+            <div class="option-icon ms">
+              <Link2 size={20} />
+            </div>
+            <div class="option-info">
+              <span class="option-title">Microsoft — open link</span>
+              <span class="option-desc">Opens microsoft.com with your code — no Azure app needed</span>
+            </div>
+            <ExternalLink size={16} class="option-arrow" />
+          </button>
+
+          <button class="login-option" onclick={startMicrosoftLogin} disabled={loggingIn}>
             <div class="option-icon ms">
               <Globe size={20} />
             </div>
             <div class="option-info">
-              <span class="option-title">Microsoft / Mojang</span>
-              <span class="option-desc">Device code — online play, skins, Realms, capes</span>
+              <span class="option-title">Microsoft — popup</span>
+              <span class="option-desc">Sign in in a popup window</span>
             </div>
-            <Check size={16} class="option-arrow" />
+            <ChevronRight size={16} class="option-arrow" />
           </button>
 
-          <button class="login-option" on:click={openMicrosoftUrlLogin}>
-            <div class="option-icon ms-url">
-              <Globe size={20} />
-            </div>
-            <div class="option-info">
-              <span class="option-title">Microsoft via URL</span>
-              <span class="option-desc">Browser login, then paste the redirect URL</span>
-            </div>
-            <Check size={16} class="option-arrow" />
-          </button>
-
-          <button class="login-option" on:click={() => (mode = "offline-form")}>
+          <button class="login-option" onclick={() => (mode = "offline-form")}>
             <div class="option-icon offline">
               <User size={20} />
             </div>
@@ -396,10 +475,10 @@
               <span class="option-title">Offline Mode</span>
               <span class="option-desc">Play with custom username</span>
             </div>
-            <Check size={16} class="option-arrow" />
+            <ChevronRight size={16} class="option-arrow" />
           </button>
 
-          <button class="login-option" on:click={openYggdrasilForm}>
+          <button class="login-option" onclick={openYggdrasilForm}>
             <div class="option-icon ygg">
               <Shield size={20} />
             </div>
@@ -407,8 +486,13 @@
               <span class="option-title">Ely.by / LittleSkin / Custom</span>
               <span class="option-desc">authlib-injector Yggdrasil providers</span>
             </div>
-            <Check size={16} class="option-arrow" />
+            <ChevronRight size={16} class="option-arrow" />
           </button>
+        </div>
+
+        <div class="ms-other">
+          <span class="ms-other-label">Other Microsoft methods</span>
+          <button class="link-btn" type="button" onclick={openMicrosoftUrlLogin}>Paste redirect URL</button>
         </div>
 
         {#if errorMsg}
@@ -417,24 +501,66 @@
 
         <p class="hint">Offline mode fetches skins from Ely.by, TLauncher, or Mojang. Capes can be shown from OptiFine / TLauncher / Mojang.</p>
 
-      {:else if mode === "microsoft-polling" && deviceCode}
+      {:else if mode === "microsoft-webview"}
         <div class="code-content">
-          <div class="code-display">
-            <span class="code">{deviceCode.userCode}</span>
-            <button class="copy-btn" on:click={copyCode} title="Copy code">
-              {#if copied}<Check size={16} />{:else}<Copy size={16} />{/if}
-            </button>
+          <div class="polling-indicator">
+            <Loader2 size={16} class="spin" />
+            <span>Complete sign-in in the popup window…</span>
           </div>
           <p class="instruction">
-            Go to <a href={deviceCode?.verificationUri ?? "#"} on:click|preventDefault={() => deviceCode && open(deviceCode.verificationUri)}>{deviceCode?.verificationUri}</a>
-            <br />and enter the code above.
+            A Microsoft login window opened. After you sign in it will close automatically.
+          </p>
+          {#if errorMsg}
+            <div class="error-msg">{errorMsg}</div>
+          {/if}
+          <button class="link-btn" type="button" onclick={() => { mode = "select"; errorMsg = ""; }}>
+            Back
+          </button>
+        </div>
+
+      {:else if mode === "microsoft-polling" && deviceCode}
+        <div class="code-content">
+          <p class="instruction">
+            A browser tab should open with your login code already filled in.
+            Finish signing in there — this window waits automatically.
+          </p>
+          <button class="primary-btn" type="button" onclick={reopenLoginLink}>
+            <ExternalLink size={16} /> Open login link
+          </button>
+          <div class="link-row">
+            <code class="login-link" title={deviceCode.loginUrl}>{deviceCode.loginUrl}</code>
+            <button class="copy-btn" onclick={copyLoginLink} title="Copy login link">
+              {#if copiedLink}<Check size={16} />{:else}<Copy size={16} />{/if}
+            </button>
+          </div>
+          <div class="manual-code">
+            <span class="code-label">Or enter code manually at microsoft.com/link</span>
+            <div class="code-display">
+              <span class="code">{deviceCode.userCode}</span>
+              <button class="copy-btn" onclick={copyCode} title="Copy code">
+                {#if copied}<Check size={16} />{:else}<Copy size={16} />{/if}
+              </button>
+            </div>
+          </div>
+          <p class="instruction muted">
+            Manual page: <a
+              href={deviceCode.verificationUri}
+              onclick={(e) => {
+                e.preventDefault();
+                const uri = deviceCode?.verificationUri;
+                if (uri) void open(uri);
+              }}>{deviceCode.verificationUri}</a
+            >
           </p>
           <div class="polling-indicator">
             <Loader2 size={16} class="spin" />
-            <span>Waiting for authentication...</span>
+            <span>Waiting for authentication…</span>
           </div>
-          <button class="link-btn" type="button" on:click={openMicrosoftUrlLogin}>
+          <button class="link-btn" type="button" onclick={openMicrosoftUrlLogin}>
             Prefer paste URL instead?
+          </button>
+          <button class="link-btn" type="button" onclick={startMicrosoftLogin}>
+            Use popup window instead?
           </button>
           {#if errorMsg}
             <div class="error-msg">{errorMsg}</div>
@@ -442,13 +568,13 @@
         </div>
 
       {:else if mode === "microsoft-url"}
-        <form class="offline-form" on:submit|preventDefault={submitMicrosoftUrlLogin}>
+        <form class="offline-form" onsubmit={(e) => { e.preventDefault(); submitMicrosoftUrlLogin(); }}>
           <p class="instruction url-steps">
             1. Sign in in the browser window<br />
-            2. When you land on a blank / “nativeclient” page, copy the full address from the address bar<br />
+            2. When you land on a blank / “oauth20_desktop” page, copy the full address from the address bar<br />
             3. Paste it below
           </p>
-          <button class="secondary-btn" type="button" on:click={reopenMicrosoftAuthorize} disabled={loggingIn}>
+          <button class="secondary-btn" type="button" onclick={reopenMicrosoftAuthorize} disabled={loggingIn}>
             <Globe size={14} /> Open Microsoft login again
           </button>
           <label class="field">
@@ -456,7 +582,7 @@
             <textarea
               bind:value={authUrlPaste}
               rows={3}
-              placeholder="https://login.microsoftonline.com/common/oauth2/nativeclient?code=..."
+              placeholder="https://login.live.com/oauth20_desktop.srf?code=..."
               disabled={loggingIn}
             ></textarea>
           </label>
@@ -472,13 +598,13 @@
               <LogIn size={16} /> Complete login
             {/if}
           </button>
-          <button class="link-btn" type="button" disabled={loggingIn} on:click={() => { mode = "select"; errorMsg = ""; }}>
+          <button class="link-btn" type="button" disabled={loggingIn} onclick={() => { mode = "select"; errorMsg = ""; }}>
             Back
           </button>
         </form>
 
       {:else if mode === "offline-form"}
-        <form class="offline-form" on:submit|preventDefault={handleOfflineLogin}>
+        <form class="offline-form" onsubmit={(e) => { e.preventDefault(); handleOfflineLogin(); }}>
           <label class="field">
             <span>Username</span>
             <input
@@ -496,7 +622,7 @@
                 type="button"
                 class="source-option"
                 class:active={skinSource === "mojang"}
-                on:click={() => (skinSource = "mojang")}
+                onclick={() => (skinSource = "mojang")}
               >
                 <Monitor size={14} />
                 Mojang
@@ -505,7 +631,7 @@
                 type="button"
                 class="source-option"
                 class:active={skinSource === "elyby"}
-                on:click={() => (skinSource = "elyby")}
+                onclick={() => (skinSource = "elyby")}
               >
                 <Globe size={14} />
                 Ely.by
@@ -514,7 +640,7 @@
                 type="button"
                 class="source-option"
                 class:active={skinSource === "tlauncher"}
-                on:click={() => (skinSource = "tlauncher")}
+                onclick={() => (skinSource = "tlauncher")}
               >
                 <Globe size={14} />
                 TLauncher
@@ -523,7 +649,7 @@
                 type="button"
                 class="source-option"
                 class:active={skinSource === "offline"}
-                on:click={() => (skinSource = "offline")}
+                onclick={() => (skinSource = "offline")}
               >
                 <User size={14} />
                 None
@@ -545,14 +671,14 @@
         </form>
 
       {:else if mode === "yggdrasil-form"}
-        <form class="offline-form" on:submit|preventDefault={handleYggdrasilLogin}>
+        <form class="offline-form" onsubmit={(e) => { e.preventDefault(); handleYggdrasilLogin(); }}>
           <div class="skin-source-grid ygg-presets">
             {#each yggPresets as preset (preset.id)}
               <button
                 type="button"
                 class="source-option"
                 class:active={yggPresetId === preset.id}
-                on:click={() => selectYggPreset(preset.id)}
+                onclick={() => selectYggPreset(preset.id)}
                 disabled={loggingIn}
               >
                 {preset.label}
@@ -636,25 +762,29 @@
     color: var(--text-primary); cursor: pointer;
   }
   .account-row:hover { border-color: var(--accent-primary); }
-  .account-row.active { border-color: var(--accent-primary); background: rgba(27, 217, 106, 0.05); }
+  .account-row.active { border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 5%, transparent); }
   .account-ico {
     width: 32px; height: 32px; border-radius: var(--border-radius-sm);
     display: flex; align-items: center; justify-content: center;
     background: var(--bg-elevated); color: var(--text-muted);
   }
   .account-ico.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
-  .account-ico.ygg { background: rgba(168, 85, 247, 0.18); color: #e9d5ff; }
+  .account-ico.ygg {
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.18));
+    color: var(--badge-ygg-fg, #e9d5ff);
+  }
   .account-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .mc-nick {
     font-family: var(--font-minecraft);
     font-size: 10px;
     letter-spacing: 0.4px;
-    text-shadow: 1px 1px 0 #3f3f3f;
+    color: var(--mc-nick-color, var(--text-primary));
+    text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
   .account-type { font-size: 10px; font-weight: 800; text-transform: uppercase; }
-  .account-type.mojang { color: #93c5fd; }
-  .account-type.offline { color: #fde68a; }
-  .account-type.ygg { color: #e9d5ff; }
+  .account-type.mojang { color: var(--badge-ms-fg, #93c5fd); }
+  .account-type.offline { color: var(--badge-offline-fg, #fde68a); }
+  .account-type.ygg { color: var(--badge-ygg-fg, #e9d5ff); }
   :global(.check) { color: var(--accent-primary); }
   .divider {
     display: flex; align-items: center; gap: 10px; margin: 14px 0;
@@ -665,6 +795,20 @@
   }
 
   .login-options { display: flex; flex-direction: column; gap: 10px; }
+  .ms-other {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin-top: 10px;
+    justify-content: center;
+  }
+  .ms-other-label {
+    width: 100%;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
 
   .login-option {
     display: flex; align-items: center; gap: 14px; padding: 14px 16px;
@@ -672,16 +816,18 @@
     border-radius: var(--border-radius-lg); cursor: pointer; text-align: left;
     transition: all 0.15s ease; width: 100%;
   }
-  .login-option:hover { border-color: var(--accent-primary); background: rgba(27, 217, 106, 0.04); }
+  .login-option:hover { border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 4%, transparent); }
 
   .option-icon {
     width: 40px; height: 40px; border-radius: 10px;
     display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
   .option-icon.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
-  .option-icon.ms-url { background: linear-gradient(135deg, #0ea5e9, #2563eb); color: #fff; }
   .option-icon.offline { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-color); }
-  .option-icon.ygg { background: rgba(168, 85, 247, 0.2); color: #e9d5ff; }
+  .option-icon.ygg {
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.2));
+    color: var(--badge-ygg-fg, #e9d5ff);
+  }
 
   .option-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
   .option-title { font-weight: 700; font-size: 14px; color: var(--text-primary); }
@@ -707,12 +853,54 @@
     width: 36px; height: 36px; padding: 0; display: flex; align-items: center; justify-content: center;
     border-radius: var(--border-radius-sm); background: var(--bg-hover); color: var(--text-secondary); border: none;
   }
-  .copy-btn:hover { background: var(--accent-primary); color: #000; }
+  .copy-btn:hover { background: var(--accent-primary); color: var(--on-accent, #000); }
 
   .instruction { color: var(--text-secondary); font-size: 13px; text-align: center; line-height: 1.6; }
   .instruction a { color: var(--accent-primary); text-decoration: none; font-weight: 600; }
   .instruction a:hover { text-decoration: underline; }
   .instruction.url-steps { text-align: left; margin: 0; }
+  .instruction.muted { font-size: 12px; color: var(--text-muted); }
+  .link-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    max-width: 100%;
+  }
+  .login-link {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .code-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-align: center;
+  }
+  .manual-code {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+  .code-content .primary-btn {
+    width: auto;
+    min-width: 200px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
 
   .polling-indicator { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
 
@@ -760,7 +948,7 @@
   .source-option:hover { border-color: var(--text-muted); color: var(--text-primary); }
   .source-option.active {
     border-color: var(--accent-primary); color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.06);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
 
   .error-msg {

@@ -438,6 +438,43 @@ pub struct CurseForgeSearchHit {
     pub class_id: Option<u32>,
 }
 
+/// Map a CurseForge category display name to a Modrinth-style slug so graph
+/// clustering can share one taxonomy (`Armor, Tools, and Weapons` → `equipment`).
+pub fn normalize_mod_category(name: &str) -> String {
+    let slug: String = name
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| match c {
+            '&' | '+' | ',' | '/' => ' ',
+            other => other,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-");
+
+    match slug.as_str() {
+        "adventure-and-rpg" => "adventure".into(),
+        "api-and-library" => "library".into(),
+        "armor-tools-and-weapons" => "equipment".into(),
+        "cosmetic" => "social".into(),
+        "map-and-information" => "management".into(),
+        "performance" => "optimization".into(),
+        "utility-qol" => "utility".into(),
+        "world-gen" | "world-generation" => "worldgen".into(),
+        "farming" => "food".into(),
+        "redstone" | "automation" | "energy" | "processing" => "technology".into(),
+        "energy-fluid-and-item-transport" | "player-transport" => "transportation".into(),
+        "biomes" | "dimensions" | "structures" | "ores-and-resources" => "worldgen".into(),
+        "bug-fixes" | "server-utility" | "miscellaneous" | "education" => "utility".into(),
+        "genetics" => "game-mechanics".into(),
+        "mcreator" => "library".into(),
+        "twitch-integration" => "social".into(),
+        other => other.to_string(),
+    }
+}
+
 /// CurseForge file dependency relation types (API `relationType`).
 /// 1 EmbeddedLibrary, 2 OptionalDependency, 3 RequiredDependency,
 /// 4 Tool, 5 Incompatible, 6 Include.

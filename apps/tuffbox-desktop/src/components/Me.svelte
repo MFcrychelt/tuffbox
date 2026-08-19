@@ -5,7 +5,6 @@
     LogIn,
     LogOut,
     Clock,
-    Shield,
     Plus,
     ArrowLeftRight,
     Trash2,
@@ -14,7 +13,8 @@
     ArrowLeft,
     Upload,
     Link2,
-  } from "lucide-svelte";
+    Sparkles,
+  } from "@lucide/svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { api } from "../lib/api";
   import {
@@ -25,41 +25,77 @@
     formatPlaytime,
     type CapeProvider,
     type CapeCatalog,
+    type CapeOffer,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
 
-  export let onBack: () => void = () => {};
+  let { onBack = () => {} }: { onBack?: () => void } = $props();
 
-  let showAccountManager = false;
-  let showLogin = false;
-  let playtimeSeconds = 0;
-  let busy = false;
-  let capeCatalog: CapeCatalog | null = null;
-  let mojangCapeMenuOpen = false;
+  let showAccountManager = $state(false);
+  let showLogin = $state(false);
+  let playtimeSeconds = $state(0);
+  let busy = $state(false);
+  let capeCatalog = $state<CapeCatalog | null>(null);
+  let capeLoading = $state(false);
+  let capeTab = $state<"all" | "mojang" | "tlauncher" | "optifine">("all");
+  let applyingCapeId = $state<string | null>(null);
+  let brokenCapeIds = $state<Record<string, boolean>>({});
 
-  let skinUrlInput = "";
-  let skinVariant: "classic" | "slim" = "classic";
-  let skinBusy = false;
+  let skinUrlInput = $state("");
+  let skinVariant = $state<"classic" | "slim">("classic");
+  let skinBusy = $state(false);
 
-  $: skinUrl = $authState.profile?.skinUrl ?? null;
-  $: capeUrl = $authState.profile?.capeUrl ?? null;
-  $: accountKey = $authState.activeAccountUuid ?? $authState.profile?.uuid ?? "";
-  $: activeAuthority =
-    $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority ?? null;
-  $: mojangCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang");
-  $: otherCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang");
-  $: canChangeMojangCape =
-    $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate);
-  $: canChangeMojangSkin = $authState.loginType === "microsoft" && $authState.loggedIn;
+  const skinUrl = $derived($authState.profile?.skinUrl ?? null);
+  const capeUrl = $derived($authState.profile?.capeUrl ?? null);
+  const accountKey = $derived($authState.activeAccountUuid ?? $authState.profile?.uuid ?? "");
+  const activeAuthority = $derived(
+    $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority ?? null,
+  );
+  const mojangCapeOffers = $derived((capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang"));
+  const tlauncherCapeOffers = $derived(
+    (capeCatalog?.offers ?? []).filter((o) => o.provider === "tlauncher"),
+  );
+  const optifineCapeOffers = $derived(
+    (capeCatalog?.offers ?? []).filter((o) => o.provider === "optifine"),
+  );
+  const selectedCapeProvider = $derived($authState.capeProvider ?? "mojang");
+  const displayedCapeKey = $derived.by(() => {
+    if (selectedCapeProvider === "none") return "none:none";
+    if (selectedCapeProvider !== "mojang") {
+      return `${selectedCapeProvider}:${selectedCapeProvider}`;
+    }
+    const active = mojangCapeOffers.find((o) => o.active) ?? mojangCapeOffers[0];
+    return active ? `mojang:${active.id}` : "none:none";
+  });
+  const noneOffer = $derived<CapeOffer>({
+    provider: "none",
+    id: "none",
+    label: "No cape",
+    url: "",
+    canActivate: true,
+    active: selectedCapeProvider === "none",
+  });
+  const visibleCapeOffers = $derived.by(() => {
+    const offers =
+      capeTab === "mojang"
+        ? mojangCapeOffers
+        : capeTab === "tlauncher"
+          ? tlauncherCapeOffers
+          : capeTab === "optifine"
+            ? optifineCapeOffers
+            : (capeCatalog?.offers ?? []).filter((o) => o.provider !== "none");
+    return [noneOffer, ...offers];
+  });
+  const canChangeMojangSkin = $derived($authState.loginType === "microsoft" && $authState.loggedIn);
 
-  const capeProviders: { id: CapeProvider; label: string }[] = [
+  const capeTabs: { id: typeof capeTab; label: string }[] = [
+    { id: "all", label: "All" },
     { id: "mojang", label: "Mojang" },
-    { id: "optifine", label: "OptiFine" },
     { id: "tlauncher", label: "TLauncher" },
-    { id: "none", label: "None" },
+    { id: "optifine", label: "OptiFine" },
   ];
 
   async function applyAuthState(state: Awaited<ReturnType<typeof api.mcAuth.getAuthStatus>>) {
@@ -95,15 +131,22 @@
     }
   }
 
+  function defaultCapeTab(loginType: string): typeof capeTab {
+    return loginType === "microsoft" ? "mojang" : "tlauncher";
+  }
+
   async function refreshCapes() {
     if (!$authState.loggedIn) {
       capeCatalog = null;
       return;
     }
+    capeLoading = true;
     try {
       capeCatalog = await api.mcAuth.listCapes();
     } catch {
       capeCatalog = null;
+    } finally {
+      capeLoading = false;
     }
   }
 
@@ -112,6 +155,7 @@
     busy = true;
     try {
       await applyAuthState(await api.mcAuth.switchAccount(uuid));
+      capeTab = defaultCapeTab($authState.loginType);
       await refreshCapes();
       toasts.success(`Switched to ${$authState.profile?.name ?? "account"}`);
     } catch (e) {
@@ -147,35 +191,36 @@
     }
   }
 
-  async function setCapeProvider(provider: CapeProvider) {
+  async function selectCape(offer: CapeOffer) {
+    if (applyingCapeId) return;
+    if (`${offer.provider}:${offer.id}` === displayedCapeKey) return;
+    applyingCapeId = offer.id;
     try {
-      await applyAuthState(await api.mcAuth.setCapeProvider(provider));
+      if (offer.provider === "none") {
+        await applyAuthState(await api.mcAuth.setCapeProvider("none"));
+      } else if (offer.canActivate && offer.provider === "mojang") {
+        await applyAuthState(await api.mcAuth.applyCape(offer.id));
+      } else {
+        await applyAuthState(await api.mcAuth.setCapeProvider(offer.provider));
+      }
       await refreshCapes();
-      mojangCapeMenuOpen =
-        provider === "mojang" &&
-        $authState.loginType === "microsoft" &&
-        (capeCatalog?.offers ?? []).some((o) => o.provider === "mojang" && o.canActivate);
+      toasts.success(offer.provider === "none" ? "Cape hidden" : `${offer.label} equipped`);
     } catch (e) {
       toasts.error(String(e));
+    } finally {
+      applyingCapeId = null;
     }
   }
 
-  async function applyCape(capeId: string) {
-    try {
-      await applyAuthState(await api.mcAuth.applyCape(capeId));
-      mojangCapeMenuOpen = true;
-      await refreshCapes();
-      toasts.success("Cape equipped");
-    } catch (e) {
-      toasts.error(String(e));
-    }
+  function capeSourceLabel(provider: CapeProvider) {
+    if (provider === "tlauncher") return "TLauncher";
+    if (provider === "optifine") return "OptiFine";
+    if (provider === "mojang") return "Mojang";
+    return "Off";
   }
 
-  function openMojangCapeMenu() {
-    mojangCapeMenuOpen = true;
-    if (($authState.capeProvider ?? "mojang") !== "mojang") {
-      void setCapeProvider("mojang");
-    }
+  function markCapeBroken(id: string) {
+    brokenCapeIds = { ...brokenCapeIds, [id]: true };
   }
 
   async function applySkinFromUrl() {
@@ -217,27 +262,30 @@
   }
 
   onMount(() => {
-    void refreshAuth();
-    void refreshPlaytime();
-    void refreshCapes();
+    void (async () => {
+      await refreshAuth();
+      capeTab = defaultCapeTab($authState.loginType);
+      void refreshPlaytime();
+      void refreshCapes();
+    })();
   });
 </script>
 
 <div class="me-page">
   <div class="me-top">
-    <button class="back-btn" on:click={onBack} title="Back">
+    <button class="back-btn" onclick={onBack} title="Back">
       <ArrowLeft size={18} />
       <span>Back</span>
     </button>
     <h1 class="me-title">Me</h1>
     <div class="me-top-actions">
       {#if $authState.loggedIn}
-        <button class="ghost-btn danger" disabled={busy} on:click={logout} title="Sign out">
+        <button class="ghost-btn danger" disabled={busy} onclick={logout} title="Sign out">
           <LogOut size={16} />
           Sign out
         </button>
       {/if}
-      <button class="ghost-btn" on:click={() => (showLogin = true)}>
+      <button class="ghost-btn" onclick={() => (showLogin = true)}>
         <Plus size={16} />
         Add account
       </button>
@@ -250,6 +298,7 @@
         <SkinPreview3D
           {skinUrl}
           {capeUrl}
+          cachedPath={$skinPath}
           {accountKey}
           playerName={$authState.profile.name}
           showName={false}
@@ -269,7 +318,7 @@
         <div class="skin-empty">
           <User size={48} />
           <p>Not signed in</p>
-          <button class="accent-btn" on:click={() => (showLogin = true)}>
+          <button class="accent-btn" onclick={() => (showLogin = true)}>
             <LogIn size={16} /> Sign in
           </button>
         </div>
@@ -301,12 +350,12 @@
               <button
                 class="chip"
                 class:active={skinVariant === "classic"}
-                on:click={() => (skinVariant = "classic")}
+                onclick={() => (skinVariant = "classic")}
               >Classic</button>
               <button
                 class="chip"
                 class:active={skinVariant === "slim"}
-                on:click={() => (skinVariant = "slim")}
+                onclick={() => (skinVariant = "slim")}
               >Slim</button>
             </div>
             <div class="url-row">
@@ -317,11 +366,11 @@
                 bind:value={skinUrlInput}
                 disabled={skinBusy}
               />
-              <button class="mini" disabled={skinBusy} on:click={applySkinFromUrl} title="Apply URL">
+              <button class="mini" disabled={skinBusy} onclick={applySkinFromUrl} title="Apply URL">
                 <Link2 size={14} />
               </button>
             </div>
-            <button class="accent-btn wide" disabled={skinBusy} on:click={uploadSkinFile}>
+            <button class="accent-btn wide" disabled={skinBusy} onclick={uploadSkinFile}>
               <Upload size={16} />
               Upload PNG
             </button>
@@ -330,59 +379,92 @@
         </section>
       {/if}
 
-      <section class="card">
+      <section class="card cape-card">
         <div class="card-head">
-          <Shield size={16} />
-          <h3>Cape source</h3>
+          <Sparkles size={16} />
+          <h3>Capes</h3>
         </div>
-        <p class="hint cape-hint">Cape shown in the launcher preview. Wings/FX — in-game (Right Shift).</p>
-        <div class="provider-row">
-          {#each capeProviders as opt (opt.id)}
-            <button
-              class="chip"
-              class:active={($authState.capeProvider ?? "mojang") === opt.id}
-              disabled={!$authState.loggedIn}
-              on:click={() => setCapeProvider(opt.id)}
-            >
-              {opt.label}
-            </button>
-          {/each}
-        </div>
-
-        {#if canChangeMojangCape}
-          <button
-            class="mini"
-            disabled={!$authState.loggedIn}
-            on:click={() => (mojangCapeMenuOpen ? (mojangCapeMenuOpen = false) : openMojangCapeMenu())}
-          >
-            {mojangCapeMenuOpen ? "Hide cape menu" : "Show cape"}
-          </button>
-        {/if}
-
-        {#if mojangCapeMenuOpen && canChangeMojangCape}
-          <div class="cape-list">
-            {#each mojangCapeOffers as offer (offer.id)}
-              <div class="cape-row" class:active={offer.active}>
-                <span>{offer.label}</span>
-                <button class="mini" on:click={() => applyCape(offer.id)} disabled={offer.active}>
-                  {offer.active ? "Active" : "Equip"}
-                </button>
-              </div>
-            {/each}
-          </div>
-        {/if}
-
-        {#if otherCapeOffers.length}
-          <div class="cape-list">
-            {#each otherCapeOffers as offer (offer.provider + offer.id)}
-              <div class="cape-row" class:active={($authState.capeProvider ?? "mojang") === offer.provider}>
-                <span>{offer.label} ({offer.provider})</span>
-                {#if ($authState.capeProvider ?? "mojang") !== offer.provider}
-                  <button class="mini" on:click={() => setCapeProvider(offer.provider)}>Show</button>
+        <p class="hint cape-hint">
+          Browse Mojang, TLauncher, and OptiFine capes. Click a tile to preview it on the skin.
+          Cracked / offline nicknames use TLauncher &amp; OptiFine.
+        </p>
+        {#if !$authState.loggedIn}
+          <p class="hint">Sign in to browse capes for this account.</p>
+        {:else}
+          <div class="cape-tabs" role="tablist" aria-label="Cape source">
+            {#each capeTabs as tab (tab.id)}
+              <button
+                type="button"
+                class="chip"
+                class:active={capeTab === tab.id}
+                role="tab"
+                aria-selected={capeTab === tab.id}
+                onclick={() => (capeTab = tab.id)}
+              >
+                {tab.label}
+                {#if tab.id === "mojang" && mojangCapeOffers.length}
+                  <span class="tab-count">{mojangCapeOffers.length}</span>
+                {:else if tab.id === "tlauncher" && tlauncherCapeOffers.length}
+                  <span class="tab-count">{tlauncherCapeOffers.length}</span>
+                {:else if tab.id === "optifine" && optifineCapeOffers.length}
+                  <span class="tab-count">{optifineCapeOffers.length}</span>
                 {/if}
-              </div>
+              </button>
             {/each}
           </div>
+
+          {#if capeLoading && !capeCatalog}
+            <div class="cape-grid" aria-busy="true">
+              {#each Array(4) as _, i (i)}
+                <div class="cape-tile skel"></div>
+              {/each}
+            </div>
+          {:else}
+            <div class="cape-grid">
+              {#each visibleCapeOffers as offer (offer.provider + offer.id)}
+                {@const isNone = offer.provider === "none"}
+                {@const broken = brokenCapeIds[offer.id]}
+                {@const isOn = `${offer.provider}:${offer.id}` === displayedCapeKey}
+                <button
+                  type="button"
+                  class="cape-tile"
+                  class:active={isOn}
+                  class:none={isNone}
+                  disabled={!!applyingCapeId || isOn}
+                  title={isOn ? `${offer.label} (active)` : `Equip ${offer.label}`}
+                  onclick={() => void selectCape(offer)}
+                >
+                  <span class="cape-tile-art">
+                    {#if isNone}
+                      <span class="cape-none-mark">×</span>
+                    {:else if offer.url && !broken}
+                      <img
+                        src={offer.url}
+                        alt=""
+                        referrerpolicy="no-referrer"
+                        draggable="false"
+                        onerror={() => markCapeBroken(offer.id)}
+                      />
+                    {:else}
+                      <Sparkles size={18} />
+                    {/if}
+                  </span>
+                  <span class="cape-tile-label">{isNone ? "None" : offer.label}</span>
+                  <span class="cape-tile-src">{capeSourceLabel(offer.provider)}</span>
+                  {#if isOn}
+                    <span class="cape-tile-badge">On</span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+            {#if capeTab === "mojang" && mojangCapeOffers.length === 0}
+              <p class="hint">No Mojang capes on this Microsoft account. Migrator / Minecon / personal capes show up here after you own them.</p>
+            {:else if capeTab === "tlauncher" && tlauncherCapeOffers.length === 0}
+              <p class="hint">No TLauncher cape for this nickname. Upload or equip one on tlauncher.org, then refresh Me.</p>
+            {:else if capeTab === "optifine" && optifineCapeOffers.length === 0}
+              <p class="hint">No OptiFine cape for this nickname.</p>
+            {/if}
+          {/if}
         {/if}
       </section>
 
@@ -390,17 +472,17 @@
         <div class="card-head">
           <User size={16} />
           <h3>Accounts</h3>
-          <button class="ghost-icon" title="Add account" on:click={() => (showLogin = true)}>
+          <button class="ghost-icon" title="Add account" onclick={() => (showLogin = true)}>
             <Plus size={16} />
           </button>
-          <button class="ghost-icon" title="Manage accounts" on:click={() => (showAccountManager = true)}>
+          <button class="ghost-icon" title="Manage accounts" onclick={() => (showAccountManager = true)}>
             <ArrowLeftRight size={16} />
           </button>
         </div>
 
         {#if $authState.accounts.length === 0}
           <p class="hint">No saved accounts. Sign in with Microsoft, Offline, Ely.by, LittleSkin, or custom Yggdrasil.</p>
-          <button class="accent-btn" on:click={() => (showLogin = true)}>
+          <button class="accent-btn" onclick={() => (showLogin = true)}>
             <LogIn size={16} /> Add account
           </button>
         {:else}
@@ -410,7 +492,7 @@
                 <button
                   class="account-main"
                   disabled={busy || account.uuid === $authState.activeAccountUuid}
-                  on:click={() => switchAccount(account.uuid)}
+                  onclick={() => switchAccount(account.uuid)}
                   title={account.uuid === $authState.activeAccountUuid ? "Active" : "Switch"}
                 >
                   <div
@@ -438,7 +520,7 @@
                       class="ghost-icon"
                       title="Switch"
                       disabled={busy}
-                      on:click={() => switchAccount(account.uuid)}
+                      onclick={() => switchAccount(account.uuid)}
                     >
                       <ArrowLeftRight size={14} />
                     </button>
@@ -447,7 +529,7 @@
                     class="ghost-icon danger"
                     title="Remove"
                     disabled={busy}
-                    on:click={() => removeAccount(account.uuid)}
+                    onclick={() => removeAccount(account.uuid)}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -463,7 +545,7 @@
 
 {#if showLogin}
   <MinecraftLogin
-    on:close={() => {
+    onclose={() => {
       showLogin = false;
       void refreshAuth();
       void refreshCapes();
@@ -472,7 +554,7 @@
 {/if}
 {#if showAccountManager}
   <AccountManager
-    on:close={() => {
+    onclose={() => {
       showAccountManager = false;
       void refreshAuth();
       void refreshCapes();
@@ -576,8 +658,8 @@
     font-family: var(--font-minecraft);
     font-size: 12px;
     letter-spacing: 0.5px;
-    color: var(--text-primary);
-    text-shadow: 1px 1px 0 #3f3f3f;
+    color: var(--mc-nick-color, var(--text-primary));
+    text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
 
   .skin-empty {
@@ -637,7 +719,133 @@
   }
 
   .cape-hint {
-    margin: 0 0 10px;
+    margin: 0 0 12px;
+  }
+
+  .cape-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .tab-count {
+    display: inline-flex;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 5px;
+    margin-left: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--accent-primary);
+    font-size: 10px;
+    font-weight: 800;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .cape-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+    gap: 8px;
+  }
+
+  .cape-tile {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 6px 10px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    min-height: 132px;
+    box-shadow: none;
+  }
+
+  .cape-tile:hover:not(:disabled) {
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    transform: none;
+  }
+
+  .cape-tile.active {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  }
+
+  .cape-tile:disabled {
+    cursor: default;
+  }
+
+  .cape-tile.skel {
+    min-height: 132px;
+    background: var(--bg-primary);
+    opacity: 0.55;
+    pointer-events: none;
+  }
+
+  .cape-tile-art {
+    width: 64px;
+    height: 80px;
+    border-radius: var(--border-radius-sm);
+    background: #121218;
+    border: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    color: var(--text-muted);
+  }
+
+  .cape-tile-art img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: pixelated;
+  }
+
+  .cape-none-mark {
+    font-size: 28px;
+    font-weight: 300;
+    line-height: 1;
+    color: var(--text-muted);
+  }
+
+  .cape-tile-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1.2;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cape-tile-src {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+  }
+
+  .cape-tile-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--accent-primary);
+    color: var(--on-accent, #000);
   }
 
   .skin-form {
@@ -672,13 +880,9 @@
     width: 100%;
   }
 
-  .provider-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
   .chip {
+    display: inline-flex;
+    align-items: center;
     padding: 6px 10px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
@@ -692,35 +896,12 @@
   .chip.active {
     border-color: var(--accent-primary);
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
 
   .chip:disabled {
     opacity: 0.45;
     cursor: not-allowed;
-  }
-
-  .cape-list {
-    margin-top: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .cape-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 8px 10px;
-    border-radius: var(--border-radius-sm);
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    font-size: 12px;
-  }
-
-  .cape-row.active {
-    border-color: rgba(27, 217, 106, 0.4);
   }
 
   .mini {
@@ -730,7 +911,7 @@
     border-radius: 6px;
     border: none;
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent, #000);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -760,7 +941,7 @@
 
   .account-item.active {
     border-color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.04);
+    background: color-mix(in srgb, var(--accent-primary) 4%, transparent);
   }
 
   .account-main {
@@ -804,13 +985,13 @@
   }
 
   .account-ico.off {
-    border: 1px solid rgba(245, 158, 11, 0.35);
-    color: #fde68a;
+    border: 1px solid var(--badge-offline-border, rgba(245, 158, 11, 0.35));
+    color: var(--badge-offline-fg, #fde68a);
   }
 
   .account-ico.ygg {
-    background: rgba(168, 85, 247, 0.18);
-    color: #e9d5ff;
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.18));
+    color: var(--badge-ygg-fg, #e9d5ff);
   }
 
   .account-text {
@@ -824,8 +1005,8 @@
   .account-text .name {
     font-family: var(--font-minecraft);
     font-size: 10px;
-    color: var(--text-primary);
-    text-shadow: 1px 1px 0 #3f3f3f;
+    color: var(--mc-nick-color, var(--text-primary));
+    text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
 
   .account-text .meta {
@@ -896,18 +1077,18 @@
   }
 
   .type-badge.microsoft {
-    color: #93c5fd;
-    background: rgba(59, 130, 246, 0.15);
+    color: var(--badge-ms-fg, #93c5fd);
+    background: var(--badge-ms-bg, rgba(59, 130, 246, 0.15));
   }
 
   .type-badge.offline {
-    color: #fde68a;
-    background: rgba(245, 158, 11, 0.12);
+    color: var(--badge-offline-fg, #fde68a);
+    background: var(--badge-offline-bg, rgba(245, 158, 11, 0.12));
   }
 
   .type-badge.ygg {
-    color: #e9d5ff;
-    background: rgba(168, 85, 247, 0.15);
+    color: var(--badge-ygg-fg, #e9d5ff);
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.15));
   }
 
   .accent-btn {
@@ -917,7 +1098,7 @@
     padding: 10px 14px;
     border-radius: var(--border-radius-md);
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent, #000);
     border: none;
     font-size: 13px;
     font-weight: 700;
