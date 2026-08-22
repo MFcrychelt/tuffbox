@@ -1717,7 +1717,7 @@
   }
 
   // Bump when layout algorithm parameters change so cached graphs re-seed.
-  const LAYOUT_VERSION = "v6-local-cluster";
+  const LAYOUT_VERSION = "v7-local-cluster";
 
   const layoutKey = $derived([
     LAYOUT_VERSION,
@@ -1791,7 +1791,13 @@
     // Center-to-center pitch for sunflower packing (icon 48px + label clearance).
     // The previous SPACING/2 ≈ 29px packed icons on top of each other.
     const NODE_PITCH = 96;
-    const discRadius = (n: number) => NODE_PITCH * Math.sqrt(Math.max(1, n)) + 56;
+    // Halo radius cap: catch-all groups (Utility etc.) can hold 100+ mods and
+    // the raw sqrt formula balloons into a full-canvas circle that pushes the
+    // group label off-screen. Cap keeps every halo readable; nodes may extend
+    // past it on very large packs.
+    const MAX_GROUP_RADIUS = 420;
+    const discRadius = (n: number) =>
+      Math.min(NODE_PITCH * Math.sqrt(Math.max(1, n)) + 56, MAX_GROUP_RADIUS);
 
     // Ring placement: each cluster gets an arc from its diameter + gap so
     // neighbouring discs never touch.
@@ -1833,7 +1839,7 @@
         color: def.color,
         x: anchor.x,
         y: anchor.y,
-        r: discRadius(cluster.members.length) + 24,
+        r: Math.min(discRadius(cluster.members.length) + 24, MAX_GROUP_RADIUS),
       };
     });
 
@@ -1863,7 +1869,10 @@
       if (!core) {
         const cluster = clusters.find((c) => c.key === clusterOf.get(node.id));
         const idx = Math.max(0, cluster?.members.findIndex((m) => m.id === node.id) ?? 0);
-        const r = NODE_PITCH * Math.sqrt(idx + 0.5);
+        const r = Math.min(
+          NODE_PITCH * Math.sqrt(idx + 0.5),
+          MAX_GROUP_RADIUS - 30,
+        );
         const theta = idx * GOLDEN_ANGLE;
         x = anchor.x + Math.cos(theta) * r;
         y = anchor.y + Math.sin(theta) * r;
@@ -1937,7 +1946,7 @@
           const dy = (n.y ?? 0) - gy;
           maxR = Math.max(maxR, Math.hypot(dx, dy) + collideRadius(n) + 12);
         }
-        return { ...group, x: gx, y: gy, r: maxR };
+        return { ...group, x: gx, y: gy, r: Math.min(maxR, MAX_GROUP_RADIUS) };
       });
       updateGraphDom();
       if (resetViewOnNextLayout) {
@@ -2208,6 +2217,14 @@
       minY = Math.min(minY, node.y - half);
       maxX = Math.max(maxX, node.x + half);
       maxY = Math.max(maxY, node.y + half + 18);
+    }
+    // Include group halos and their labels so a fit never crops a halo or
+    // leaves a category label outside the viewport.
+    for (const group of groupMeta) {
+      minX = Math.min(minX, group.x - group.r);
+      maxX = Math.max(maxX, group.x + group.r);
+      minY = Math.min(minY, group.y - group.r - 18 - 14);
+      maxY = Math.max(maxY, group.y + group.r);
     }
     const contentW = Math.max(160, maxX - minX);
     const contentH = Math.max(160, maxY - minY);
