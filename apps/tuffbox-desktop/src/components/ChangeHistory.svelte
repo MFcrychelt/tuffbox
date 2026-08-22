@@ -242,7 +242,7 @@
       return (episode.fixMethod ?? "").toLowerCase() === "manual" ||
         actions.some((a) => (a.actor || "").toLowerCase() === "user");
     }
-    return actions.some((a) => (a.actor || "launcher") === actorFilter);
+    return actions.some((a) => (a.actor || "launcher").toLowerCase() === actorFilter.toLowerCase());
   }
 
   function showRollbackConfirm(entry: ChangeEntry) {
@@ -526,11 +526,6 @@
       message = `Opened ${path} in Tune.`;
       return;
     }
-    if (entry.canOpen && path) {
-      await openFullFile(entry);
-      if (!editorOpen) message = `Opened ${path} in the built-in editor.`;
-      return;
-    }
     if (path) {
       await openFullFile(entry);
       if (!editorOpen) message = `Opened ${path} in the built-in editor.`;
@@ -683,13 +678,15 @@
     const q = filter.toLowerCase();
     const matchesText =
       !q ||
-      entry.path.toLowerCase().includes(q) ||
-      entry.kind.toLowerCase().includes(q) ||
-      entry.preview.toLowerCase().includes(q) ||
+      (entry.path ?? "").toLowerCase().includes(q) ||
+      (entry.kind ?? "").toLowerCase().includes(q) ||
+      (entry.preview ?? "").toLowerCase().includes(q) ||
       (entry.operation || "").toLowerCase().includes(q);
     const matchesCategory = categoryFilter === "All" || entry.category === categoryFilter;
     const matchesTracked = tracked[entry.category] ?? true;
-    const matchesActor = actorFilter === "All" || (entry.actor || "launcher") === actorFilter;
+    const matchesActor =
+      actorFilter === "All" ||
+      (entry.actor || "launcher").toLowerCase() === actorFilter.toLowerCase();
     return matchesText && matchesCategory && matchesTracked && matchesActor;
   }));
 
@@ -702,8 +699,8 @@
       (episode.fingerprintKey ?? "").toLowerCase().includes(q) ||
       actions.some(
         (a) =>
-          a.path.toLowerCase().includes(q) ||
-          a.preview.toLowerCase().includes(q) ||
+          (a.path ?? "").toLowerCase().includes(q) ||
+          (a.preview ?? "").toLowerCase().includes(q) ||
           (a.operation || "").toLowerCase().includes(q),
       );
     const matchesOutcome = outcomeFilter === "All" || episode.outcome === outcomeFilter;

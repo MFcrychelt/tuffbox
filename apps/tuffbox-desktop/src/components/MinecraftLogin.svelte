@@ -93,8 +93,10 @@
   }
 
   async function startDeviceCodeLogin() {
+    if (loggingIn || polling || pollInFlight) return;
     mode = "microsoft-code";
     errorMsg = "";
+    loggingIn = true;
     try {
       const info = await api.mcAuth.startDeviceCode();
       deviceCode = {
@@ -133,6 +135,8 @@
       }
       errorMsg = msg;
       mode = "select";
+    } finally {
+      loggingIn = false;
     }
   }
 
@@ -208,7 +212,13 @@
   function scheduleNextPoll() {
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = setTimeout(async () => {
-      if (!polling || pollInFlight) {
+      // Stop entirely once polling was turned off (modal closed / destroyed) —
+      // never re-schedule in that case, or timers leak forever after close.
+      if (!polling) {
+        pollTimer = null;
+        return;
+      }
+      if (pollInFlight) {
         scheduleNextPoll();
         return;
       }
@@ -359,9 +369,13 @@
 
   async function copyCode() {
     if (!deviceCode) return;
-    await navigator.clipboard.writeText(deviceCode.userCode);
-    copied = true;
-    setTimeout(() => (copied = false), 2000);
+    try {
+      await navigator.clipboard.writeText(deviceCode.userCode);
+      copied = true;
+      setTimeout(() => (copied = false), 2000);
+    } catch {
+      errorMsg = "Copy failed — select and copy the code manually.";
+    }
   }
 
   async function copyLoginLink() {
@@ -395,11 +409,8 @@
 
 <div
   class="overlay"
-  role="button"
-  tabindex="-1"
-  aria-label="Close sign-in dialog"
+  role="presentation"
   onclick={(e) => e.target === e.currentTarget && close()}
-  onkeydown={(e) => e.key === "Enter" && close()}
 >
   <div class="modal">
     <div class="modal-header">
@@ -409,7 +420,7 @@
           {#if mode === "offline-form"}Offline Login
           {:else if mode === "yggdrasil-form"}Yggdrasil Login
           {:else if mode === "microsoft-webview"}Microsoft Login
-          {:else if mode === "microsoft-polling"}Microsoft — link
+          {:else if mode === "microsoft-code" || mode === "microsoft-polling"}Microsoft — link
           {:else if mode === "microsoft-url"}Microsoft Login (URL)
           {:else}Sign In{/if}
         </h3>
@@ -529,6 +540,20 @@
           {#if errorMsg}
             <div class="error-msg">{errorMsg}</div>
           {/if}
+          <button class="link-btn" type="button" onclick={() => { mode = "select"; errorMsg = ""; }}>
+            Back
+          </button>
+        </div>
+
+      {:else if mode === "microsoft-code"}
+        <div class="code-content">
+          <div class="polling-indicator">
+            <Loader2 size={16} class="spin" />
+            <span>Contacting Microsoft…</span>
+          </div>
+          <p class="instruction">
+            Requesting a device login code — a browser tab will open shortly.
+          </p>
           <button class="link-btn" type="button" onclick={() => { mode = "select"; errorMsg = ""; }}>
             Back
           </button>
@@ -750,6 +775,8 @@
     background: var(--bg-elevated); border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl); width: 460px; max-width: 90vw;
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5); overflow: hidden;
+    display: flex; flex-direction: column;
+    max-height: min(84vh, 720px);
   }
 
   .modal-header {
@@ -766,7 +793,7 @@
   }
   .close-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-  .modal-body { padding: 22px; }
+  .modal-body { padding: 22px; overflow-y: auto; }
 
   /* ─── Login options ──────────────────────── */
   .existing-accounts { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }

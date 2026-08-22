@@ -678,13 +678,13 @@
         </button>
         {#if layoutMenuOpen}
           <div class="layout-menu" role="menu">
-            <button role="menuitem" aria-checked={lastLayout === "tree"} onclick={() => pickLayout("tree")}>
+            <button role="menuitemradio" aria-checked={lastLayout === "tree"} onclick={() => pickLayout("tree")}>
               Tree
             </button>
-            <button role="menuitem" aria-checked={lastLayout === "grid"} onclick={() => pickLayout("grid")}>
+            <button role="menuitemradio" aria-checked={lastLayout === "grid"} onclick={() => pickLayout("grid")}>
               Grid
             </button>
-            <button role="menuitem" aria-checked={lastLayout === "circle"} onclick={() => pickLayout("circle")}>
+            <button role="menuitemradio" aria-checked={lastLayout === "circle"} onclick={() => pickLayout("circle")}>
               Circle
             </button>
           </div>

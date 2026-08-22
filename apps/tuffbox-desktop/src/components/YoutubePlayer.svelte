@@ -34,7 +34,12 @@
   let backdropOut = $state(false);
   let dialogOut = $state(false);
   let closing = $state(false);
-  let mode: "modal" | "mini" = $state(startMini ? "mini" : "modal");
+  // startMini is a one-shot initial prop — snapshot at mount, not live.
+  let mode: "modal" | "mini" = $state(initialMode());
+
+  function initialMode(): "modal" | "mini" {
+    return startMini ? "mini" : "modal";
+  }
 
   let miniX = $state(24);
   let miniY = $state(24);
@@ -56,7 +61,12 @@
   let embedTipDismissed = $state(false);
   let embedLoadTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const embedStart = Math.max(0, Math.floor(start || 0));
+  // start is a one-shot initial prop — snapshot at mount, not live.
+  const embedStart = Math.max(0, Math.floor(initialStart()));
+
+  function initialStart(): number {
+    return start || 0;
+  }
   const embedSrc = $derived(
     `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3` +
       (embedStart > 0 ? `&start=${embedStart}` : ""),

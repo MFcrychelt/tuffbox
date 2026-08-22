@@ -1076,7 +1076,6 @@
     color: var(--ftbq-text-muted);
   }
 
-  .card input[type="text"],
   .card input[type="number"],
   .card select {
     font-size: 12px;
@@ -1088,12 +1087,10 @@
     border-radius: var(--ftbq-radius-control);
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
-  .card input[type="text"]:hover,
   .card input[type="number"]:hover,
   .card select:hover {
     border-color: color-mix(in srgb, var(--ftbq-text-muted) 50%, var(--ftbq-frame));
   }
-  .card input[type="text"]:focus,
   .card input[type="number"]:focus,
   .card select:focus {
     outline: none;

@@ -219,18 +219,6 @@
       }
     }
 
-    if (q) {
-      for (const file of list) {
-        const parts = file.path.split("/");
-        for (let i = 0; i < parts.length - 1; i++) {
-          expandedDirs.add(parts.slice(0, i + 1).join("/"));
-        }
-      }
-      for (const [dirPath, dir] of dirs) {
-        dir.expanded = expandedDirs.has(dirPath) || true;
-      }
-    }
-
     const result: FlatNode[] = [];
     function walk(dirPath: string, depth: number) {
       const dir = dirs.get(dirPath);
@@ -436,8 +424,11 @@
     openFileInternal(file, line);
   }
 
+  let openFileGeneration = 0;
+
   async function openFileInternal(file: ConfigFile, line?: number) {
     if (!$projectPath) return;
+    const generation = ++openFileGeneration;
     selected = file;
     content = "";
     originalContent = "";
@@ -446,21 +437,24 @@
     message = null;
     lintIssues = [];
     try {
-      content = await invoke("read_config_file", {
+      const nextContent = await invoke<string>("read_config_file", {
         path: $projectPath,
         relativePath: file.path,
       });
+      if (generation !== openFileGeneration) return;
+      content = nextContent;
       originalContent = content;
       await lintFile();
-      if (line != null) {
+      if (line != null && generation === openFileGeneration) {
         pendingJumpLine = line;
         await tick();
         jumpToLine(line);
       }
     } catch (e) {
+      if (generation !== openFileGeneration) return;
       error = String(e);
     } finally {
-      loading = false;
+      if (generation === openFileGeneration) loading = false;
     }
   }
 

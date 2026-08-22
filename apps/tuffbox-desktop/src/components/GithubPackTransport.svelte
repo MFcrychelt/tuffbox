@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { Github, KeyRound, UploadCloud, Link2 } from "@lucide/svelte";
+  import { Github, KeyRound, UploadCloud, Link2, Copy, Check } from "@lucide/svelte";
   import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { api } from "../lib/api";
   import { projectPath } from "../lib/store";
+  import { copyText } from "../lib/clipboard";
   import { open } from "@tauri-apps/plugin-shell";
 
   let { repository = $bindable("") }: { repository?: string } = $props();
@@ -76,6 +77,7 @@
     stopPolling();
     stopProgress?.();
     stopProgress = null;
+    if (copyTimer) clearTimeout(copyTimer);
   });
 
   function clearScopedState() {
@@ -87,6 +89,13 @@
     conflict = "";
     message = "";
     error = "";
+    // A device-login flow belongs to the previous project/repo scope: stop
+    // polling and unblock the login button instead of leaving it disabled.
+    if (polling || loginStarting) {
+      stopPolling();
+      loginStarting = false;
+      userCode = "";
+    }
   }
 
   function stopPolling() {
@@ -261,6 +270,23 @@
     await open(shareUrl);
   }
 
+  let copied = $state(false);
+  let copyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function copyShare() {
+    if (!shareUrl) return;
+    try {
+      await copyText(shareUrl);
+      copied = true;
+      if (copyTimer) clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => {
+        copied = false;
+      }, 1600);
+    } catch {
+      message = "Copy failed — select and copy the share URL manually.";
+    }
+  }
+
   function phaseLabel(value: string): string {
     if (value === "staging") return "Staging…";
     if (value === "commit") return "Publishing staged Git tree…";
@@ -312,6 +338,13 @@
       <UploadCloud size={12} /> {busy ? phaseLabel(phase) : "Publish pack"}
     </button>
     {#if shareUrl}
+      <button class="ghost mini" onclick={copyShare} title="Copy share URL">
+        {#if copied}
+          <Check size={12} /> Copied!
+        {:else}
+          <Copy size={12} /> Copy link
+        {/if}
+      </button>
       <button class="ghost mini" onclick={openShare}><Link2 size={12} /> Open share link</button>
     {/if}
   </div>

@@ -433,11 +433,6 @@
     gap: 20px;
   }
 
-  .settings-grid.dimmed {
-    opacity: 0.5;
-    pointer-events: none;
-  }
-
   .loading {
     display: flex;
     align-items: center;

@@ -163,6 +163,10 @@
     }
   }
 
+  function ariaLabel(name: string): string {
+    return `Switch to ${name}`;
+  }
+
   const showStorefront = $derived(!hasSelection);
   const playStop = $derived(running && !launching);
   const progressPct = $derived(
@@ -315,7 +319,7 @@
   <div class="poster-bottom">
     {#if crashBanner}
       <div class="crash-fix-banner" role="status">
-        <ShieldAlert size={18} />
+        <span class="crash-fix-icon"><ShieldAlert size={18} /></span>
         <div class="crash-fix-banner-body">
           <strong>Fix applied</strong>
           <span>
@@ -343,10 +347,35 @@
       </div>
     {/if}
 
-    {#if hasSelection && title}
-      {#key title}
-        <h1 class="poster-title" in:fade={{ duration: artFadeMs }}>{title}</h1>
-      {/key}
+    {#if hasSelection}
+      <div class="poster-title-row">
+        {#if title}
+          {#key title}
+            <h1 class="poster-title" in:fade={{ duration: artFadeMs }}>{title}</h1>
+          {/key}
+        {/if}
+        <button
+          class={["play-btn", { stop: playStop }]}
+          onclick={onPlayClick}
+          disabled={playDisabled || launching}
+          aria-busy={launching}
+          title={launching ? (launchMessage || "Launching…") : undefined}
+        >
+          {#if launching}
+            <span class="spinner spin" aria-hidden="true"></span>
+            <span class="play-text play-phase">{launchMessage || "Launching…"}</span>
+            {#if launchPercent != null}
+              <span class="play-pct" aria-hidden="true">{launchPercent}%</span>
+            {/if}
+          {:else if playStop}
+            <Square size={24} fill="currentColor" />
+            <span class="play-text">Stop</span>
+          {:else}
+            <Play size={28} fill="currentColor" />
+            <span class="play-text">Play</span>
+          {/if}
+        </button>
+      </div>
     {/if}
   </div>
 </section>
@@ -358,31 +387,42 @@
         {#if meta}
           <p class="poster-meta">
             {meta}
-            <span class="meta-chevron" aria-hidden="true"></span>
           </p>
         {/if}
       </div>
-      <button
-        class={["play-btn", { stop: playStop }]}
-        onclick={onPlayClick}
-        disabled={playDisabled || launching}
-        aria-busy={launching}
-        title={launching ? (launchMessage || "Launching…") : undefined}
-      >
-        {#if launching}
-          <span class="spinner spin" aria-hidden="true"></span>
-          <span class="play-text play-phase">{launchMessage || "Launching…"}</span>
-          {#if launchPercent != null}
-            <span class="play-pct" aria-hidden="true">{launchPercent}%</span>
-          {/if}
-        {:else if playStop}
-          <Square size={24} fill="currentColor" />
-          <span class="play-text">Stop</span>
-        {:else}
-          <Play size={28} fill="currentColor" />
-          <span class="play-text">Play</span>
-        {/if}
-      </button>
+
+      {#if accounts.length > 1}
+        <div
+          class={["account-avatars", { scrollable: avatarScrollable }]}
+          role="group"
+          aria-label="Switch account"
+          bind:this={avatarRowEl}
+          onwheel={onAvatarWheel}
+        >
+          {#each accounts as account, i (account.uuid)}
+            <button
+              type="button"
+              class={["avatar-tile", { active: account.uuid === activeAccountUuid }]}
+              disabled={accountSwitchBusy}
+              title={account.name}
+              aria-pressed={account.uuid === activeAccountUuid}
+              aria-label={ariaLabel(account.name)}
+              use:avatarRef={account.uuid}
+              in:fade={{ duration: 200, delay: Math.min(i * 40, 240) }}
+              out:fade={{ duration: 120 }}
+              onclick={() => onSwitchAccount?.(account.uuid)}
+            >
+              <HeadAvatar
+                skinSrc={accountSkins?.[account.uuid] ?? null}
+                size={40}
+                alt={account.name}
+              />
+              <span class="avatar-name">{account.name}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+
       <div class="play-side play-side-end">
         {#if playerName}
           <span class="poster-player">{playerName}</span>
@@ -394,38 +434,6 @@
         {/if}
       </div>
     </div>
-
-    {#if accounts.length > 1}
-      <div
-        class={["account-avatars", { scrollable: avatarScrollable }]}
-        role="group"
-        aria-label="Switch account"
-        bind:this={avatarRowEl}
-        onwheel={onAvatarWheel}
-      >
-        {#each accounts as account, i (account.uuid)}
-          <button
-            type="button"
-            class={["avatar-tile", { active: account.uuid === activeAccountUuid }]}
-            disabled={accountSwitchBusy}
-            title={account.name}
-            aria-pressed={account.uuid === activeAccountUuid}
-            aria-label={`Switch to ${account.name}`}
-            use:avatarRef={account.uuid}
-            in:fade={{ duration: 200, delay: Math.min(i * 40, 240) }}
-            out:fade={{ duration: 120 }}
-            onclick={() => onSwitchAccount?.(account.uuid)}
-          >
-            <HeadAvatar
-              skinSrc={accountSkins?.[account.uuid] ?? null}
-              size={40}
-              alt={account.name}
-            />
-            <span class="avatar-name">{account.name}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
   </div>
 {/if}
 
@@ -539,7 +547,7 @@
     z-index: 2;
     height: 18px;
     pointer-events: none;
-    background-color: color-mix(in srgb, var(--accent-primary) 26%, #33501f);
+    background-color: color-mix(in srgb, var(--accent-primary) 26%, var(--grass-edge-base, #33501f));
     box-shadow:
       0 1px 0 rgba(0, 0, 0, 0.4),
       0 8px 20px rgba(0, 0, 0, 0.28);
@@ -553,7 +561,7 @@
     right: 0;
     height: 8px;
     background-image: repeating-conic-gradient(
-      color-mix(in srgb, var(--accent-primary) 26%, #33501f) 0% 25%,
+      color-mix(in srgb, var(--accent-primary) 26%, var(--grass-edge-base, #33501f)) 0% 25%,
       transparent 0% 50%
     );
     background-size: 16px 16px;
@@ -721,6 +729,7 @@
 
   .poster-title {
     margin: 0;
+    min-width: 0;
     max-width: 100%;
     font-size: clamp(22px, 4.4cqi, 34px);
     font-weight: 800;
@@ -731,6 +740,22 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Build name (left) + Play button (right) sit under the Java Updates strip. */
+  .poster-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    width: 100%;
+    min-width: 0;
+    animation: poster-in var(--motion-enter, 320ms) var(--ease-spring, ease) both;
+    animation-delay: calc(var(--stagger-step, 48ms) * 2);
+  }
+
+  .poster-title-row .play-btn {
+    flex-shrink: 0;
   }
 
   .poster-action-bar {
@@ -862,9 +887,9 @@
 
   .poster-play-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
     align-items: center;
-    gap: 16px;
+    gap: 12px;
     min-width: 0;
     width: 100%;
     padding: 12px 16px;
@@ -887,6 +912,13 @@
 
   .play-side-end {
     justify-self: end;
+  }
+
+  /* Avatar strip lives in the middle column where the Play button used to be. */
+  .poster-play-row .account-avatars {
+    margin-top: 0;
+    justify-content: center;
+    max-width: 100%;
   }
 
   .play-btn {
@@ -991,10 +1023,6 @@
     white-space: nowrap;
   }
 
-  .meta-chevron {
-    display: none;
-  }
-
   .poster-signin {
     padding: 0;
     height: auto;
@@ -1097,7 +1125,8 @@
     color: var(--hero-fg);
   }
 
-  .crash-fix-banner > svg {
+  .crash-fix-icon {
+    display: inline-flex;
     flex-shrink: 0;
     align-self: flex-start;
     margin-top: 1px;

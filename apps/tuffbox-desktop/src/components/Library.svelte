@@ -30,6 +30,7 @@
   import LibraryInstancesPane from "./LibraryInstancesPane.svelte";
   import PromptDialog from "./PromptDialog.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
 
@@ -46,6 +47,7 @@
   let importMenuOpen = $state(false);
   let githubImportOpen = $state(false);
   let githubConfirmOpen = $state(false);
+  let githubInstallActive = $state(false);
   let githubPendingSource = $state("");
   let githubInspectSummary = $state("");
 
@@ -131,6 +133,8 @@
   async function importFromSource(source: string) {
     importing = true;
     importMenuOpen = false;
+    const isGithub = /^(gh:|https:\/\/github\.com\/|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$)/.test(source.trim()) && !/\.(mrpack|zip)$/i.test(source.trim());
+    if (isGithub) githubInstallActive = true;
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
@@ -147,6 +151,7 @@
       toasts.error(String(e));
     } finally {
       importing = false;
+      githubInstallActive = false;
     }
   }
 
@@ -413,7 +418,7 @@
     }));
   }
 
-  async function search(_opts?: { reset?: boolean }) {
+  async function search() {
     const requestId = ++searchRequestId;
     loadingDiscover = true;
     discoverError = "";
@@ -552,7 +557,7 @@
   );
 </script>
 
-<div class="library fade-slide-in lib-page">
+<div class="library fade-slide-in">
   <div class="library-subnav lib-header-enter">
     <div class="tabs" role="tablist" aria-label="Library">
       <button type="button" class:active={tab === "yours"} onclick={() => switchTab("yours")}>
@@ -605,7 +610,11 @@
 
   {#if tab === "yours"}
     <div class="yours-wrap">
-      <LibraryInstancesPane bind:currentView />
+      <LibraryInstancesPane
+        bind:currentView
+        onDiscover={() => (tab = "discover")}
+        onCreate={() => openAddInstance("blank")}
+      />
     </div>
   {:else if tab === "discover"}
   <div class="tab-scroll">
@@ -693,7 +702,12 @@
             role="button"
             tabindex="0"
             onclick={() => openCatalogInApp(result)}
-            onkeydown={(e) => e.key === "Enter" && openCatalogInApp(result)}
+            onkeydown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                openCatalogInApp(result);
+              }
+            }}
           >
             <div
               class="pack-cover"
@@ -862,6 +876,8 @@
     oncancel={() => (githubConfirmOpen = false)}
   />
 {/if}
+
+<GithubPackInstallProgress active={githubInstallActive} onclose={() => (githubInstallActive = false)} />
 
 <svelte:window onmousedown={onGlobalPointerDown} onkeydown={onGlobalKeydown} />
 
@@ -1265,7 +1281,7 @@
     font-size: 12px;
     font-weight: 700;
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent);
     border: none;
     cursor: pointer;
     transition: background 0.15s ease;
@@ -1334,7 +1350,7 @@
     font-weight: 700;
     font-size: 13px;
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent);
     border: none;
     cursor: pointer;
   }

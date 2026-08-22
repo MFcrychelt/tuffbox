@@ -3168,7 +3168,7 @@
     overflow: auto;
     scrollbar-gutter: stable;
   }
-  .toolbar, .actions, .title, .primary-actions, .panel-header, .suspect-head, .meta, .plan-meta { display: flex; align-items: center; }
+  .toolbar, .actions, .title { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 10px; flex-wrap: wrap; }
   .dx-chrome {
     position: sticky;
@@ -3297,50 +3297,6 @@
   }
   .title, h2 { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .actions { gap: 8px; flex-wrap: wrap; }
-  .primary-actions { gap: 8px; flex-wrap: wrap; }
-  .primary-actions .primary, .primary-actions .secondary, .primary-actions .ghost { cursor: pointer; }
-  .ghost.icon-only { padding: 8px; min-width: 36px; justify-content: center; }
-
-  .tools-strip {
-    padding: 0;
-    margin-bottom: 14px;
-    border-radius: var(--border-radius-lg);
-    border: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-  }
-  .tools-strip > summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 14px;
-    cursor: pointer;
-    list-style: none;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-secondary);
-  }
-  .tools-strip > summary::-webkit-details-marker { display: none; }
-  .tools-strip > summary span:first-child {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-  }
-  .tools-strip[open] .tools-hint :global(svg) { transform: rotate(180deg); }
-  .tools-strip-body {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 0 14px 12px;
-    border-top: 1px solid var(--border-color);
-  }
-  .tools-primary-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    padding-top: 10px;
-  }
   .recent-pack-panel {
     margin-bottom: 14px;
   }
@@ -3421,8 +3377,6 @@
   .tools-results { margin-bottom: 14px; padding: 14px; }
   .tools-results h2, .tools-results h3 { margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
 
-  .dx-source { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-  .dx-source-label { color: var(--text-muted); font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
   .dx-source-select {
     width: 100%;
     padding: 10px 12px;
@@ -3432,38 +3386,11 @@
     color: var(--text-primary);
     font-size: 13px;
   }
-  .analysis-tools { margin-bottom: 16px; border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); background: var(--bg-secondary); }
-  .analysis-tools > summary,
-  .collapsible-block > summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 12px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    list-style: none;
-    font-size: 12px;
-    font-weight: 700;
-  }
-  .analysis-tools > summary::-webkit-details-marker,
-  .collapsible-block > summary::-webkit-details-marker { display: none; }
-  .analysis-tools > summary span,
-  .collapsible-block > summary span { display: flex; align-items: center; gap: 7px; }
-  .analysis-tools .tools-hint,
-  .collapsible-block .tools-hint { color: var(--text-muted); font-weight: 500; }
-  .analysis-tools[open] .tools-hint :global(svg),
-  .collapsible-block[open] .tools-hint :global(svg),
-  .collapsible-block[open] > summary :global(svg:last-child) { transform: rotate(180deg); }
-  .analysis-tools .actions { padding: 0 12px 12px; border-top: 1px solid var(--border-color); padding-top: 12px; }
-  .collapsible-block { margin-bottom: 12px; padding: 0; }
-  .log-reader-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
   h2 { display: flex; font-size: 14px; margin: 0 0 12px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
-  .stat-card, .panel, .empty, .loading { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
-  .muted-box, .report-card span, .log-status, .snapshot-row span, .snapshot-row small, .suspect-head span { color: var(--text-muted); font-size: 12px; }
+  .panel, .empty, .loading { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .panel { padding: 16px; min-width: 0; }
   .muted-inline { margin: 0; color: var(--text-muted); font-size: 12px; }
   .analyzing-pill {
@@ -3505,7 +3432,6 @@
   .network-pending { display: flex; flex-direction: column; gap: 8px; }
   .network-pending-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; }
   .trust-card-line { font-size: 12px; color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .action-diff-row { display: flex; flex-wrap: wrap; gap: 6px; }
   .diff-chip {
     display: inline-flex;
     align-items: center;
@@ -3518,10 +3444,6 @@
     background: var(--bg-tertiary);
     color: var(--text-secondary);
   }
-  .diff-chip.add { color: #86efac; border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.1); }
-  .diff-chip.remove { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.1); }
-  .diff-chip.change { color: #fde68a; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.1); }
-  .muted-box { padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color); }
   .loading, .empty { padding: 24px; text-align: center; color: var(--text-muted); }
   .log-pre {
     margin: 0;
@@ -3605,29 +3527,5 @@
     background: var(--bg-primary);
     color: inherit;
   }
-  .scanner-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 10px;
-    margin-top: 12px;
-  }
-  .scanner-card {
-    padding: 10px;
-    border-radius: var(--border-radius-sm);
-    border: 1px solid var(--border-color);
-    background: var(--bg-primary);
-    font-size: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .scanner-card pre {
-    margin: 0;
-    max-height: 120px;
-    overflow: auto;
-    font-size: 10px;
-    color: var(--text-muted);
-  }
   .author-form textarea.mono { font-family: ui-monospace, monospace; font-size: 11px; }
-  .author-cases { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
 </style>

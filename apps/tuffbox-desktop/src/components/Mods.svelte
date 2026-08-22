@@ -457,8 +457,8 @@ import { trapFocus } from "../lib/focusTrap";
   let searchTotal = $state(0);
   let searchLoading = $state(false);
   let loadingMore = $state(false);
-  let browserResultsEl: HTMLElement | null = null;
-  let infiniteSentinel: HTMLElement | null = null;
+  let browserResultsEl = $state<HTMLElement | null>(null);
+  let infiniteSentinel = $state<HTMLElement | null>(null);
   let infiniteObserver: IntersectionObserver | null = null;
   // Plain counter — must not be $state (sync ++ inside search would fight runes).
   let searchRequestId = 0;
@@ -505,7 +505,7 @@ import { trapFocus } from "../lib/focusTrap";
   let cardSize = $state<CardSize>(addViewPref.cardSize);
   let page = $state(1);
   let pageSize = $state(addViewPref.pageSize);
-  let addSearchInput: HTMLInputElement | null = null;
+  let addSearchInput = $state<HTMLInputElement | null>(null);
   let brokenCatalogIcons = $state<string[]>([]);
   let accordionOpen = $state<Record<string, boolean>>({
     gameVersion: true,
@@ -1765,7 +1765,7 @@ import { trapFocus } from "../lib/focusTrap";
     patchUserState(modId, { saved: !inDefault });
   }
 
-  let copiedLinkId: string | null = null;
+  let copiedLinkId = $state<string | null>(null);
   let copiedLinkTimer: ReturnType<typeof setTimeout> | null = null;
 
   function modrinthTypePath(projectType?: string | null): string {
@@ -1979,7 +1979,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   // Install all mods from a list (one click)
-  let installingFromList: string | null = null;
+  let installingFromList = $state<string | null>(null);
   async function installList(listName: string) {
     if (!$projectPath) return;
     const modIds = userState.lists[listName] ?? [];
@@ -2005,12 +2005,12 @@ import { trapFocus } from "../lib/focusTrap";
 
   // Change plan preview before install
   let planPreviewOpen = $state(false);
-  let planPreviewMod: SearchResult | null = null;
+  let planPreviewMod = $state<SearchResult | null>(null);
   let planPreviewLoading = $state(false);
-  let planPreviewDeps: InstallPreview | null = null;
+  let planPreviewDeps = $state<InstallPreview | null>(null);
   type DepPlanEntry = { target: string; name: string | null; depth: number };
-  let planDepTree: DepPlanEntry[] = [];
-  let planDepSelected: Record<string, boolean> = {};
+  let planDepTree = $state<DepPlanEntry[]>([]);
+  let planDepSelected = $state<Record<string, boolean>>({});
 
   async function showPlanPreview(result: SearchResult) {
     planPreviewMod = result;
@@ -3193,6 +3193,8 @@ import { trapFocus } from "../lib/focusTrap";
       </div>
       <div class="results list saved-results tb-stagger">
         {#each filteredSavedMods as result, i (result.id)}
+          <!-- Clickable card: role="button" + tabindex="0" + Enter/Space handler; inner buttons stopPropagation. -->
+          <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
           <article
             class="result-card tb-card"
             style={`--i: ${i}`}
@@ -3308,6 +3310,8 @@ import { trapFocus } from "../lib/focusTrap";
   </div>
 
   {#snippet installedModCard(mod: ModRow, i: number)}
+        <!-- Clickable installed-mod card: role="button" + tabindex + keyboard handler; inner buttons stopPropagation. -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
         <article
           class="installed-card tb-card"
           class:has-update={mod.updateAvailable}
@@ -3824,6 +3828,8 @@ import { trapFocus } from "../lib/focusTrap";
             {:else}
               <div class="results {viewMode === 'list' ? 'list' : 'grid'} card-size-{cardSize.toLowerCase()} tb-stagger">
                 {#each savedMods as result, i (result.id)}
+                  <!-- Clickable card: role="button" + tabindex="0" + Enter/Space handler; inner buttons stopPropagation. -->
+                  <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
                   <article
                     class="result-card tb-card"
                     style={`--i: ${i}`}
@@ -3917,6 +3923,8 @@ import { trapFocus } from "../lib/focusTrap";
           {:else}
             <div class="results {viewMode === 'list' ? 'list' : 'grid'} card-size-{cardSize.toLowerCase()} tb-stagger">
           {#each displayedResults as result, i (result.id)}
+            <!-- Clickable card: role="button" + tabindex="0" + Enter/Space handler; inner buttons stopPropagation. -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
             <article
               class="result-card tb-card"
               style={`--i: ${i}`}
@@ -3928,6 +3936,8 @@ import { trapFocus } from "../lib/focusTrap";
               onclick={() => openCatalogInApp(result)}
               onkeydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
             >
+              <!-- Label wraps the checkbox (native toggle); onclick only stops propagation so the card click doesn't fire. -->
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
               <label class="select-result" title="Select for bulk install" onclick={(e) => e.stopPropagation()}>
                 <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} onchange={() => toggleResultSelection(result)} />
               </label>
@@ -5022,14 +5032,6 @@ import { trapFocus } from "../lib/focusTrap";
 
   .toolbar-search input::placeholder {
     color: var(--text-muted);
-  }
-
-  .control-row > .primary-action {
-    padding: 9px 14px;
-    font-size: 13px;
-    min-height: 40px;
-    white-space: nowrap;
-    flex-shrink: 0;
   }
 
   .more-wrap {
@@ -6994,7 +6996,7 @@ import { trapFocus } from "../lib/focusTrap";
   .save-dropdown {
     position: absolute; right: 0; top: 100%; margin-top: 4px; z-index: 100;
     min-width: 220px; max-height: 320px; overflow: auto;
-    background: var(--bg-card); border: 1px solid var(--border-color);
+    background: var(--bg-elevated); border: 1px solid var(--border-color);
     border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     padding: 6px; display: flex; flex-direction: column; gap: 2px;
   }
@@ -7111,7 +7113,6 @@ import { trapFocus } from "../lib/focusTrap";
     letter-spacing: 0;
   }
   .install-plan-panel .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); cursor: pointer; }
-  .install-plan-panel .checkbox-row span { font-size: 13px; color: var(--text-primary); }
   .plan-deps { margin-top: 8px; max-height: 80px; overflow: auto; }
   .conflict-warning { margin-top: 10px; padding: 10px; border: 1px solid rgba(239,68,68,.32); border-radius: var(--border-radius-md); background: rgba(239,68,68,.08); display: grid; gap: 6px; }
   .conflict-warning strong { color: #fecaca; }

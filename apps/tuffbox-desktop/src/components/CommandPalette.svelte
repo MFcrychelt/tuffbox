@@ -139,7 +139,7 @@
   });
 </script>
 
-<div class="cmd-backdrop tb-modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && onclose?.()} onkeydown={() => {}}>
+<div class="cmd-backdrop tb-modal-backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose?.()}>
   <div class="cmd-dialog tb-anim-search-enter" role="dialog" aria-modal="true" aria-label="Command palette" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <div class="cmd-input-wrap">
       <Search size={18} class="cmd-search-icon" />

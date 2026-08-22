@@ -2629,6 +2629,7 @@
       class="goto-dialog"
       role="dialog"
       aria-labelledby="goto-title"
+      tabindex="-1"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
     >
@@ -2655,6 +2656,7 @@
       class="goto-dialog from-world-dialog"
       role="dialog"
       aria-labelledby="from-world-title"
+      tabindex="-1"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
     >
@@ -3692,11 +3694,6 @@
     gap: 6px;
   }
 
-  .layout-dock .filter-bar .sep,
-  .layout-dock .nbt-bar .sep {
-    display: none;
-  }
-
   .layout-dock .filter-bar .num,
   .layout-dock .nbt-bar .num,
   .layout-dock .filter-bar .num.wide,
@@ -3711,7 +3708,6 @@
   .filter-bar .num, .nbt-bar .num { width: 64px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 4px 6px; font-size: 12px; }
   .filter-bar .num.wide, .nbt-bar .num.wide { width: 88px; }
   .nbt-bar .chk, .filter-bar .chk { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
-  .filter-bar .sep { width: 1px; height: 18px; background: var(--border-color); margin: 0 4px; }
   .mini-select { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 4px 6px; font-size: 11px; }
   .mini { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 4px 8px; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; }
   .mini:hover:not(:disabled) { background: var(--bg-tertiary); }

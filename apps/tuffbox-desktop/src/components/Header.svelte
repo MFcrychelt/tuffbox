@@ -6,6 +6,7 @@
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
   import { projectPath, projectInfo, openLaunchLog, recentProjects, launcherSettingsLive } from "../lib/store";
+  import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
 
   import type { View } from "../lib/types";
@@ -87,12 +88,16 @@
       filters: [{ name: "TuffBox Project", extensions: ["tuffbox.json"] }],
     });
     if (selected && typeof selected === "string") {
-      const info = await invoke("validate_project", { path: selected }) as import("../lib/api").ProjectSummary;
-      const manifestPath = info.manifestPath || selected;
-      recentProjects.add({ path: manifestPath, info: info as any }, { reorder: false });
-      projectPath.set(manifestPath);
-      projectInfo.set(info as any);
-      void api.session.setLastOpened(manifestPath).catch(() => {});
+      try {
+        const info = await invoke("validate_project", { path: selected }) as import("../lib/api").ProjectSummary;
+        const manifestPath = info.manifestPath || selected;
+        recentProjects.add({ path: manifestPath, info: info as any }, { reorder: false });
+        projectPath.set(manifestPath);
+        projectInfo.set(info as any);
+        void api.session.setLastOpened(manifestPath).catch(() => {});
+      } catch (e) {
+        toasts.error(String(e));
+      }
     }
   }
 </script>
@@ -265,7 +270,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #64748b;
+    background: var(--text-muted);
     box-shadow: none;
   }
   .online-dot.on {

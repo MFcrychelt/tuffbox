@@ -77,9 +77,14 @@
   const displayedCapeKey = $derived.by(() => {
     if (selectedCapeProvider === "none") return "none:none";
     if (selectedCapeProvider !== "mojang") {
+      // Backend offers carry the provider key as their id for non-Mojang
+      // capes (e.g. "tlauncher:tlauncher"), so the provider key matches.
       return `${selectedCapeProvider}:${selectedCapeProvider}`;
     }
-    const active = mojangCapeOffers.find((o) => o.active) ?? mojangCapeOffers[0];
+    // Only mark a Mojang cape as equipped when the backend reports it as
+    // ACTIVE — never fall back to the first offer (that would show an
+    // unequipped cape with an "On" badge).
+    const active = mojangCapeOffers.find((o) => o.active);
     return active ? `mojang:${active.id}` : "none:none";
   });
   const noneOffer = $derived<CapeOffer>({
@@ -682,9 +687,9 @@
   }
 
   .ghost-btn.danger:hover {
-    color: #ef4444;
-    border-color: rgba(239, 68, 68, 0.35);
-    background: rgba(239, 68, 68, 0.08);
+    color: var(--accent-danger);
+    border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
   }
 
   .me-hero {
@@ -846,7 +851,7 @@
     width: 100px;
     height: 124px;
     border-radius: var(--border-radius-sm);
-    background: #121218;
+    background: var(--bg-elevated);
     border: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
     display: flex;
     align-items: center;
@@ -1070,6 +1075,9 @@
     font-size: 10px;
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .account-text .meta {
@@ -1115,8 +1123,8 @@
   }
 
   .ghost-icon.danger:hover {
-    background: rgba(239, 68, 68, 0.12) !important;
-    color: #ef4444 !important;
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent) !important;
+    color: var(--accent-danger) !important;
   }
 
   .back-btn {

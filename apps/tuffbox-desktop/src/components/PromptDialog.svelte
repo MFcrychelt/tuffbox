@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { trapFocus } from "../lib/focusTrap";
 
   let {
@@ -23,7 +24,13 @@
     oncancel?: () => void;
   } = $props();
 
-  let value = $state(defaultValue);
+  // Intentional snapshot: the dialog seeds its text field from defaultValue
+  // exactly once at mount; later prop changes must not overwrite user input.
+  let value = $state("");
+
+  onMount(() => {
+    value = defaultValue;
+  });
 </script>
 
 <div class="prompt-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && oncancel?.()} onkeydown={() => {}}>

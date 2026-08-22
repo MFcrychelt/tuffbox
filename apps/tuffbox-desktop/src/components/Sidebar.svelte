@@ -276,6 +276,7 @@
 
   <nav class="rail-zone rail-instances" aria-label="Instances">
     {#each $recentProjects as instance (instance.path)}
+      {#if instance.info}
       {@const icon = instanceIcons[instance.path]}
       {@const running = isProjectRunning(instance.path, $runningInstances)}
       {@const [g0, g1] = themeGradient(instance.info.name)}
@@ -301,6 +302,7 @@
           <span class="rail-label">{instance.info.name}</span>
         </button>
       </div>
+      {/if}
     {/each}
     {#if $recentProjects.length === 0}
       <div class="rail-item">

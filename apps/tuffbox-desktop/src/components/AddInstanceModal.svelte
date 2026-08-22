@@ -5,6 +5,7 @@
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { projectPath, libraryTabRequest } from "../lib/store";
+  import { toasts } from "../lib/toast";
   import { trapFocus } from "../lib/focusTrap";
   import LoadingButton from "./LoadingButton.svelte";
 
@@ -312,7 +313,7 @@
             sourceFile: iconSourcePath,
           });
         } catch (iconErr) {
-          error = `Pack created, but icon failed: ${iconErr}`;
+          toasts.warning(`Pack created, but the icon could not be applied: ${iconErr}`);
         }
       }
       oncreated?.(path as string);

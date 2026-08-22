@@ -34,10 +34,16 @@
   });
 
   async function browse() {
+    const isWindows = typeof navigator !== "undefined" && /win/i.test(navigator.platform || "");
     const selected = await open({
       multiple: false,
       directory: false,
-      filters: [{ name: "Java executable", extensions: ["exe"] }],
+      filters: [
+        {
+          name: "Java executable",
+          extensions: isWindows ? ["exe"] : ["java", "bin", "*"],
+        },
+      ],
     });
     if (selected && typeof selected === "string") {
       onselected?.(selected);
@@ -65,7 +71,7 @@
   }
 </script>
 
-<div class="modal-backdrop" onclick={(e) => e.target === e.currentTarget && onclose?.()} role="button" tabindex="-1" aria-label="Close" onkeydown={() => {}}>
+<div class="modal-backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose?.()}>
   <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <div class="modal-header">
       <h2>

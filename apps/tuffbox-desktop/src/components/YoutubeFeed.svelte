@@ -838,7 +838,11 @@
   .rail .title {
     font-size: 12px;
     line-height: 1.35;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
   }
 
   .rail .channel {

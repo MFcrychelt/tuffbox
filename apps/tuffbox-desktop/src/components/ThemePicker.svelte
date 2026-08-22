@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { Check } from "@lucide/svelte";
   import {
     THEMES,
@@ -53,6 +54,17 @@
     commitTheme(id);
     onChange(id);
   }
+
+  onDestroy(() => {
+    // If the picker unmounts while a preview is pending (or already applied),
+    // clear the timer and restore the committed theme — otherwise the preview
+    // theme sticks forever after closing the picker.
+    clearTimeout(previewTimer);
+    if (previewed !== null) {
+      previewed = null;
+      restoreCommittedTheme();
+    }
+  });
 
   function badgeFor(id: ThemeId): string | null {
     return THEMES.find((t) => t.id === id)?.badge ?? null;

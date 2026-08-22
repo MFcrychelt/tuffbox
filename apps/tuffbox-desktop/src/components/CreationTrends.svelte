@@ -281,7 +281,6 @@
     }
     creationBusy = true;
     try {
-      await loadCreationDefaults();
       const jobId =
         typeof crypto !== "undefined" && "randomUUID" in crypto
           ? crypto.randomUUID()

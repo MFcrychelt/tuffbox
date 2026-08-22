@@ -21,7 +21,7 @@
   ];
 </script>
 
-<div class="kh-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && onclose?.()} onkeydown={() => {}}>
+<div class="kh-backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose?.()}>
   <div class="kh-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <h3>Keyboard Shortcuts</h3>
     <div class="kh-list">

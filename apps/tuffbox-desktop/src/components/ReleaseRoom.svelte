@@ -23,37 +23,45 @@
   };
 
   let version = $state($projectInfo?.version ?? "1.0.0");
-  let changelog = "";
-  let issues: Issue[] = [];
-  let artifacts: Artifact[] = [];
-  let checklist: Record<string, boolean> = {
+  let changelog = $state("");
+  let issues = $state<Issue[]>([]);
+  let artifacts = $state<Artifact[]>([]);
+  let checklist = $state<Record<string, boolean>>({
     version: false,
     validation: false,
     artifacts: false,
     changelog: false,
     snapshot: false,
-  };
+  });
 
-  let publishConfig: PublishConfig = {
+  let publishConfig = $state<PublishConfig>({
     githubRepository: "",
     modrinthProjectId: "",
     curseforgeProjectId: "",
     curseforgeGameVersionIds: [],
-  };
-  let curseforgeGameVersionIdsText = "";
+  });
+  let curseforgeGameVersionIdsText = $state("");
   let configLoading = $state(false);
   let configSaving = $state(false);
-  let publishingTarget: string | null = null;
-  let publishResults: Record<string, PublishResult> = {};
-  let publishErrors: Record<string, string> = {};
+  let publishingTarget = $state<string | null>(null);
+  let publishResults = $state<Record<string, PublishResult>>({});
+  let publishErrors = $state<Record<string, string>>({});
 
-  let exportLoading: string | null = null;
-  let githubRelease: any = null;
+  let exportLoading = $state<string | null>(null);
+  let githubRelease = $state<any>(null);
   let githubLoading = $state(false);
   let loading = $state(false);
-  let error = "";
-  let message = "";
+  let error = $state("");
+  let message = $state("");
   let lastLoadedPath: string | null = null;
+
+  const CHECKLIST_LABELS: Record<string, string> = {
+    version: "Version set",
+    validation: "No blocking errors",
+    artifacts: "Artifacts exported",
+    changelog: "Changelog written",
+    snapshot: "Snapshot created",
+  };
 
   function parseGameVersionIds(text: string): number[] {
     return text
@@ -469,7 +477,7 @@
             {#each Object.entries(checklist) as [key, done] (key)}
               <label class:done>
                 <input type="checkbox" bind:checked={checklist[key]} />
-                <span>{key}</span>
+                <span>{CHECKLIST_LABELS[key] ?? key}</span>
               </label>
             {/each}
             <div class="ready" class:ok={releaseReady}>{releaseReady ? "Ready to ship" : "Release not ready yet"}</div>
@@ -568,7 +576,7 @@
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .layout { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 16px; }
-  .panel, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
+  .panel { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .panel { padding: 18px; }
   .release-panel { display: grid; gap: 18px; align-content: start; }
   label { display: grid; gap: 8px; color: var(--text-secondary); font-weight: 700; }
@@ -585,7 +593,7 @@
   .release-checklist-details summary { padding: 10px 12px; cursor: pointer; color: var(--text-secondary); font-size: 14px; font-weight: 700; list-style: none; }
   .release-checklist-details summary::-webkit-details-marker { display: none; }
   .release-checklist-details .release-checklist { padding: 0 12px 12px; }
-  .release-checklist h3, .artifact-list h3, .publish-targets h3, .publish-config h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
+  .artifact-list h3, .publish-targets h3, .publish-config h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
   .config-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
   .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); text-transform: none; letter-spacing: 0; }
   .release-checklist label.done { border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent); }
@@ -623,7 +631,7 @@
   .changelog-panel { overflow: hidden; display: flex; flex-direction: column; min-height: 680px; }
   .changelog-header { justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color); margin-bottom: 0; }
   textarea { flex: 1; resize: none; min-height: 600px; border: 0; outline: none; background: #09090b; color: #e5e7eb; padding: 18px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height: 1.6; }
-  .empty { color: var(--text-muted); padding: 80px; text-align: center; }
+  /* (removed dead .empty rule — no element uses it) */
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }

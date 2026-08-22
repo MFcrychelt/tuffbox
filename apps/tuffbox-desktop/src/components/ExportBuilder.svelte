@@ -139,7 +139,6 @@
         : [],
   );
   const blockingErrors = $derived(activeIssues.filter((i) => i.severity === "error"));
-  const mrBlocking = $derived(mrIssues.filter((i) => i.severity === "error"));
   const warnCount = $derived(activeIssues.filter((i) => i.severity === "warning").length);
   const exportBlocked = $derived(
     exporting || (activeFormat.validation != null && blockingErrors.length > 0),

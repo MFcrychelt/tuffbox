@@ -2,7 +2,7 @@
   import { invoke, isTauri } from "@tauri-apps/api/core";
   import { open as openShell } from "@tauri-apps/plugin-shell";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import {
     Palette, Info, Command, Plug, KeyRound, CheckCircle2, AlertTriangle, Loader2,
     Bot, Network, Coffee, Terminal, HardDrive, Settings2,
@@ -198,6 +198,8 @@
   });
   let launcherSaving = $state(false);
   let launcherMsg = $state("");
+  let launcherMsgTimer: ReturnType<typeof setTimeout> | null = null;
+  let discordMsgTimer: ReturnType<typeof setTimeout> | null = null;
   let launcherErr = $state("");
   let defaultRuntimePath = $state("");
   let runtimeDraft = $state("");
@@ -369,7 +371,8 @@
       }
       notifyLauncherSettingsChanged(launcher);
       launcherMsg = "Saved.";
-      setTimeout(() => (launcherMsg = ""), 1600);
+      if (launcherMsgTimer) clearTimeout(launcherMsgTimer);
+      launcherMsgTimer = setTimeout(() => (launcherMsg = ""), 1600);
     } catch (e) {
       launcher = prev;
       if (partial && ("uiScalePercent" in partial || "uiScaleMode" in partial)) {
@@ -437,7 +440,8 @@
       discordMessage = settings.discordRpcEnabled
         ? "Discord Rich Presence enabled."
         : "Discord Rich Presence saved.";
-      setTimeout(() => {
+      if (discordMsgTimer) clearTimeout(discordMsgTimer);
+      discordMsgTimer = setTimeout(() => {
         if (discordMessage.startsWith("Discord Rich Presence")) discordMessage = "";
       }, 2200);
       return true;
@@ -1001,6 +1005,11 @@
     await loadIntegrations();
     await loadPresence();
     await loadLauncher();
+  });
+
+  onDestroy(() => {
+    if (launcherMsgTimer) clearTimeout(launcherMsgTimer);
+    if (discordMsgTimer) clearTimeout(discordMsgTimer);
   });
 
   function applyPotatoPc(on: boolean) {
@@ -2429,11 +2438,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, #ffc500, #ff9500);
-    color: #241703;
+    background: var(--brand-mark-gradient, linear-gradient(135deg, #ffc500, #ff9500));
+    color: var(--brand-mark-fg, #241703);
     font-weight: 900;
     font-size: 22px;
-    box-shadow: 0 4px 14px rgba(255, 197, 0, 0.28);
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--brand-mark-gradient, #ffc500) 28%, transparent);
   }
 
   .brand-icon-creeper {
@@ -2471,7 +2480,7 @@
   .shortcut-row small { color: var(--text-muted); font-size: 10px; }
 
   .update-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); border: 1px solid var(--border-color); margin: 10px 0; font-size: 12px; }
-  .update-info.error { color: #fecaca; border-color: rgba(239, 68, 68, 0.28); background: rgba(239, 68, 68, 0.08); }
+  .update-info.error { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 30%, transparent); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); }
   .update-avail { color: var(--accent-primary); font-weight: 700; }
   .update-ok { color: var(--text-muted); }
 
@@ -2558,8 +2567,8 @@
     min-width: 0;
     color: var(--text-secondary, inherit);
   }
-  .notice { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-color); font-size: 12px; }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
+  .notice { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-color); font-size: 12px; overflow-wrap: anywhere; }
+  .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .inline-status { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; margin-bottom: 10px; }
   :global(.spin) { animation: spin 900ms linear infinite; }

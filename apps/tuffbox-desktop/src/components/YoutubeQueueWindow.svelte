@@ -216,7 +216,7 @@
   }
 </script>
 
-<div class="qw-overlay" onclick={onOverlayClick} onkeydown={() => {}}>
+<div class="qw-overlay" role="presentation" onclick={onOverlayClick}>
   <div
     class="qw-modal"
     role="dialog"

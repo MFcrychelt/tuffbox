@@ -32,7 +32,7 @@
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
-  import { launchWithFeedback, killWithFeedback, registerLaunchCrashListener } from "../lib/launch";
+  import { launchWithFeedback, killWithFeedback } from "../lib/launch";
   import { fetchCrashFixBanner, rollbackLastCrashFix } from "../lib/softVerify";
   import {
     homeCrashFixBanner,
@@ -45,6 +45,8 @@
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
   import HomeHero, { type PosterCoverKind } from "./HomeHero.svelte";
+  import GithubPackUpdateBanner from "./GithubPackUpdateBanner.svelte";
+  import GithubPackUpdateGate from "./GithubPackUpdateGate.svelte";
   import HomeInstanceShelf from "./HomeInstanceShelf.svelte";
   import YoutubeFeed from "./YoutubeFeed.svelte";
   import PromptDialog from "./PromptDialog.svelte";
@@ -72,6 +74,8 @@
   );
   let accountSwitchBusy = $state(false);
   let heroOverflowOpen = $state(false);
+  let updateGateOpen = $state(false);
+  let launchAfterGate = false;
   let heroActionBusy = $state(false);
   let showRenamePrompt = $state(false);
   let showClonePrompt = $state(false);
@@ -324,9 +328,8 @@
         selectProject($recentProjects[0].path);
       }
 
-      // Global handler for JVM crashes that happen after the launch command
-      // has returned "started" — surfaces a categorized, retryable toast.
-      registerLaunchCrashListener();
+      // JVM crash toast handler is registered once in App.svelte (it is
+      // idempotent and must live for the whole app lifetime, not per-mount).
 
       // Refresh playtime when a session ends.
       const { listen } = await import("@tauri-apps/api/event");
@@ -386,13 +389,30 @@
 
   async function launch() {
     if (!selectedPath) return;
-    await launchWithFeedback({ path: selectedPath, profile: "client" });
-    const project = $recentProjects.find((p) => p.path === selectedPath);
+    const launchTarget = selectedPath;
+    // Update-to-play gate: if this pack came from a GitHub repo and has a
+    // pending update, block the launch until the user reviews and applies it.
+    try {
+      const status = await api.transport.github.checkUpdate(launchTarget);
+      if (status.updateAvailable) {
+        updateGateOpen = true;
+        launchAfterGate = true;
+        return;
+      }
+    } catch {
+      // Not a GitHub-transported pack — launch normally.
+    }
+    await doLaunch(launchTarget);
+  }
+
+  async function doLaunch(path: string) {
+    await launchWithFeedback({ path, profile: "client" });
+    const project = $recentProjects.find((p) => p.path === path);
     if (project) recentProjects.add(project);
-    void api.stats.get(selectedPath).then((s) => {
+    void api.stats.get(path).then((s) => {
       homeStats.update((prev) => ({
         ...prev,
-        [selectedPath!]: {
+        [path]: {
           playtime: s.totalPlaytimeSeconds ?? 0,
           lastLaunch: s.lastLaunch ?? null,
         },
@@ -503,6 +523,9 @@
 <div class="home fade-slide-in">
   <div class="main-layout">
     <div class="home-main">
+      {#if $projectPath}
+        <GithubPackUpdateBanner />
+      {/if}
       <HomeHero
         hasSelection={!!selectedProject}
         emptyZero={$recentProjects.length === 0}
@@ -661,6 +684,24 @@
 
 {#if showAccountManager}
   <AccountManager onclose={() => (showAccountManager = false)} />
+{/if}
+
+{#if updateGateOpen && selectedPath}
+  <GithubPackUpdateGate
+    targetPath={selectedPath}
+    oncontinue={() => {
+      updateGateOpen = false;
+      const path = selectedPath;
+      if (path && launchAfterGate) {
+        launchAfterGate = false;
+        void doLaunch(path);
+      }
+    }}
+    oncancel={() => {
+      updateGateOpen = false;
+      launchAfterGate = false;
+    }}
+  />
 {/if}
 
 {#if $newProjectOpen}

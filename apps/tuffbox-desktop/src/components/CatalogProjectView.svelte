@@ -66,7 +66,12 @@
     compatible?: boolean;
   };
 
-  let detail: CatalogDetail = $state({ ...result });
+  // result is a one-shot initial prop — snapshot once, then edit the copy.
+  let detail: CatalogDetail = $state(initialDetail());
+
+  function initialDetail(): CatalogDetail {
+    return { ...result };
+  }
   let loading = $state(true);
   let versionsLoading = $state(false);
   let versions = $state<CatalogVersion[]>([]);
@@ -323,7 +328,7 @@
     place-items: center;
     font-size: 28px;
     font-weight: 900;
-    color: #fff;
+    color: var(--text-primary);
   }
   .hero-icon img { width: 100%; height: 100%; object-fit: cover; }
   .eyebrow { display: flex; gap: 8px; margin-bottom: 4px; }

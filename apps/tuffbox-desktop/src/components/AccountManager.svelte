@@ -1,19 +1,16 @@
 <script lang="ts">
   import {
     X,
-    LogIn,
-    LogOut,
     Plus,
     User,
     Globe,
     Monitor,
-    Check,
     Trash2,
     ArrowLeftRight,
     Shield,
-    Palette,
   } from "@lucide/svelte";
   import { api } from "../lib/api";
+  import { focusInit } from "../lib/focusInit";
   import {
     authState,
     skinPath,
@@ -376,7 +373,7 @@
 
           <label class="field">
             <span>Email / Username</span>
-            <input bind:value={yggUsername} placeholder="account@example.com" autofocus disabled={busy} />
+            <input bind:value={yggUsername} placeholder="account@example.com" use:focusInit disabled={busy} />
           </label>
 
           <label class="field">
@@ -401,7 +398,7 @@
               bind:value={offlineUsername}
               placeholder="Enter username"
               maxlength={16}
-              autofocus
+              use:focusInit
               disabled={busy}
             />
           </label>

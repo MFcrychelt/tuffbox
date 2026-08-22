@@ -103,8 +103,19 @@
 
   async function deleteBackup(id: string) {
     if (!$projectPath) return;
-    await api.backups.delete(id, $projectPath);
-    await loadBackups();
+    showConfirm(
+      "Delete backup",
+      "Delete this backup permanently? This cannot be undone.",
+      async () => {
+        try {
+          await api.backups.delete(id, $projectPath!);
+          await loadBackups();
+        } catch (e) {
+          error = String(e);
+        }
+      },
+      true,
+    );
   }
 
   async function restoreBackup(id: string) {
@@ -268,19 +279,26 @@
     }
   }
 
+  let snapshotRequestGen = 0;
+
   async function selectSnapshot(id: string) {
     selectedId = id;
     const dir = await ensureProjectDir();
     if (!dir) return;
+    const generation = ++snapshotRequestGen;
     detailLoading = true;
     error = null;
     try {
-      detail = await api.snapshots.detail(id, dir);
+      const result = await api.snapshots.detail(id, dir);
+      // Ignore stale responses if the user clicked another snapshot meanwhile.
+      if (generation !== snapshotRequestGen) return;
+      detail = result;
     } catch (e) {
+      if (generation !== snapshotRequestGen) return;
       error = String(e);
       detail = null;
     } finally {
-      detailLoading = false;
+      if (generation === snapshotRequestGen) detailLoading = false;
     }
   }
 
@@ -637,10 +655,10 @@
           {/if}
 
           <div class="block">
-            <h3><Zap size={13} /> Actions ({detail.actionsSummary.length})</h3>
-            {#if detail.actionsSummary.length}
+            <h3><Zap size={13} /> Actions ({(detail.actionsSummary ?? []).length})</h3>
+            {#if (detail.actionsSummary ?? []).length > 0}
               <ul class="action-list">
-                {#each detail.actionsSummary as line}
+                {#each detail.actionsSummary ?? [] as line}
                   <li><span class="bullet" aria-hidden="true"></span>{line}</li>
                 {/each}
               </ul>
@@ -650,10 +668,10 @@
           </div>
 
           <div class="block">
-            <h3><FolderOpen size={13} /> Changed files ({detail.changedFiles.length})</h3>
-            {#if detail.changedFiles.length}
+            <h3><FolderOpen size={13} /> Changed files ({(detail.changedFiles ?? []).length})</h3>
+            {#if (detail.changedFiles ?? []).length > 0}
               <ul class="file-list">
-                {#each detail.changedFiles as f}
+                {#each detail.changedFiles ?? [] as f}
                   <li>
                     <span class="cat">{f.category}</span>
                     <span class="file-path tb-truncate">{f.path}</span>

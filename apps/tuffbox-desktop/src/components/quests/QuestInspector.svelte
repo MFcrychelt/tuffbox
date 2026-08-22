@@ -845,9 +845,8 @@
     line-height: 1.4;
   }
 
-  .fields input[type="text"],
+  .fields input:not([type]),
   .fields input[type="number"],
-  .fields input[type="search"],
   .fields textarea,
   .fields select {
     font-family: inherit;

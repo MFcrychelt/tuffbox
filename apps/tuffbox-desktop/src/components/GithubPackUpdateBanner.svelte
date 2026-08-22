@@ -169,9 +169,9 @@
     {/if}
     <div class="review-diff">
       <strong>Review diff (required)</strong>
-      {#if preview.changes.length > 0}
+      {#if (preview.changes?.length ?? 0) > 0}
         <ul>
-          {#each preview.changes as change, i (i)}
+          {#each preview.changes ?? [] as change, i (i)}
             <li>{changeLabel(change)}</li>
           {/each}
         </ul>

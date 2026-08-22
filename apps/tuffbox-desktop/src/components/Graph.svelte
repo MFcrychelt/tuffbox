@@ -2057,7 +2057,7 @@
   // SVG we move/scale a "camera" viewBox over it, exactly like Obsidian's
   // graph view: wheel zooms (toward the cursor), drag empty space to pan,
   // double-click / button to reset.
-  let viewportEl: SVGSVGElement;
+  let viewportEl = $state<SVGSVGElement>();
   let viewX = $state(0);
   let viewY = $state(0);
   let viewScale = $state(1);
@@ -2461,6 +2461,7 @@
         <span class="stat-value">{displayEdges.length}</span>
         <span class="stat-label">Dependencies</span>
       </div>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -- the card is a real focusable button (role="button" + tabindex="0" + Enter/Space keydown) only when hasMissingSpotlight is set; svelte cannot see the conditional -->
       <div
         class="stat-card"
         class:danger={hasMissingSpotlight}
@@ -2573,7 +2574,7 @@
           </div>
         {/if}
       </div>
-      <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -- svg canvas handles wheel/pointer/click/dblclick/keydown; role="img" is non-interactive -->
       <svg
         bind:this={viewportEl}
         viewBox={viewBoxString}
@@ -3702,8 +3703,7 @@
     cursor: grabbing;
   }
 
-  .graph-canvas svg text,
-  .graph-canvas svg tspan {
+  .graph-canvas svg text {
     user-select: none;
     -webkit-user-select: none;
     pointer-events: none;

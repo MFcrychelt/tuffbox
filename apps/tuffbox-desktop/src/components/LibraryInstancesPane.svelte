@@ -60,6 +60,7 @@
   import { portal } from "../lib/portal";
   import PromptDialog from "./PromptDialog.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
 
   let {
@@ -82,6 +83,7 @@
   let addMenuOpen = $state(false);
   let githubImportOpen = $state(false);
   let githubConfirmOpen = $state(false);
+  let githubInstallActive = $state(false);
   let githubPendingSource = $state("");
   let githubInspectSummary = $state("");
   let foldersMenuOpen = $state(false);
@@ -319,7 +321,7 @@
     holdingPath = null;
     dragSource = project;
     closeMenus();
-    selectInstance(project);
+    void selectInstance(project);
     dragGhost = {
       x,
       y,
@@ -471,7 +473,7 @@
       suppressNextClick = false;
       return;
     }
-    selectInstance(project);
+    void selectInstance(project);
   }
 
   function openCtxMenu(e: MouseEvent, project: RecentProject) {
@@ -650,6 +652,8 @@
 
   async function importFromSource(source: string) {
     actionBusy = true;
+    const isGithub = /^(gh:|https:\/\/github\.com\/|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$)/.test(source.trim()) && !/\.(mrpack|zip)$/i.test(source.trim());
+    if (isGithub) githubInstallActive = true;
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
@@ -667,12 +671,13 @@
       };
       const manifestPath = info.manifestPath || path;
       recentProjects.add({ path: manifestPath, info: info as RecentProject["info"] });
-      selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
+      void selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
       toasts.success(`Imported "${result.name ?? info.name ?? "pack"}"`);
     } catch (e) {
       toasts.error(String(e));
     } finally {
       actionBusy = false;
+      githubInstallActive = false;
     }
   }
 
@@ -822,7 +827,7 @@
       };
       const manifestPath = info.manifestPath || clonedPath;
       recentProjects.add({ path: manifestPath, info: info as RecentProject["info"] });
-      selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
+      void selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
       toasts.success(`Copied to: ${manifestPath}`);
     } catch (e) {
       toasts.error(String(e));
@@ -858,7 +863,7 @@
   });
 </script>
 
-<div class="prism-lib lib-motion" class:drag-mode={dragging}>
+<div class="prism-lib" class:drag-mode={dragging}>
   <div class="prism-toolbar lib-toolbar-enter">
     <div class="tb-left">
       <div class="tb-add-wrap">
@@ -1026,7 +1031,12 @@
                     in:tileIntro
                     onclick={() => onTileClick(project)}
                     ondblclick={() => !dragging && void launchInstance(project)}
-                    onkeydown={(e) => e.key === "Enter" && selectInstance(project)}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        selectInstance(project);
+                      }
+                    }}
                     oncontextmenu={(e) => openCtxMenu(e, project)}
                     onpointerdown={(e) => onTilePointerDown(e, project)}
                     onpointermove={onTilePointerMove}
@@ -1291,6 +1301,8 @@
   />
 {/if}
 
+<GithubPackInstallProgress active={githubInstallActive} onclose={() => (githubInstallActive = false)} />
+
 {#if showGroupPrompt && groupTarget}
   <div
     class="group-dialog-backdrop"
@@ -1341,10 +1353,6 @@
     overflow: hidden;
     position: relative;
   }
-  .prism-lib.lib-motion::before {
-    display: none;
-  }
-
   .lib-toolbar-enter {
     animation: lib-toolbar-in 160ms var(--ease-out) both;
   }
@@ -1873,7 +1881,7 @@
     border: none;
     border-radius: 10px;
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent);
     font-weight: 700;
     font-size: 13px;
     cursor: pointer;
@@ -2003,7 +2011,7 @@
     border-radius: var(--border-radius-sm);
     border: none;
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent);
     cursor: pointer;
     font-weight: 700;
     font-size: 12px;
@@ -2051,7 +2059,6 @@
     background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent-primary) 3%, transparent), transparent 70%);
   }
 
-  :global(.potato-pc) .lib-motion::before,
   :global(.potato-pc) .lib-toolbar-enter,
   :global(.potato-pc) .lib-side-enter,
   :global(.potato-pc) .hold-ring {
@@ -2066,7 +2073,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .lib-motion::before,
     .lib-toolbar-enter,
     .lib-side-enter,
     .hold-ring {

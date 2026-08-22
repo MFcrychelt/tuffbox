@@ -21,7 +21,7 @@
   } from "@lucide/svelte";
   import { projectPath, projectInfo, ideStageRequest, questChatFocusId, tuneChatFocusId } from "../lib/store";
   import { toasts } from "../lib/toast";
-  import { api, type SearchResult, type QuestChatSession, type TuneChatSession } from "../lib/api";
+  import { api, type SearchResult, type TuneChatSession } from "../lib/api";
 
   let { currentView = $bindable() }: { currentView: string } = $props();
 
@@ -84,6 +84,7 @@
   let brief = $state<CreateModeBrief | null>(null);
   let draft = $state<PackDraft | null>(null);
   let candidates = $state<CandidateAddon[]>([]);
+  let sessionGeneration = 0;
   let input = $state("");
   let targetCount = $state(80);
   let busy = $state(false);
@@ -239,13 +240,23 @@
 
   async function selectSession(id: string, kind: "create" | "quest" | "tune" = "create") {
     if (!$projectPath) return;
+    const generation = ++sessionGeneration;
     activeId = id;
     activeKind = kind;
     questPendingPlan = false;
     tunePendingAdvise = false;
+    // Clear UI state that belongs to the previously selected chat so a
+    // quest/tune thread never shows stale create-chat artifacts (pillars,
+    // install trail, draft previews) — and vice versa.
+    pillarStatus = [];
+    lastCuration = null;
+    postInstallTrail = false;
+    lastInstallCount = 0;
+    moreMenuOpen = false;
     if (kind === "quest") {
       try {
         const s = await api.quests.loadChat(id, $projectPath);
+        if (generation !== sessionGeneration) return;
         messages = (s.messages ?? []).map((m) => ({
           role: m.role,
           content: m.content,
@@ -266,6 +277,7 @@
     if (kind === "tune") {
       try {
         const s = await api.config.loadChat(id, $projectPath);
+        if (generation !== sessionGeneration) return;
         messages = (s.messages ?? []).map((m) => ({
           role: m.role,
           content: m.content,
@@ -288,6 +300,7 @@
         path: $projectPath,
         chatId: id,
       });
+      if (generation !== sessionGeneration) return;
       messages = s.messages ?? [];
       draft = s.draft ?? null;
       brief = s.draft?.brief ?? brief;
@@ -2331,6 +2344,9 @@
     font-size: 13px;
     line-height: 1.45;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
   }
   .bubble.user {
     align-self: flex-end;
@@ -2474,13 +2490,13 @@
   .btn.primary {
     background: var(--accent-primary);
     border-color: var(--accent-primary);
-    color: #0b1a10;
+    color: var(--on-accent, #000);
     font-weight: 600;
   }
   .btn.accent {
-    background: #3b82f6;
-    border-color: #3b82f6;
-    color: #fff;
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: var(--on-accent, #000);
   }
   .btn.ghost {
     background: transparent;
@@ -2856,7 +2872,7 @@
     font-size: 10px;
     padding: 1px 5px;
     border-radius: 4px;
-    background: color-mix(in srgb, var(--accent, #5b8def) 25%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
   .pillar-warn {
     margin: 8px 0 0;

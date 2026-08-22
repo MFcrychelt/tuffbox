@@ -2562,6 +2562,7 @@
     <div
       class="qe-sheet"
       role="dialog"
+      tabindex="-1"
       aria-modal="true"
       aria-label="Book settings"
       onclick={(e) => e.stopPropagation()}
@@ -2597,6 +2598,7 @@
     <div
       class="qe-sheet"
       role="dialog"
+      tabindex="-1"
       aria-modal="true"
       aria-label="Chapter groups"
       onclick={(e) => e.stopPropagation()}
@@ -2628,6 +2630,7 @@
     <div
       class="qe-sheet"
       role="dialog"
+      tabindex="-1"
       aria-modal="true"
       aria-label="Reward tables"
       onclick={(e) => e.stopPropagation()}
@@ -2658,6 +2661,7 @@
     <div
       class="qe-sheet"
       role="dialog"
+      tabindex="-1"
       aria-modal="true"
       aria-label="Locales"
       onclick={(e) => e.stopPropagation()}
@@ -2701,6 +2705,7 @@
     <div
       class="qe-sheet qe-sheet-wide"
       role="dialog"
+      tabindex="-1"
       aria-modal="true"
       aria-label="KubeJS"
       onclick={(e) => e.stopPropagation()}
@@ -3188,12 +3193,6 @@
   .notice-dismiss:hover {
     opacity: 1;
   }
-  .clear-filter {
-    font-size: 11px;
-    font-weight: 600;
-    white-space: nowrap;
-    padding: 2px 8px;
-  }
   .notice.error {
     color: #fecaca;
     background: rgba(239, 68, 68, 0.1);
@@ -3255,12 +3254,6 @@
   .empty-cta:active {
     transform: translateY(0);
   }
-  .hint {
-    font-size: 12px;
-    border-radius: var(--ftbq-radius-control);
-    padding: 4px 8px;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease;
-  }
   .qe-lay {
     flex: 1;
     min-height: 0;
@@ -3318,54 +3311,12 @@
     min-height: 0;
     overflow: hidden;
   }
-  .canvas-tools {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.2)),
-      var(--ftbq-bg-panel);
-    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
-  }
-  .canvas-tools input {
-    flex: 1;
-    background: var(--ftbq-input-bg);
-    border: 1px solid var(--ftbq-frame);
-    color: inherit;
-    border-radius: var(--ftbq-radius-control);
-    padding: 4px 8px;
-    font-size: 12px;
-  }
-  .canvas-tools input:focus {
-    border-color: var(--ftbq-focus-border);
-    box-shadow: 0 0 0 2px var(--ftbq-focus-ring);
-    outline: none;
-  }
   .filt-count {
     flex: 1;
     padding: 5px 8px;
     font-size: 12px;
     color: var(--ftbq-text-muted);
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
-  }
-  .layout-btns {
-    display: flex;
-    gap: 4px;
-    flex-shrink: 0;
-  }
-  .layout-btn {
-    padding: 3px 8px;
-    font-size: 11px;
-    border: 1px solid var(--ftbq-border);
-    background: rgba(0, 0, 0, 0.25);
-    color: var(--ftbq-text-muted);
-    border-radius: var(--ftbq-radius-control);
-    cursor: pointer;
-  }
-  .layout-btn:hover {
-    color: var(--ftbq-text);
-    border-color: var(--ftbq-accent-teal);
   }
   .search-bar {
     display: flex;
