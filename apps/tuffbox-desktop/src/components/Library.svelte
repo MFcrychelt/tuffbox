@@ -610,11 +610,7 @@
 
   {#if tab === "yours"}
     <div class="yours-wrap">
-      <LibraryInstancesPane
-        bind:currentView
-        onDiscover={() => (tab = "discover")}
-        onCreate={() => openAddInstance("blank")}
-      />
+      <LibraryInstancesPane bind:currentView />
     </div>
   {:else if tab === "discover"}
   <div class="tab-scroll">

@@ -6021,13 +6021,14 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 22px;
   }
 
-  /* Add content browser: ~95% viewport with ~24px blurred/dimmed frame around it. */
+  /* Add content browser: nearly full viewport — only a slim 12px dimmed
+     frame remains so the backdrop blur is barely visible behind it. */
   .modal.add-mods-modal {
     position: relative;
-    width: 95vw;
-    height: 95vh;
-    max-width: calc(100vw - 48px);
-    max-height: calc(100vh - 48px);
+    width: 100vw;
+    height: 100vh;
+    max-width: calc(100vw - 12px);
+    max-height: calc(100vh - 12px);
     display: flex;
     flex-direction: column;
     overflow: hidden;

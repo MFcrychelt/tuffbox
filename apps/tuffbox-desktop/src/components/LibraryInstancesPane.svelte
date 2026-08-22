@@ -21,7 +21,8 @@
     Package,
     Wrench,
     Minus,
-    Compass,
+    ImageIcon,
+    Eraser,
   } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
@@ -42,6 +43,7 @@
     uiScalePercentLive,
     type RecentProject,
   } from "../lib/store";
+  import { homeIcons } from "../lib/homeBootstrap";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import { copyText } from "../lib/clipboard";
@@ -65,12 +67,8 @@
 
   let {
     currentView = $bindable(),
-    onDiscover = undefined,
-    onCreate = undefined,
   }: {
     currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world";
-    onDiscover?: () => void;
-    onCreate?: () => void;
   } = $props();
 
   const LONG_PRESS_MS = 420;
@@ -178,6 +176,48 @@
     groupMap,
     $recentProjects.map((p) => p.path),
   ));
+
+  /** Instance icon data URLs (from listing iconPath), keyed by project path. */
+  const instanceIcons = $derived($homeIcons);
+  const iconRequested = new Set<string>();
+
+  /** Load a single instance's listing icon into the shared homeIcons store. */
+  async function loadInstanceIcon(path: string) {
+    try {
+      const listing = await api.project.getListing(path);
+      const rel = listing.iconPath;
+      if (!rel) {
+        homeIcons.update((m) => ({ ...m, [path]: null }));
+        return;
+      }
+      const data = await api.project.readListingAsset(rel, path);
+      homeIcons.update((m) => ({ ...m, [path]: data }));
+    } catch {
+      homeIcons.update((m) => ({ ...m, [path]: null }));
+    }
+  }
+
+  // Batch-fetch icons for instances that have none cached yet.
+  $effect(() => {
+    const missing = $recentProjects
+      .map((p) => p.path)
+      .filter((path) => !iconRequested.has(path) && instanceIcons[path] === undefined);
+    if (!missing.length) return;
+    for (const path of missing) iconRequested.add(path);
+    void api.home
+      .projectBriefs(missing)
+      .then((briefs) => {
+        const icons: Record<string, string | null> = {};
+        for (const b of briefs) icons[b.path] = b.iconDataUrl ?? null;
+        homeIcons.update((prev) => ({ ...prev, ...icons }));
+        for (const path of missing) {
+          if (icons[path] === undefined) void loadInstanceIcon(path);
+        }
+      })
+      .catch(() => {
+        for (const path of missing) void loadInstanceIcon(path);
+      });
+  });
 
   function gradientFrom(name: string) {
     const colors = ["var(--accent-primary)", "var(--accent-secondary)", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
@@ -701,6 +741,12 @@
       case "folder":
         await openSelectedFolder(project);
         break;
+      case "change-icon":
+        await changeInstanceIcon(project);
+        break;
+      case "clear-icon":
+        await clearInstanceIcon(project);
+        break;
       case "export-mrpack":
         actionBusy = true;
         try {
@@ -813,6 +859,41 @@
     }
   }
 
+  /** Pick a PNG and apply it as the instance's listing icon (shared homeIcons store). */
+  async function changeInstanceIcon(project: RecentProject) {
+    const selected = await openDialog({
+      multiple: false,
+      title: `Choose icon for "${project.info.name}"`,
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (typeof selected !== "string" || !selected) return;
+    actionBusy = true;
+    try {
+      await api.project.setListingIcon(selected, project.path);
+      iconRequested.delete(project.path);
+      await loadInstanceIcon(project.path);
+      toasts.success(`Icon updated for "${project.info.name}"`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  /** Remove the custom listing icon and fall back to the gradient letter tile. */
+  async function clearInstanceIcon(project: RecentProject) {
+    actionBusy = true;
+    try {
+      await api.project.clearListingIcon(project.path);
+      homeIcons.update((prev) => ({ ...prev, [project.path]: null }));
+      toasts.info(`Icon cleared for "${project.info.name}"`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      actionBusy = false;
+    }
+  }
+
   async function confirmClone(newName: string) {
     showClonePrompt = false;
     if (!cloneTarget || !newName.trim()) return;
@@ -918,19 +999,6 @@
           </div>
         {/if}
       </div>
-
-      {#if onDiscover}
-        <button type="button" class="tb-btn" title="Discover" onclick={() => onDiscover()}>
-          <Compass size={16} />
-          <span>Discover</span>
-        </button>
-      {/if}
-      {#if onCreate}
-        <button type="button" class="tb-btn" title="Create" onclick={() => onCreate()}>
-          <Plus size={16} />
-          <span>Create</span>
-        </button>
-      {/if}
 
       <button type="button" class="tb-btn" title="Settings" onclick={() => (currentView = "settings")}>
         <Settings size={16} />
@@ -1046,10 +1114,18 @@
                     <div class="hold-ring" aria-hidden="true"></div>
                     <div
                       class="inst-icon"
+                      class:has-image={!!instanceIcons[project.path]}
                       class:folder-preview={dropTargetPath === project.path}
                       style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}
                     >
-                      {#if dropTargetPath === project.path && dragSource}
+                      {#if instanceIcons[project.path]}
+                        <img
+                          class="inst-icon-img"
+                          src={instanceIcons[project.path]!}
+                          alt=""
+                          draggable="false"
+                        />
+                      {:else if dropTargetPath === project.path && dragSource}
                         <span class="folder-stack" aria-hidden="true">
                           <span class="stack-a">{dragSource.info.name[0]?.toUpperCase()}</span>
                           <span class="stack-b">{project.info.name[0]?.toUpperCase()}</span>
@@ -1095,9 +1171,19 @@
             <div class="side-hero">
               <div
                 class="side-icon"
+                class:has-image={!!instanceIcons[selected.path]}
                 style={`background: linear-gradient(135deg, ${gradientFrom(selected.info.name)}, ${gradientFrom(selected.info.id)})`}
               >
-                {selected.info.name[0]?.toUpperCase() ?? "?"}
+                {#if instanceIcons[selected.path]}
+                  <img
+                    class="side-icon-img"
+                    src={instanceIcons[selected.path]!}
+                    alt=""
+                    draggable="false"
+                  />
+                {:else}
+                  {selected.info.name[0]?.toUpperCase() ?? "?"}
+                {/if}
               </div>
               <div class="side-title" title={selected.info.name}>{selected.info.name}</div>
               <div class="side-meta">
@@ -1241,6 +1327,14 @@
     <button type="button" role="menuitem" onclick={() => void runAction("folder", menuProject)}>
       <Folder size={14} /> Folder
     </button>
+    <button type="button" role="menuitem" onclick={() => void runAction("change-icon", menuProject)} disabled={actionBusy}>
+      <ImageIcon size={14} /> Change icon…
+    </button>
+    {#if instanceIcons[menuProject.path]}
+      <button type="button" role="menuitem" onclick={() => void runAction("clear-icon", menuProject)} disabled={actionBusy}>
+        <Eraser size={14} /> Clear icon
+      </button>
+    {/if}
     <button type="button" role="menuitem" onclick={() => void runAction("copy", menuProject)}>
       <Copy size={14} /> Copy
     </button>
@@ -1693,6 +1787,16 @@
   .inst-icon.folder-preview {
     border-radius: var(--border-radius-lg);
   }
+
+  /* Instance listing icon: cover the whole tile face with crisp pixel art. */
+  .inst-icon-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    image-rendering: pixelated;
+    border-radius: inherit;
+  }
+
   .folder-stack {
     position: relative;
     width: 100%;
@@ -1779,10 +1883,17 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
     font-size: 40px;
     font-weight: 900;
     color: #fff;
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
+  }
+  .side-icon-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    image-rendering: pixelated;
   }
   .side-title {
     font-size: 18px;
