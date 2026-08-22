@@ -216,6 +216,8 @@ export interface LauncherSettings {
   roundedCorners: boolean;
   /** Hide InstanceHome (mods/packs/worlds) preview block on the home dashboard. */
   hideInstanceHome: boolean;
+  /** Quartz backdrop panel behind the home dashboard. Home-only; toggle in Settings. */
+  homeBackdrop: boolean;
 }
 
 export type SidebarMode = "full" | "icons" | "autoHide";

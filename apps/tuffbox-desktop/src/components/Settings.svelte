@@ -195,6 +195,7 @@
     uiScaleMode: "auto",
     roundedCorners: true,
     hideInstanceHome: false,
+    homeBackdrop: true,
   });
   let launcherSaving = $state(false);
   let launcherMsg = $state("");
@@ -1136,6 +1137,17 @@
           Rounded corners
         </label>
         <p class="hint">Round edges on panels, cards, modals, and chrome — works with every theme.</p>
+
+        <label class="check-row" style="margin-top: 14px;">
+          <input
+            type="checkbox"
+            checked={launcher.homeBackdrop !== false}
+            disabled={launcherSaving}
+            onchange={(e) => void persistLauncher({ homeBackdrop: e.currentTarget.checked })}
+          />
+          Home backdrop
+        </label>
+        <p class="hint">Polished stone backdrop panel behind the home dashboard (home only).</p>
 
         <div class="settings-row" style="margin-top: 18px;">
           <div class="settings-row-text">

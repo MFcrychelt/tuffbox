@@ -20,7 +20,7 @@
   import { fade } from "svelte/transition";
   import type { CrashFixBannerPayload } from "../lib/homeBootstrap";
   import type { AccountEntry } from "../lib/store";
-  import HeadAvatar from "./HeadAvatar.svelte";
+  import AccountCarousel from "./AccountCarousel.svelte";
   import MojangNews from "./MojangNews.svelte";
 
   let {
@@ -49,6 +49,7 @@
     softVerifyRemainingSecs = null,
     onPlay,
     onStop,
+    onEditIn,
     onSettings,
     onFolder,
     onToggleOverflow,
@@ -90,6 +91,7 @@
     softVerifyRemainingSecs?: number | null;
     onPlay: () => void;
     onStop: () => void;
+    onEditIn?: () => void;
     onSettings: () => void;
     onFolder: () => void;
     onToggleOverflow: () => void;
@@ -104,68 +106,6 @@
     onSignIn?: () => void;
     onSwitchAccount?: ((uuid: string) => void) | null;
   } = $props();
-
-  let avatarRowEl = $state<HTMLDivElement | null>(null);
-  /** True when the strip overflows — enables the Xbox-style edge fade mask. */
-  let avatarScrollable = $state(false);
-  const avatarEls = new Map<string, HTMLButtonElement>();
-
-  function updateAvatarScrollState() {
-    const el = avatarRowEl;
-    avatarScrollable = !!el && el.scrollWidth > el.clientWidth + 1;
-  }
-
-  // Track the strip overflow (for the edge mask) on mount and on any resize;
-  // re-runs when the accounts prop changes too.
-  $effect(() => {
-    const el = avatarRowEl;
-    void accounts.length;
-    if (!el) return;
-    updateAvatarScrollState();
-    const ro = new ResizeObserver(() => updateAvatarScrollState());
-    ro.observe(el);
-    return () => ro.disconnect();
-  });
-
-  /** Track avatar tile elements so the active one can be scrolled into view. */
-  function avatarRef(node: HTMLButtonElement, uuid: string) {
-    avatarEls.set(uuid, node);
-    return {
-      destroy() {
-        avatarEls.delete(uuid);
-      },
-    };
-  }
-
-  /** Keep the active avatar in view (Xbox / BoI character-select feel). */
-  $effect(() => {
-    const active = activeAccountUuid;
-    if (!active) return;
-    const el = avatarEls.get(active);
-    if (!el) return;
-    const reduced =
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    el.scrollIntoView({
-      behavior: reduced ? "auto" : "smooth",
-      inline: "center",
-      block: "nearest",
-    });
-  });
-
-  /** Vertical wheel → horizontal scroll on the avatar strip. */
-  function onAvatarWheel(e: WheelEvent) {
-    const el = avatarRowEl;
-    if (!el) return;
-    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-      e.preventDefault();
-      el.scrollLeft += e.deltaY;
-    }
-  }
-
-  function ariaLabel(name: string): string {
-    return `Switch to ${name}`;
-  }
 
   const showStorefront = $derived(!hasSelection);
   const playStop = $derived(running && !launching);
@@ -349,12 +289,26 @@
 
     {#if hasSelection}
       <div class="poster-title-row">
-        {#if title}
+        {#if coverKind === "icon" && coverUrl}
+          <img
+            class="poster-pack-icon"
+            src={coverUrl}
+            alt=""
+            draggable="false"
+          />
+        {/if}
+                {#if title}
           {#key title}
             <h1 class="poster-title" in:fade={{ duration: artFadeMs }}>{title}</h1>
           {/key}
         {/if}
-        <button
+        <div class="poster-title-actions">
+          {#if onEditIn}
+            <button type="button" class="edit-in-btn" onclick={onEditIn}>
+              <Package size={15} /> Edit In Tuffbox
+            </button>
+          {/if}
+                <button
           class={["play-btn", { stop: playStop }]}
           onclick={onPlayClick}
           disabled={playDisabled || launching}
@@ -375,6 +329,7 @@
             <span class="play-text">Play</span>
           {/if}
         </button>
+        </div>
       </div>
     {/if}
   </div>
@@ -392,37 +347,14 @@
       </div>
 
       {#if accounts.length > 1}
-        <div
-          class={["account-avatars", { scrollable: avatarScrollable }]}
-          role="group"
-          aria-label="Switch account"
-          bind:this={avatarRowEl}
-          onwheel={onAvatarWheel}
-        >
-          {#each accounts as account, i (account.uuid)}
-            <button
-              type="button"
-              class={["avatar-tile", { active: account.uuid === activeAccountUuid }]}
-              disabled={accountSwitchBusy}
-              title={account.name}
-              aria-pressed={account.uuid === activeAccountUuid}
-              aria-label={ariaLabel(account.name)}
-              use:avatarRef={account.uuid}
-              in:fade={{ duration: 200, delay: Math.min(i * 40, 240) }}
-              out:fade={{ duration: 120 }}
-              onclick={() => onSwitchAccount?.(account.uuid)}
-            >
-              <HeadAvatar
-                skinSrc={accountSkins?.[account.uuid] ?? null}
-                size={40}
-                alt={account.name}
-              />
-              <span class="avatar-name">{account.name}</span>
-            </button>
-          {/each}
-        </div>
+        <AccountCarousel
+          accounts={accounts}
+          skinPaths={accountSkins ?? {}}
+          activeUuid={activeAccountUuid}
+          busy={accountSwitchBusy}
+          onswitch={(uuid) => onSwitchAccount?.(uuid)}
+        />
       {/if}
-
       <div class="play-side play-side-end">
         {#if playerName}
           <span class="poster-player">{playerName}</span>
@@ -456,7 +388,7 @@
   }
 
   .poster.launching .poster-art.icon-fill {
-    filter: blur(28px) brightness(0.85);
+    filter: blur(34px) saturate(1.15) brightness(0.75);
   }
 
   .poster.launching .poster-art.no-blur,
@@ -487,11 +419,11 @@
   }
 
   .poster-art.icon-fill {
-    inset: -8%;
-    width: 116%;
-    height: 116%;
-    filter: blur(28px);
-    transform: scale(1.25);
+    inset: -12%;
+    width: 124%;
+    height: 124%;
+    filter: blur(34px) saturate(1.15) brightness(0.9);
+    transform: scale(1.3);
   }
 
   .poster-art.no-blur,
@@ -742,6 +674,16 @@
     white-space: nowrap;
   }
 
+  .poster-pack-icon {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    border-radius: var(--border-radius-sm);
+    object-fit: cover;
+    image-rendering: pixelated;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  }
+
   /* Build name (left) + Play button (right) sit under the Java Updates strip. */
   .poster-title-row {
     display: flex;
@@ -758,131 +700,43 @@
     flex-shrink: 0;
   }
 
+  .poster-title-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .edit-in-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 16px;
+    border-radius: var(--border-radius-lg);
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    color: var(--hero-fg);
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    -webkit-backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-saturate, 100%));
+    backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-saturate, 100%));
+    box-shadow: inset 0 1px 0 var(--glass-highlight);
+    transition:
+      background var(--motion-fast) var(--ease-out),
+      border-color var(--motion-fast) var(--ease-out),
+      transform var(--motion-fast) var(--ease-spring);
+  }
+
+  .edit-in-btn:hover {
+    background: color-mix(in srgb, #fff 10%, var(--glass-bg));
+    border-color: color-mix(in srgb, #fff 22%, var(--glass-border));
+    transform: translateY(-1px);
+  }
+
   .poster-action-bar {
     margin-top: 14px;
     width: 100%;
-  }
-
-  /* ─── Account mini-avatar strip (Xbox / BoI character-select style) ─── */
-  .account-avatars {
-    margin-top: 10px;
-    display: flex;
-    gap: 10px;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x proximity;
-    padding: 6px 2px 12px;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .account-avatars::-webkit-scrollbar {
-    display: none;
-  }
-
-  /* Edge fade on the strip — only when it actually overflows. */
-  .account-avatars.scrollable {
-    -webkit-mask-image: linear-gradient(
-      to right,
-      transparent 0,
-      #000 22px,
-      #000 calc(100% - 22px),
-      transparent 100%
-    );
-    mask-image: linear-gradient(
-      to right,
-      transparent 0,
-      #000 22px,
-      #000 calc(100% - 22px),
-      transparent 100%
-    );
-  }
-
-  .avatar-tile {
-    position: relative;
-    width: 68px;
-    height: 64px;
-    padding: 6px 4px 4px;
-    flex-shrink: 0;
-    scroll-snap-align: center;
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 4px;
-    border-radius: var(--border-radius-lg);
-    border: 1px solid var(--border-color);
-    background: var(--bg-primary);
-    cursor: pointer;
-    transition:
-      border-color var(--motion-fast, 160ms) var(--ease-out, ease),
-      box-shadow var(--motion-fast, 160ms) var(--ease-out, ease),
-      transform var(--motion-fast, 160ms) var(--ease-out, ease),
-      background var(--motion-fast, 160ms) var(--ease-out, ease);
-  }
-
-  .avatar-tile:hover:not(:disabled) {
-    border-color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
-    transform: translateY(-2px);
-  }
-
-  .avatar-tile.active {
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 45%, transparent);
-    transform: scale(1.06);
-    animation: avatar-pop 320ms var(--ease-out, ease);
-  }
-
-  @keyframes avatar-pop {
-    0% {
-      transform: scale(0.92);
-    }
-    60% {
-      transform: scale(1.1);
-    }
-    100% {
-      transform: scale(1.06);
-    }
-  }
-
-  .avatar-tile.active::after {
-    content: "";
-    position: absolute;
-    bottom: -5px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 5px;
-    height: 5px;
-    border-radius: 999px;
-    background: var(--accent-primary);
-    box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 70%, transparent);
-    pointer-events: none;
-  }
-
-  .avatar-name {
-    max-width: 100%;
-    font-family: var(--font-minecraft);
-    font-size: 10px;
-    line-height: 1.15;
-    color: var(--text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    transition: color var(--motion-fast, 160ms) var(--ease-out, ease);
-  }
-
-  .avatar-tile.active .avatar-name {
-    color: var(--accent-primary);
-  }
-
-  .avatar-tile:disabled {
-    opacity: 0.55;
-    cursor: default;
-  }
-
-  .avatar-tile :global(.head-wrap) {
-    pointer-events: none;
   }
 
   .poster-play-row {
@@ -912,13 +766,6 @@
 
   .play-side-end {
     justify-self: end;
-  }
-
-  /* Avatar strip lives in the middle column where the Play button used to be. */
-  .poster-play-row .account-avatars {
-    margin-top: 0;
-    justify-content: center;
-    max-width: 100%;
   }
 
   .play-btn {
@@ -1257,12 +1104,6 @@
       filter: none;
       animation: none;
       animation-delay: 0ms;
-    }
-
-    .avatar-tile {
-      animation: none;
-      transition: none;
-      transform: none;
     }
 
     .poster-art {

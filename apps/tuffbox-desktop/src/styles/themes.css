@@ -85,25 +85,19 @@
   --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.55);
 }
 
-/* Light theme Home: polished-quartz backdrop with dark silvery content
-   islands (poster, play bar, pack shelf, YouTube feed) so they read clearly
-   against the light stone instead of dissolving into white. */
+/* Light themes: pale polished-quartz backdrop behind the home dashboard. */
+:is([data-theme="light"], [data-theme="tuffbox-light"]) {
+  --home-backdrop-line: rgba(18, 26, 32, 0.05);
+  --home-backdrop-sheen: rgba(255, 255, 255, 0.65);
+  --home-backdrop-a: #e9eeed;
+  --home-backdrop-b: #dfe6e4;
+  --home-backdrop-c: #eaf0ef;
+}
+
+/* Light theme Home: dark silvery content islands (poster, play bar, pack
+   shelf, YouTube feed) so they read clearly against the light stone instead
+   of dissolving into white. */
 :is([data-theme="light"], [data-theme="tuffbox-light"]) .home {
-  --home-quartz-line: rgba(18, 26, 32, 0.05);
-  --home-quartz-sheen: rgba(255, 255, 255, 0.65);
-
-  /* Polished quartz texture — near-white stone + faint seams + soft sheen. */
-  background:
-    radial-gradient(ellipse 140% 90% at 50% -8%, var(--home-quartz-sheen), transparent 58%),
-    linear-gradient(90deg, var(--home-quartz-line) 1px, transparent 1px),
-    linear-gradient(0deg, var(--home-quartz-line) 1px, transparent 1px),
-    linear-gradient(150deg, #e9eeed 0%, #dfe6e4 46%, #eaf0ef 100%);
-  background-size:
-    auto,
-    60px 60px,
-    60px 60px,
-    auto;
-
   /* Surface tokens inside home → dark silvery islands. */
   --bg-primary: #191c21;
   --bg-secondary: #22272e;
@@ -135,6 +129,32 @@
   --tex-speck-a: rgba(150, 170, 190, 0.1);
   --tex-speck-b: rgba(4, 7, 10, 0.34);
   --tex-speck-c: rgba(100, 120, 140, 0.12);
+}
+
+/* Home quartz backdrop panel — every theme gets the polished stone with faint
+   seams + soft sheen, padded and rounded so it reads as a raised surface.
+   Disabled per-theme via Settings → Appearance → "Home backdrop" (home only). */
+.home {
+  background:
+    radial-gradient(ellipse 140% 90% at 50% -8%, var(--home-backdrop-sheen), transparent 58%),
+    linear-gradient(90deg, var(--home-backdrop-line) 1px, transparent 1px),
+    linear-gradient(0deg, var(--home-backdrop-line) 1px, transparent 1px),
+    linear-gradient(150deg, var(--home-backdrop-a) 0%, var(--home-backdrop-b) 46%, var(--home-backdrop-c) 100%);
+  background-size:
+    auto,
+    60px 60px,
+    60px 60px,
+    auto;
+  border-radius: var(--border-radius-xl);
+  padding: 20px;
+  box-shadow: var(--shadow-md);
+}
+
+.home[data-home-backdrop="off"] {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 [data-theme="inferno"] {

@@ -74,6 +74,15 @@
     linear-gradient(0deg, rgba(9, 12, 15, 0.7) 0%, transparent 52%);
   --play-glow: 0 8px 28px color-mix(in srgb, var(--accent-primary) 34%, transparent);
   --play-glow-hover: 0 12px 36px color-mix(in srgb, var(--accent-primary) 46%, transparent);
+
+  /* Home dashboard quartz backdrop (dark default). Light themes override these
+     to a pale stone; the panel is shown for every theme and can be disabled in
+     Settings → Appearance → "Home backdrop" (home only). */
+  --home-backdrop-line: rgba(255, 255, 255, 0.05);
+  --home-backdrop-sheen: rgba(255, 255, 255, 0.1);
+  --home-backdrop-a: #13161b;
+  --home-backdrop-b: #0e1115;
+  --home-backdrop-c: #161a20;
 }
 
 /* Fill the viewport after html zoom shrinks/enlarges CSS pixels. */

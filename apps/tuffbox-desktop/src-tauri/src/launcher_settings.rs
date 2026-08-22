@@ -74,6 +74,9 @@ pub struct LauncherSettings {
     /// Hide InstanceHome preview block on the home dashboard.
     #[serde(default)]
     pub hide_instance_home: bool,
+    /// Quartz backdrop panel behind the home dashboard (home-only).
+    #[serde(default = "default_home_backdrop")]
+    pub home_backdrop: bool,
     /// Inject the in-game overlay bridge (YouTube player + friends/chat) on launch.
     #[serde(default = "default_ingame_overlay")]
     pub ingame_overlay: bool,
@@ -98,6 +101,9 @@ fn default_ui_scale_percent() -> u32 {
     100
 }
 fn default_rounded_corners() -> bool {
+    true
+}
+fn default_home_backdrop() -> bool {
     true
 }
 fn default_ingame_overlay() -> bool {
@@ -143,6 +149,7 @@ impl Default for LauncherSettings {
             ui_scale_mode: "auto".into(),
             rounded_corners: default_rounded_corners(),
             hide_instance_home: false,
+            home_backdrop: default_home_backdrop(),
             ingame_overlay: default_ingame_overlay(),
         }
     }

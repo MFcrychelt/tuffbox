@@ -28,6 +28,7 @@
     openAddInstance,
     launcherSettingsLive,
     homeYoutubePlacement,
+    ideStageRequest,
     type RecentProject,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
@@ -102,6 +103,7 @@
   });
   const youtubeOnHome = $derived($launcherSettingsLive?.showYoutubeOnHome === true);
   const youtubeBesideSkin = $derived(youtubeOnHome && $homeYoutubePlacement === "right");
+  const homeBackdropOn = $derived($launcherSettingsLive?.homeBackdrop !== false);
   const skinPreviewHeight = $derived(youtubeBesideSkin ? 240 : 400);
   const skinAvatarSize = $derived(youtubeBesideSkin ? 72 : 120);
 
@@ -520,7 +522,7 @@
   }
 </script>
 
-<div class="home fade-slide-in">
+<div class="home fade-slide-in" data-home-backdrop={homeBackdropOn ? "on" : "off"}>
   <div class="main-layout">
     <div class="home-main">
       {#if $projectPath}
@@ -553,6 +555,10 @@
         softVerifyRemainingSecs={softVerifyRemainingSecs}
         onPlay={launch}
         onStop={stopGame}
+        onEditIn={() => {
+          ideStageRequest.set("content");
+          currentView = "ide";
+        }}
         onSettings={openSettings}
         onFolder={() => {
           if (selectedProject) void invoke("open_project_folder", { path: selectedProject.path });
