@@ -946,7 +946,7 @@
     inset: 0;
     pointer-events: none;
     z-index: 5;
-    box-shadow: inset 0 0 64px rgba(0, 0, 0, 0.38);
+    box-shadow: inset 0 0 64px rgba(0, 0, 0, 0.25);
   }
 
   .marquee-box {
@@ -965,8 +965,14 @@
   :global(.svelte-flow__background) {
     background-color: var(--ftbq-bg-canvas);
   }
-  :global(.svelte-flow__edge path) {
+  /* Only restyle the visible path — the invisible interaction path (20px hit
+     target) must keep its default width or edge clicks stop registering. */
+  :global(.svelte-flow__edge .svelte-flow__edge-path) {
     stroke-width: 3;
+  }
+  :global(.ftbq-canvas .svelte-flow__handle.connectionindicator),
+  :global(.ftbq-canvas .svelte-flow__node:hover .svelte-flow__handle) {
+    pointer-events: all !important;
   }
   :global(.svelte-flow__edge:hover path) {
     stroke: var(--ftbq-line-hover);

@@ -60,43 +60,45 @@
     class:external
     title={external && data.chapterTitle ? `${q.title} (${data.chapterTitle})` : q.title}
   >
-  <div
-    class="node-icon shape-{shape}"
-    class:clipped
-    class:optional={q.optional || external}
-    class:prog-completed={prog === "completed"}
-    class:prog-started={prog === "started"}
-    class:prog-available={prog === "available"}
-    class:prog-locked={prog === "locked"}
-    style="width:{size}px; height:{size}px;"
-  >
-    <div class="node-face shape-{shape}">
-      <QuestItemIcon
-        itemId={iconId}
-        fallback={glyph(q)}
-        size={Math.max(12, Math.floor(size * 0.62))}
-        revision={data.iconRevision}
+    <div
+      class="node-icon shape-{shape}"
+      class:clipped
+      class:optional={q.optional || external}
+      class:prog-completed={prog === "completed"}
+      class:prog-started={prog === "started"}
+      class:prog-available={prog === "available"}
+      class:prog-locked={prog === "locked"}
+      style="width:{size}px; height:{size}px;"
+    >
+      <div class="node-face shape-{shape}">
+        <QuestItemIcon
+          itemId={iconId}
+          fallback={glyph(q)}
+          size={Math.max(12, Math.floor(size * 0.62))}
+          revision={data.iconRevision}
+        />
+      </div>
+      <!-- Handles live inside .node-icon so they anchor to the icon edges on
+           any node size / label width — not to the measured root box. -->
+      <Handle
+        type="target"
+        position={Position.Top}
+        class="conn-handle"
+        title={external ? undefined : "Drop here: this quest depends on the source"}
       />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        class="conn-handle"
+        title={external ? undefined : "Drag to another quest’s top handle to create a dependency"}
+      />
+      {#if q.optional}<span class="opt">?</span>{/if}
+      {#if prog === "completed"}<span class="check" title="Completed">✓</span>{/if}
     </div>
-    <Handle
-      type="target"
-      position={Position.Top}
-      class="conn-handle"
-      title={external ? undefined : "Drop here: this quest depends on the source"}
-    />
-    <Handle
-      type="source"
-      position={Position.Bottom}
-      class="conn-handle"
-      title={external ? undefined : "Drag to another quest’s top handle to create a dependency"}
-    />
-    {#if q.optional}<span class="opt">?</span>{/if}
-    {#if prog === "completed"}<span class="check" title="Completed">✓</span>{/if}
-  </div>
-  <span class="node-label">{q.title}</span>
-  {#if external && data.chapterTitle}
-    <span class="ch-badge">{data.chapterTitle}</span>
-  {/if}
+    <span class="node-label">{q.title}</span>
+    {#if external && data.chapterTitle}
+      <span class="ch-badge">{data.chapterTitle}</span>
+    {/if}
   </div>
 </div>
 
@@ -119,6 +121,9 @@
     transition: opacity 0.12s ease, transform 0.12s ease;
     z-index: 3;
   }
+  /* Handles are pointer-events:none by default in xyflow until a connection
+     drag starts; the canvas adds pointer-events during drags and hover so the
+     dots are actually grabbable / droppable. */
   .node-root:hover:not(.external) :global(.conn-handle),
   .node-root.sel:not(.external) :global(.conn-handle) {
     opacity: 0.95;

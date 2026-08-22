@@ -166,6 +166,17 @@
     return false;
   }
 
+  /** The manifest itself — diff noise from mod add/remove/update snapshots.
+      Demoted in the timeline and shown as "Manifest" instead of the raw file name. */
+  function isManifestPath(path: string) {
+    return path.replace(/\\/g, "/").toLowerCase() === "project.tuffbox.json";
+  }
+
+  /** Manifest entries sink to the bottom of their timestamp group. */
+  function manifestRank(entry: ChangeEntry): number {
+    return isManifestPath(entry.path ?? "") ? 1 : 0;
+  }
+
   /** Human sentence ops (Install…, Edited file.js) vs raw path dumps. */
   function isHumanOperation(operation: string) {
     const o = (operation ?? "").trim();
@@ -186,6 +197,7 @@
     const operation = (entry.operation ?? "").trim();
     const kind = entry.kind ?? "";
     const op = entry.op ?? "";
+    if (isManifestPath(path)) return "Manifest";
     if (operation && (isBareOpPath(path, kind, op) || isHumanOperation(operation))) return operation;
     if (path && !isBareOpPath(path, kind, op)) return path;
     return operation || path || kind;
@@ -196,6 +208,7 @@
     const path = (entry.path ?? "").trim();
     const kind = entry.kind ?? "";
     const title = entryTitle(entry);
+    if (isManifestPath(path)) return "project.tuffbox.json";
     if (path && !isBareOpPath(path, kind, entry.op) && path !== title) return path;
     const humanKind = kind.replaceAll("_", " ");
     if (humanKind && humanKind !== title) return humanKind;
@@ -716,12 +729,21 @@
     return matchesText && matchesOutcome && matchesMethod && matchesActor && matchesCategory && matchesTracked;
   }));
 
-  const byDay = $derived(visible.reduce<Record<string, ChangeEntry[]>>((acc, entry) => {
-    const key = dayKey(entry.createdAt);
-    acc[key] = acc[key] ?? [];
-    acc[key].push(entry);
-    return acc;
-  }, {}));
+  // Within each day: newest first, manifest diffs (project.tuffbox.json) sink last.
+  const byDay = $derived(
+    visible
+      .slice()
+      .sort(
+        (a, b) =>
+          manifestRank(a) - manifestRank(b) || b.createdAt.localeCompare(a.createdAt),
+      )
+      .reduce<Record<string, ChangeEntry[]>>((acc, entry) => {
+        const key = dayKey(entry.createdAt);
+        acc[key] = acc[key] ?? [];
+        acc[key].push(entry);
+        return acc;
+      }, {}),
+  );
   const dayKeys = $derived(Object.keys(byDay).sort((a, b) => b.localeCompare(a)));
 
   const episodesByDay = $derived(visibleEpisodes.reduce<Record<string, HistoryEpisode[]>>((acc, episode) => {
@@ -1037,6 +1059,7 @@
                 class="change-card"
                 id="change-{entry.id}"
                 class:jar-drift={entry.kind === "jar_drift" || entry.tags?.includes("jar_drift")}
+                class:manifest={isManifestPath(entry.path ?? "")}
                 role="button"
                 tabindex="0"
                 ondblclick={() => {
@@ -1330,6 +1353,9 @@
   .change-preview { min-width: 0; padding: 16px; overflow-y: auto; max-height: 80vh; }
   .change-card { margin-bottom: 28px; padding-bottom: 28px; border-bottom: 1px solid var(--border-color); }
   .change-card.jar-drift { border-color: rgba(245,158,11,.35); }
+  /* Manifest diffs: quiet, secondary — they're bookkeeping, not real file edits. */
+  .change-card.manifest { opacity: 0.62; }
+  .change-card.manifest:hover { opacity: 1; }
   .change-card:last-child { border-bottom: none; }
   .show-more-row { display: flex; justify-content: center; padding: 8px 0 16px; }
   .mini-preview { margin-top: 10px; max-height: 80px; overflow: hidden; opacity: 0.7; mask-image: linear-gradient(to bottom, black 50%, transparent 100%); }
