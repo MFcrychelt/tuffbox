@@ -21,6 +21,11 @@
  * redesign, the light-theme Home (quartz backdrop + dark content islands), and
  * the quest-editor design-system aliases. Current startup CSS is ~30.0 KB
  * gzipped; 31 KB keeps ~1 KB headroom while still catching accidental bloat.
+ *
+ * 2026-08 second bump: CSS 31 -> 32 KB — the toggleable home quartz backdrop
+ * (theme tokens in styles.css + per-theme overrides in themes.css, home-only
+ * Settings toggle) added ~0.2 KB gzipped, landing at 31.2 KB. 32 KB restores
+ * headroom while still catching accidental startup-CSS bloat.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -33,7 +38,7 @@ const indexHtmlPath = path.join(distDir, "index.html");
 
 const BUDGETS_GZIP_BYTES = {
   ".js": 230 * 1024,
-  ".css": 31 * 1024,
+  ".css": 32 * 1024,
 };
 
 if (!existsSync(indexHtmlPath)) {

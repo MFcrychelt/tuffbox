@@ -755,14 +755,14 @@
           {/if}
           {#if searchResults.length > 0}
             <div class="search-results">
-              {#each searchResults.slice(0, 40) as hit (hit.path + ':' + hit.line + hit.text)}
+              {#each searchResults.slice(0, 80) as hit (hit.path + ':' + hit.line + hit.text)}
                 <button class="search-hit" onclick={() => openSearchHit(hit)}>
                   <span class="hit-path">{hit.path}:{hit.line}</span>
                   <span class="hit-text">{hit.text}</span>
                 </button>
               {/each}
-              {#if searchResults.length >= 40}
-                <div class="search-truncated">… and {searchResults.length - 40} more results</div>
+              {#if searchResults.length >= 80}
+                <div class="search-truncated">… and {searchResults.length - 80} more results</div>
               {/if}
             </div>
           {:else if searchLoading}
@@ -938,11 +938,16 @@
     min-height: 0;
     display: grid;
     grid-template-columns: 300px minmax(0, 1fr);
+    /* Explicit single row: without it the implicit row sizes to content (auto),
+       grows past the panel and gets clipped by overflow:hidden — so neither the
+       file tree nor the editor ever scroll. */
+    grid-template-rows: minmax(0, 1fr);
     gap: 12px;
     overflow: hidden;
   }
   .layout.with-ai {
     grid-template-columns: 260px minmax(0, 1fr) minmax(280px, 320px);
+    grid-template-rows: minmax(0, 1fr);
     gap: 0 12px;
   }
   .file-panel, .editor-panel { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
@@ -995,7 +1000,7 @@
     font-size: 12px;
   }
 
-  .search-across { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
+  .search-across { display: flex; flex-direction: column; min-height: 0; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
   .search-across-row { display: flex; gap: 6px; align-items: center; }
   .search-across-row input {
     flex: 1;
@@ -1014,7 +1019,16 @@
   .mini-btn:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
   .search-error, .search-status { color: #fecaca; font-size: 11px; margin-top: 4px; }
   .search-status { color: var(--text-muted); }
-  .search-results { max-height: 140px; overflow: auto; margin-top: 6px; }
+  .search-results {
+    /* Give content search room to breathe: up to ~38% of the panel height on
+       big result sets, while short lists stay compact (no empty gap). */
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: clamp(140px, 38vh, 420px);
+    overflow: auto;
+    margin-top: 6px;
+    overscroll-behavior: contain;
+  }
   .search-hit { width: 100%; display: grid; gap: 2px; text-align: left; padding: 5px 6px; margin-bottom: 2px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); transform: none; }
   .search-hit:hover { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .hit-path { font-size: 11px; color: var(--accent-primary); font-family: ui-monospace, monospace; }
