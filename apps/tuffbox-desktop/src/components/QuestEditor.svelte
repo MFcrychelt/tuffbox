@@ -3029,9 +3029,10 @@
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     box-shadow: none;
     color: var(--ftbq-quest-completed);
-    border-radius: var(--ftbq-radius-control);
-    padding: 2px 8px;
-    font-size: 12px;
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 500;
     cursor: pointer;
     text-shadow: none;
   }
@@ -3058,12 +3059,13 @@
     gap: 8px;
     width: 100%;
     text-align: left;
-    padding: 8px 10px;
+    padding: 9px 12px;
     border: none;
     border-bottom: 1px solid var(--ftbq-border);
     background: transparent;
     color: var(--ftbq-text);
-    font-size: 11px;
+    font-size: 12px;
+    line-height: 1.45;
     cursor: pointer;
   }
   .issue-row:hover {
@@ -3097,9 +3099,9 @@
     justify-content: space-between;
     margin-bottom: 4px;
     flex-shrink: 0;
-    padding: 6px 10px;
-    min-height: 40px;
-    max-height: 48px;
+    padding: 7px 12px;
+    min-height: 44px;
+    max-height: 52px;
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     border: 1px solid var(--ftbq-frame);
     border-radius: var(--ftbq-radius-panel);
@@ -3129,24 +3131,25 @@
     min-width: 0;
     flex-wrap: wrap;
     color: var(--text-muted, var(--ftbq-text-muted));
-    font-weight: 600;
+    font-weight: 500;
     font-size: 13px;
-    letter-spacing: 0.02em;
+    letter-spacing: 0;
   }
   .qe-title .book-name {
     color: var(--text-primary, var(--ftbq-text));
-    font-weight: 600;
+    font-weight: 650;
     text-shadow: none;
   }
   .tb-chip {
     font-size: 11px;
-    font-weight: 600;
-    padding: 2px 8px;
+    font-weight: 500;
+    padding: 3px 9px;
     border-radius: 999px;
     border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text-muted);
     background: color-mix(in srgb, var(--ftbq-bg) 70%, transparent);
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
   .prog-stat {
     color: var(--ftbq-quest-completed);
@@ -3324,7 +3327,7 @@
     gap: 8px;
     padding: 6px 12px;
     border-bottom: 1px solid var(--ftbq-frame);
-    background: linear-gradient(90deg, rgba(61, 184, 168, 0.12), rgba(0, 0, 0, 0.2));
+    background: var(--ftbq-bg-panel);
     flex-shrink: 0;
   }
   .search-bar input {
@@ -3394,16 +3397,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.01em;
     cursor: pointer;
     transition: background 0.12s ease, color 0.12s ease;
   }
   .hit-field {
     color: var(--ftbq-text-muted);
-    text-transform: uppercase;
-    font-size: 9px;
-    letter-spacing: 0.04em;
+    font-size: 10px;
+    letter-spacing: 0.02em;
   }
   .hit-text {
     overflow: hidden;
@@ -3435,20 +3436,20 @@
   .panel-tabs .tab {
     flex: 1;
     min-width: 0;
-    padding: 7px 2px;
+    padding: 8px 2px;
     border: 1px solid transparent;
     border-bottom: none;
     border-radius: var(--ftbq-radius-control) var(--ftbq-radius-control) 0 0;
     background: transparent;
     color: var(--text-muted, var(--ftbq-text-muted));
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
     cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    transition: color 0.12s ease, background 0.12s ease;
   }
   .panel-tabs .tab:last-child {
     border-right: none;
@@ -3474,13 +3475,15 @@
   .panel-content {
     flex: 1;
     min-height: 0;
-    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
-    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    display: flex;
+    flex-direction: column;
+    background: var(--ftbq-bg-panel);
   }
   .sel-hint {
     margin: 0;
     padding: 8px 12px 12px;
-    font-size: 11px;
+    font-size: 12px;
+    line-height: 1.5;
     color: var(--ftbq-text-muted);
     border-top: 1px solid var(--ftbq-frame);
   }

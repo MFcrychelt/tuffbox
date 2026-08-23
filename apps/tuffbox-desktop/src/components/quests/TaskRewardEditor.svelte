@@ -1000,11 +1000,10 @@
   }
   .tr-h h4 {
     margin: 0;
-    color: var(--ftbq-text-muted);
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    color: var(--text-primary, var(--ftbq-text));
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
   }
   .add-row {
     display: flex;
@@ -1070,8 +1069,7 @@
   .card label {
     display: grid;
     gap: 4px;
-    font-size: 11px;
-    text-transform: none;
+    font-size: 12px;
     letter-spacing: 0;
     color: var(--ftbq-text-muted);
   }

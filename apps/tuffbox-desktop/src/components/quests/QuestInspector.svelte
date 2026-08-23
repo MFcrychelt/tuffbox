@@ -639,41 +639,41 @@
       <label
         >Hide dependency lines
         <select value={triVal(quest.hideDependencyLines)} onchange={(e) => tri("hideDependencyLines", e)}>
-          <option value="">unset</option>
-          <option value="true">true</option>
-          <option value="false">false</option>
+          <option value="">Default</option>
+          <option value="true">Hide</option>
+          <option value="false">Show</option>
         </select>
       </label>
       <label
         >Hide dependent lines
         <select value={triVal(quest.hideDependentLines)} onchange={(e) => tri("hideDependentLines", e)}>
-          <option value="">unset</option>
-          <option value="true">true</option>
-          <option value="false">false</option>
+          <option value="">Default</option>
+          <option value="true">Hide</option>
+          <option value="false">Show</option>
         </select>
       </label>
       <label
         >Can repeat
         <select value={triVal(quest.canRepeat)} onchange={(e) => tri("canRepeat", e)}>
-          <option value="">unset</option>
-          <option value="true">true</option>
-          <option value="false">false</option>
+          <option value="">Default</option>
+          <option value="true">Yes</option>
+          <option value="false">No</option>
         </select>
       </label>
       <label
         >Invisible
         <select value={triVal(quest.invisible)} onchange={(e) => tri("invisible", e)}>
-          <option value="">unset</option>
-          <option value="true">true</option>
-          <option value="false">false</option>
+          <option value="">Default</option>
+          <option value="true">Hidden until unlocked</option>
+          <option value="false">Always visible</option>
         </select>
       </label>
       <label
         >Disable toast
         <select value={triVal(quest.disableToast)} onchange={(e) => tri("disableToast", e)}>
-          <option value="">unset</option>
-          <option value="true">true</option>
-          <option value="false">false</option>
+          <option value="">Default</option>
+          <option value="true">Muted</option>
+          <option value="false">Show toast</option>
         </select>
       </label>
       <label
@@ -721,7 +721,8 @@
 </aside>
 
 <style>
-  /* Modern typography system for quest inspector */
+  /* Inspector typography follows the app font stack (--font-sans) so the panel
+     doesn't drift from the rest of the launcher. */
   .insp {
     background: var(--ftbq-bg-panel);
     border-left: 1px solid var(--ftbq-frame);
@@ -732,7 +733,7 @@
     overflow-x: hidden;
     display: flex;
     flex-direction: column;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    font-family: var(--font-sans, inherit);
     font-size: 13px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
@@ -747,17 +748,20 @@
     padding: 12px 14px;
     border-bottom: 1px solid var(--ftbq-frame);
     background: var(--ftbq-bg-panel);
+    position: sticky;
+    top: 0;
+    z-index: 2;
   }
   .insp-h h3 {
     margin: 0;
     font-size: 15px;
-    font-weight: 700;
+    font-weight: 650;
     color: var(--text-primary, var(--ftbq-text));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     letter-spacing: -0.01em;
-    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
+    text-shadow: none;
   }
 
   .qid-mini {
@@ -794,16 +798,15 @@
   }
   .block-h {
     margin: 0;
-    padding: 12px 14px 10px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--ftbq-accent-teal);
+    padding: 11px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--text-primary, var(--ftbq-text));
     display: flex;
     align-items: center;
     gap: 8px;
-    background: color-mix(in srgb, var(--ftbq-bg) 40%, transparent);
+    background: color-mix(in srgb, var(--ftbq-bg) 30%, transparent);
     border-top: 1px solid var(--ftbq-frame);
     border-bottom: 1px solid var(--ftbq-frame);
   }
@@ -844,7 +847,6 @@
     letter-spacing: 0;
     line-height: 1.4;
   }
-
   .fields input:not([type]),
   .fields input[type="number"],
   .fields textarea,
@@ -913,10 +915,9 @@
     cursor: pointer;
     list-style: none;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--ftbq-accent-teal);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.01em;
     padding: 4px 0;
   }
   .fmt-details summary::-webkit-details-marker {
@@ -1100,10 +1101,9 @@
     border-top: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text-muted);
     font-family: inherit;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
     text-align: left;
     padding: 12px 14px;
     cursor: pointer;
@@ -1126,11 +1126,11 @@
   .flags h4 {
     margin: 12px 0 0 !important;
     padding: 0 !important;
-    font-size: 11px !important;
-    font-weight: 700 !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.06em !important;
-    color: var(--ftbq-text-muted) !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    text-transform: none !important;
+    letter-spacing: 0.01em !important;
+    color: var(--ftbq-text-secondary, var(--ftbq-text)) !important;
     border: none !important;
     background: transparent !important;
   }
@@ -1161,32 +1161,30 @@
 
   h4 {
     margin: 0;
-    padding: 12px 14px 10px;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--ftbq-text-muted);
+    padding: 11px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--text-primary, var(--ftbq-text));
     display: flex;
     align-items: center;
     gap: 8px;
-    background: color-mix(in srgb, var(--ftbq-bg) 40%, transparent);
+    background: color-mix(in srgb, var(--ftbq-bg) 30%, transparent);
     border-top: 1px solid var(--ftbq-frame);
     border-bottom: 1px solid var(--ftbq-frame);
   }
   .block-h.tog {
     width: 100%;
     margin: 0;
-    padding: 12px 14px 10px;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--ftbq-text-muted);
+    padding: 11px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--text-primary, var(--ftbq-text));
     display: flex;
     align-items: center;
     gap: 8px;
-    background: color-mix(in srgb, var(--ftbq-bg) 40%, transparent);
+    background: color-mix(in srgb, var(--ftbq-bg) 30%, transparent);
     border-top: 1px solid var(--ftbq-frame);
     border-bottom: 1px solid var(--ftbq-frame);
     font-family: inherit;
@@ -1225,9 +1223,8 @@
   }
   .col-h {
     font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    font-weight: 600;
+    letter-spacing: 0.01em;
     color: var(--ftbq-text-muted);
     padding-bottom: 4px;
     border-bottom: 1px solid var(--ftbq-border);

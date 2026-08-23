@@ -294,9 +294,8 @@
   .rail-h h3 {
     margin: 0;
     color: var(--text-muted, var(--ftbq-text-muted));
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
+    font-size: 11px;
+    letter-spacing: 0.04em;
     font-weight: 600;
     text-shadow: none;
   }
@@ -341,11 +340,10 @@
     border: none;
     background: transparent;
     color: var(--ftbq-text-muted);
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-size: 10px;
+    letter-spacing: 0.04em;
     cursor: pointer;
-    font-weight: 700;
+    font-weight: 600;
   }
   .group-h:hover {
     color: var(--ftbq-text);

@@ -173,10 +173,9 @@
   .ch-set h4 {
     margin: 0;
     padding: 10px 12px 8px;
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 650;
     letter-spacing: 0;
-    text-transform: none;
     color: var(--text-primary, var(--ftbq-text));
     background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
     border-bottom: 1px solid var(--ftbq-frame);
@@ -184,16 +183,21 @@
   .ch-set h4:not(:first-child) {
     margin-top: 4px;
     border-top: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-accent-teal);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary, var(--ftbq-text));
   }
   .ch-set label {
     display: grid;
     gap: 4px;
     color: var(--text-muted, var(--ftbq-text-muted));
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-size: 12px;
+    letter-spacing: 0;
     padding: 0 12px;
+  }
+  .ch-set label:has(> select),
+  .ch-set label:has(> input) {
+    font-weight: 500;
   }
   .icon-edit {
     padding: 0 12px;
