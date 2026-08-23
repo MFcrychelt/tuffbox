@@ -1759,7 +1759,8 @@ html[data-rounded-corners="off"][data-theme] {
 }
 
 /* When rounded mode is on, force common block chrome to use the tokens
-   (covers hardcoded radius leftovers on panels & cards). */
+   (covers hardcoded radius leftovers on panels & cards). The header is a
+   full-width top bar — it never gets rounded, in any theme or corner mode. */
 html[data-rounded-corners="on"][data-theme] :where(
   .panel,
   .card,
@@ -1782,7 +1783,6 @@ html[data-rounded-corners="on"][data-theme] :where(
   .backdrop > .modal,
   .content > section,
   .sidebar,
-  .header,
   .command-palette,
   .toast,
   .tb-toast-enter,
@@ -1863,7 +1863,6 @@ html[data-rounded-corners="off"][data-theme] :where(
   .mr-page,
   .cf-page,
   .sidebar,
-  .header,
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
   textarea,
   select,
@@ -1934,7 +1933,6 @@ html[data-rounded-corners="off"]:is(
     .mr-page,
     .cf-page,
     .sidebar,
-    .header,
     input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
     textarea,
     select,
@@ -2007,7 +2005,6 @@ html:is(
     .backdrop > .modal,
     .content > section,
     .sidebar,
-    .header,
     .command-palette,
     .toast,
     .mr-card,

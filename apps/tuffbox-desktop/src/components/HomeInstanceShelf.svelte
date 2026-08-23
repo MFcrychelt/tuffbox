@@ -363,13 +363,15 @@
     line-height: 1.25;
     text-align: center;
     max-width: 100%;
+    /* Fixed two-line box: clamped pill label left a thin text sliver under
+       the name on hover (WebView2 artifact). */
+    height: calc(11px * 1.25 * 2 + 4px);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
     padding: 2px 6px;
-    border-radius: 999px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
     overflow: hidden;
   }
   .potato .pack-tile:hover .pack-icon-wrap {

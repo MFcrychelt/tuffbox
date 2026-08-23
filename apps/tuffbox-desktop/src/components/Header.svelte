@@ -186,6 +186,8 @@
     background: var(--header-bg, rgba(18, 18, 20, 0.8));
     -webkit-backdrop-filter: var(--header-backdrop, blur(12px));
     backdrop-filter: var(--header-backdrop, blur(12px));
+    /* Full-width top bar — square corners in every theme / corner mode. */
+    border-radius: 0;
     flex-shrink: 0;
   }
 
