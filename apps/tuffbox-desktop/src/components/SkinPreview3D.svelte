@@ -562,10 +562,9 @@
     position: relative;
     border-radius: var(--border-radius-lg);
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow:
-      inset 0 -40px 60px rgba(0, 0, 0, 0.35),
-      0 12px 28px rgba(0, 0, 0, 0.35);
+    /* Glassy theme: no frame, no heavy shadow — the canvas floats on the panel. */
+    border: none;
+    box-shadow: none;
     touch-action: none;
     overscroll-behavior: contain;
     width: 100%;

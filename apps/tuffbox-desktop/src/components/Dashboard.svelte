@@ -884,9 +884,8 @@
     width: 100% !important;
     max-width: 100%;
     border-radius: 0;
-    border-left: none;
-    border-right: none;
-    border-top: none;
+    border: none !important;
+    box-shadow: none !important;
   }
 
   .skin-panel :global(.skin-3d-wrap) {

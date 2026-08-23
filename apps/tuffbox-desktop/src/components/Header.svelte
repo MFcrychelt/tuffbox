@@ -132,7 +132,7 @@
       <span class="online-hint">{onlineOk ? "online" : isTauri() ? "offline" : "preview"}</span>
     </div>
 
-    <button class="secondary" onclick={selectProject}>
+    <button class="secondary switch-quiet" onclick={selectProject}>
       <FolderOpen size={16} />
       {$projectPath ? "Switch" : "Open"}
     </button>
@@ -283,6 +283,27 @@
     font-variant-numeric: tabular-nums;
     color: var(--text-primary);
     min-width: 1ch;
+  }
+
+  /* Switch/Open project: quiet ghost — visible affordance, not a loud CTA. */
+  .switch-quiet {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-muted);
+    font-weight: 500;
+    box-shadow: none;
+    text-shadow: none;
+    transition:
+      color var(--motion-fast, 160ms) ease,
+      background var(--motion-fast, 160ms) ease;
+  }
+  .switch-quiet:hover:not(:disabled) {
+    background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 8%, transparent));
+    border-color: transparent;
+    color: var(--text-secondary);
+  }
+  .switch-quiet:active:not(:disabled) {
+    background: var(--bg-active, color-mix(in srgb, var(--text-primary) 12%, transparent));
   }
   .online-hint {
     text-transform: lowercase;
