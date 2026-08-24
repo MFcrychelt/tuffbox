@@ -270,13 +270,27 @@
     await open(shareUrl);
   }
 
+  // Ready-to-paste message for messengers: browsable https link first (works
+  // for everyone), one-click tuffbox:// deep link second (for installed apps).
+  let shareMessage = $derived.by(() => {
+    if (!shareUrl) return "";
+    const repoPath = shareUrl.replace(/^https:\/\/github\.com\//, "").replace(/\/+$/, "");
+    const meta = preview ? ` v${preview.packVersion}` : "";
+    const lines = [
+      `Minecraft pack${meta} — ${repoPath}`,
+      shareUrl,
+      `Install in TuffBox: tuffbox://install?repo=${encodeURIComponent(repoPath)}`,
+    ];
+    return lines.join("\n");
+  });
+
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function copyShare() {
     if (!shareUrl) return;
     try {
-      await copyText(shareUrl);
+      await copyText(shareMessage || shareUrl);
       copied = true;
       if (copyTimer) clearTimeout(copyTimer);
       copyTimer = setTimeout(() => {
@@ -338,11 +352,11 @@
       <UploadCloud size={12} /> {busy ? phaseLabel(phase) : "Publish pack"}
     </button>
     {#if shareUrl}
-      <button class="ghost mini" onclick={copyShare} title="Copy share URL">
+      <button class="ghost mini" onclick={copyShare} title="Copy share message (link + one-click install)">
         {#if copied}
           <Check size={12} /> Copied!
         {:else}
-          <Copy size={12} /> Copy link
+          <Copy size={12} /> Copy share message
         {/if}
       </button>
       <button class="ghost mini" onclick={openShare}><Link2 size={12} /> Open share link</button>
