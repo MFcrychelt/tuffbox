@@ -269,8 +269,10 @@
           id: `e-${depId}-${q.id}`,
           source: sourceId,
           target: q.id,
-          type: "step",
+          type: "smoothstep",
           style,
+          // Direction arrow at the dependent end: dependency flows prereq → quest.
+          markerEnd: { type: "arrowclosed", width: 16, height: 16, color: "#5c8a9e" },
           selectable: !external,
           data: { depId, dependentId: q.id },
           selected: selectedEdgeId === `e-${depId}-${q.id}`,
@@ -739,7 +741,7 @@
       fitView
       fitViewOptions={{ padding: 0.2 }}
       defaultEdgeOptions={{
-        type: "step",
+        type: "smoothstep",
         style:
           "stroke: var(--ftbq-line, #5c8a9e); stroke-width: 3; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));",
       }}

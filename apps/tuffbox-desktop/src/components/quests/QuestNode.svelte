@@ -110,14 +110,16 @@
     align-items: center;
   }
   .node-root :global(.conn-handle) {
-    width: 10px !important;
-    height: 10px !important;
-    min-width: 10px;
-    min-height: 10px;
+    width: 8px !important;
+    height: 8px !important;
+    min-width: 8px;
+    min-height: 8px;
     background: var(--ftbq-accent-teal) !important;
     border: 2px solid var(--ftbq-frame, #3a3a42) !important;
     border-radius: 50%;
-    opacity: 0;
+    /* Always faintly visible so connection points are discoverable;
+       full opacity on hover/selection. */
+    opacity: 0.35;
     transition: opacity 0.12s ease, transform 0.12s ease;
     z-index: 3;
   }
