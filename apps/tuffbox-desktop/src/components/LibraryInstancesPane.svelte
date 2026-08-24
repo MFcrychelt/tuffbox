@@ -45,7 +45,7 @@
   } from "../lib/store";
   import { homeIcons } from "../lib/homeBootstrap";
   import { toasts } from "../lib/toast";
-  import { api } from "../lib/api";
+  import { api, githubInspectMeta } from "../lib/api";
   import { copyText } from "../lib/clipboard";
   import { launchWithFeedback, killWithFeedback } from "../lib/launch";
   import {
@@ -663,7 +663,10 @@
         : info.status
           ? String(info.status)
           : "packwiz pack";
-      githubInspectSummary = `${info.fullName || trimmed}${version} · ${ready}. Install anonymously?`;
+      const meta = githubInspectMeta(info);
+      githubInspectSummary = `${info.fullName || trimmed}${version} · ${ready}${
+        meta ? ` (${meta})` : ""
+      }. Install anonymously?`;
       githubConfirmOpen = true;
     } catch (e) {
       toasts.error(String(e));

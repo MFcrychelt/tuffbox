@@ -23,7 +23,7 @@
     openAddInstance,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
-  import { api } from "../lib/api";
+  import { api, githubInspectMeta, onInstallLink } from "../lib/api";
   import type { SearchResult } from "../lib/api";
   import CreationTrends from "./CreationTrends.svelte";
   import AddInstanceModal from "./AddInstanceModal.svelte";
@@ -202,7 +202,10 @@
         : info.status
           ? String(info.status)
           : "packwiz pack";
-      githubInspectSummary = `${info.fullName || trimmed}${version} · ${ready}. Install anonymously?`;
+      const meta = githubInspectMeta(info);
+      githubInspectSummary = `${info.fullName || trimmed}${version} · ${ready}${
+        meta ? ` (${meta})` : ""
+      }. Install anonymously?`;
       githubConfirmOpen = true;
     } catch (e) {
       toasts.error(String(e));
@@ -522,6 +525,15 @@
     void loadSwarm();
     void loadDownloadDir();
     if (tab === "discover") search();
+    // `tuffbox://install?repo=…` links land here: valid repos go straight to
+    // the existing confirm dialog, garbage becomes a toast.
+    return onInstallLink((link) => {
+      if (link.status === "valid") {
+        void confirmGithubImport(link.repo);
+      } else {
+        toasts.error(`Install link rejected: "${link.raw}" is not a GitHub owner/repo.`);
+      }
+    });
   });
 
   $effect(() => {

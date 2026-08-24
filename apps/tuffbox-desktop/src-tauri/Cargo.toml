@@ -22,6 +22,11 @@ dirs.workspace = true
 tokio.workspace = true
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
+tauri-plugin-deep-link = "2"
+# `tuffbox://install?repo=owner/repo` share links open the app directly.
+# A second launch hands its argv (the clicked link) to the running instance.
+# Its `deep-link` feature replays those args through tauri-plugin-deep-link.
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

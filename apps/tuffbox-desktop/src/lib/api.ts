@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { projectPath, type AuthState, type McProfile, type DeviceCodeInfo, type SkinSource, type AccountEntry, type McCapeEntry, type CapeProvider, type CapeCatalog, type YggdrasilPreset, type PresenceSettings, type LauncherSettings } from "./store";
 import { get } from "svelte/store";
 
@@ -2771,6 +2772,10 @@ export const api = {
     takePendingLaunch() {
       return cmd<string | null>("take_pending_launch_project");
     },
+    /** One-shot verdict from a `tuffbox://install?repo=…` deep link. */
+    takePendingInstall() {
+      return cmd<InstallLinkPayload | null>("take_pending_install_repo");
+    },
   },
 
   // ── Localization ──────────────────────────────────────────────────
@@ -2950,4 +2955,85 @@ export function fitLabel(fit: string | undefined): string {
     default:
       return "—";
   }
+}
+
+/**
+ * Pack metadata line for the GitHub import confirm dialog, e.g.
+ * `MC 1.20.1 · fabric 0.15.11 · 142 mods (+12 custom)`.
+ * Absent/null fields are omitted instead of rendering "null".
+ */
+export function githubInspectMeta(info: {
+  mcVersion?: string | null;
+  loaderKind?: string | null;
+  loaderVersion?: string | null;
+  modCount?: number | null;
+  customModCount?: number | null;
+}): string {
+  const parts: string[] = [];
+  if (info.mcVersion) parts.push(`MC ${info.mcVersion}`);
+  const loader = [info.loaderKind, info.loaderVersion].filter(Boolean).join(" ");
+  if (loader) parts.push(loader);
+  if (typeof info.modCount === "number" && info.modCount > 0) {
+    const custom =
+      typeof info.customModCount === "number" && info.customModCount > 0
+        ? ` (+${info.customModCount} custom)`
+        : "";
+    parts.push(`${info.modCount} ${info.modCount === 1 ? "mod" : "mods"}${custom}`);
+  }
+  return parts.join(" · ");
+}
+
+// ── tuffbox://install deep link ──────────────────────────────────────
+
+export type InstallLinkPayload =
+  | { status: "valid"; repo: string }
+  | { status: "invalid"; raw: string };
+
+type InstallLinkHandler = (link: InstallLinkPayload) => void;
+
+const installLinkHandlers = new Set<InstallLinkHandler>();
+let queuedInstallLink: InstallLinkPayload | null = null;
+
+function deliverInstallLink(link: InstallLinkPayload): void {
+  // The Library view owns the GitHub confirm dialog; surface it first so a
+  // subscriber exists by the time the user looks.
+  window.dispatchEvent(new CustomEvent("tuffbox:open-library"));
+  if (!installLinkHandlers.size) {
+    // Cold start: Library has not mounted yet — hold until it subscribes.
+    queuedInstallLink = link;
+    return;
+  }
+  queuedInstallLink = null;
+  for (const handler of [...installLinkHandlers]) handler(link);
+}
+
+/** Subscribe to `tuffbox://install?repo=…` links. A subscriber that mounts
+ * late still receives a link that arrived before it existed. Returns an
+ * unlisten function. */
+export function onInstallLink(handler: InstallLinkHandler): () => void {
+  installLinkHandlers.add(handler);
+  const queued = queuedInstallLink;
+  queuedInstallLink = null;
+  if (queued) handler(queued);
+  return () => {
+    installLinkHandlers.delete(handler);
+  };
+}
+
+if (isTauri()) {
+  // Cold start: drain what the backend parked before any UI existed.
+  void api.files
+    .takePendingInstall()
+    .then((pending) => {
+      if (pending) deliverInstallLink(pending);
+    })
+    .catch(() => {});
+  // Warm start: a second instance forwarded the URL to this process.
+  void listen<InstallLinkPayload | null>("tuffbox:install-link", (event) => {
+    if (!event.payload) return;
+    // The backend parks the same link for the next cold start; drop it so a
+    // later launch doesn't replay a link the user already handled.
+    void api.files.takePendingInstall().catch(() => {});
+    deliverInstallLink(event.payload);
+  });
 }

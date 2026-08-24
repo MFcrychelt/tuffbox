@@ -1,6 +1,7 @@
 mod auth;
 mod cosmetics_local;
 mod create_mode_api;
+mod deep_link;
 mod github_auth;
 mod github_pack_commands;
 mod helpers;
@@ -16375,11 +16376,48 @@ async fn read_quest_chapter_text(file_path: String) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
+    let builder = tauri::Builder::default();
+
+    // Must be the very first plugin: a second launch hands its argv (the
+    // clicked `tuffbox://install?…` link) to the instance already running.
+    // Its callback only refocuses the window; URL replay happens inside the
+    // deep-link plugin via its `deep-link` feature.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        use tauri::Manager;
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+        }
+    }));
+    // Registered before `setup`, which reaches for `app.deep_link()`.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
+
+    builder
         .setup(|app| {
             parse_launch_cli_args();
+            // `tuffbox://install?repo=owner/repo` share links.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // Needed in dev and on Linux; a no-op once the installer has
+                // registered the scheme for real.
+                let _ = app.deep_link().register_all();
+
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        deep_link::handle_install_url(&handle, url.as_str());
+                    }
+                });
+                // Cold start: the app was *opened by* the link.
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    for url in urls {
+                        deep_link::handle_install_url(app.handle(), url.as_str());
+                    }
+                }
+            }
             let _ = launcher_settings::load_launcher_settings();
             use tauri::Manager;
             if let Ok(resources) = app.path().resource_dir() {
@@ -16785,6 +16823,7 @@ pub fn run() {
             open_project_folder,
             create_project_desktop_shortcut,
             take_pending_launch_project,
+            deep_link::take_pending_install_repo,
             delete_project,
             create_logs_zip,
             clone_project,
