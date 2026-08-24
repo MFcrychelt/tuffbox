@@ -94,12 +94,8 @@ fn verify_transport_content(root: &Path, meta: &RepoTransportMeta) -> Result<(),
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let actual = crate::github_pack::staging::content_digest(root, &files).map_err(|error| {
-        ImportError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            error.to_string(),
-        ))
-    })?;
+    let actual = crate::github_pack::staging::content_digest(root, &files)
+        .map_err(|error| ImportError::Io(std::io::Error::other(error.to_string())))?;
     if !actual.eq_ignore_ascii_case(&meta.content_digest) {
         return Err(ImportError::ContentDigestMismatch {
             expected: meta.content_digest.clone(),

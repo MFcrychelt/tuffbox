@@ -23,9 +23,7 @@ pub use client::{
 };
 pub use import::{extract_github_tarball, import_repo_tree, safe_relative_path, ImportError};
 pub use publish::{publish_staged_tree, PublishError, PublishResult};
-pub use source::{
-    parse_github_source, validate_github_ref, GitHubSource, GitHubSourceError,
-};
+pub use source::{parse_github_source, validate_github_ref, GitHubSource, GitHubSourceError};
 pub use staging::{
     content_digest, stage_repo_tree, PendingReleaseAsset, StageError, StageOptions, StagedFile,
     StagedRepo,

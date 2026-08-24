@@ -2,12 +2,14 @@
 
 use base64::Engine;
 use serde_json::{json, Value};
+use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Mutex;
 use thiserror::Error;
 
 use crate::github_pack::source::validate_github_ref;
+use crate::github_pack::types::REPO_TRANSPORT_FILE;
 
 const APP_USER_AGENT: &str = "TuffBox-IDE/0.1";
 const MAX_GITHUB_BYTES: u64 = 512 * 1024 * 1024;
@@ -23,8 +25,23 @@ pub enum GitHubError {
     NotFound(String),
     #[error("request failed: {0}")]
     Request(String),
+    #[error(
+        "recursive tree {sha} was truncated by GitHub (repository too large); \
+             refusing to continue against a partial tree"
+    )]
+    TruncatedTree { sha: String },
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+/// Git blob object ID: SHA-1 over `blob {byte_len}\0{bytes}`, matching
+/// `git hash-object`. Lets callers dedup uploads against content-addressed
+/// tree entries without a round trip.
+pub fn git_blob_sha(bytes: &[u8]) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(format!("blob {}\0", bytes.len()));
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
 }
 
 pub trait GitHubApi: Send + Sync {
@@ -351,6 +368,56 @@ pub fn ref_sha(
     }
 }
 
+/// Decodes a Contents API file response to raw bytes (`base64` or plain).
+fn contents_bytes(
+    api: &dyn GitHubApi,
+    owner: &str,
+    repo: &str,
+    path: &str,
+) -> Result<Vec<u8>, GitHubError> {
+    let body = get_json(api, &format!("/repos/{owner}/{repo}/contents/{path}"))?;
+    let content = body
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .replace('\n', "");
+    if body.get("encoding").and_then(|v| v.as_str()) == Some("base64") {
+        Ok(
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, content)
+                .unwrap_or_default(),
+        )
+    } else {
+        Ok(content.into_bytes())
+    }
+}
+
+/// Fetches the `<manifestFile>` referenced by the transport doc with one extra
+/// Contents GET. Preview-only: any failure yields `None` so partial metadata
+/// never fails inspection.
+fn manifest_preview(
+    api: &dyn GitHubApi,
+    owner: &str,
+    repo: &str,
+    transport: Option<&Value>,
+) -> Option<Value> {
+    let manifest_file = transport?.get("manifestFile")?.as_str()?.trim();
+    // Path comes from remote JSON: refuse traversal-shaped values instead of
+    // handing them to the API path builder.
+    if manifest_file.is_empty()
+        || manifest_file.contains('\\')
+        || manifest_file
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return None;
+    }
+    let bytes = contents_bytes(api, owner, repo, manifest_file).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn str_field(manifest: Option<&Value>, pointer: &str) -> Option<String> {
+    manifest?.pointer(pointer)?.as_str().map(str::to_string)
+}
 pub fn inspect_public_pack(
     api: &dyn GitHubApi,
     owner: &str,
@@ -362,28 +429,33 @@ pub fn inspect_public_pack(
         .and_then(|v| v.as_str())
         .unwrap_or("main")
         .to_string();
-    let transport = match get_json(
-        api,
-        &format!("/repos/{owner}/{repo}/contents/.tuffbox/repo-transport.json"),
-    ) {
-        Ok(body) => {
-            let content = body
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .replace('\n', "");
-            let bytes = if body.get("encoding").and_then(|v| v.as_str()) == Some("base64") {
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, content)
-                    .unwrap_or_default()
-            } else {
-                content.into_bytes()
-            };
-            serde_json::from_slice::<Value>(&bytes).ok()
-        }
+    let transport = match contents_bytes(api, owner, repo, REPO_TRANSPORT_FILE) {
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes).ok(),
         Err(GitHubError::NotFound(_)) => None,
         Err(e) => return Err(e),
     };
-    Ok(serde_json::json!({
+    // Rich install preview: one extra Contents GET for the manifest listed by
+    // the transport doc. Metadata only — never the tarball, never mod jars.
+    let manifest = manifest_preview(api, owner, repo, transport.as_ref());
+    let mods = manifest
+        .as_ref()
+        .and_then(|m| m.pointer("/mods"))
+        .and_then(Value::as_array);
+    let total_asset_bytes = transport
+        .as_ref()
+        .and_then(|t| t.get("releaseAssets"))
+        .and_then(Value::as_array)
+        .filter(|assets| !assets.is_empty())
+        .and_then(|assets| {
+            assets
+                .iter()
+                .map(|asset| asset.get("size").and_then(Value::as_u64))
+                .collect::<Option<Vec<_>>>()
+                // All-or-nothing: null unless every asset size is known.
+                .filter(|sizes| sizes.iter().all(|&size| size > 0))
+                .map(|sizes| sizes.iter().sum::<u64>())
+        });
+    Ok(json!({
         "owner": owner,
         "repo": repo,
         "fullName": repo_json.get("full_name").and_then(|v| v.as_str()).unwrap_or(""),
@@ -397,6 +469,21 @@ pub fn inspect_public_pack(
             .and_then(|t| t.get("status").and_then(|s| s.as_str()))
             .map(|s| s == "ready")
             .unwrap_or(false),
+        "projectName": str_field(manifest.as_ref(), "/project/name"),
+        "projectVersion": str_field(manifest.as_ref(), "/project/version"),
+        "mcVersion": str_field(manifest.as_ref(), "/minecraft/version"),
+        "loaderKind": str_field(manifest.as_ref(), "/loader/type"),
+        "loaderVersion": str_field(manifest.as_ref(), "/loader/version"),
+        "modCount": mods.map(|entries| entries.len() as u64),
+        "customModCount": mods.map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry.pointer("/source/type").and_then(Value::as_str) == Some("local")
+                })
+                .count() as u64
+        }),
+        "totalAssetBytes": total_asset_bytes,
     }))
 }
 
@@ -425,6 +512,11 @@ pub fn recursive_tree(
         api,
         &format!("/repos/{owner}/{repo}/git/trees/{sha}?recursive=1"),
     )?;
+    if body.get("truncated").and_then(Value::as_bool) == Some(true) {
+        return Err(GitHubError::TruncatedTree {
+            sha: sha.to_string(),
+        });
+    }
     let tree = body
         .get("tree")
         .and_then(|v| v.as_array())
@@ -449,6 +541,130 @@ pub fn recursive_tree(
             })
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_blob_sha_matches_git_hash_object() {
+        assert_eq!(
+            git_blob_sha(b""),
+            "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        );
+        assert_eq!(
+            git_blob_sha(b"hello"),
+            "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"
+        );
+        assert_eq!(
+            git_blob_sha(b"hello\n"),
+            "ce013625030ba8dba906f756967f9e9ca394464a"
+        );
+    }
+
+    #[test]
+    fn recursive_tree_rejects_truncated_response() {
+        let api = MockGitHub::new("acme", "demo");
+        let tree_sha = post_json(&api, "/repos/acme/demo/git/trees", &json!({ "tree": [] }))
+            .unwrap()
+            .get("sha")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+
+        let ok = recursive_tree(&api, "acme", "demo", &tree_sha).unwrap();
+        assert!(ok.is_empty());
+
+        api.emulate_truncated_tree();
+        let err = recursive_tree(&api, "acme", "demo", &tree_sha).unwrap_err();
+        assert!(matches!(err, GitHubError::TruncatedTree { .. }));
+    }
+    fn seed_head_files(api: &MockGitHub, owner: &str, repo: &str, files: &[(&str, &[u8])]) {
+        let entries: Vec<Value> = files
+            .iter()
+            .map(|(path, bytes)| {
+                let sha = create_blob(api, owner, repo, bytes).unwrap();
+                json!({ "path": path, "mode": "100644", "type": "blob", "sha": sha })
+            })
+            .collect();
+        let tree_sha = create_tree(api, owner, repo, None, &entries).unwrap();
+        let commit = create_commit(api, owner, repo, "seed", &tree_sha, &[]).unwrap();
+        update_ref(api, owner, repo, "heads/main", &commit, true).unwrap();
+    }
+
+    #[test]
+    fn inspect_public_pack_previews_manifest_metadata() {
+        let api = MockGitHub::new("acme", "demo");
+        let transport = json!({
+            "schemaVersion": 2,
+            "manifestFile": "demo.tuffbox.json",
+            "lockfileFile": "demo.tuffbox.lock.json",
+            "packVersion": "1.0.0",
+            "status": "ready",
+            "releaseAssets": [
+                { "modId": "sodium", "fileName": "sodium.jar", "relativePath": "mods/sodium.jar", "sha512": "aa", "size": 1024 },
+                { "modId": "lithium", "fileName": "lithium.jar", "relativePath": "mods/lithium.jar", "sha512": "bb", "size": 512 },
+                { "modId": "custom-lib", "fileName": "custom-lib.jar", "relativePath": "mods/custom-lib.jar", "sha512": "cc", "size": 256 },
+            ],
+        });
+        let manifest = json!({
+            "schemaVersion": "0.1.0",
+            "project": { "id": "demo-pack", "name": "Demo Pack", "version": "1.0.0" },
+            "minecraft": { "version": "1.21.1" },
+            "loader": { "type": "fabric", "version": "0.16.9" },
+            "profiles": [ { "id": "client", "side": "client" } ],
+            "mods": [
+                { "id": "sodium", "name": "Sodium", "version": "0.6.0", "side": "client",
+                  "source": { "type": "modrinth", "projectId": "AANobbMI" } },
+                { "id": "lithium", "name": "Lithium", "version": "0.14.0", "side": "client",
+                  "source": { "type": "modrinth", "projectId": "gvQqBUqZ" } },
+                { "id": "custom-lib", "name": "Custom Lib", "version": "1.0.0", "side": "both",
+                  "file_name": "custom-lib.jar", "source": { "type": "local" } },
+            ],
+        });
+        let transport_bytes = serde_json::to_vec(&transport).unwrap();
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        seed_head_files(
+            &api,
+            "acme",
+            "demo",
+            &[
+                (".tuffbox/repo-transport.json", transport_bytes.as_slice()),
+                ("demo.tuffbox.json", manifest_bytes.as_slice()),
+            ],
+        );
+
+        let before = api.request_count();
+        let out = inspect_public_pack(&api, "acme", "demo").unwrap();
+        assert_eq!(out["fullName"], "acme/demo");
+        assert_eq!(out["packVersion"], "1.0.0");
+        assert_eq!(out["ready"], true);
+        assert_eq!(out["projectName"], "Demo Pack");
+        assert_eq!(out["projectVersion"], "1.0.0");
+        assert_eq!(out["mcVersion"], "1.21.1");
+        assert_eq!(out["loaderKind"], "fabric");
+        assert_eq!(out["loaderVersion"], "0.16.9");
+        assert_eq!(out["modCount"], 3);
+        assert_eq!(out["customModCount"], 1);
+        assert_eq!(out["totalAssetBytes"], 1792);
+        // Budget: repo meta + transport + manifest only. No tarball, no
+        // per-mod downloads.
+        assert_eq!(api.request_count() - before, 3);
+    }
+
+    #[test]
+    fn inspect_public_pack_without_transport_reports_null_preview() {
+        let api = MockGitHub::new("acme", "empty");
+        let out = inspect_public_pack(&api, "acme", "empty").unwrap();
+        assert_eq!(out["ready"], false);
+        assert_eq!(out["projectName"], Value::Null);
+        assert_eq!(out["modCount"], Value::Null);
+        assert_eq!(out["customModCount"], Value::Null);
+        assert_eq!(out["totalAssetBytes"], Value::Null);
+        // Repo meta + failed transport lookup; no manifest GET attempted.
+        assert_eq!(api.request_count(), 2);
+    }
 }
 
 pub fn blob_bytes(
@@ -589,8 +805,16 @@ struct MockState {
     releases: Vec<Value>,
     assets: HashMap<String, Vec<u8>>,
     conflict_next_ref: bool,
+    /// One-shot: next `GET /git/trees` response carries `"truncated": true`.
+    truncate_next_tree: bool,
+    /// Handled `POST /git/blobs` requests (each is a real upload on live API).
+    created_blobs: u64,
+    /// Handled `GET /git/trees` requests.
+    tree_requests: u64,
+    /// Handled `send_json` requests (any method; used by preview tests to
+    /// assert the request budget).
+    requests_handled: u64,
 }
-
 struct CommitObj {
     tree: String,
     parents: Vec<String>,
@@ -613,12 +837,32 @@ impl MockGitHub {
                 releases: Vec::new(),
                 assets: HashMap::new(),
                 conflict_next_ref: false,
+                truncate_next_tree: false,
+                created_blobs: 0,
+                tree_requests: 0,
+                requests_handled: 0,
             }),
         }
     }
 
     pub fn fail_next_ref_update(&self) {
         self.inner.lock().unwrap().conflict_next_ref = true;
+    }
+
+    pub fn emulate_truncated_tree(&self) {
+        self.inner.lock().unwrap().truncate_next_tree = true;
+    }
+
+    pub fn created_blob_count(&self) -> u64 {
+        self.inner.lock().unwrap().created_blobs
+    }
+
+    pub fn tree_request_count(&self) -> u64 {
+        self.inner.lock().unwrap().tree_requests
+    }
+
+    pub fn request_count(&self) -> u64 {
+        self.inner.lock().unwrap().requests_handled
     }
 
     pub fn head_files(&self) -> HashMap<String, Vec<u8>> {
@@ -679,6 +923,7 @@ impl GitHubApi for MockGitHub {
     ) -> Result<(u16, Value), GitHubError> {
         let (path_only, _query) = path.split_once('?').unwrap_or((path, ""));
         let mut g = self.inner.lock().unwrap();
+        g.requests_handled += 1;
         let prefix = format!("/repos/{}/{}", g.owner, g.repo);
         if method == "GET" && path_only == prefix {
             return Ok((
@@ -738,6 +983,8 @@ impl GitHubApi for MockGitHub {
             };
         }
         if method == "GET" && path_only.starts_with(&format!("{prefix}/git/trees/")) {
+            g.tree_requests += 1;
+            let truncated = std::mem::take(&mut g.truncate_next_tree);
             let sha = path_only.trim_start_matches(&format!("{prefix}/git/trees/"));
             let sha = g
                 .commits
@@ -747,7 +994,10 @@ impl GitHubApi for MockGitHub {
             let Some(tree) = g.trees.get(&sha) else {
                 return Ok((404, json!({ "message": "Not Found" })));
             };
-            return Ok((200, json!({ "sha": sha, "tree": tree, "truncated": false })));
+            return Ok((
+                200,
+                json!({ "sha": sha, "tree": tree, "truncated": truncated }),
+            ));
         }
         if method == "GET" && path_only.starts_with(&format!("{prefix}/git/blobs/")) {
             let sha = path_only.trim_start_matches(&format!("{prefix}/git/blobs/"));
@@ -772,7 +1022,10 @@ impl GitHubApi for MockGitHub {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(content)
                 .unwrap_or_default();
-            let sha = Self::alloc(&mut g);
+            // Git blob storage is content-addressed: the SHA is derived from
+            // the bytes, so re-uploading identical content is idempotent.
+            let sha = git_blob_sha(&bytes);
+            g.created_blobs += 1;
             g.blobs.insert(sha.clone(), bytes);
             return Ok((201, json!({ "sha": sha })));
         }

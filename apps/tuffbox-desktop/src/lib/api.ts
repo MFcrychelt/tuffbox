@@ -2479,6 +2479,18 @@ export const api = {
           packVersion?: string | null;
           status?: string | null;
           ready: boolean;
+          /** Install-preview metadata below: present only when the repo
+           * carries .tuffbox/repo-transport.json + manifest; null otherwise. */
+          projectName?: string | null;
+          projectVersion?: string | null;
+          mcVersion?: string | null;
+          loaderKind?: string | null;
+          loaderVersion?: string | null;
+          modCount?: number | null;
+          /** Sum of transport releaseAssets sizes; null when any is unknown. */
+          totalAssetBytes?: number | null;
+          /** Mods whose source.type === "local" (custom in-repo mods). */
+          customModCount?: number | null;
         }>("github_pack_inspect_source", { source });
       },
       authStatus() {

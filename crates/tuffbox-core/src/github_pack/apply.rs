@@ -482,7 +482,7 @@ mod tests {
             .create_with_meta(
                 "before-update",
                 "github_pack_update",
-                &instance.path().join("demo.tuffbox.json"),
+                instance.path().join("demo.tuffbox.json"),
                 None::<&std::path::Path>,
                 &[] as &[std::path::PathBuf],
                 SnapshotMeta {
