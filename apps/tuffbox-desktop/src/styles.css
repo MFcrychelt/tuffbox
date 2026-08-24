@@ -171,7 +171,18 @@ html[data-ui-scaled="1"] #app {
 
 [data-theme="light"] button,
 [data-theme="tuffbox-light"] button {
-  color: var(--on-accent);
+  color: #ffffff;
+  background: #39393b;
+  border-color: #39393b;
+  border-bottom-color: #232425;
+}
+
+[data-theme="light"] button.primary,
+[data-theme="tuffbox-light"] button.primary {
+  background: #491ac0;
+  border-color: #491ac0;
+  border-bottom-color: #32127f;
+  color: #ffffff;
 }
 
 [data-theme="light"] button.secondary,
@@ -239,20 +250,23 @@ body {
   line-height: 1.5;
 }
 
-/* Buttons follow the Prism Launcher look: flat, palette-driven, no motion
-   gimmicks. Default button is NEUTRAL (secondary-style); accent fill requires
-   the explicit .primary class. Hover/active change background only. */
+/* Buttons in the Ore UI (Minecraft) style, per Prism "Dark Amethyst" theme:
+   near-square, flat fill, and a darker bottom edge that visually depresses
+   when pressed (border-bottom shrinks + button shifts down). Accent fill is
+   amethyst #491AC0 via .primary. */
 button {
   font-family: inherit;
   cursor: pointer;
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius-md);
-  padding: 8px 14px;
-  background: var(--bg-elevated);
-  color: var(--text-primary);
+  border: 1px solid #39393b;
+  border-bottom-width: 3px;
+  border-radius: 3px;
+  padding: 6px 12px 5px;
+  background: #39393b;
+  color: #ffffff;
   font-weight: 600;
   font-size: 13px;
-  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  transition: background 0.1s ease, border-color 0.1s ease, margin-top 0.05s ease,
+    padding 0.05s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -260,38 +274,45 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: #47484a;
+  border-color: #47484a;
 }
 
 button:active:not(:disabled) {
-  background: var(--bg-active);
+  background: #2a2b2c;
+  border-bottom-width: 1px;
+  margin-top: 2px;
 }
 
 button.primary {
-  background: var(--accent-primary);
-  color: var(--on-accent, #000);
-  border-color: transparent;
-  font-weight: 700;
+  background: #491ac0;
+  border-color: #491ac0;
+  border-bottom-color: #32127f;
 }
 
 button.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: #5c2dd5;
+  border-color: #5c2dd5;
+  border-bottom-color: #3f1a96;
 }
 
 button.secondary {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
+  background: #39393b;
+  color: #ffffff;
+  border: 1px solid #39393b;
+  border-bottom-width: 3px;
+  border-bottom-color: #232425;
 }
 
 button.secondary:hover {
-  background: var(--bg-hover);
+  background: #47484a;
 }
 
 button.ghost {
   background: transparent;
   color: var(--text-secondary);
   border-color: transparent;
+  border-bottom-width: 1px;
 }
 
 button.ghost:hover {
