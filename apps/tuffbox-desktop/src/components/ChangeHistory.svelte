@@ -177,6 +177,14 @@
     return isManifestPath(entry.path ?? "") ? 1 : 0;
   }
 
+  /** Episode actions: chronological, but manifest diffs sink to the bottom. */
+  function sortedEpisodeActions(actions: ChangeEntry[]): ChangeEntry[] {
+    if (actions.length < 2) return actions;
+    const ranked = actions.map((a, i) => ({ a, r: manifestRank(a), i }));
+    ranked.sort((x, y) => x.r - y.r || y.a.createdAt.localeCompare(x.a.createdAt) || x.i - y.i);
+    return ranked.map((x) => x.a);
+  }
+
   /** Human sentence ops (Install…, Edited file.js) vs raw path dumps. */
   function isHumanOperation(operation: string) {
     const o = (operation ?? "").trim();
@@ -939,7 +947,7 @@
             </div>
           {:else if viewMode === "episodes"}
             {#each visibleEpisodeSlice as episode (episode.id)}
-              {@const actions = resolveEpisodeActions(episode)}
+              {@const actions = sortedEpisodeActions(resolveEpisodeActions(episode))}
               <div class="change-card episode-card" id="episode-{episode.id}">
                 <div class="preview-header">
                   <div>
@@ -1011,6 +1019,7 @@
                       {#each actions as entry (entry.id)}
                         <div
                           class="nested-action"
+                          class:manifest={isManifestPath(entry.path ?? "")}
                           id="change-{entry.id}"
                           role="button"
                           tabindex="0"
@@ -1382,6 +1391,8 @@
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
   }
+  .nested-action.manifest { opacity: 0.62; }
+  .nested-action.manifest:hover { opacity: 1; }
   .nested-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .nested-head strong { color: var(--text-primary); font-size: 13px; }
   .nested-head small { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
