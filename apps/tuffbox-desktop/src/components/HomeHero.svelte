@@ -789,7 +789,6 @@
 
   .play-btn:hover:not(:disabled) {
     box-shadow: var(--play-glow-hover);
-    transform: translateY(-1px);
   }
 
   .play-btn:disabled {
@@ -812,7 +811,6 @@
   .play-btn.stop:hover:not(:disabled) {
     background: var(--accent-danger, #ef4444);
     box-shadow: 0 12px 32px color-mix(in srgb, var(--accent-danger, #ef4444) 52%, transparent);
-    transform: translateY(-1px);
   }
 
   :global(html.potato-pc) .play-btn.stop,

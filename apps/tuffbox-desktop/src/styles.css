@@ -239,26 +239,43 @@ body {
   line-height: 1.5;
 }
 
+/* Buttons follow the Prism Launcher look: flat, palette-driven, no motion
+   gimmicks. Default button is NEUTRAL (secondary-style); accent fill requires
+   the explicit .primary class. Hover/active change background only. */
 button {
   font-family: inherit;
   cursor: pointer;
-  border: none;
+  border: 1px solid var(--border-color);
   border-radius: var(--border-radius-md);
-  padding: 10px 18px;
-  background: var(--accent-primary);
-  color: var(--on-accent, #000);
-  font-weight: 700;
-  font-size: 14px;
-  transition: all 0.15s ease;
+  padding: 8px 14px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 13px;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
 }
 
-button:hover {
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+button:active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+button.primary {
+  background: var(--accent-primary);
+  color: var(--on-accent, #000);
+  border-color: transparent;
+  font-weight: 700;
+}
+
+button.primary:hover:not(:disabled) {
   background: var(--accent-hover);
-  transform: translateY(-1px);
 }
 
 button.secondary {
@@ -274,7 +291,7 @@ button.secondary:hover {
 button.ghost {
   background: transparent;
   color: var(--text-secondary);
-  border: none;
+  border-color: transparent;
 }
 
 button.ghost:hover {
@@ -492,25 +509,19 @@ html.potato-pc .spin * {
   animation: tb-spin 900ms linear infinite !important;
 }
 
-/* Subtle press feedback on interactive controls (calm: delayed hover, instant press). */
+/* Press feedback (Prism-style: background only, no transform). Calm delayed
+   hover, instant press. */
 button {
-  transition: transform var(--motion-fast, 160ms) var(--ease-spring, ease),
-    background var(--motion-fast, 160ms) ease,
+  transition: background var(--motion-fast, 160ms) ease,
     border-color var(--motion-fast, 160ms) ease,
-    color var(--motion-fast, 160ms) ease,
-    box-shadow var(--motion-med, 240ms) var(--ease-out, ease),
-    filter var(--motion-fast, 160ms) ease;
+    color var(--motion-fast, 160ms) ease;
   transition-delay: 0ms;
 }
 button:hover:not(:disabled) {
   transition-delay: var(--motion-hover-delay, 70ms);
 }
 button:active:not(:disabled) {
-  transform: scale(0.97);
   transition-delay: 0ms;
-}
-html.potato-pc button:active:not(:disabled) {
-  transform: none;
 }
 
 /* ── Search fields with overlaid glyph ─────────────────────────────
