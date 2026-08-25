@@ -118,6 +118,7 @@
   let copiedFlash = $state(false);
 
   let lastPathForDefaults = $state("");
+  let lastInfoReadyForDefaults = $state(false);
 
   const activeFormat = $derived(FORMATS.find((f) => f.id === exportMode) ?? FORMATS[0]);
   const activePath = $derived(
@@ -179,12 +180,6 @@
   function refreshDefaultPath() {
     if (!$projectPath) return;
     void loadDefaultPaths($projectPath);
-  }
-
-  function onProjectPathChange(path: string | null) {
-    if (!path || path === lastPathForDefaults) return;
-    lastPathForDefaults = path;
-    void loadDefaultPaths(path);
   }
 
   function setActivePath(value: string) {
@@ -299,7 +294,16 @@
   }
 
   $effect(() => {
-    onProjectPathChange($projectPath);
+    const path = $projectPath;
+    const infoReady = !!$projectInfo;
+    if (!path) return;
+    // Recompute defaults when the path changes AND once more once
+    // projectInfo resolves, so filenames use real id/version instead of
+    // the "modpack"/"1.0.0" fallbacks.
+    if (path === lastPathForDefaults && infoReady === lastInfoReadyForDefaults) return;
+    lastPathForDefaults = path;
+    lastInfoReadyForDefaults = infoReady;
+    void loadDefaultPaths(path);
   });
 </script>
 

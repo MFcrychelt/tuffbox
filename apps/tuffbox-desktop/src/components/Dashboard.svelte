@@ -21,6 +21,7 @@
     launchProgress,
     runningInstances,
     isProjectRunning,
+    normalizeInstancePath,
     loginTypeLabel,
     formatPlaytime,
     libraryTabRequest,
@@ -77,6 +78,10 @@
   let heroOverflowOpen = $state(false);
   let updateGateOpen = $state(false);
   let launchAfterGate = false;
+  // Honest spinner: launchWithFeedback resets the global isLaunching flag as
+  // soon as the spawn invoke returns; hold our own flag until the backend
+  // reports this instance actually exited ("process-exited" event).
+  let launchHoldPath = $state<string | null>(null);
   let heroActionBusy = $state(false);
   let showRenamePrompt = $state(false);
   let showClonePrompt = $state(false);
@@ -85,6 +90,8 @@
 
   const selectedProject = $derived($recentProjects.find((p) => p.path === selectedPath));
   const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
+  // Spinner covers spawn + play session, not just the invoke round-trip.
+  const launchingHeld = $derived($isLaunching || launchHoldPath !== null);
   const selectedInstanceMeta = $derived.by(() => {
     const info = selectedProject?.info;
     if (!info) return "";
@@ -338,6 +345,12 @@
       const unlistenExit = await listen<{ id: string }>("process-exited", (event) => {
         const id = event.payload?.id;
         if (id) {
+          if (
+            launchHoldPath &&
+            normalizeInstancePath(id) === normalizeInstancePath(launchHoldPath)
+          ) {
+            launchHoldPath = null;
+          }
           void api.stats.get(id).then((s) => {
             homeStats.update((prev) => ({
               ...prev,
@@ -408,7 +421,9 @@
   }
 
   async function doLaunch(path: string) {
-    await launchWithFeedback({ path, profile: "client" });
+    const result = await launchWithFeedback({ path, profile: "client" });
+    // null = launch failed (toast shown); otherwise hold spinner until exit.
+    if (result) launchHoldPath = path;
     const project = $recentProjects.find((p) => p.path === path);
     if (project) recentProjects.add(project);
     void api.stats.get(path).then((s) => {
@@ -533,7 +548,7 @@
         emptyZero={$recentProjects.length === 0}
         title={selectedProject?.info.name ?? ""}
         meta={selectedInstanceMeta}
-        launching={$isLaunching}
+        launching={launchingHeld}
         launchMessage={$launchProgress?.message ?? ""}
         launchPercent={$launchProgress?.percent ?? null}
         running={selectedRunning}

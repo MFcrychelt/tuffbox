@@ -14,7 +14,7 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, youtubeQueueOpen, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, youtubeQueueOpen, theme, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import YoutubeQueueWindow from "./components/YoutubeQueueWindow.svelte";
   import { api } from "./lib/api";
@@ -26,6 +26,7 @@
   import MinecraftLogin from "./components/MinecraftLogin.svelte";
   import { launchWithFeedback, registerLaunchCrashListener, registerProcessListeners, refreshRunningInstances, startRunningInstancesWatch } from "./lib/launch";
   import { registerSoftVerifyListeners } from "./lib/softVerify";
+  import type { ThemeId } from "./lib/themes";
 
   const SWARM_ONBOARD_KEY = "tuffbox.swarm.onboarding.done";
 
@@ -299,8 +300,8 @@
         document.documentElement.classList.add("potato-pc");
       }
       if (s.theme) {
-        localStorage.setItem("tuffbox-theme", s.theme);
-        document.documentElement.setAttribute("data-theme", s.theme === "light" ? "tuffbox-light" : s.theme);
+        // Shared store applies data-theme + persists; map legacy "light".
+        theme.set((s.theme === "light" ? "tuffbox-light" : s.theme) as ThemeId);
       }
       autoHideWorkflowRail.set(!!s.autoHideWorkflowRail);
       sidebarMode.set(normalizeSidebarMode(s.sidebarMode));

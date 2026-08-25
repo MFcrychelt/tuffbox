@@ -25,11 +25,12 @@
     BRAND_ICON_CREEPER_SRC,
     BRAND_ICON_CREEPER_SRC_SM,
     settingsNavRequest,
+    theme,
     type BrandIconId,
   } from "../lib/store";
   import ConfettiBurst from "./ConfettiBurst.svelte";
   import {
-    readStoredTheme, commitTheme, type ThemeId,
+    readStoredTheme, type ThemeId,
   } from "../lib/themes";
   import AiSettingsPanel from "./AiSettingsPanel.svelte";
   import ThemePicker from "./ThemePicker.svelte";
@@ -102,7 +103,6 @@
     return invoke<T>(cmd, args);
   }
 
-  let theme = $state<ThemeId>(readStoredTheme());
   let reducedMotion = $state(localStorage.getItem("tuffbox-reduced-motion") === "1");
   let shortcuts = $state<any[]>([]);
   let shortcutsOpen = $state(false);
@@ -259,11 +259,10 @@
         ...launcher,
         uiScaleMode: resolveUiScaleMode(launcher),
       };
-      theme = (THEMES_SAFE(launcher.theme) as ThemeId) || readStoredTheme();
+      theme.set((THEMES_SAFE(launcher.theme) as ThemeId) || readStoredTheme());
       reducedMotion = !!launcher.potatoPc;
       applyPotatoPc(reducedMotion);
       localStorage.setItem("tuffbox-reduced-motion", reducedMotion ? "1" : "0");
-      commitTheme(theme);
       autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
       sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
       const applied = applyUiScaleFromSettings(launcher);
@@ -315,9 +314,9 @@
     try {
       const next: LauncherSettings = { ...launcher, ...partial };
       if (partial?.theme) {
-        theme = THEMES_SAFE(partial.theme) as ThemeId;
-        commitTheme(theme);
-        next.theme = theme;
+        const nextTheme = THEMES_SAFE(partial.theme) as ThemeId;
+        theme.set(nextTheme);
+        next.theme = nextTheme;
       }
       if (partial && "uiScalePercent" in partial) {
         next.uiScalePercent = normalizeUiScalePercent(partial.uiScalePercent);
@@ -386,7 +385,7 @@
   }
 
   function onThemeChange(id: ThemeId) {
-    theme = id;
+    theme.set(id);
     void persistLauncher({ theme: id });
   }
 
@@ -1118,7 +1117,7 @@
         </div>
         <div class="field">
           <span class="field-label">Theme</span>
-          <ThemePicker value={theme} onChange={onThemeChange} />
+          <ThemePicker value={$theme} onChange={onThemeChange} />
           <p class="hint">Hover a swatch to preview — click to save.</p>
         </div>
         <label class="check-row">

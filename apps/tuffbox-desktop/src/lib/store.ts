@@ -1,6 +1,7 @@
 import { get, writable } from "svelte/store";
 import type { RunningInstance } from "./api";
 import { api } from "./api";
+import { readStoredTheme, commitTheme, type ThemeId } from "./themes";
 export {
   changeOptionKey,
   fixPreferenceByFingerprint,
@@ -505,6 +506,12 @@ export function openLauncherSettings(
     window.dispatchEvent(new CustomEvent("tuffbox:open-settings"));
   }
 }
+
+// Single source of truth for the app theme. Initialized from localStorage
+// (legacy ids migrated by readStoredTheme); every change re-applies the
+// data-theme attribute and persists, keeping all subscribers in sync.
+export const theme = writable<ThemeId>(readStoredTheme());
+theme.subscribe((id) => commitTheme(id));
 
 // Global launch state — true while a launch is in progress.
 // Used by Header to show spinner, and by Dashboard to disable play button.

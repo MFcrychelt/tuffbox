@@ -45,6 +45,7 @@
   } from "../lib/store";
   import { homeIcons } from "../lib/homeBootstrap";
   import { toasts } from "../lib/toast";
+  import { listen } from "@tauri-apps/api/event";
   import { api, githubInspectMeta } from "../lib/api";
   import { copyText } from "../lib/clipboard";
   import { launchWithFeedback, killWithFeedback } from "../lib/launch";
@@ -312,9 +313,41 @@
         return;
       }
       await invoke("set_last_opened_project", { path });
-      await launchWithFeedback({ path, profile: "client" });
+      // launchWithFeedback returns as soon as the JVM is spawned; keep the
+      // spinner honest by clearing on process-exited for this instance
+      // (same lifecycle as Dashboard.launch), not synchronously in finally.
+      let exited = false;
+      let unlisten: () => void = () => {};
+      const onExited = (event: { payload?: { id?: string } }) => {
+        if (event.payload?.id === path) {
+          exited = true;
+          unlisten();
+        }
+      };
+      listen<{ id: string; code?: number | null }>("process-exited", onExited).then((fn) => {
+        if (exited) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      });
+      try {
+        await launchWithFeedback({ path, profile: "client" });
+        // Fallback: if no exit event arrives (e.g. instance already counted
+        // as running elsewhere), clear after a generous grace period.
+        setTimeout(() => {
+          if (!exited) {
+            unlisten();
+            launching = null;
+          }
+        }, 15000);
+        return;
+      } catch (e) {
+        toasts.error(`Launch failed: ${e}`);
+      } finally {
+        unlisten();
+      }
     } finally {
-      launching = null;
       void loadStats(selectedPath ?? project.path);
     }
   }

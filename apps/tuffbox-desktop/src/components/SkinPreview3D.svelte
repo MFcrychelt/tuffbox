@@ -43,6 +43,9 @@
   let capeFrameIdx = 0;
   let capeAnimTimer: ReturnType<typeof setInterval> | null = null;
   let initGen = 0;
+  // Generation counter for applyTextures: a newer prop change (or dispose)
+  // invalidates any in-flight texture fetch so a stale skin can't win.
+  let texGen = 0;
 
   function stopCapeAnim() {
     if (capeAnimTimer) {
@@ -350,6 +353,7 @@
 
   async function applyTextures() {
     if (!viewer) return;
+    const myGen = ++texGen;
     const skin = skinUrl;
     const cache = cachedPath;
     const nextCape = capeKey(capeUrl);
@@ -370,6 +374,7 @@
       let displayedFromCache = false;
       if (canShowCache && cache) {
         displayedFromCache = await loadSkinFromCachedPath(cache);
+        if (myGen !== texGen || !viewer) return; // superseded or disposed mid-load
         if (displayedFromCache) {
           lastCachedPath = cache;
           skinShown = true;
@@ -387,6 +392,9 @@
           : Promise.resolve(null as HTMLCanvasElement[] | null);
 
       const [skinData, capeFramesResult] = await Promise.all([skinPromise, capePromise]);
+
+      // Newer load started while we awaited — discard stale results.
+      if (myGen !== texGen || !viewer) return;
 
       if (skinData) {
         await viewer.loadSkin(skinData, { model: model ?? "auto-detect" });
@@ -413,7 +421,8 @@
       console.error("[SkinPreview3D] load textures failed:", e);
       loadError = String(e);
     } finally {
-      loading = false;
+      // Only the newest run owns the loading overlay.
+      if (myGen === texGen) loading = false;
     }
   }
 
@@ -503,6 +512,7 @@
     void initViewer();
     return () => {
       initGen++;
+      texGen++;
       stopCapeAnim();
       if (viewer) {
         viewer.dispose();
