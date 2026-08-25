@@ -4,10 +4,13 @@
   import type { AccountEntry } from "../lib/store";
 
   /**
-   * Xbox-style account picker: a horizontal rail of skin heads that the user
-   * scrolls with the mouse wheel (or arrows / click). The active head is always
-   * centered; neighbors scale down and fade, and the rail edges dim out via a
-   * CSS mask so long strips melt into the panel sides.
+   * Xbox-style account picker: a horizontal rail of skin heads steered with
+   * the mouse wheel, arrow keys, or clicks. Navigation only moves a LOCAL
+   * selection highlight; the real account switch happens on explicit confirm
+   * (Enter, the confirm chip, or clicking the already-selected head). Escape
+   * cancels back to the active account. The signed-in head keeps its glow; a
+   * pending pick wears a dashed ring instead. The selected head stays
+   * centered; neighbors scale down and fade, rail edges dim via a CSS mask.
    */
   let {
     accounts = [],
@@ -24,11 +27,12 @@
   } = $props();
 
   const HEAD_W = 76; // rendered head size (canvas) — CSS scale handles the rest
-  const SLOT_GAP = 6; // px between slots
+  const SLOT_GAP = 18; // px between slots — wide enough for the rail to breathe
   const SLOT_W = HEAD_W + SLOT_GAP; // one step of the rail
-  const WHEEL_STEP = 22; // accumulated deltaY per account step
-  const WHEEL_COOLDOWN_MS = 90; // min gap between wheel-driven switches
+  const WHEEL_STEP = 22; // accumulated deltaY per selection step
+  const WHEEL_COOLDOWN_MS = 90; // min gap between wheel-driven steps
 
+  let root = $state<HTMLDivElement | undefined>();
   let viewport = $state<HTMLDivElement | undefined>();
   let viewportW = $state(288);
   let index = $state(
@@ -43,8 +47,12 @@
 
   const count = $derived(accounts.length);
   const activeIndex = $derived(accounts.findIndex((a) => a.uuid === activeUuid));
+  const selected = $derived(accounts[index]);
+  // A pick awaiting confirmation: selected head differs from the signed-in one.
+  const pending = $derived(count > 1 && !!selected && selected.uuid !== activeUuid);
 
-  // Follow external account switches (AccountManager, login modal, boot).
+  // Follow external account switches (AccountManager, login modal, boot);
+  // doubles as cancel when the world changes behind a pending pick.
   $effect(() => {
     index = activeIndex >= 0 ? activeIndex : 0;
   });
@@ -65,15 +73,33 @@
     const d = Math.abs(i - index);
     const scale = d === 0 ? 1 : d === 1 ? 0.72 : d === 2 ? 0.55 : 0.42;
     const opacity = d === 0 ? 1 : d === 1 ? 0.82 : 0.4;
-    return { active: d === 0, scale, opacity };
+    return { scale, opacity };
+  }
+
+  /** Move the LOCAL selection; never touches the backend. */
+  function select(i: number) {
+    const next = Math.min(count - 1, Math.max(0, i));
+    if (next === index || busy) return;
+    index = next;
+    // Focus the group so Enter confirms the pick instead of leaking to
+    // whatever the user had focused before they started scrolling.
+    root?.focus({ preventScroll: true });
   }
 
   function move(dir: number) {
-    if (count <= 1 || busy) return;
-    const next = Math.min(count - 1, Math.max(0, index + dir));
-    if (next === index) return;
-    const target = accounts[next];
-    if (target) onswitch(target.uuid);
+    if (count <= 1) return;
+    select(index + dir);
+  }
+
+  /** Explicit confirmation: the only path that fires the real switch. */
+  function confirmSelection() {
+    if (busy || !selected || selected.uuid === activeUuid) return;
+    onswitch(selected.uuid);
+  }
+
+  function cancelSelection() {
+    index = activeIndex >= 0 ? activeIndex : 0;
+    wheelAcc = 0;
   }
 
   function onWheel(e: WheelEvent) {
@@ -96,13 +122,30 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
+    if (count <= 1) return;
     if (e.key === "ArrowLeft") {
       e.preventDefault();
       move(-1);
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
       move(1);
+    } else if (e.key === "Enter") {
+      // preventDefault stops a focused slot button from also firing click.
+      e.preventDefault();
+      confirmSelection();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelSelection();
     }
+  }
+
+  /** First click picks a neighbor; clicking the picked head again confirms. */
+  function onSlotClick(i: number) {
+    if (busy || count <= 1) return;
+    const account = accounts[i];
+    if (!account || account.uuid === activeUuid) return;
+    if (i === index) confirmSelection();
+    else select(i);
   }
 </script>
 
@@ -112,6 +155,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="account-carousel"
+  bind:this={root}
   tabindex="0"
   role="group"
   aria-label="Minecraft accounts"
@@ -140,16 +184,17 @@
   {/if}
 
   <div class="carousel-viewport" bind:this={viewport}>
-    <div class="carousel-track" style="transform: translateX({trackOffset}px);">
+    <div class="carousel-track" style="gap: {SLOT_GAP}px; transform: translateX({trackOffset}px);">
       {#each accounts as account, i (account.uuid)}
         {@const v = visual(i)}
         <button
           type="button"
           class="carousel-slot"
-          class:active={v.active}
+          class:active={account.uuid === activeUuid}
+          class:selected={i === index}
           disabled={busy}
           title={account.name}
-          onclick={() => onswitch(account.uuid)}
+          onclick={() => onSlotClick(i)}
           style="--scale: {v.scale}; --opacity: {v.opacity};"
         >
           <span class="slot-head" aria-hidden="true">
@@ -161,8 +206,10 @@
     </div>
   </div>
 
-  {#if count > 1}
-    <div class="carousel-hint">Scroll to switch · ← →</div>
+  {#if pending}
+    <button type="button" class="carousel-confirm" disabled={busy} onclick={confirmSelection}>
+      Use “{selected?.name}” · Enter
+    </button>
   {/if}
 </div>
 
@@ -210,7 +257,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 5px;
+    gap: 9px;
     width: 76px;
     padding: 0;
     border: none;
@@ -258,11 +305,21 @@
     box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 70%, transparent);
   }
 
+  /* Pending pick: dashed ring, distinct from the active glow above. */
+  .carousel-slot.selected:not(.active) .slot-head {
+    outline: 2px dashed color-mix(in srgb, var(--accent-primary) 75%, transparent);
+    outline-offset: 2px;
+  }
+
+  .carousel-slot.selected:not(.active) .slot-name {
+    color: var(--text-primary);
+  }
+
   .slot-name {
     font-family: var(--font-minecraft);
-    font-size: 8px;
+    font-size: 12px;
     letter-spacing: 0.3px;
-    max-width: 76px;
+    max-width: 92px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -277,17 +334,18 @@
 
   .carousel-arrow {
     position: absolute;
-    top: 30px;
+    top: 38px; /* head-row center: pad-top 14px + head 76/2 − arrow 28/2 */
     z-index: 2;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     padding: 0;
     border-radius: var(--border-radius-sm);
     background: var(--bg-elevated);
     border: 1px solid var(--border-color);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
     color: var(--text-secondary);
     cursor: pointer;
     transition:
@@ -297,8 +355,8 @@
       transform var(--motion-fast) var(--ease-spring);
   }
 
-  .carousel-arrow.left { left: 0; }
-  .carousel-arrow.right { right: 0; }
+  .carousel-arrow.left { left: 8px; }
+  .carousel-arrow.right { right: 8px; }
 
   .carousel-arrow:hover:not(:disabled) {
     border-color: var(--accent-primary);
@@ -311,14 +369,31 @@
     cursor: default;
   }
 
-  .carousel-hint {
-    margin-top: 9px;
-    text-align: center;
-    font-size: 10px;
+  .carousel-confirm {
+    display: block;
+    margin: 10px auto 0;
+    padding: 4px 14px;
+    font-size: 11px;
     font-weight: 600;
-    letter-spacing: 0.03em;
-    color: var(--text-muted);
+    letter-spacing: 0.02em;
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    border: 1px solid var(--accent-primary);
+    border-radius: var(--border-radius-sm);
+    cursor: pointer;
     user-select: none;
+    transition:
+      background var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out);
+  }
+
+  .carousel-confirm:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  }
+
+  .carousel-confirm:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   /* Weak GPUs / reduced motion: snap instead of sliding. */
@@ -330,6 +405,7 @@
   @media (prefers-reduced-motion: reduce) {
     .carousel-track,
     .carousel-slot,
+    .carousel-confirm,
     .carousel-arrow {
       transition: none;
     }
