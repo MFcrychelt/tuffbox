@@ -13226,8 +13226,49 @@ async fn install_modpack(
                 "tuffbox-pack-{}.zip",
                 tuffbox_core::time_util::compact_now()
             ));
-            tuffbox_core::download_with_sha1(&source, &tmp, None)
-                .map_err(|e| format!("pack download failed: {e}"))?;
+            // download_with_sha1 trusts a pre-existing dest when no checksum is
+            // known; a stale/interrupted file would then fail deep inside the
+            // importer with an opaque zip error. Verify the archive actually
+            // opens and contains a pack marker, re-download once fresh if not.
+            let mut last_err: Option<String> = None;
+            for attempt in 0..2 {
+                if tmp.exists() {
+                    let _ = std::fs::remove_file(&tmp);
+                }
+                remove_part_file(&tmp);
+                if attempt == 1 {
+                    let _ = app.emit(
+                        "modpack-install-progress",
+                        serde_json::json!({ "phase": "downloading-pack", "message": "Retrying pack download…" }),
+                    );
+                }
+                match tuffbox_core::download_with_sha1(&source, &tmp, None) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        last_err = Some(format!("pack download failed: {e}"));
+                        continue;
+                    }
+                }
+                if !tmp.is_file() {
+                    last_err = Some("pack download produced no file".into());
+                    continue;
+                }
+                match verify_pack_archive(&tmp) {
+                    Ok(()) => {
+                        last_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(format!(
+                            "downloaded pack is not a valid modpack archive ({e}); retrying"
+                        ));
+                    }
+                }
+            }
+            if let Some(e) = last_err {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e);
+            }
             tmp
         } else {
             PathBuf::from(&source)
@@ -13341,6 +13382,23 @@ async fn install_modpack(
             // Re-extract into final instance (temp was cleaned).
             std::fs::create_dir_all(instance_dir.join("mods")).map_err(|e| e.to_string())?;
             extract_mods_only_zip(&pack_path, &instance_dir.join("mods"))?;
+        }
+
+        // Modrinth .mrpack bundles config/resourcepack/shader files under
+        // overrides/ — they must land in the instance or the pack installs
+        // without its configs. Mirrors the CurseForge overrides step above.
+        if ext == "mrpack" {
+            let n = extract_mrpack_overrides(&pack_path, &instance_dir)
+                .map_err(|e| format!("failed to extract Modrinth overrides: {e}"))?;
+            if n > 0 {
+                let _ = app.emit(
+                    "modpack-install-progress",
+                    serde_json::json!({
+                        "phase": "overrides",
+                        "message": format!("Extracted {n} override files")
+                    }),
+                );
+            }
         }
 
         let manifest_path = instance_dir.join(format!("{}.tuffbox.json", manifest.project.id));
@@ -13457,6 +13515,75 @@ fn extract_mods_only_zip(zip_path: &Path, mods_dir: &Path) -> Result<(), String>
         std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Extracts a Modrinth .mrpack `overrides/` tree into the instance dir.
+/// Returns the number of files written. Files already provided by the index
+/// (mods/ jars that will be downloaded separately) are still extracted if
+/// present — the index download skips existing non-empty files anyway.
+fn extract_mrpack_overrides(pack_path: &Path, instance_dir: &Path) -> Result<usize, String> {
+    let file = std::fs::File::open(pack_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let prefix = "overrides/";
+    let mut count = 0usize;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let name = entry.name().replace('\\', "/");
+        if !name.starts_with(prefix) || name.ends_with('/') {
+            continue;
+        }
+        let rel = &name[prefix.len()..];
+        if rel.is_empty() || rel.contains("..") {
+            continue;
+        }
+        let dest = instance_dir.join(rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut out = std::fs::File::create(&dest).map_err(|e| format!("write {rel}: {e}"))?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| format!("write {rel}: {e}"))?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Opens the archive and checks it contains at least one known pack marker.
+/// Guards against truncated/HTML-error-page downloads that would otherwise
+/// fail deep inside the importer with an opaque zip error.
+fn verify_pack_archive(path: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("cannot open pack: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("corrupt zip: {e}"))?;
+    for i in 0..archive.len() {
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| format!("corrupt zip: {e}"))?;
+        let name = entry.name().replace('\\', "/");
+        let lower = name.to_lowercase();
+        if lower == "modrinth.index.json"
+            || lower.ends_with("/modrinth.index.json")
+            || lower == "manifest.json"
+            || lower.ends_with("/manifest.json")
+            || lower == "instance.cfg"
+            || lower.ends_with("/instance.cfg")
+            || lower.ends_with(".jar")
+        {
+            return Ok(());
+        }
+    }
+    Err("no modrinth.index.json / manifest.json / instance.cfg / jars found".into())
+}
+
+/// Removes the resumable-download sidecar (<name>.tuffbox.part) for a dest.
+fn remove_part_file(dest: &Path) {
+    let name = dest
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("download");
+    let part = dest.with_file_name(format!("{name}.tuffbox.part"));
+    if part.exists() {
+        let _ = std::fs::remove_file(part);
+    }
 }
 
 fn extract_prism_zip_content(zip_path: &Path, instance_dir: &Path) -> Result<(), String> {
