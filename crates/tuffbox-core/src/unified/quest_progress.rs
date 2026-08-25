@@ -6,7 +6,7 @@
 //! We only surface completion / started / locked for the canvas overlay —
 //! no write-back in Phase C.
 
-use crate::unified::quest_book::{QuestBook, Quest};
+use crate::unified::quest_book::{Quest, QuestBook};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -136,11 +136,7 @@ pub fn load_progress_for_book(
         .unwrap_or_default();
 
     let completed_keys = collect_id_keys(raw.get("completed"));
-    let task_keys = collect_id_keys(
-        raw
-            .get("task_progress")
-            .or_else(|| raw.get("taskProgress")),
-    );
+    let task_keys = collect_id_keys(raw.get("task_progress").or_else(|| raw.get("taskProgress")));
 
     let mut snap = build_progress_snapshot(book, &completed_keys, &task_keys);
     snap.world = world;
@@ -223,7 +219,11 @@ fn id_matches_any(id: &str, keys: &HashSet<String>) -> bool {
 }
 
 fn id_key_variants(id: &str) -> Vec<String> {
-    let mut out = vec![id.to_string(), id.to_ascii_lowercase(), id.to_ascii_uppercase()];
+    let mut out = vec![
+        id.to_string(),
+        id.to_ascii_lowercase(),
+        id.to_ascii_uppercase(),
+    ];
     let hex = id.trim_start_matches("0x");
     if let Ok(n) = u64::from_str_radix(hex, 16) {
         out.push(n.to_string());
@@ -251,9 +251,11 @@ fn collect_id_keys(v: Option<&serde_json::Value>) -> HashSet<String> {
         for (k, val) in obj {
             let active = match val {
                 serde_json::Value::Bool(b) => *b,
-                serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) != 0
-                    || n.as_u64().unwrap_or(0) != 0
-                    || n.as_f64().unwrap_or(0.0) != 0.0,
+                serde_json::Value::Number(n) => {
+                    n.as_i64().unwrap_or(0) != 0
+                        || n.as_u64().unwrap_or(0) != 0
+                        || n.as_f64().unwrap_or(0.0) != 0.0
+                }
                 serde_json::Value::String(s) => !s.is_empty() && s != "0",
                 serde_json::Value::Null => false,
                 _ => true,
@@ -422,7 +424,11 @@ mod tests {
                 title: "C".into(),
                 title_from_snbt: true,
                 icon: None,
-                quests: vec![mk("AAAA", &[]), mk("BBBB", &["AAAA"]), mk("CCCC", &["BBBB"])],
+                quests: vec![
+                    mk("AAAA", &[]),
+                    mk("BBBB", &["AAAA"]),
+                    mk("CCCC", &["BBBB"]),
+                ],
                 group: None,
                 order_index: None,
                 filename: None,

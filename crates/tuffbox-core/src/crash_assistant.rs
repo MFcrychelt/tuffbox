@@ -122,6 +122,7 @@ pub fn run_full_analysis(ctx: &AnalysisCtx) -> CrashAnalysisReport {
     findings.extend(check_cascading_config_mask(&combined));
     findings.extend(check_render_stack_conflict(ctx, &combined));
     findings.extend(check_mcreator_mods(&ctx.installed_mods));
+    findings.extend(check_resourcepack_shader_recoverable(ctx, &combined));
     findings.extend(check_conflict_log_phrases(ctx, &combined));
 
     // Deduplicate by code (keep first / highest-severity order).
@@ -156,7 +157,16 @@ fn f(
     auto_fix: Option<&str>,
     refs: &[&str],
 ) -> CrashAnalysisFinding {
-    fx(severity, code, title, description, auto_fix, refs, vec![], None)
+    fx(
+        severity,
+        code,
+        title,
+        description,
+        auto_fix,
+        refs,
+        vec![],
+        None,
+    )
 }
 
 fn fx(
@@ -220,11 +230,9 @@ fn contains_mod_token(haystack: &str, needle: &str) -> bool {
     let mut start = 0;
     while let Some(rel) = haystack[start..].find(needle) {
         let abs = start + rel;
-        let before_ok = abs == 0
-            || !haystack.as_bytes()[abs - 1].is_ascii_alphanumeric();
+        let before_ok = abs == 0 || !haystack.as_bytes()[abs - 1].is_ascii_alphanumeric();
         let end = abs + needle.len();
-        let after_ok = end >= haystack.len()
-            || !haystack.as_bytes()[end].is_ascii_alphanumeric();
+        let after_ok = end >= haystack.len() || !haystack.as_bytes()[end].is_ascii_alphanumeric();
         if before_ok && after_ok {
             return true;
         }
@@ -401,7 +409,9 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
             .iter()
             .filter(|l| {
                 let lower = l.to_lowercase();
-                (lower.contains("mixin") || lower.contains("@inject") || lower.contains("@redirect"))
+                (lower.contains("mixin")
+                    || lower.contains("@inject")
+                    || lower.contains("@redirect"))
                     && !looks_like_mod_inventory_line(l)
             })
             .cloned()
@@ -468,11 +478,9 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
                 ]
             })
             .collect();
-        let evidence = first_evidence_line(
-            search,
-            &["Mixin apply failed", "Mixin", "@Inject", "mixin"],
-        )
-        .map(truncate_evidence);
+        let evidence =
+            first_evidence_line(search, &["Mixin apply failed", "Mixin", "@Inject", "mixin"])
+                .map(truncate_evidence);
         vec![fx(
             "error",
             "MIXIN_APPLY_FAILED",
@@ -1237,7 +1245,9 @@ fn check_render_stack_conflict(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAn
         && (lower.contains("tesselation") || lower.contains("shader") || lower.contains("iris"));
     let dh_mixin = lower.contains("noncullingfrustummixin")
         || lower.contains("mixins.oculus.compat.dh")
-        || (lower.contains("oculus") && lower.contains("distanthorizons") && lower.contains("mixin"));
+        || (lower.contains("oculus")
+            && lower.contains("distanthorizons")
+            && lower.contains("mixin"));
 
     if (tainted || field_break) && (has_embeddium || has_oculus || lower.contains("oculus")) {
         let mut fixes = Vec::new();
@@ -1317,11 +1327,7 @@ fn check_render_stack_conflict(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAn
                 })
                 .map(|s| s.as_str())
                 .unwrap_or("distanthorizons");
-            fixes.push(fix_action(
-                "updateMod",
-                "Update Distant Horizons",
-                Some(id),
-            ));
+            fixes.push(fix_action("updateMod", "Update Distant Horizons", Some(id)));
             fixes.push(fix_action(
                 "disableMod",
                 "Disable Distant Horizons to test",
@@ -1366,6 +1372,103 @@ fn check_render_stack_conflict(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAn
     }
 
     out
+}
+
+/// Resource packs that fail to build a required core shader are NOT a crash:
+/// Minecraft logs the error, drops the selected resource packs and keeps
+/// running on vanilla resources. Surface it as an informational note instead
+/// of a scary GPU-crash signal, naming the missing shader programs so the
+/// user can tell which pack broke.
+fn check_resourcepack_shader_recoverable(
+    _ctx: &AnalysisCtx,
+    combined: &str,
+) -> Vec<CrashAnalysisFinding> {
+    let lower = combined.to_lowercase();
+    let caught = lower.contains("caught error loading resourcepacks");
+    let shader_programs_failed = lower.contains("failed to load required shader programs");
+    let shader_missing = lower.contains("could not find shader");
+    if !(caught || (shader_programs_failed && shader_missing)) {
+        return Vec::new();
+    }
+
+    // Collect missing program ids: list entries like
+    // ` - minecraft:core/rendertype_solid: …` and inline mentions like
+    // `Could not find shader minecraft:core/rendertype_solid`.
+    let mut shaders: Vec<String> = Vec::new();
+    for line in combined.lines() {
+        if let Some(id) = missing_shader_id_from_line(line) {
+            if !shaders.contains(&id) {
+                shaders.push(id);
+            }
+        }
+    }
+    let shader_note = match shaders.len() {
+        0 => String::new(),
+        1 => format!(" Missing shader program: {}.", shaders[0]),
+        n => {
+            let shown: Vec<String> = shaders.iter().take(8).cloned().collect();
+            format!(
+                " Missing shader programs: {}{}",
+                shown.join(", "),
+                if n > shown.len() { "…" } else { "" },
+            )
+        }
+    };
+
+    let mut description = String::from(
+        "The game could not build a required shader while loading a resource pack, so \
+         Minecraft disabled that pack and continued on vanilla resources. Nothing \
+         crashed — safe to ignore unless visuals look wrong; remove or update the \
+         pack to stop this message.",
+    );
+    description.push_str(&shader_note);
+
+    vec![fx(
+        "info",
+        "RESOURCEPACK_SHADER_RECOVERED",
+        "Resource pack skipped (game recovered)",
+        &description,
+        None,
+        &[],
+        vec![],
+        first_evidence_line(
+            combined,
+            &[
+                "Caught error loading resourcepacks",
+                "Failed to load required shader programs",
+                "Could not find shader",
+            ],
+        )
+        .map(truncate_evidence),
+    )]
+}
+
+/// Extract a namespaced shader id such as `minecraft:core/rendertype_solid`
+/// from a log line reporting a missing required shader program.
+fn missing_shader_id_from_line(line: &str) -> Option<String> {
+    const INLINE_NEEDLE: &str = "could not find shader ";
+    let lower = line.to_lowercase();
+    let rest = if let Some(i) = lower.find(INLINE_NEEDLE) {
+        &line[i + INLINE_NEEDLE.len()..]
+    } else {
+        let trimmed = line.trim().trim_start_matches("- ");
+        // List entries look like `- minecraft:core/rendertype_solid: …`.
+        if trimmed.starts_with("minecraft:") {
+            trimmed
+        } else {
+            return None;
+        }
+    };
+    let id: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '/' | '_' | '.' | '-'))
+        .collect();
+    // A real program id always carries a namespace and a path segment.
+    if id.contains(':') && id.contains('/') && !id.ends_with('.') {
+        Some(id)
+    } else {
+        None
+    }
 }
 
 fn check_mcreator_mods(mods: &[String]) -> Vec<CrashAnalysisFinding> {
@@ -1497,25 +1600,27 @@ pub fn extract_blame_class_names(text: &str, limit: usize) -> Vec<String> {
             continue;
         }
         for prefix in re_candidates {
-            if let Some(rest) = trimmed
-                .strip_prefix(prefix)
-                .or_else(|| {
-                    let lower = trimmed.to_lowercase();
-                    let p = prefix.to_lowercase();
-                    if lower.contains(&p) {
-                        trimmed.split(prefix).nth(1)
-                    } else {
-                        None
-                    }
-                })
-            {
+            if let Some(rest) = trimmed.strip_prefix(prefix).or_else(|| {
+                let lower = trimmed.to_lowercase();
+                let p = prefix.to_lowercase();
+                if lower.contains(&p) {
+                    trimmed.split(prefix).nth(1)
+                } else {
+                    None
+                }
+            }) {
                 let token = rest
                     .trim()
                     .split_whitespace()
                     .next()
                     .unwrap_or("")
                     .trim_matches(|c: char| c == ':' || c == '"' || c == '\'');
-                let class_fqn = token.replace('/', ".").split('$').next().unwrap_or(token).to_string();
+                let class_fqn = token
+                    .replace('/', ".")
+                    .split('$')
+                    .next()
+                    .unwrap_or(token)
+                    .to_string();
                 if class_fqn.contains('.')
                     && !class_fqn.starts_with("java.")
                     && seen.insert(class_fqn.clone())
@@ -1694,7 +1799,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "DuplicateModsFoundException",
                 "Failed to build unique mod list",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let mut fixes = Vec::new();
         for m in mods.iter().take(4) {
             fixes.push(fix_action(
@@ -1702,11 +1808,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 &format!("Disable duplicate candidate `{m}`"),
                 Some(m),
             ));
-            fixes.push(fix_action(
-                "removeMod",
-                &format!("Remove `{m}`"),
-                Some(m),
-            ));
+            fixes.push(fix_action("removeMod", &format!("Remove `{m}`"), Some(m)));
         }
         out.push(fx(
             "critical",
@@ -1738,7 +1840,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "ModResolutionException",
                 "MissingDependency",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let mut fixes = Vec::new();
         let known_deps = [
             "fabric-api",
@@ -1759,7 +1862,11 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
             }
         }
         for dep in candidates {
-            if ctx.installed_mods.iter().any(|m| m.eq_ignore_ascii_case(&dep)) {
+            if ctx
+                .installed_mods
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case(&dep))
+            {
                 continue;
             }
             fixes.push(fix_action(
@@ -1769,7 +1876,10 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
             ));
         }
         // Also offer updating the dependent mod(s) named in the log.
-        for m in match_mods_in_text(combined, &ctx.installed_mods).into_iter().take(3) {
+        for m in match_mods_in_text(combined, &ctx.installed_mods)
+            .into_iter()
+            .take(3)
+        {
             fixes.push(fix_action(
                 "updateMod",
                 &format!("Update `{m}` (may change dependency range)"),
@@ -1796,7 +1906,9 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         || lower.contains("mod file is for fabric, but this is forge")
         || lower.contains("incompatiblemodsexception")
         || lower.contains("wrong loader")
-        || (lower.contains("quilt") && lower.contains("requires fabric") && lower.contains("missing"))
+        || (lower.contains("quilt")
+            && lower.contains("requires fabric")
+            && lower.contains("missing"))
     {
         let mods = match_mods_in_text(combined, &ctx.installed_mods);
         let evidence = first_evidence_line(
@@ -1808,13 +1920,18 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "IncompatibleModsException",
                 "wrong loader",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let mut fixes: Vec<_> = mods
             .iter()
             .take(4)
             .flat_map(|m| {
                 vec![
-                    fix_action("disableMod", &format!("Disable wrong-loader `{m}`"), Some(m)),
+                    fix_action(
+                        "disableMod",
+                        &format!("Disable wrong-loader `{m}`"),
+                        Some(m),
+                    ),
                     fix_action("removeMod", &format!("Remove `{m}`"), Some(m)),
                 ]
             })
@@ -1853,7 +1970,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "Unsupported Minecraft",
                 "incompatible with",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let mut fixes: Vec<_> = mods
             .iter()
             .take(4)
@@ -1900,7 +2018,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "AbstractMethodError",
                 "IncompatibleClassChangeError",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let fixes: Vec<_> = mods
             .iter()
             .take(5)
@@ -1940,7 +2059,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "Error loading mods",
                 "Failed to load mods",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let fixes: Vec<_> = mods
             .iter()
             .take(4)
@@ -1972,8 +2092,14 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
     {
         let evidence = first_evidence_line(
             combined,
-            &["duplicate", "classpath", "ASM", "LoaderUtil.verifyClasspath"],
-        ).map(truncate_evidence);
+            &[
+                "duplicate",
+                "classpath",
+                "ASM",
+                "LoaderUtil.verifyClasspath",
+            ],
+        )
+        .map(truncate_evidence);
         out.push(fx(
             "error",
             "DUPLICATE_CLASSPATH",
@@ -1991,14 +2117,27 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
     }
 
     // --- JEI / REI conflict ---
-    if (lower.contains("jei") && lower.contains("rei") && (lower.contains("duplicate") || lower.contains("conflict")))
+    if (lower.contains("jei")
+        && lower.contains("rei")
+        && (lower.contains("duplicate") || lower.contains("conflict")))
         || lower.contains("reiplugincompatibilities") && lower.contains("jei")
     {
         let mut fixes = Vec::new();
-        if ctx.installed_mods.iter().any(|m| m.eq_ignore_ascii_case("jei")) {
-            fixes.push(fix_action("disableMod", "Disable JEI (keep REI)", Some("jei")));
+        if ctx
+            .installed_mods
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case("jei"))
+        {
+            fixes.push(fix_action(
+                "disableMod",
+                "Disable JEI (keep REI)",
+                Some("jei"),
+            ));
         }
-        if ctx.installed_mods.iter().any(|m| m.eq_ignore_ascii_case("roughlyenoughitems") || m.eq_ignore_ascii_case("rei"))
+        if ctx
+            .installed_mods
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case("roughlyenoughitems") || m.eq_ignore_ascii_case("rei"))
         {
             fixes.push(fix_action(
                 "disableMod",
@@ -2045,11 +2184,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "Raise allocated memory, then relaunch."
             }),
             &[],
-            vec![fix_action(
-                "raiseMemory",
-                "Bump RAM to 6 GB",
-                None,
-            )],
+            vec![fix_action("raiseMemory", "Bump RAM to 6 GB", None)],
             first_evidence_line(
                 combined,
                 &[
@@ -2079,7 +2214,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "InvalidInjectionException",
                 "mixin",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let fixes: Vec<_> = mods
             .iter()
             .take(5)
@@ -2177,7 +2313,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
     // --- Fabric hard conflicts ("Incompatible mods found" / breaks / conflicts with) ---
     if lower.contains("incompatible mods found")
         || lower.contains("incompatible mod set")
-        || (lower.contains("conflicts with") && (lower.contains("mod ") || lower.contains("modresolution")))
+        || (lower.contains("conflicts with")
+            && (lower.contains("mod ") || lower.contains("modresolution")))
         || (lower.contains(" breaks ") && lower.contains("mod "))
     {
         let mods = match_mods_in_text(combined, &ctx.installed_mods);
@@ -2216,7 +2353,9 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
 
     // --- Non-unique Mixin config (two mods share the same mixins.json name) ---
     if lower.contains("non-unique mixin config") {
-        let evidence = first_evidence_line(combined, &["Non-unique Mixin config", "non-unique mixin"]).map(truncate_evidence);
+        let evidence =
+            first_evidence_line(combined, &["Non-unique Mixin config", "non-unique mixin"])
+                .map(truncate_evidence);
         let mut mods = match_mods_in_text(combined, &ctx.installed_mods);
         // Also pull "used by the mods A and B" tokens when present.
         if let Some(ev) = evidence.as_ref() {
@@ -2395,6 +2534,18 @@ pub fn tail_log(path: &Path, max_lines: usize) -> String {
     }
 }
 
+/// Severity ordering for the launch summarizer: >= 1 blocks the "clean exit"
+/// framing; 0 marks informational notes.
+fn launch_severity_rank(severity: &str) -> u8 {
+    match severity {
+        "critical" => 4,
+        "error" => 3,
+        "high" => 2,
+        "warning" | "medium" => 1,
+        _ => 0,
+    }
+}
+
 /// Analyze a failed launch log and produce a categorized, user-facing launch
 /// error the UI surfaces with a Retry action. The logic runs the same
 /// crash-analysis engine used for the in-app report, but is kept tiny and
@@ -2431,6 +2582,32 @@ pub fn classify_launch_crash(
 
     let report = run_full_analysis(&analysis_ctx);
 
+    // A clean exit (Some(0)) must never read as a crash. The production exit
+    // handler already returns before classification on success; this guard
+    // keeps direct callers honest. LaunchCrash stays reserved for non-zero
+    // exits.
+    if exit_code == Some(0) {
+        let has_blocking_finding = report
+            .findings
+            .iter()
+            .any(|f| launch_severity_rank(&f.severity) > 0);
+        if !has_blocking_finding {
+            let mut message = String::from("Game closed cleanly.");
+            if report
+                .findings
+                .iter()
+                .any(|f| f.code == "RESOURCEPACK_SHADER_RECOVERED")
+            {
+                message.push_str(" A resource pack was skipped after a shader load failure — see Diagnose for details.");
+            } else if let Some(note) = report.findings.first() {
+                message.push_str(&format!(" Note: {} — see Diagnose.", note.title));
+            } else {
+                message.push_str(" No issues spotted in the log.");
+            }
+            return LaunchErrorInfo::new(LaunchErrorKind::Unknown, message).with_log(log_path);
+        }
+    }
+
     let code_note = match exit_code {
         Some(c) if c != 0 => format!("Game closed (code {c}). "),
         Some(_) => "Game closed. ".to_string(),
@@ -2442,17 +2619,21 @@ pub fn classify_launch_crash(
         message.push_str("Couldn't spot an obvious cause — hit Diagnose or open the log.");
     } else {
         // Surface the most severe findings (up to 2) + a concrete next step.
-        let severity_rank = |s: &str| match s {
-            "critical" => 4,
-            "error" => 3,
-            "high" => 2,
-            "warning" | "medium" => 1,
-            _ => 0,
-        };
         let mut ranked: Vec<&CrashAnalysisFinding> = report.findings.iter().collect();
-        ranked.sort_by(|a, b| severity_rank(&b.severity).cmp(&severity_rank(&a.severity)));
+        ranked.sort_by(|a, b| {
+            launch_severity_rank(&b.severity).cmp(&launch_severity_rank(&a.severity))
+        });
         let top = ranked.first().copied();
-        message.push_str("Likely: ");
+
+        // An info-only top finding is an observation, not a crash cause —
+        // avoid the scary "Likely:" framing for it.
+        let cause_prefix =
+            if launch_severity_rank(top.map(|f| f.severity.as_str()).unwrap_or("")) == 0 {
+                "Noticed: "
+            } else {
+                "Likely: "
+            };
+        message.push_str(cause_prefix);
         let shown = ranked.len().min(2);
         for (i, f) in ranked.iter().take(shown).enumerate() {
             if i > 0 {
@@ -2477,7 +2658,12 @@ pub fn classify_launch_crash(
         message.push('.');
     }
 
-    LaunchErrorInfo::new(LaunchErrorKind::LaunchCrash, message).with_log(log_path)
+    let kind = if exit_code == Some(0) {
+        LaunchErrorKind::Unknown
+    } else {
+        LaunchErrorKind::LaunchCrash
+    };
+    LaunchErrorInfo::new(kind, message).with_log(log_path)
 }
 
 #[cfg(test)]
@@ -2500,15 +2686,8 @@ mod tests {
             "crash.log",
             "java.lang.OutOfMemoryError: Java heap space\n\tat net.minecraft.server.MinecraftServer",
         );
-        let info = classify_launch_crash(
-            &log,
-            Some(1),
-            "1.20.1",
-            "17.0.1",
-            "fabric",
-            "0.15.0",
-            &[],
-        );
+        let info =
+            classify_launch_crash(&log, Some(1), "1.20.1", "17.0.1", "fabric", "0.15.0", &[]);
         assert_eq!(info.kind, LaunchErrorKind::LaunchCrash);
         assert!(!info.message.is_empty());
         assert!(info.retryable());
@@ -2520,8 +2699,7 @@ mod tests {
         let missing = std::env::temp_dir()
             .join("tuffbox_crash_test")
             .join("does_not_exist.log");
-        let info =
-            classify_launch_crash(&missing, Some(1), "1.20.1", "17", "vanilla", "", &[]);
+        let info = classify_launch_crash(&missing, Some(1), "1.20.1", "17", "vanilla", "", &[]);
         assert_eq!(info.kind, LaunchErrorKind::LaunchCrash);
         assert!(info.retryable());
         assert_eq!(info.log_path.as_deref(), Some(missing.to_str().unwrap()));
@@ -2539,6 +2717,109 @@ mod tests {
         assert!(info.message.contains("File locked by another process"));
     }
 
+    const RESOURCEPACK_RECOVERY_LOG: &str = r"[13:37:00] [Render thread/ERROR]: Caught error loading resourcepacks, removing all selected resourcepacks
+java.util.concurrent.CompletionException: java.lang.IllegalStateException: Failed to load required shader programs:
+ - minecraft:core/rendertype_solid: Could not find shader minecraft:core/rendertype_solid
+ - minecraft:core/rendertype_cutout: Could not find shader minecraft:core/rendertype_cutout
+Caused by: java.io.FileNotFoundException: minecraft:shaders/core/rendertype_solid.json
+[13:37:01] [Render thread/INFO]: Reloading ResourceManager: vanilla";
+
+    #[test]
+    fn resourcepack_recovery_exit_zero_reads_informational() {
+        let log = write_temp_log("resourcepack_recovery.log", RESOURCEPACK_RECOVERY_LOG);
+        let info = classify_launch_crash(&log, Some(0), "1.20.1", "17", "vanilla", "", &[]);
+        assert_ne!(info.kind, LaunchErrorKind::LaunchCrash);
+        assert!(info.message.starts_with("Game closed cleanly."));
+        assert!(!info.message.contains("Likely:"));
+        assert!(info.message.contains("resource pack was skipped"));
+    }
+
+    #[test]
+    fn resourcepack_recovery_adds_info_only_finding() {
+        let findings = check_resourcepack_shader_recoverable(&ctx(), RESOURCEPACK_RECOVERY_LOG);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, "info");
+        assert_eq!(findings[0].code, "RESOURCEPACK_SHADER_RECOVERED");
+        assert_eq!(findings[0].title, "Resource pack skipped (game recovered)");
+    }
+
+    #[test]
+    fn resourcepack_recovery_full_run_stays_informational_only() {
+        // Neutral environment: no Intel CPU/GPU, no render mods — so any
+        // warning+ finding here would come from the recovery lines themselves
+        // (conflict-phrase / render-stack escalation), which must not happen.
+        let c = AnalysisCtx {
+            installed_mods: Vec::new(),
+            cpu_name: String::new(),
+            gpu_names: Vec::new(),
+            total_ram_mb: 16384,
+            ..recovery_test_ctx()
+        };
+        let r = run_full_analysis(&c);
+        let non_info: Vec<_> = r
+            .findings
+            .iter()
+            .filter(|f| f.severity != "info")
+            .map(|f| format!("{}={}", f.code, f.severity))
+            .collect();
+        assert!(
+            non_info.is_empty(),
+            "recovery log must not raise warning+: {non_info:?}"
+        );
+    }
+
+    #[test]
+    fn resourcepack_recovery_nonzero_exit_keeps_crash_kind_mentions_recovery_first() {
+        let log = write_temp_log("resourcepack_recovery_exit1.log", RESOURCEPACK_RECOVERY_LOG);
+        let info = classify_launch_crash(&log, Some(1), "1.20.1", "17", "vanilla", "", &[]);
+        assert_eq!(info.kind, LaunchErrorKind::LaunchCrash);
+        assert!(info.retryable());
+        let recovery_pos = info
+            .message
+            .find("Resource pack skipped")
+            .expect("recovery mentioned");
+        assert!(recovery_pos < info.message.len());
+        assert!(!info.message.contains("Couldn't spot"));
+    }
+
+    #[test]
+    fn resourcepack_recovery_lists_missing_shaders() {
+        let findings = check_resourcepack_shader_recoverable(&ctx(), RESOURCEPACK_RECOVERY_LOG);
+        let description = &findings[0].description;
+        assert!(description.contains("minecraft:core/rendertype_solid"));
+        assert!(description.contains("minecraft:core/rendertype_cutout"));
+    }
+
+    #[test]
+    fn real_opengl_crash_is_not_marked_resourcepack_recovered() {
+        let log = "[Render thread/ERROR]: OpenGL debug message, id = 1282, GL_INVALID_OPERATION in BufferRenderer::draw";
+        assert!(check_resourcepack_shader_recoverable(&ctx(), log).is_empty());
+    }
+
+    fn recovery_test_ctx() -> AnalysisCtx {
+        AnalysisCtx {
+            crash_content: RESOURCEPACK_RECOVERY_LOG
+                .lines()
+                .map(String::from)
+                .collect(),
+            latest_log: String::new(),
+            launcher_log: String::new(),
+            installed_mods: Vec::new(),
+            previous_mods: Vec::new(),
+            java_version: "17".into(),
+            java_vendor: String::new(),
+            os_name: "Windows 11".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0.15".into(),
+            cpu_name: String::new(),
+            gpu_names: Vec::new(),
+            total_ram_mb: 16384,
+            is_offline: false,
+            win_events: vec![],
+            combined_lines: std::cell::OnceCell::new(),
+        }
+    }
     fn ctx() -> AnalysisCtx {
         AnalysisCtx {
             crash_content: vec![
@@ -2612,7 +2893,10 @@ mod tests {
         assert!(hits.iter().any(|f| f.code == "DUPLICATE_MODS"));
         let f = hits.iter().find(|f| f.code == "DUPLICATE_MODS").unwrap();
         assert!(!f.fixes.is_empty());
-        assert!(f.fixes.iter().any(|a| a.kind == "disableMod" || a.kind == "removeMod"));
+        assert!(f
+            .fixes
+            .iter()
+            .any(|a| a.kind == "disableMod" || a.kind == "removeMod"));
     }
 
     #[test]
@@ -2623,7 +2907,10 @@ mod tests {
             "Mod 'create' requires 'fabric-api' which is missing!\nModResolutionException\n".into();
         let hits = check_conflict_log_phrases(&c, &c.latest_log);
         assert!(hits.iter().any(|f| f.code == "MISSING_DEPENDENCY"));
-        let f = hits.iter().find(|f| f.code == "MISSING_DEPENDENCY").unwrap();
+        let f = hits
+            .iter()
+            .find(|f| f.code == "MISSING_DEPENDENCY")
+            .unwrap();
         assert!(f
             .fixes
             .iter()
@@ -2641,7 +2928,10 @@ mod tests {
             .iter()
             .find(|f| f.code == "NONUNIQUE_MIXIN_CONFIG")
             .unwrap();
-        assert!(f.fixes.iter().any(|a| a.mod_id.as_deref() == Some("thiccpackets")));
+        assert!(f
+            .fixes
+            .iter()
+            .any(|a| a.mod_id.as_deref() == Some("thiccpackets")));
     }
 
     #[test]
@@ -2711,10 +3001,8 @@ mod tests {
             let mut zip = zip::ZipWriter::new(file);
             let opts = zip::write::SimpleFileOptions::default();
             zip.start_file("fabric.mod.json", opts).unwrap();
-            zip.write_all(
-                br#"{"schemaVersion":1,"id":"coolmod","version":"1","authors":["Zed"]}"#,
-            )
-            .unwrap();
+            zip.write_all(br#"{"schemaVersion":1,"id":"coolmod","version":"1","authors":["Zed"]}"#)
+                .unwrap();
             zip.start_file("com/example/CoolClass.class", opts).unwrap();
             zip.write_all(&[0u8; 8]).unwrap();
             zip.finish().unwrap();

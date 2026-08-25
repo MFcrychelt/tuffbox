@@ -7,9 +7,9 @@ use crate::ai_explanation::AiAction;
 use crate::change_plan::{ChangeAction, ChangePlan, ChangeRisk};
 use crate::crash::FixAction;
 use crate::graph::NodeId;
-use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
 pub const ACTION_PLAN_SCHEMA_VERSION: u32 = 1;
 
@@ -367,10 +367,7 @@ fn dedupe_actions(actions: Vec<LauncherAction>) -> Vec<LauncherAction> {
 
 /// Stable identity for an action within a plan: op + mod/project id (or path).
 fn action_dedupe_key(a: &LauncherAction) -> Option<String> {
-    let op = a
-        .op
-        .trim()
-        .to_ascii_lowercase();
+    let op = a.op.trim().to_ascii_lowercase();
     let id = a
         .mod_id
         .as_deref()
@@ -416,13 +413,7 @@ pub fn ground_action_plan_with_compat(
     missing_dep_ids: &[String],
     compat: &[CoexistingPair],
 ) -> GroundingResult {
-    ground_action_plan_core(
-        plan,
-        inventory_mod_ids,
-        missing_dep_ids,
-        compat,
-        true,
-    )
+    ground_action_plan_core(plan, inventory_mod_ids, missing_dep_ids, compat, true)
 }
 
 /// Core grounding shared by the public variants.
@@ -553,9 +544,7 @@ fn ground_action_plan_core(
         // another mod the plan itself implicates (suspected/targeted), the pair
         // demonstrably coexists in working packs — so the claim is *suppressed*
         // rather than downgraded.
-        if apply_conflict_guard
-            && matches!(a.op.as_str(), "remove_mod" | "disable_mod")
-        {
+        if apply_conflict_guard && matches!(a.op.as_str(), "remove_mod" | "disable_mod") {
             if let Some(ref reason) = a.reason {
                 if is_speculative_conflict_reason(reason) && plan.matched_case_ids.is_empty() {
                     let id_l = a
@@ -657,8 +646,11 @@ fn ground_action_plan_core(
             .collect();
         if !install_ids.is_empty() {
             let before = plan.suspected_mods.len();
-            plan.suspected_mods
-                .retain(|s| !install_ids.iter().any(|id| id == &s.trim().to_ascii_lowercase()));
+            plan.suspected_mods.retain(|s| {
+                !install_ids
+                    .iter()
+                    .any(|id| id == &s.trim().to_ascii_lowercase())
+            });
             if plan.suspected_mods.len() != before {
                 notes.push(
                     "cleared suspectedMods entries that are install_mod targets (fix ≠ culprit)"
@@ -692,10 +684,7 @@ pub fn overlay_crash_assistant_findings(
         .auto_fix
         .clone()
         .unwrap_or_else(|| java.description.clone());
-    let java_note = format!(
-        "Crash Assistant [{}]: {} — {}",
-        java.code, java.title, auto
-    );
+    let java_note = format!("Crash Assistant [{}]: {} — {}", java.code, java.title, auto);
 
     let only_mod_churn = !plan.actions.is_empty()
         && plan.actions.iter().all(|a| {
@@ -778,9 +767,8 @@ fn is_invented_mod_path(path: Option<&str>) -> bool {
 /// LLM false-positive pattern and must not justify removing a mod.
 fn is_speculative_conflict_reason(reason: &str) -> bool {
     let r = reason.to_ascii_lowercase();
-    let claims_conflict = r.contains("conflict")
-        || r.contains("incompatible")
-        || r.contains("clash");
+    let claims_conflict =
+        r.contains("conflict") || r.contains("incompatible") || r.contains("clash");
     if !claims_conflict {
         return false;
     }
@@ -854,7 +842,9 @@ fn compat_count(map: &HashMap<(String, String), u64>, x: &str, y: &str) -> Optio
         return None;
     }
     let (a, b) = if x <= y { (x, y) } else { (y, x) };
-    map.get(&(a, b)).copied().filter(|&c| c >= MIN_COEXIST_COUNT)
+    map.get(&(a, b))
+        .copied()
+        .filter(|&c| c >= MIN_COEXIST_COUNT)
 }
 
 /// All mod slugs referenced by a plan: action targets + suspected mods.
@@ -1038,9 +1028,9 @@ pub fn validate_action_plan_with_inventory_and_compat(
                         .map(|s| s.trim().to_ascii_lowercase())
                         .filter(|s| !s.is_empty());
                     let has_compat = id_l.as_ref().map_or(false, |id| {
-                        plan_mod_id_set(plan)
-                            .iter()
-                            .any(|other| other != id && compat_count(&compat_map, id, other).is_some())
+                        plan_mod_id_set(plan).iter().any(|other| {
+                            other != id && compat_count(&compat_map, id, other).is_some()
+                        })
                     });
                     if !has_compat {
                         warnings.push(format!(
@@ -1173,8 +1163,7 @@ pub fn encode_edit_config_patch(action: &LauncherAction) -> String {
 /// user. Returns true when a veto fired.
 pub fn veto_content_vs_optimization(plan: &mut ActionPlan) -> bool {
     let is_action_on_mod = |a: &LauncherAction| -> bool {
-        matches!(a.op.as_str(), "remove_mod" | "disable_mod" | "update_mod")
-            && a.mod_id.is_some()
+        matches!(a.op.as_str(), "remove_mod" | "disable_mod" | "update_mod") && a.mod_id.is_some()
     };
     let risky = |a: &LauncherAction| -> bool {
         let Some(id) = a.mod_id.as_deref() else {
@@ -1188,7 +1177,9 @@ pub fn veto_content_vs_optimization(plan: &mut ActionPlan) -> bool {
     let has_replaceable = plan.actions.iter().any(|a| {
         a.mod_id
             .as_deref()
-            .map(|id| crate::mod_category::is_safe_to_disable(crate::mod_category::classify(id, "")))
+            .map(|id| {
+                crate::mod_category::is_safe_to_disable(crate::mod_category::classify(id, ""))
+            })
             .unwrap_or(false)
     }) || plan
         .suspected_mods
@@ -1206,18 +1197,11 @@ pub fn veto_content_vs_optimization(plan: &mut ActionPlan) -> bool {
     if affected.is_empty() {
         return false;
     }
-    plan.actions
-        .retain(|a| !(is_action_on_mod(a) && risky(a)));
+    plan.actions.retain(|a| !(is_action_on_mod(a) && risky(a)));
     plan.needs_user_review = true;
     let note = affected
         .iter()
-        .map(|a| {
-            format!(
-                "{} {}",
-                a.op,
-                a.mod_id.as_deref().unwrap_or("?")
-            )
-        })
+        .map(|a| format!("{} {}", a.op, a.mod_id.as_deref().unwrap_or("?")))
         .collect::<Vec<_>>()
         .join(", ");
     let extra = plan.additional_context.get_or_insert_with(String::new);
@@ -1266,7 +1250,9 @@ pub fn apply_config_patch(
                 .unwrap_or("")
                 .to_ascii_lowercase();
             match (other, ext.as_str()) {
-                (_, "json" | "json5") => apply_config_patch(current, relative_path, "json_merge", patch),
+                (_, "json" | "json5") => {
+                    apply_config_patch(current, relative_path, "json_merge", patch)
+                }
                 (_, "toml") => apply_config_patch(current, relative_path, "toml_set", patch),
                 (_, "properties" | "cfg") => {
                     apply_config_patch(current, relative_path, "properties_set", patch)
@@ -1332,7 +1318,10 @@ fn set_toml_path(doc: &mut toml::Value, path: &str, value: toml::Value) -> Resul
         }
         let table = cur.as_table_mut().unwrap();
         if !table.contains_key(*part) {
-            table.insert((*part).to_string(), toml::Value::Table(toml::map::Map::new()));
+            table.insert(
+                (*part).to_string(),
+                toml::Value::Table(toml::map::Map::new()),
+            );
         }
         cur = table.get_mut(*part).unwrap();
     }
@@ -1441,9 +1430,7 @@ pub fn plan_from_launcher_actions(
         confidence: score.clamp(0.0, 1.0),
         suspected_mods: suspected_mods.to_vec(),
         needs_user_review: score < 0.9
-            || actions
-                .iter()
-                .any(|a| a.risk.eq_ignore_ascii_case("high")),
+            || actions.iter().any(|a| a.risk.eq_ignore_ascii_case("high")),
         source: Some("kb".into()),
         matched_case_ids: vec![case_id.to_string()],
         actions,
@@ -1549,7 +1536,11 @@ mod tests {
           ]
         }"#;
         let plan = parse_action_plan(json).unwrap();
-        assert_eq!(plan.actions.len(), 1, "duplicate install_mod:indium must collapse");
+        assert_eq!(
+            plan.actions.len(),
+            1,
+            "duplicate install_mod:indium must collapse"
+        );
         let a = &plan.actions[0];
         assert_eq!(a.op, "install_mod");
         assert_eq!(a.mod_id.as_deref(), Some("indium"));
@@ -1611,11 +1602,7 @@ mod tests {
         assert_eq!(plan.actions[0].version, None);
         assert_eq!(plan.actions[0].path, None);
 
-        let grounded = ground_action_plan(
-            plan,
-            &["crittersandcompanions".into()],
-            &[],
-        );
+        let grounded = ground_action_plan(plan, &["crittersandcompanions".into()], &[]);
         assert_eq!(grounded.plan.actions[0].op, "disable_mod");
         assert!(grounded.plan.actions[0]
             .reason
@@ -1644,11 +1631,8 @@ mod tests {
         }"#;
         let plan = parse_action_plan(json).unwrap();
         assert_eq!(plan.actions[0].op, "install_mod");
-        let grounded = ground_action_plan(
-            plan,
-            &["placeholder-api".into(), "fabric-api".into()],
-            &[],
-        );
+        let grounded =
+            ground_action_plan(plan, &["placeholder-api".into(), "fabric-api".into()], &[]);
         assert_eq!(grounded.plan.actions[0].op, "install_mod");
         assert!(!grounded.notes.iter().any(|n| n.contains("install→disable")));
     }
@@ -1666,18 +1650,18 @@ mod tests {
           ]
         }"#;
         let plan = parse_action_plan(json).unwrap();
-        let grounded = ground_action_plan(
-            plan,
-            &["sodium".into()],
-            &["indium".into()],
-        );
+        let grounded = ground_action_plan(plan, &["sodium".into()], &["indium".into()]);
         assert_eq!(grounded.plan.actions[0].op, "install_mod");
     }
 
     #[test]
     fn drops_invented_vanilla_resource_install_ids() {
-        assert!(is_invented_vanilla_resource_mod_id("minecraftbuiltinentity"));
-        assert!(is_invented_vanilla_resource_mod_id("minecraft-rendertype-text"));
+        assert!(is_invented_vanilla_resource_mod_id(
+            "minecraftbuiltinentity"
+        ));
+        assert!(is_invented_vanilla_resource_mod_id(
+            "minecraft-rendertype-text"
+        ));
         assert!(!is_invented_vanilla_resource_mod_id("minecraft"));
         assert!(!is_invented_vanilla_resource_mod_id("indium"));
 
@@ -1924,10 +1908,7 @@ mod tests {
             &["serversidehorror".into(), "fake_death_messages".into()],
             &[],
         );
-        assert!(v
-            .warnings
-            .iter()
-            .any(|w| w.contains("speculative overlap")));
+        assert!(v.warnings.iter().any(|w| w.contains("speculative overlap")));
     }
 
     #[test]
@@ -1944,11 +1925,7 @@ mod tests {
           ]
         }"#;
         let plan = parse_action_plan(json).unwrap();
-        let grounded = ground_action_plan(
-            plan,
-            &["serversidehorror".into()],
-            &[],
-        );
+        let grounded = ground_action_plan(plan, &["serversidehorror".into()], &[]);
         // matched case → trust the removal, no speculative downgrade.
         assert_eq!(grounded.plan.actions[0].op, "remove_mod");
         assert!(!grounded
@@ -2063,18 +2040,20 @@ mod tests {
         .unwrap();
         let mut plan = plan;
         let fired = veto_content_vs_optimization(&mut plan);
-        assert!(fired, "veto should fire for content removal with optimisation alternative");
+        assert!(
+            fired,
+            "veto should fire for content removal with optimisation alternative"
+        );
         // Content removal dropped; optimisation disable kept.
         assert_eq!(plan.actions.len(), 1);
         assert_eq!(plan.actions[0].op, "disable_mod");
         assert_eq!(plan.actions[0].mod_id.as_deref(), Some("sodium"));
         assert!(plan.needs_user_review);
-        assert!(
-            plan.additional_context
-                .as_deref()
-                .unwrap_or("")
-                .contains("POLICY_VETO")
-        );
+        assert!(plan
+            .additional_context
+            .as_deref()
+            .unwrap_or("")
+            .contains("POLICY_VETO"));
     }
 
     #[test]

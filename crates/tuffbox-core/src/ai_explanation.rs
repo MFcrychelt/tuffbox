@@ -6,7 +6,7 @@
 //! backend can use with any LLM provider (OpenAI, Anthropic, local).
 
 use crate::crash_assistant::CrashAnalysisFinding;
-use crate::crash_kb::{SimilarCaseHit, smart_excerpt};
+use crate::crash_kb::{smart_excerpt, SimilarCaseHit};
 use crate::project_ai_inventory::ProjectAiInventory;
 use serde::{Deserialize, Serialize};
 
@@ -200,7 +200,10 @@ fn is_small_local_model(model: &str) -> bool {
         "tinydolphin",
         "tinyllama",
     ];
-    if SMALL.iter().any(|s| m == *s || m.starts_with(&format!("{s}-"))) {
+    if SMALL
+        .iter()
+        .any(|s| m == *s || m.starts_with(&format!("{s}-")))
+    {
         return true;
     }
     // Heuristic: parameter tags under 7b.
@@ -248,7 +251,10 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
 
     p.push_str("## System Context\n");
     p.push_str(&format!("- Minecraft: {}\n", ctx.mc_version));
-    p.push_str(&format!("- Loader: {} {}\n", ctx.loader, ctx.loader_version));
+    p.push_str(&format!(
+        "- Loader: {} {}\n",
+        ctx.loader, ctx.loader_version
+    ));
     p.push_str(&format!("- Java: {}\n", ctx.java_version));
     p.push_str(&format!("- OS: {}\n", ctx.os));
     p.push_str(&format!(
@@ -336,7 +342,11 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
             let shown: Vec<&String> = trail.clean.iter().take(24).collect();
             p.push_str(&format!(
                 "- clean (enabled on healthy): [{}{}]\n",
-                shown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+                shown
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 if trail.clean.len() > 24 { ", …" } else { "" }
             ));
         }
@@ -357,7 +367,12 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
     if !ctx.similar_cases.is_empty() {
         p.push_str("## Similar known cases (from local knowledge base)\n");
         p.push_str("Prefer these solutions when they match. Do not invent mods outside the project inventory.\n");
-        for (i, c) in ctx.similar_cases.iter().take(budget.similar_cases).enumerate() {
+        for (i, c) in ctx
+            .similar_cases
+            .iter()
+            .take(budget.similar_cases)
+            .enumerate()
+        {
             p.push_str(&format!(
                 "{}. score={:.2} source={} key={}\n   Solution: {}\n",
                 i + 1,
@@ -440,11 +455,15 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
 
     if !ctx.recent_changes.is_empty() {
         p.push_str("## Recent Changes (may have caused the crash)\n");
-        for c in ctx.recent_changes.iter().take(if budget.include_full_inventory {
-            usize::MAX
-        } else {
-            6
-        }) {
+        for c in ctx
+            .recent_changes
+            .iter()
+            .take(if budget.include_full_inventory {
+                usize::MAX
+            } else {
+                6
+            })
+        {
             p.push_str(&format!("- {c}\n"));
         }
         p.push('\n');
@@ -681,7 +700,10 @@ mod tests {
         assert!(prompt.contains("Relevant mod ids") || prompt.contains("indium"));
         assert!(prefers_compact_crash_prompt("ollama", "llama3.2:3b"));
         assert!(!prefers_compact_crash_prompt("ollama", "qwen2.5:7b"));
-        assert!(!prefers_compact_crash_prompt("openai-compatible", "gpt-4o-mini"));
+        assert!(!prefers_compact_crash_prompt(
+            "openai-compatible",
+            "gpt-4o-mini"
+        ));
     }
 
     #[test]

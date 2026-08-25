@@ -8,7 +8,7 @@
 //! mods sit in different halves: a crash must not re-enable the other half.
 //! This module peels a covering (Hwang-style split of the positive group).
 
-use crate::action_plan::{LauncherAction, ACTION_PLAN_SCHEMA_VERSION, ActionPlan};
+use crate::action_plan::{ActionPlan, LauncherAction, ACTION_PLAN_SCHEMA_VERSION};
 use crate::manifest::{ContentType, DependencyKind, ModSpec};
 use serde::{Deserialize, Serialize};
 
@@ -44,9 +44,13 @@ pub enum GroupTestPhase {
     /// Disable only isolated defectives; rest of pool enabled.
     VerifyAll,
     /// Enable `defectives[index]`; other defectives stay disabled.
-    VerifyOne { index: usize },
+    VerifyOne {
+        index: usize,
+    },
     Done,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -122,10 +126,7 @@ impl GroupTestSession {
             GroupTestPhase::Testing => format!(
                 "Enable [{}]; keep {} other suspects disabled.",
                 self.test_group.join(", "),
-                self.covering
-                    .len()
-                    .saturating_sub(self.test_group.len())
-                    + self.defectives.len()
+                self.covering.len().saturating_sub(self.test_group.len()) + self.defectives.len()
             ),
             GroupTestPhase::VerifyAll => {
                 format!("Verify: disable only [{}].", self.defectives.join(", "))
@@ -201,7 +202,9 @@ impl GroupTestSession {
                 TestOutcome::Crash => {
                     self.verified = false;
                     self.phase = GroupTestPhase::Failed {
-                        reason: "Verify failed: pack still crashes with only isolated mods disabled.".into(),
+                        reason:
+                            "Verify failed: pack still crashes with only isolated mods disabled."
+                                .into(),
                     };
                 }
             },
@@ -223,7 +226,8 @@ impl GroupTestSession {
                     if self.defectives.is_empty() {
                         self.verified = false;
                         self.phase = GroupTestPhase::Failed {
-                            reason: "Verify failed: no claimed defective reproduced the crash.".into(),
+                            reason: "Verify failed: no claimed defective reproduced the crash."
+                                .into(),
                         };
                     } else if index >= self.defectives.len() {
                         self.verified = true;
@@ -308,7 +312,9 @@ pub fn peel_group_size(n: usize) -> usize {
 
 pub fn is_protected_mod_id(id: &str) -> bool {
     let l = id.to_ascii_lowercase();
-    PROTECTED_IDS.iter().any(|p| l == *p || l.starts_with(&format!("{p}-")))
+    PROTECTED_IDS
+        .iter()
+        .any(|p| l == *p || l.starts_with(&format!("{p}-")))
         || l.contains("fabric-api")
         || l == "neoforged"
 }

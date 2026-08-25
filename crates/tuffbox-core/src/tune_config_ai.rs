@@ -4,7 +4,7 @@
 
 use crate::action_plan::{
     apply_config_patch, parse_action_plan, validate_action_plan, ActionPlan, ActionPlanValidation,
-    LauncherAction, ACTION_PLAN_SCHEMA_VERSION, ACTION_PLAN_JSON_SCHEMA_HINT,
+    LauncherAction, ACTION_PLAN_JSON_SCHEMA_HINT, ACTION_PLAN_SCHEMA_VERSION,
 };
 use crate::project_ai_inventory::{format_inventory_for_prompt, ProjectAiInventory};
 use crate::properties_parser::PropertiesFile;
@@ -188,7 +188,9 @@ fn looks_like_properties(text: &str) -> bool {
     let lines: Vec<&str> = text
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('!') && !l.starts_with(';'))
+        .filter(|l| {
+            !l.is_empty() && !l.starts_with('#') && !l.starts_with('!') && !l.starts_with(';')
+        })
         .collect();
     if lines.is_empty() {
         return false;
@@ -390,7 +392,11 @@ pub fn merge_template_and_ai_actions(
     let mut out = templates;
     let mut seen_paths: HashSet<String> = out
         .iter()
-        .filter_map(|a| a.path.as_ref().map(|p| p.replace('\\', "/").to_ascii_lowercase()))
+        .filter_map(|a| {
+            a.path
+                .as_ref()
+                .map(|p| p.replace('\\', "/").to_ascii_lowercase())
+        })
         .collect();
     for a in ai {
         if a.op != "edit_config" {
@@ -602,12 +608,18 @@ pub fn build_tune_advisor_user_message(
 /// Parse LLM JSON into TuneAdviseDraft (ActionPlan + unknownKeys / researchQueries).
 pub fn parse_tune_advise_draft(raw: &str) -> Result<TuneAdviseDraft, String> {
     let plan = parse_action_plan(raw)?;
-    let value: Value = serde_json::from_str(raw.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim())
-        .or_else(|_| {
-            // parse_action_plan already accepted it — re-parse via Value from plan serialize
-            serde_json::to_value(&plan).map_err(|e| e.to_string())
-        })
-        .map_err(|e| e.to_string())?;
+    let value: Value = serde_json::from_str(
+        raw.trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim(),
+    )
+    .or_else(|_| {
+        // parse_action_plan already accepted it — re-parse via Value from plan serialize
+        serde_json::to_value(&plan).map_err(|e| e.to_string())
+    })
+    .map_err(|e| e.to_string())?;
 
     // Prefer extracting extensions from original JSON if possible
     let (unknown_keys, research_queries) = extract_extensions_from_raw(raw);
