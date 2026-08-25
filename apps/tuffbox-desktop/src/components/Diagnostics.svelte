@@ -2096,6 +2096,28 @@
     if (result) {
       message =
         "Test launch started. Soft-verify continues until a healthy post-fix session passes the playtime gate (or the game crashes / you Restore).";
+      // The invoke returns once the JVM spawns; keep the spinner until this
+      // instance's process-exited event (grace fallback covers edge cases).
+      const path = $projectPath;
+      let exited = false;
+      let unlisten: () => void = () => {};
+      const onExited = (event: { payload?: { id?: string } }) => {
+        if (event.payload?.id === path) {
+          exited = true;
+          unlisten();
+        }
+      };
+      listen<{ id: string; code?: number | null }>("process-exited", onExited).then((fn) => {
+        if (exited) fn();
+        else unlisten = fn;
+      });
+      setTimeout(() => {
+        if (!exited) {
+          unlisten();
+          launching = false;
+        }
+      }, 15000);
+      return;
     }
     launching = false;
   }

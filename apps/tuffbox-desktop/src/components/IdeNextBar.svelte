@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { Stethoscope, ArrowRight, X, AlertTriangle } from "@lucide/svelte";
   import { launchWithFeedback } from "../lib/launch";
   import {
@@ -119,7 +120,29 @@
     launching = true;
     try {
       await launchWithFeedback({ path: $projectPath, profile: "client" });
-    } finally {
+      // launchWithFeedback returns once the JVM is spawned; keep the spinner
+      // honest by clearing on this instance's process-exited event (with a
+      // grace fallback) instead of resetting synchronously.
+      const path = $projectPath;
+      let exited = false;
+      let unlisten: () => void = () => {};
+      const onExited = (event: { payload?: { id?: string } }) => {
+        if (event.payload?.id === path) {
+          exited = true;
+          unlisten();
+        }
+      };
+      listen<{ id: string; code?: number | null }>("process-exited", onExited).then((fn) => {
+        if (exited) fn();
+        else unlisten = fn;
+      });
+      setTimeout(() => {
+        if (!exited) {
+          unlisten();
+          launching = false;
+        }
+      }, 15000);
+    } catch {
       launching = false;
     }
   }
