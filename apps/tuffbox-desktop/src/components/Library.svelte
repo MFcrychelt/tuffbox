@@ -988,32 +988,38 @@
     align-items: center;
     gap: 6px;
     padding: 8px 14px;
-    border-radius: 999px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: #39393b;
+    border: 1px solid #39393b;
+    border-bottom-color: #232425;
     color: var(--text-secondary);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     transition:
-      transform var(--motion-fast) var(--ease-out),
-      background var(--motion-fast) var(--ease-out),
-      border-color var(--motion-fast) var(--ease-out),
-      color var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-fast) var(--ease-out);
+      background var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease),
+      color var(--motion-fast) var(--motion-ease);
   }
   .tabs button:hover {
-    background: var(--bg-hover);
+    background: #47484a;
     color: var(--text-primary);
   }
   .tabs button:active:not(:disabled) {
-    transform: scale(0.96);
+    background: #2a2b2c;
+    border-bottom-width: 1px;
+    transform: translateY(1px);
   }
   .tabs button.active {
-    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
-    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-    color: var(--accent-primary);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 12%, transparent), 0 6px 16px color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    background: #491ac0;
+    border-color: #491ac0;
+    border-bottom-color: #32127f;
+    color: #ffffff;
+  }
+  .tabs button.active:hover {
+    background: #5c2dd5;
+    border-color: #5c2dd5;
+    border-bottom-color: #3f1a96;
   }
 
   .pack-grid {
@@ -1033,9 +1039,8 @@
     flex-direction: column;
     position: relative;
     transition:
-      transform var(--motion-fast) var(--ease-spring),
-      border-color var(--motion-fast) var(--ease-out),
-      background var(--motion-fast) var(--ease-out);
+      border-color var(--motion-fast) var(--motion-ease),
+      background var(--motion-fast) var(--motion-ease);
   }
   .pack-card:hover {
     background: var(--bg-tertiary);
@@ -1159,9 +1164,8 @@
     cursor: pointer;
     text-align: left;
     transition:
-      border-color var(--motion-fast) var(--ease-out),
-      background var(--motion-fast) var(--ease-out),
-      transform var(--motion-fast) var(--ease-spring);
+      border-color var(--motion-fast) var(--motion-ease),
+      background var(--motion-fast) var(--motion-ease);
   }
   .create-plus.import {
     border-color: rgba(59, 130, 246, 0.28);
@@ -1188,7 +1192,6 @@
   .create-plus:hover {
     border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
     color: var(--text-primary);
-    transform: translateY(-1px);
   }
   .create-plus.import:hover {
     border-color: rgba(59, 130, 246, 0.55);
