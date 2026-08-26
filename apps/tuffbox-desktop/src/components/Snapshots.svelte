@@ -906,25 +906,42 @@
     flex: 1;
     min-width: 0;
     padding: 10px 14px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-color);
+    /* Task #67: buttons had no rounding/borders — flat slabs. Ore UI keys. */
+    border-radius: var(--border-radius-md);
+    background: #39393b;
+    border: 1px solid #39393b;
+    border-bottom-color: #232425;
     color: var(--text-muted);
     font-weight: 600;
     font-size: 12px;
-    transform: none;
+    cursor: pointer;
+    transition: background var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
+  }
+  .kind-btn:hover {
+    background: #47484a;
+    color: var(--text-primary);
+  }
+  .kind-btn:active {
+    background: #2a2b2c;
+    transform: translateY(1px);
   }
   .kind-btn :global(svg) { color: var(--text-muted); flex-shrink: 0; }
   .k-count { font-size: 18px; font-weight: 800; color: var(--text-primary); line-height: 1; }
   .k-label { color: var(--text-muted); }
-  .kind-btn.active { border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-elevated)); }
-  .kind-btn.active .k-label { color: var(--text-primary); }
-  .kind-btn.active :global(svg) { color: var(--accent-primary); }
-  .kind-btn.auto.active { border-color: rgba(147,197,253,.45); background: rgba(147,197,253,.08); }
-  .kind-btn.auto.active :global(svg), .kind-btn.auto.active .k-count { color: #93c5fd; }
-  .kind-btn.manual.active { border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-elevated)); }
-  .kind-btn.manual.active :global(svg) { color: var(--accent-primary); }
-  .kind-btn.crash.active { border-color: rgba(251,191,36,.45); background: rgba(251,191,36,.08); }
-  .kind-btn.crash.active :global(svg), .kind-btn.crash.active .k-count { color: #fbbf24; }
+  .kind-btn.active {
+    background: #491ac0;
+    border-color: #491ac0;
+    border-bottom-color: #32127f;
+  }
+  .kind-btn.active .k-label { color: #ffffff; }
+  .kind-btn.active .k-count { color: #ffffff; }
+  .kind-btn.active :global(svg) { color: #ffffff; }
+  .kind-btn.auto.active { border-color: #491ac0; }
+  .kind-btn.auto.active :global(svg), .kind-btn.auto.active .k-count { color: #ffffff; }
+  .kind-btn.manual.active { border-color: #491ac0; }
+  .kind-btn.manual.active :global(svg) { color: #ffffff; }
+  .kind-btn.crash.active :global(svg), .kind-btn.crash.active .k-count { color: #ffffff; }
 
   /* ── Filters ─────────────────────────────────────────────── */
   .filters { display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
