@@ -970,6 +970,11 @@
     overflow: hidden;
     padding: 12px 16px 16px;
     box-sizing: border-box;
+    /* Task #62: on wide screens the panels stretched edge to edge. Cap the
+       column and center it like other editors. */
+    max-width: 1180px;
+    margin: 0 auto;
+    width: 100%;
   }
 
   .main-body {
@@ -977,10 +982,11 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-gutter: stable;
+    font-size: 13px;
   }
 
   .page-header {
@@ -1168,12 +1174,12 @@
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
-    padding: 12px;
+    padding: 16px;
   }
 
   .panel h3 {
     margin: 0 0 10px;
-    font-size: 14px;
+    font-size: 15px;
   }
 
   .panel-head {
