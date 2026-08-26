@@ -425,13 +425,20 @@
     justify-content: center;
     box-shadow: var(--brand-mark-shadow, 0 4px 14px rgba(255, 197, 0, 0.28));
     animation: tb-logo-reveal 1.15s cubic-bezier(0.22, 1, 0.36, 1) both;
+    overflow: hidden;
   }
 
   .brand-logo-img {
     display: block;
-    object-fit: cover;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    padding: 3px;
+    box-sizing: border-box;
+    /* Task #55: PNG transparency must survive — no own background, no square
+       borders visible, glyph centered and never clipped by the rounded box. */
     background: transparent;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    box-shadow: none;
     color: transparent;
     font-size: 0;
   }

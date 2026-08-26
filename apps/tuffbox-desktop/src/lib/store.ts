@@ -288,11 +288,12 @@ export function suggestUiScalePercent(): number {
 
   let suggested = 100;
   // Tiny / phone-like or very short height
-  if (width < 1100 || height < 720 || shortSide < 700) suggested = 125;
-  // Classic laptops: 1366×768, 1400×900, 1440×900, 1600×900
-  else if (width <= 1440 || height <= 900) suggested = 110;
-  else if (dpr >= 2 && width < 1800) suggested = 110;
-  else if (width < 1600 && height < 1000) suggested = 110;
+  if (width < 1100 || height < 720 || shortSide < 700) suggested = 110;
+  // Classic laptops: 1366×768, 1400×900, 1440×900, 1600×900 — task #57: users
+  // found 110 too large here; suggest a denser 90 for this band.
+  else if (width <= 1440 || height <= 900) suggested = 90;
+  else if (dpr >= 2 && width < 1800) suggested = 90;
+  else if (width < 1600 && height < 1000) suggested = 90;
   else if (width >= 1920 && height >= 1080 && dpr <= 1) suggested = 100;
   else suggested = 100;
 

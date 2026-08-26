@@ -8709,8 +8709,26 @@ fn lint_config(path: String, relative_path: String) -> Result<Vec<serde_json::Va
                 if t.is_empty() || t.starts_with('#') {
                     continue;
                 }
+                // Task #64: .properties files legitimately contain non-key lines
+                // (section headers, license blocks, continuation backslashes,
+                // MO/other-launcher metadata). Only flag a missing '=' when the
+                // line looks like a key: starts with an identifier-ish token and
+                // is short. Everything else is noise we must not warn about.
                 if !t.contains('=') && t.len() > 2 {
-                    issues.push(serde_json::json!({"severity":"warning","code":"PROPERTY_NO_EQ","message":"Line without = sign","line":line_no+1}));
+                    let looks_like_key = t
+                        .chars()
+                        .next()
+                        .map(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+                        .unwrap_or(false)
+                        && t.chars().all(|c| {
+                            c.is_ascii_alphanumeric()
+                                || "_-. /\\".contains(c)
+                                || c.is_ascii_punctuation() && !"{}[]()<>|&;:!\"'`~^$*+?,".contains(c)
+                        })
+                        && t.split_whitespace().count() <= 4;
+                    if looks_like_key {
+                        issues.push(serde_json::json!({"severity":"warning","code":"PROPERTY_NO_EQ","message":"Line without = sign","line":line_no+1}));
+                    }
                     continue;
                 }
                 if let Some(eq) = t.find('=') {
