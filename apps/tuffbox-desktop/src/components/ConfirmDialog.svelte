@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { AlertDialog as BitsAlert } from "bits-ui";
   import { AlertTriangle } from "@lucide/svelte";
-  import { trapFocus } from "../lib/focusTrap";
+  import { fly, fade } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
 
   let {
     title = "Confirm",
@@ -19,40 +21,80 @@
     onconfirm?: () => void;
     oncancel?: () => void;
   } = $props();
+
+  // Bits UI owns open state; the component is always mounted with open=true
+  // (callers conditionally render it), so closing routes to cancel/confirm.
+  function close(action: "confirm" | "cancel") {
+    if (action === "confirm") onconfirm?.();
+    else oncancel?.();
+  }
 </script>
 
-<div
-  class="cd-backdrop"
-  role="presentation"
-  onclick={(e) => e.target === e.currentTarget && oncancel?.()}
+<BitsAlert.Root
+  open={true}
+  onOpenChange={(open) => { if (!open) close("cancel"); }}
 >
-  <div class="cd-dialog" role="alertdialog" aria-modal="true" use:trapFocus={{ onEscape: () => oncancel?.() }}>
-    <div class="cd-icon">
-      <AlertTriangle size={28} color={danger ? "#f87171" : "#fbbf24"} />
+  <BitsAlert.Portal>
+    <div transition:fly={{ y: 14, duration: 200, opacity: 0, easing: quintOut }} class="cd-transition-wrap">
+      <BitsAlert.Overlay class="cd-backdrop" />
+      <BitsAlert.Content
+        class="cd-dialog"
+      >
+      <BitsAlert.Title class="cd-title">
+        <span class="cd-icon" aria-hidden="true">
+          <AlertTriangle size={22} color={danger ? "#f87171" : "#fbbf24"} />
+        </span>
+        {title}
+      </BitsAlert.Title>
+      <BitsAlert.Description class="cd-message">{message}</BitsAlert.Description>
+      <div class="cd-actions">
+        <BitsAlert.Cancel class="ghost" onclick={() => close("cancel")}>{cancelLabel}</BitsAlert.Cancel>
+        <BitsAlert.Action class={danger ? "danger" : ""} onclick={() => close("confirm")}>
+          {confirmLabel}
+        </BitsAlert.Action>
+      </div>
+      </BitsAlert.Content>
     </div>
-    <h3>{title}</h3>
-    <p>{message}</p>
-    <div class="cd-actions">
-      <button class="ghost" onclick={() => oncancel?.()}>{cancelLabel}</button>
-      <button class={danger ? "danger" : ""} onclick={() => onconfirm?.()}>{confirmLabel}</button>
-    </div>
-  </div>
-</div>
+  </BitsAlert.Portal>
+</BitsAlert.Root>
 
 <style>
-  .cd-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex;
-    align-items: center; justify-content: center; z-index: 200; backdrop-filter: blur(8px);
+  :global(.cd-backdrop) {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(8px);
+    z-index: 200;
   }
-  .cd-dialog {
-    background: var(--bg-secondary); border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-xl); padding: 28px; width: min(420px, 92vw);
-    text-align: center; box-shadow: var(--shadow-lg);
+  :global(.cd-dialog) {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-xl);
+    padding: 26px 28px;
+    width: min(420px, 92vw);
+    box-shadow: var(--shadow-lg);
+    z-index: 201;
   }
-  .cd-icon { margin-bottom: 12px; }
-  .cd-dialog h3 { font-size: 18px; margin-bottom: 8px; color: var(--text-primary); }
-  .cd-dialog p { color: var(--text-muted); font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
-  .cd-actions { display: flex; gap: 10px; justify-content: center; }
-  button.danger { background: #ef4444; color: #fff; }
-  button.danger:hover { background: #dc2626; }
+  :global(.cd-title) {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 10px;
+  }
+  .cd-icon { display: inline-flex; flex-shrink: 0; }
+  :global(.cd-message) {
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 20px;
+    white-space: pre-wrap;
+  }
+  .cd-actions { display: flex; gap: 10px; justify-content: flex-end; }
 </style>
