@@ -671,6 +671,16 @@
   {#if viewLoadsInFlight > 0}
     <div class="route-progress" aria-hidden="true"><div class="route-progress-bar"></div></div>
   {/if}
+  <!-- Ambient background glows: two slow-drifting accent blobs behind all
+       content. Pure GPU compositing, pointer-transparent, disabled on
+       potato-pc / reduced-motion via the same guard as viewIntro. -->
+  {#if !prefersReducedMotion()}
+    <div class="bg-glows" aria-hidden="true">
+      <div class="glow glow-a"></div>
+      <div class="glow glow-b"></div>
+      <div class="glow-dots"></div>
+    </div>
+  {/if}
   <Sidebar bind:currentView />
   <div class="main">
     {#if currentView !== "ide"}
@@ -885,6 +895,8 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    position: relative;
+    z-index: 1;
   }
 
   .content {
@@ -1008,5 +1020,54 @@
   :global(.potato-pc) .route-progress { display: none; }
   @media (prefers-reduced-motion: reduce) {
     .route-progress-bar { animation-duration: 3s; }
+  }
+  /* Ambient background glows (Spectra-style): two large blurred accent blobs
+     drifting on a 40s loop + a subtle dot grid. z-index 0, content above. */
+  .bg-glows {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .glow {
+    position: absolute;
+    width: 42vw;
+    height: 42vw;
+    min-width: 420px;
+    min-height: 420px;
+    border-radius: 50%;
+    filter: blur(90px);
+    opacity: 0.14;
+    background: var(--accent-primary);
+    will-change: transform;
+  }
+  .glow-a {
+    top: -12%;
+    right: -8%;
+    animation: glow-float-a 44s ease-in-out infinite alternate;
+  }
+  .glow-b {
+    bottom: -18%;
+    left: -10%;
+    opacity: 0.09;
+    animation: glow-float-b 52s ease-in-out infinite alternate;
+  }
+  .glow-dots {
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(
+      color-mix(in srgb, var(--text-primary) 4%, transparent) 1px,
+      transparent 1px
+    );
+    background-size: 26px 26px;
+  }
+  @keyframes glow-float-a {
+    0% { transform: translate(0, 0) scale(1); }
+    100% { transform: translate(-90px, 70px) scale(1.12); }
+  }
+  @keyframes glow-float-b {
+    0% { transform: translate(0, 0) scale(1); }
+    100% { transform: translate(110px, -80px) scale(1.08); }
   }
 </style>
