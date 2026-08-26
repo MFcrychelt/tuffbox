@@ -96,6 +96,9 @@
 
   let loadedViews = $state<Partial<Record<LazyView, LazyComponent>>>({});
   const viewsLoading = new Set<LazyView>();
+  // Reactive mirror of viewsLoading for the top progress line: plain Set is
+  // not reactive, so track a counter alongside.
+  let viewLoadsInFlight = $state(0);
   let viewLoadError = $state<string | null>(null);
 
   async function ensureViewLoaded(view: View) {
@@ -103,6 +106,7 @@
     const key = view as LazyView;
     if (loadedViews[key] || viewsLoading.has(key)) return;
     viewsLoading.add(key);
+    viewLoadsInFlight++;
     viewLoadError = null;
     try {
       const mod = await VIEW_LOADERS[key]();
@@ -112,6 +116,7 @@
       viewLoadError = String(e);
     } finally {
       viewsLoading.delete(key);
+      viewLoadsInFlight--;
     }
   }
 
@@ -662,6 +667,10 @@
 </script>
 
 <div class="app-shell">
+  <!-- Spectra-style top progress line: visible while a lazy view chunk loads. -->
+  {#if viewLoadsInFlight > 0}
+    <div class="route-progress" aria-hidden="true"><div class="route-progress-bar"></div></div>
+  {/if}
   <Sidebar bind:currentView />
   <div class="main">
     {#if currentView !== "ide"}
@@ -971,5 +980,33 @@
     min-height: 0;
     height: 100%;
     overflow-y: auto;
+  }
+  /* Spectra-style route progress: thin accent line, indeterminate sweep.
+     Hidden on weak hardware / reduced motion (viewIntro uses the same guard). */
+  .route-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    z-index: 1000;
+    overflow: hidden;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
+  }
+  .route-progress-bar {
+    height: 100%;
+    width: 40%;
+    border-radius: 999px;
+    background: var(--accent-primary);
+    animation: route-sweep 1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  @keyframes route-sweep {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(350%); }
+  }
+  :global(.potato-pc) .route-progress { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .route-progress-bar { animation-duration: 3s; }
   }
 </style>
