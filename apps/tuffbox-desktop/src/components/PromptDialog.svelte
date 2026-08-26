@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { Dialog as BitsDialog } from "bits-ui";
+  import { fly, fade } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
   import { onMount } from "svelte";
-  import { trapFocus } from "../lib/focusTrap";
 
   let {
     title = "Select",
@@ -31,154 +33,128 @@
   onMount(() => {
     value = defaultValue;
   });
+
+  function submit() {
+    if (value.trim()) onconfirm?.(value);
+  }
 </script>
 
-<div class="prompt-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && oncancel?.()} onkeydown={() => {}}>
-  <div class="prompt-dialog" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => oncancel?.() }}>
-    <h3>{title}</h3>
-    {#if message}
-      <p>{message}</p>
-    {/if}
+<BitsDialog.Root
+  open={true}
+  onOpenChange={(open) => { if (!open) oncancel?.(); }}
+>
+  <BitsDialog.Portal>
+    <div transition:fly={{ y: 14, duration: 200, opacity: 0, easing: quintOut }}>
+      <BitsDialog.Overlay class="prompt-backdrop" />
+      <BitsDialog.Content class="prompt-dialog">
+        <BitsDialog.Title class="prompt-title">{title}</BitsDialog.Title>
+        {#if message}
+          <BitsDialog.Description class="prompt-message">{message}</BitsDialog.Description>
+        {/if}
 
-    {#if mode === "text"}
-      <input
-        class="prompt-input"
-        type="text"
-        bind:value
-        onkeydown={(e) => e.key === "Enter" && value.trim() && onconfirm?.(value)}
-      />
-    {:else}
-      <div class="prompt-options">
-        {#each options as option}
-          <button
-            class="prompt-option"
-            class:selected={option === value}
-            onclick={() => (value = option)}
-          >
-            <span class="prompt-option-name">{option}</span>
-            {#if option === value}
-              <span class="prompt-option-check">&#10003;</span>
-            {/if}
-          </button>
-        {/each}
-      </div>
-    {/if}
+        {#if mode === "text"}
+          <input
+            class="prompt-input"
+            type="text"
+            bind:value
+            onkeydown={(e) => e.key === "Enter" && value.trim() && onconfirm?.(value)}
+          />
+        {:else}
+          <div class="prompt-options">
+            {#each options as option}
+              <button
+                class="prompt-option"
+                class:selected={option === value}
+                onclick={() => (value = option)}
+              >
+                <span class="prompt-option-name">{option}</span>
+                {#if option === value}
+                  <span class="prompt-option-check">&#10003;</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
 
-    <div class="prompt-actions">
-      <button class="ghost" onclick={() => oncancel?.()}>{cancelLabel}</button>
-      <button disabled={!value.trim()} onclick={() => onconfirm?.(value)}>{confirmLabel}</button>
+        <div class="prompt-actions">
+          <BitsDialog.Close class="ghost" onclick={() => oncancel?.()}>{cancelLabel}</BitsDialog.Close>
+          <button disabled={!value.trim()} onclick={submit}>{confirmLabel}</button>
+        </div>
+      </BitsDialog.Content>
     </div>
-  </div>
-</div>
+  </BitsDialog.Portal>
+</BitsDialog.Root>
 
 <style>
-  .prompt-backdrop {
-    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 200; backdrop-filter: blur(8px);
+  :global(.prompt-backdrop) {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(8px);
+    z-index: 200;
   }
-
-  .prompt-dialog {
+  :global(.prompt-dialog) {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
-    padding: 28px; width: 420px;
+    padding: 24px;
+    width: min(440px, 92vw);
     box-shadow: var(--shadow-lg);
+    z-index: 201;
   }
-
-  .prompt-dialog h3 {
-    font-size: 18px; margin: 0 0 4px; color: var(--text-primary);
+  :global(.prompt-title) {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
   }
-
-  .prompt-dialog p {
-    color: var(--text-muted); font-size: 13px; line-height: 1.5;
-    margin: 0 0 18px;
+  :global(.prompt-message) {
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 14px;
   }
-
-  .prompt-input {
+  :global(.prompt-input) {
     width: 100%;
-    padding: 10px 14px;
-    background: var(--bg-primary);
+    padding: 9px 12px;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
-    color: var(--text-primary);
-    font-size: 14px;
-    font-family: inherit;
-    outline: none;
     margin-bottom: 18px;
-    box-sizing: border-box;
   }
-
-  .prompt-input:focus {
-    border-color: var(--accent-primary);
-  }
-
-  .prompt-options {
+  :global(.prompt-options) {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 18px;
     display: flex;
     flex-direction: column;
     gap: 4px;
-    margin-bottom: 18px;
-    max-height: 260px;
-    overflow-y: auto;
   }
-
-  .prompt-option {
-    width: 100%;
-    padding: 10px 14px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
+  :global(.prompt-option) {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    cursor: pointer;
+    padding: 9px 12px;
     text-align: left;
-    font-size: 14px;
+    font-size: 13px;
     color: var(--text-primary);
-    transition: all 0.12s ease;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    cursor: pointer;
+    transition: background var(--motion-fast, 160ms) ease, border-color var(--motion-fast, 160ms) ease;
   }
-
-  .prompt-option:hover {
-    border-color: var(--text-muted);
-    background: var(--bg-hover);
-  }
-
-  .prompt-option.selected {
+  :global(.prompt-option:hover) { border-color: var(--accent-primary); }
+  :global(.prompt-option.selected) {
     border-color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-  }
-
-  .prompt-option-name {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .prompt-option-check {
     color: var(--accent-primary);
-    font-weight: 700;
-    flex-shrink: 0;
+    font-weight: 600;
   }
-
-  .prompt-actions {
-    display: flex;
-    gap: 10px;
-    justify-content: flex-end;
-  }
-
-  .prompt-actions button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  button.ghost {
-    background: transparent;
-    color: var(--text-muted);
-  }
-
-  button.ghost:hover {
-    color: var(--text-primary);
-    background: var(--bg-hover);
-  }
+  .prompt-actions { display: flex; gap: 10px; justify-content: flex-end; }
 </style>
