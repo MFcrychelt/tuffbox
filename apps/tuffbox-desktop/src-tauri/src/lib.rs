@@ -18,6 +18,7 @@ mod presence;
 mod quest_chat_api;
 mod snbt_parser;
 mod speculative;
+mod superseded_cleanup;
 mod swarm_api;
 mod swarm_node;
 mod task_progress_api;
@@ -15172,58 +15173,12 @@ fn remove_superseded_mod_files(manifest_path: &Path, old_mod: &ModSpec, new_mod:
         return;
     };
     let content_dir = tuffbox_core::content_dir_for(&instance_dir, new_mod.content_type);
-    let keep_name = new_mod.file_name.as_deref();
-    let old_name = old_mod.file_name.as_deref();
-    let old_sha1 = old_mod
-        .hashes
-        .as_ref()
-        .and_then(|h| h.sha1.as_ref())
-        .filter(|h| !h.is_empty())
-        .cloned();
-
-    let Ok(entries) = std::fs::read_dir(&content_dir) else {
-        return;
+    let old = superseded_cleanup::SupersededOld {
+        id: &old_mod.id,
+        file_name: old_mod.file_name.as_deref(),
+        sha1: old_mod.hashes.as_ref().and_then(|h| h.sha1.as_deref()),
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        let base = name.strip_suffix(".disabled").unwrap_or(name.as_str());
-        if !(base.ends_with(".jar") || base.ends_with(".zip")) {
-            continue;
-        }
-        if keep_name == Some(base) {
-            continue;
-        }
-
-        let mut remove = old_name == Some(base);
-        if !remove {
-            if let Some(ref expected) = old_sha1 {
-                if let Ok(actual) = tuffbox_core::sha1_file(&path) {
-                    if actual.eq_ignore_ascii_case(expected) {
-                        remove = true;
-                    }
-                }
-            }
-        }
-        // Also drop leftover jars that share the mod slug as a filename prefix
-        // (e.g. sodium-fabric-0.5.0.jar after updating to sodium-fabric-0.5.8.jar).
-        if !remove {
-            let id = old_mod.id.to_lowercase().replace('_', "-");
-            let base_l = base.to_lowercase();
-            if !id.is_empty()
-                && (base_l.starts_with(&id) || base_l.starts_with(&format!("{id}-")))
-                && keep_name != Some(base)
-            {
-                remove = true;
-            }
-        }
-        if remove {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
+    superseded_cleanup::remove_superseded_in_dir(&content_dir, &old, new_mod.file_name.as_deref());
 }
 
 fn refresh_modrinth_file_metadata(
