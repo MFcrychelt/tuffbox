@@ -5578,6 +5578,9 @@ fn run_crash_assistant_full(
 
     let mut class_finder = Vec::new();
     let mut combined = String::new();
+    // Task #66: per-run cache so repeated class names don't rescan all jars.
+    let mut class_finder_cache: std::collections::HashMap<String, Vec<tuffbox_core::crash_assistant::ClassMatch>> =
+        std::collections::HashMap::new();
     if let Some(text) = load_scoped_crash_report(&project_dir, report_id.as_deref()) {
         combined.push_str(&text);
         combined.push('\n');
@@ -5596,8 +5599,15 @@ fn run_crash_assistant_full(
                 .and_then(|s| s.split_whitespace().next())
             {
                 if cls.len() > 5 && cls.len() < 200 && cls.contains('.') {
-                    let matches = tuffbox_core::crash_assistant::find_class_in_mods(cls, &mods_dir);
-                    for m in matches {
+                    // Task #66: the same class can appear on many log lines;
+                    // re-scanning every jar per line made Diagnose take minutes.
+                    // Cache lookups within this run.
+                    let matches = class_finder_cache
+                        .entry(cls.to_string())
+                        .or_insert_with(|| {
+                            tuffbox_core::crash_assistant::find_class_in_mods(cls, &mods_dir)
+                        });
+                    for m in matches.iter() {
                         class_finder.push(serde_json::json!({"className":m.class_name,"modId":m.mod_id,"modName":m.mod_name}));
                     }
                 }
