@@ -852,11 +852,37 @@
           );
           const downloaded = report.downloaded?.length ?? 0;
           const failed = report.failed?.length ?? 0;
-          toasts.success(
+
+          // Extended repair sweep: duplicates + wrong-loader jars, so the user
+          // gets a full health picture in one action instead of hunting
+          // through Diagnostics.
+          const dupes = (await api.mods.detectDuplicateModJars(project.path)) as Array<{
+            modId: string;
+            keepCandidate: string;
+            jars: unknown[];
+          }>;
+          const wrongLoader =
+            ((await api.mods.detectWrongLoader(project.path)) as Array<Record<string, unknown>>) ??
+            [];
+
+          const parts: string[] = [];
+          parts.push(
             downloaded === 0 && failed === 0
               ? "All mod files present and valid."
-              : `Repaired: ${downloaded} file(s) re-downloaded${failed ? `, ${failed} failed` : ""}.`,
+              : `Re-downloaded ${downloaded} file(s)${failed ? `, ${failed} failed` : ""}.`,
           );
+          if (dupes.length > 0) {
+            parts.push(`${dupes.length} duplicate group${dupes.length > 1 ? "s" : ""} — resolve in Mods → Duplicates.`);
+          }
+          if (wrongLoader.length > 0) {
+            parts.push(`${wrongLoader.length} wrong-loader jar(s) — disable in Mods → Wrong loader.`);
+          }
+          if (dupes.length === 0 && wrongLoader.length === 0) {
+            toasts.success(parts.join(" "));
+          } else {
+            // Problems found: warn instead of success so it draws the eye.
+            toasts.warning(`Repair finished with findings. ${parts.join(" ")}`, 10000);
+          }
         } catch (e) {
           toasts.error(String(e));
         } finally {
