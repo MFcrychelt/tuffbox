@@ -844,7 +844,13 @@
 
 <div class="test-runs">
   <div class="toolbar">
-    <div class="title"><PlayCircle size={18} /> Test · launch lab</div>
+    <div class="title"><PlayCircle size={18} /> <span>Test · launch lab</span></div>
+    <div class="toolbar-actions">
+      <button class="ghost" onclick={() => loadProfiles(true)} disabled={!$projectPath || loading} title="Reload profiles">
+        <RefreshCw size={14} class={loading ? "spin" : ""} />
+        Profiles
+      </button>
+    </div>
   </div>
 
   {#if error}<div class="notice error">{error}</div>{/if}
@@ -1197,7 +1203,32 @@
   .profile-select select { min-width: 180px; }
   .launch-actions { gap: 8px; flex-wrap: wrap; flex: 1; }
   .preset { display: inline-flex; align-items: center; gap: 8px; }
-  .preset.primary { background: color-mix(in srgb, var(--accent-primary) 18%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); color: var(--accent-primary); font-weight: 700; }
+  /* Task #65: preset buttons get the Ore UI key treatment — flat fill,
+     darker bottom edge, amethyst primary. */
+  .preset {
+    background: #39393b;
+    border-color: #39393b;
+    border-bottom-color: #232425;
+  }
+  .preset:hover:not(:disabled) { background: #47484a; color: var(--text-primary); }
+  .preset:active:not(:disabled) {
+    background: #2a2b2c;
+    border-bottom-width: 1px;
+    transform: translateY(1px);
+  }
+  .preset.primary {
+    background: #491ac0;
+    border-color: #491ac0;
+    border-bottom-color: #32127f;
+    color: #ffffff;
+    font-weight: 700;
+  }
+  .preset.primary:hover:not(:disabled) {
+    background: #5c2dd5;
+    border-color: #5c2dd5;
+    border-bottom-color: #3f1a96;
+    color: #ffffff;
+  }
   .work {
     flex: 1 1 auto;
     min-height: 0;
@@ -1303,7 +1334,7 @@
   .vbadge.skipped { color: var(--text-muted); }
   .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
   .peak-badge { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-  .status { gap: 8px; color: var(--text-muted); background: var(--bg-tertiary); border-radius: 999px; padding: 8px 12px; }
+  .status { gap: 8px; color: var(--text-muted); background: #39393b; border: 1px solid #39393b; border-bottom-color: #232425; border-radius: var(--border-radius-md); padding: 8px 14px; font-weight: 600; }
   .status.running { color: var(--accent-primary); }
   .status.pass { color: var(--accent-primary); }
   .status.fail { color: #fca5a5; }
