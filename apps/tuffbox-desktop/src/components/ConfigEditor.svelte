@@ -1070,6 +1070,14 @@
   .lang-badge { background: color-mix(in srgb, var(--accent-secondary) 15%, transparent); color: var(--accent-secondary); padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
 
   .cm-wrapper { flex: 1; min-height: 0; overflow: hidden; }
+  /* The lib renders .cm-wrapper > .codemirror-wrapper > .cm-editor. The middle
+     div has no intrinsic height; without pinning it to 100% the editor's
+     height:100% resolves to auto, the document grows past the panel and gets
+     clipped by overflow:hidden — the open file never scrolls. */
+  .cm-wrapper :global(.codemirror-wrapper) {
+    height: 100%;
+    overflow: hidden;
+  }
   .cm-wrapper :global(.cm-editor) { height: 100%; }
   .cm-wrapper :global(.cm-scroller) { overflow: auto; }
   .cm-wrapper.line-hl :global(.cm-selectionBackground) { background: color-mix(in srgb, var(--accent-primary) 22%, transparent) !important; }
