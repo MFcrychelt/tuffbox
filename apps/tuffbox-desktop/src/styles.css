@@ -19,6 +19,13 @@
   --accent-danger: #ef4444;
   --accent-warning: #f5a524;
 
+  /* Motion tokens (Spectra-smoothness plan): one easing family everywhere.
+     --motion-smooth is the signature curve for hovers/presses/overlays. */
+  --motion-fast: 160ms;
+  --motion-medium: 240ms;
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
+  --motion-hover-delay: 70ms;
+
   --border-color: #2a313b;
   --border-radius-sm: 8px;
   --border-radius-md: 12px;
@@ -531,11 +538,11 @@ html.potato-pc .spin * {
 }
 
 /* Press feedback (Prism-style: background only, no transform). Calm delayed
-   hover, instant press. */
+   hover, instant press. Signature easing token from :root. */
 button {
-  transition: background var(--motion-fast, 160ms) ease,
-    border-color var(--motion-fast, 160ms) ease,
-    color var(--motion-fast, 160ms) ease;
+  transition: background var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
   transition-delay: 0ms;
 }
 button:hover:not(:disabled) {
