@@ -1,8 +1,9 @@
 <script lang="ts">
   import type { Component } from "svelte";
   import { toasts, type Toast } from "../lib/toast";
-  import { X, CheckCircle2, AlertTriangle, Info, AlertCircle } from "@lucide/svelte";
+  import { X, CheckCircle2, AlertTriangle, Info, AlertCircle, Copy } from "@lucide/svelte";
   import { fly, fade } from "svelte/transition";
+  import { copyText } from "../lib/clipboard";
 
   function icon(t: string): Component<{ size?: number; color?: string }> {
     if (t === "success") return CheckCircle2;
@@ -15,6 +16,18 @@
     if (t === "error") return "#f87171";
     if (t === "warning") return "#fbbf24";
     return "#93c5fd";
+  }
+
+  let copiedId = $state<number | null>(null);
+
+  async function copyDetails(t: Toast) {
+    try {
+      await copyText(t.message);
+      copiedId = t.id;
+      setTimeout(() => { if (copiedId === t.id) copiedId = null; }, 1500);
+    } catch {
+      // clipboard unavailable — leave the toast visible for manual selection
+    }
   }
 
   let now = $state(Date.now());
@@ -43,6 +56,16 @@
     >
       <span class="ti"><Icon size={16} color="var(--tc)" /></span>
       <span class="tm">{t.message}</span>
+      {#if t.type === "error"}
+        <button
+          class="ta copy"
+          onclick={() => void copyDetails(t)}
+          title="Copy error details"
+          aria-label="Copy error details"
+        >
+          {#if copiedId === t.id}<CheckCircle2 size={12} />{:else}<Copy size={12} /> Copy{/if}
+        </button>
+      {/if}
       {#if t.actions}
         {#each t.actions as a}
           <button class="ta" onclick={() => { a.run(); toasts.dismiss(t.id); }}>{a.label}</button>
@@ -100,6 +123,18 @@
     cursor: pointer;
   }
   .ta:hover { filter: brightness(1.1); }
+
+  .ta.copy {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .ta.copy:hover {
+    background: color-mix(in srgb, var(--tc) 25%, var(--bg-hover));
+    filter: none;
+  }
 
   .tx {
     flex-shrink: 0;
