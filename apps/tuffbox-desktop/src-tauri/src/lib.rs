@@ -14099,10 +14099,22 @@ async fn repair_project(path: String) -> Result<tuffbox_core::ModSyncReport, Str
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let instance_dir = tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path))
             .ok_or_else(|| "manifest has no parent directory".to_string())?;
-        Ok(tuffbox_core::ensure_project_mods_downloaded(
-            &manifest,
-            &instance_dir,
-        ))
+        // Surface the (possibly slow) re-download sweep in TaskProgress so the
+        // user sees why the UI is busy instead of a silent hang.
+        let task_id = tuffbox_core::task_progress::start_task(
+            format!("repair-{}", tuffbox_core::time_util::compact_now()),
+            format!("Repair {}", manifest.project.name),
+        );
+        tuffbox_core::task_progress::set_progress(&task_id, 0.1, Some("Checking mod files…".into()));
+        let report =
+            tuffbox_core::ensure_project_mods_downloaded(&manifest, &instance_dir);
+        let detail = if !report.downloaded.is_empty() {
+            format!("{} file(s) re-downloaded", report.downloaded.len())
+        } else {
+            "all files present".into()
+        };
+        tuffbox_core::task_progress::succeed(&task_id, Some(detail));
+        Ok(report)
     })
     .await
     .map_err(|e| e.to_string())?

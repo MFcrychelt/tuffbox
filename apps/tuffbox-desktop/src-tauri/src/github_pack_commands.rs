@@ -93,8 +93,16 @@ pub async fn github_pack_install(
     );
     let bytes = download_github_bytes(&url).await?;
 
+    let task_id = tuffbox_core::task_progress::start_task(
+        format!("gh-pack-{}", tuffbox_core::time_util::compact_now()),
+        format!("Install GitHub pack {}/{}", parsed.owner, parsed.repo),
+    );
+    tuffbox_core::task_progress::set_progress(&task_id, 0.15, Some("Downloading tarball…".into()));
+
     tokio::task::spawn_blocking(move || {
-        install_from_tarball_bytes(
+        // Keep TaskProgress accurate across the blocking install; the helper
+        // below marks success/failure so the panel never shows a stuck task.
+        let result = install_from_tarball_bytes(
             &app,
             &bytes,
             &parsed.owner,
@@ -103,7 +111,15 @@ pub async fn github_pack_install(
             Some(&commit),
             &target_dir,
             instance_name,
-        )
+        );
+        match &result {
+            Ok(v) => tuffbox_core::task_progress::succeed(
+                &task_id,
+                Some(format!("{} mods", v.get("modCount").and_then(|m| m.as_u64()).unwrap_or(0))),
+            ),
+            Err(e) => tuffbox_core::task_progress::fail(&task_id, e.clone()),
+        }
+        result
     })
     .await
     .map_err(|e| e.to_string())?
