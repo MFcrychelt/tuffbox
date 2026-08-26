@@ -1311,6 +1311,12 @@
     margin-bottom: 20px;
     align-items: center;
     flex-wrap: wrap;
+    /* Task #61: the bar floated on the page bg with no surface — give it a
+       proper panel like other toolbars. */
+    padding: 10px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
   }
   .provider-toggle {
     display: inline-flex;
@@ -1324,16 +1330,25 @@
   .provider-toggle button {
     padding: 6px 12px;
     border-radius: var(--border-radius-sm);
-    border: none;
-    background: transparent;
+    border: 1px solid transparent;
+    background: #39393b;
+    border-bottom-color: #232425;
     color: var(--text-secondary);
     font-size: 12px;
     font-weight: 700;
     cursor: pointer;
+    transition: background var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
+  }
+  .provider-toggle button:hover {
+    background: #47484a;
+    color: var(--text-primary);
   }
   .provider-toggle button.active {
-    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-    color: var(--text-primary);
+    background: #491ac0;
+    border-color: #491ac0;
+    border-bottom-color: #32127f;
+    color: #ffffff;
   }
   .search {
     flex: 1;
