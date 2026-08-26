@@ -12017,6 +12017,60 @@ fn export_modrinth_pack(
     Ok(result)
 }
 
+/// Export preview: composition of the would-be archive without writing it.
+/// Reuses the same manifest walk as the real exporter so counts match what a
+/// subsequent export produces.
+#[tauri::command(rename_all = "camelCase")]
+fn export_preview(path: String, kind: String) -> Result<serde_json::Value, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let manifest_dir = PathBuf::from(&path);
+    let project_dir = manifest_dir
+        .parent()
+        .ok_or_else(|| "manifest has no parent directory".to_string())?
+        .to_path_buf();
+
+    let remote_mods = manifest
+        .mods
+        .iter()
+        .filter(|m| m.source.url.is_some())
+        .count();
+    let local_mods = manifest.mods.iter().filter(|m| m.source.url.is_none()).count();
+
+    // Count override files on disk per top-level content folder.
+    let count_tree = |sub: &str| -> usize {
+        fn walk(dir: &Path, out: &mut usize) {
+            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.is_file() {
+                    *out += 1;
+                }
+            }
+        }
+        let mut n = 0usize;
+        walk(&project_dir.join(sub), &mut n);
+        n
+    };
+
+    let overrides = ["config", "defaultconfigs", "kubejs", "scripts", "shaderpacks", "resourcepacks"]
+        .iter()
+        .map(|s| count_tree(s))
+        .sum::<usize>();
+
+    Ok(serde_json::json!({
+        "kind": kind,
+        "modCount": manifest.mods.len(),
+        "remoteMods": remote_mods,
+        "localMods": local_mods,
+        "overrideFiles": overrides,
+        "mcVersion": manifest.minecraft.version,
+        "loaderKind": format!("{:?}", manifest.loader.kind).to_lowercase(),
+        "loaderVersion": manifest.loader.version,
+    }))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn export_server_pack(
     path: String,
@@ -17202,6 +17256,7 @@ pub fn run() {
             export_graph_dot,
             export_project_report,
             batch_export_all,
+            export_preview,
             audit_performance,
             list_curated_optimize_packs,
             preview_curated_optimize_pack,
