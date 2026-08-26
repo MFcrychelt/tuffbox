@@ -3402,6 +3402,105 @@ async fn remove_loose_jar(path: String, file_name: String) -> Result<String, Str
     .map_err(|e| e.to_string())?
 }
 
+/// One jar inside a duplicate-`mod_id` group.
+struct DuplicateJarEntry {
+    file_name: String,
+    mod_id: String,
+    mtime_ms: u64,
+    size: u64,
+    in_manifest: bool,
+}
+
+/// A true-duplicate group in `mods/`: several jars sharing one fabric/forge
+/// `mod_id`. Shared by the Duplicates command and Pack Health.
+struct DuplicateJarGroup {
+    mod_id: String,
+    /// Newest jar — recommended survivor when deduplicating.
+    keep_candidate: String,
+    jars: Vec<DuplicateJarEntry>,
+}
+
+/// Groups jars in `mods/` that share the same fabric/forge `mod_id`.
+/// Jars sort newest-first within a group (the keep candidate leads);
+/// groups sort by mod id.
+fn scan_duplicate_mod_jars(
+    mods_dir: &Path,
+    tracked: &std::collections::HashSet<String>,
+) -> Vec<DuplicateJarGroup> {
+    let entries = match std::fs::read_dir(mods_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    // mod_id → jars
+    let mut by_id: std::collections::HashMap<String, Vec<DuplicateJarEntry>> =
+        std::collections::HashMap::new();
+
+    for entry in entries.flatten() {
+        let jar_path = entry.path();
+        if !jar_path
+            .extension()
+            .map_or(false, |e| e.eq_ignore_ascii_case("jar"))
+        {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let Ok(meta) = std::fs::metadata(&jar_path) else {
+            continue;
+        };
+        let mtime_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let size = meta.len();
+        let mod_id = match tuffbox_core::mod_scan::scan_mod_jar(&jar_path) {
+            Ok(scan) => scan
+                .mod_id
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty()),
+            Err(_) => None,
+        };
+        let Some(mod_id) = mod_id else {
+            continue;
+        };
+        by_id
+            .entry(mod_id.clone())
+            .or_default()
+            .push(DuplicateJarEntry {
+                in_manifest: tracked.contains(&file_name),
+                file_name,
+                mod_id,
+                mtime_ms,
+                size,
+            });
+    }
+
+    let mut groups: Vec<DuplicateJarGroup> = by_id
+        .into_iter()
+        .filter(|(_, jars)| jars.len() > 1)
+        .map(|(mod_id, mut jars)| {
+            jars.sort_by(|a, b| {
+                b.mtime_ms
+                    .cmp(&a.mtime_ms)
+                    .then_with(|| a.file_name.cmp(&b.file_name))
+            });
+            let keep_candidate = jars
+                .first()
+                .map(|j| j.file_name.clone())
+                .unwrap_or_default();
+            DuplicateJarGroup {
+                mod_id,
+                keep_candidate,
+                jars,
+            }
+        })
+        .collect();
+    groups.sort_by(|a, b| a.mod_id.cmp(&b.mod_id));
+    groups
+}
+
 /// Groups jars in `mods/` that share the same fabric/forge `mod_id` (true duplicates).
 #[tauri::command(rename_all = "camelCase")]
 async fn detect_duplicate_mod_jars(path: String) -> Result<Vec<serde_json::Value>, String> {
@@ -3410,7 +3509,6 @@ async fn detect_duplicate_mod_jars(path: String) -> Result<Vec<serde_json::Value
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
-        let mods_dir = project_dir.join("mods");
         let manifest = ProjectManifest::load_from_path(&path).ok();
         let tracked: std::collections::HashSet<String> = manifest
             .as_ref()
@@ -3422,85 +3520,22 @@ async fn detect_duplicate_mod_jars(path: String) -> Result<Vec<serde_json::Value
             })
             .unwrap_or_default();
 
-        let entries = match std::fs::read_dir(&mods_dir) {
-            Ok(e) => e,
-            Err(_) => return Ok(Vec::new()),
-        };
-
-        // mod_id → jars
-        let mut by_id: std::collections::HashMap<String, Vec<serde_json::Value>> =
-            std::collections::HashMap::new();
-
-        for entry in entries.flatten() {
-            let jar_path = entry.path();
-            if !jar_path
-                .extension()
-                .map_or(false, |e| e.eq_ignore_ascii_case("jar"))
-            {
-                continue;
-            }
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            let Ok(meta) = std::fs::metadata(&jar_path) else {
-                continue;
-            };
-            let mtime_ms = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            let size = meta.len();
-            let mod_id = match tuffbox_core::mod_scan::scan_mod_jar(&jar_path) {
-                Ok(scan) => scan
-                    .mod_id
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty()),
-                Err(_) => None,
-            };
-            let Some(mod_id) = mod_id else {
-                continue;
-            };
-            by_id.entry(mod_id.clone()).or_default().push(serde_json::json!({
-                "fileName": file_name,
-                "modId": mod_id,
-                "mtimeMs": mtime_ms,
-                "size": size,
-                "inManifest": tracked.contains(&file_name),
-            }));
-        }
-
-        let mut groups: Vec<serde_json::Value> = by_id
+        Ok(scan_duplicate_mod_jars(&project_dir.join("mods"), &tracked)
             .into_iter()
-            .filter(|(_, jars)| jars.len() > 1)
-            .map(|(mod_id, mut jars)| {
-                jars.sort_by(|a, b| {
-                    let am = a.get("mtimeMs").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let bm = b.get("mtimeMs").and_then(|v| v.as_u64()).unwrap_or(0);
-                    bm.cmp(&am).then_with(|| {
-                        let an = a.get("fileName").and_then(|v| v.as_str()).unwrap_or("");
-                        let bn = b.get("fileName").and_then(|v| v.as_str()).unwrap_or("");
-                        an.cmp(bn)
-                    })
-                });
-                let keep = jars
-                    .first()
-                    .and_then(|j| j.get("fileName"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+            .map(|g| {
                 serde_json::json!({
-                    "modId": mod_id,
-                    "keepCandidate": keep,
-                    "jars": jars,
+                    "modId": g.mod_id,
+                    "keepCandidate": g.keep_candidate,
+                    "jars": g.jars.iter().map(|j| serde_json::json!({
+                        "fileName": j.file_name,
+                        "modId": j.mod_id,
+                        "mtimeMs": j.mtime_ms,
+                        "size": j.size,
+                        "inManifest": j.in_manifest,
+                    })).collect::<Vec<serde_json::Value>>(),
                 })
             })
-            .collect();
-        groups.sort_by(|a, b| {
-            let am = a.get("modId").and_then(|v| v.as_str()).unwrap_or("");
-            let bm = b.get("modId").and_then(|v| v.as_str()).unwrap_or("");
-            am.cmp(bm)
-        });
-        Ok(groups)
+            .collect())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -9655,6 +9690,175 @@ fn get_diagnostic_counts(path: String) -> Result<tuffbox_core::DiagnosticCounts,
         &result.diagnostics,
         result.cached,
     ))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackHealthDiagnostics {
+    errors: usize,
+    warnings: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackHealthIssue {
+    severity: String,
+    code: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackHealthDuplicateGroup {
+    mod_id: String,
+    keep_candidate: String,
+    count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackHealthLastCrash {
+    at: String,
+    exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum PackHealthOverall {
+    Healthy,
+    Warnings,
+    Errors,
+}
+
+/// Aggregate pack-health snapshot for one project. Composes the same core
+/// checks the individual screens run: diagnostics, Modrinth export
+/// validation, wrong-loader scan, duplicate-jar scan, quest book validation,
+/// plus the newest crash from the launch journal.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackHealthReport {
+    diagnostics: PackHealthDiagnostics,
+    export_issues: Vec<PackHealthIssue>,
+    wrong_loader_count: usize,
+    duplicate_groups: Vec<PackHealthDuplicateGroup>,
+    quest_issues: usize,
+    last_crash: Option<PackHealthLastCrash>,
+    overall: PackHealthOverall,
+}
+
+/// Best-effort per section: only manifest load failures fail the command;
+/// an unreadable quest book or empty launch journal simply contributes nothing.
+fn get_pack_health_impl(path: &str) -> Result<PackHealthReport, String> {
+    let manifest_path = PathBuf::from(path);
+    let manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+    let project_dir = manifest_parent(path)?;
+
+    // Same core helper as get_diagnostics.
+    let diagnostics =
+        tuffbox_core::diagnostics_for_click_path(&manifest_path, &manifest).diagnostics;
+    let diag_errors = diagnostics
+        .iter()
+        .filter(|d| d.severity == tuffbox_core::DiagnosticSeverity::Error)
+        .count();
+    let diag_warnings = diagnostics
+        .iter()
+        .filter(|d| d.severity == tuffbox_core::DiagnosticSeverity::Warning)
+        .count();
+
+    // Same core helper as validate_modrinth_export.
+    let export_issues: Vec<PackHealthIssue> = tuffbox_core::validate_modrinth_export(&manifest)
+        .into_iter()
+        .map(|issue| PackHealthIssue {
+            severity: match issue.severity {
+                tuffbox_core::ExportIssueSeverity::Error => "error",
+                tuffbox_core::ExportIssueSeverity::Warning => "warning",
+            }
+            .to_string(),
+            code: issue.code,
+            message: issue.message,
+        })
+        .collect();
+
+    // Shared scanner with detect_wrong_loader_mods.
+    let project_loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+    let tracked: Vec<String> = manifest
+        .mods
+        .iter()
+        .filter_map(|m| m.file_name.clone())
+        .collect();
+    let wrong_loader_count =
+        scan_wrong_loader_jars(&project_dir.join("mods"), &project_loader, &tracked).len();
+
+    // Shared scanner with detect_duplicate_mod_jars.
+    let tracked_set: std::collections::HashSet<String> = tracked.into_iter().collect();
+    let duplicate_groups: Vec<PackHealthDuplicateGroup> =
+        scan_duplicate_mod_jars(&project_dir.join("mods"), &tracked_set)
+            .into_iter()
+            .map(|g| PackHealthDuplicateGroup {
+                count: g.jars.len(),
+                mod_id: g.mod_id,
+                keep_candidate: g.keep_candidate,
+            })
+            .collect();
+
+    // Same validation as validate_quest_book; a missing/unreadable book is not
+    // itself a quest issue.
+    let quest_issues = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)
+        .map(|book| {
+            let available = collect_catalog_item_ids_click_path(&manifest_path);
+            if available.is_empty() {
+                book.validate()
+            } else {
+                book.validate_with_items(Some(&available))
+            }
+            .len()
+        })
+        .unwrap_or(0);
+
+    // Newest non-clean exit from the launch journal: crashes are recorded via
+    // archive_crashed_session with exit_code != Some(0); healthy exits record
+    // Some(0). None when there is no history yet.
+    let last_crash = tuffbox_core::launch_history::list_launch_history_default(&project_dir)
+        .into_iter()
+        .find(|e| e.exit_code != Some(0))
+        .map(|e| PackHealthLastCrash {
+            at: e.ended_at,
+            exit_code: e.exit_code,
+        });
+
+    let overall = if diag_errors > 0 || wrong_loader_count > 0 {
+        PackHealthOverall::Errors
+    } else if diag_warnings > 0
+        || !export_issues.is_empty()
+        || !duplicate_groups.is_empty()
+        || quest_issues > 0
+    {
+        PackHealthOverall::Warnings
+    } else {
+        PackHealthOverall::Healthy
+    };
+
+    Ok(PackHealthReport {
+        diagnostics: PackHealthDiagnostics {
+            errors: diag_errors,
+            warnings: diag_warnings,
+        },
+        export_issues,
+        wrong_loader_count,
+        duplicate_groups,
+        quest_issues,
+        last_crash,
+        overall,
+    })
+}
+
+/// Aggregated pack health across all per-screen checks (backend for the
+/// Pack Health panel). Heavy scans run on the blocking pool.
+#[tauri::command(rename_all = "camelCase")]
+async fn get_pack_health(path: String) -> Result<PackHealthReport, String> {
+    tokio::task::spawn_blocking(move || get_pack_health_impl(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -16819,6 +17023,7 @@ pub fn run() {
             get_graph,
             refresh_graph,
             get_diagnostics,
+            get_pack_health,
             get_diagnostic_counts,
             run_project_validation,
             check_mod_compatibility,
