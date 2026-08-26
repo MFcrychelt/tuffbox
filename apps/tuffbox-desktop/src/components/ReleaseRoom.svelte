@@ -27,11 +27,12 @@
   let issues = $state<Issue[]>([]);
   let artifacts = $state<Artifact[]>([]);
   let checklist = $state<Record<string, boolean>>({
-    version: false,
-    validation: false,
-    artifacts: false,
-    changelog: false,
-    snapshot: false,
+      version: false,
+      validation: false,
+      artifacts: false,
+      changelog: false,
+      snapshot: false,
+      publish_target: false,
   });
 
   let publishConfig = $state<PublishConfig>({
@@ -61,6 +62,7 @@
     artifacts: "Artifacts exported",
     changelog: "Changelog written",
     snapshot: "Snapshot created",
+    publish_target: "Publish target configured (GitHub repo or Modrinth project)",
   };
 
   function parseGameVersionIds(text: string): number[] {
@@ -338,6 +340,11 @@
   });
   $effect(() => {
     checklist.changelog = changelog.trim().length > 0;
+  });
+  $effect(() => {
+    checklist.publish_target =
+      publishConfig.githubRepository.trim().length > 0 ||
+      publishConfig.modrinthProjectId.trim().length > 0;
   });
   const releaseReady = $derived(Object.values(checklist).every(Boolean));
   $effect(() => {
