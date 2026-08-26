@@ -335,7 +335,10 @@
   .overlay {
     position: fixed;
     inset: 0;
-    z-index: 80;
+    /* Was 80 — below other overlays (AccountManager/Login use 200) and, more
+       importantly, could lose to transformed ancestors' contexts. Task:
+       'New skin button does nothing'. Align with the rest of the modals. */
+    z-index: 200;
     display: flex;
     align-items: center;
     justify-content: center;

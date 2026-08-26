@@ -588,8 +588,10 @@ async fn fetch_skin_for_username(username: &str, source: &SkinSource) -> Option<
 
 /// Short-timeout client for cheap existence probes (capes can be dead URLs).
 fn probe_client() -> Result<Client, String> {
+    // Task: cape probes chained HEAD→GET with 8s timeouts made first load hang
+    // for tens of seconds when a host was slow/down. 4s is plenty for a probe.
     Client::builder()
-        .timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(4))
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .map_err(|e| e.to_string())
@@ -2683,6 +2685,12 @@ fn load_cape_cache(uuid: &str) -> Option<CapeCatalog> {
     Some(env.catalog)
 }
 
+/// Stale-while-revalidate helper: any cached catalog regardless of age.
+fn load_cape_cache_any_age(uuid: &str) -> Option<CapeCatalog> {
+    let raw = fs::read_to_string(cape_cache_path(uuid)).ok()?;
+    serde_json::from_str(&raw).ok().map(|env: CapeCacheEnvelope| env.catalog)
+}
+
 fn save_cape_cache(uuid: &str, catalog: &CapeCatalog) {
     let path = cape_cache_path(uuid);
     if let Some(parent) = path.parent() {
@@ -2704,7 +2712,23 @@ fn invalidate_cape_cache(uuid: &str) {
 pub async fn mc_list_capes() -> Result<CapeCatalog, String> {
     let state = load_auth_state();
     let profile = state.profile.ok_or("Not logged in")?;
-    if let Some(cached) = load_cape_cache(&profile.uuid) {
+    // Task: capes "load forever". Two mitigations:
+    // 1. Fresh cache → instant return (unchanged).
+    // 2. Stale cache → return it immediately and refresh in the background;
+    //    the UI gets data at once instead of waiting on external probes.
+    if let Some(cached) = load_cape_cache_any_age(&profile.uuid) {
+        let fresh = load_cape_cache(&profile.uuid).is_some();
+        if !fresh {
+            let username = profile.name.clone();
+            let uuid = profile.uuid.clone();
+            let provider = state.cape_provider.clone();
+            let owned = profile.capes.clone();
+            tokio::spawn(async move {
+                let catalog =
+                    build_cape_catalog(&username, &uuid, provider, &owned).await;
+                save_cape_cache(&uuid, &catalog);
+            });
+        }
         return Ok(cached);
     }
     let catalog = build_cape_catalog(

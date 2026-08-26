@@ -622,9 +622,9 @@
 
 <style>
   .me-page {
-    max-width: 980px;
+    max-width: 1120px;
     margin: 0 auto;
-    padding: 8px 4px 32px;
+    padding: 4px 8px 32px;
   }
 
   .me-top {
