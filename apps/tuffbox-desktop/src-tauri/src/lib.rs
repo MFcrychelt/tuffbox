@@ -3257,6 +3257,69 @@ fn fix_action_to_launcher_action(
     }
 }
 
+/// One jar sitting in a project's `mods/` folder that was built for a
+/// different loader than the project uses (e.g. a Forge jar in a Fabric
+/// project). Shared by the Diagnostics command and the launch preflight.
+struct WrongLoaderFinding {
+    file_name: String,
+    /// Loader(s) the jar was built for, e.g. "forge" or "neoforge, fabric".
+    jar_loaders: String,
+}
+
+/// Core wrong-loader scan shared by the `detect_wrong_loader_mods` command
+/// and the launch preflight ('Play does not lie'). Scans `mods_dir` for
+/// `.jar`s NOT tracked in the manifest and identifies them via Modrinth hash
+/// lookup, flagging jars whose loaders exclude `project_loader`.
+fn scan_wrong_loader_jars(
+    mods_dir: &Path,
+    project_loader: &str,
+    tracked: &[String],
+) -> Vec<WrongLoaderFinding> {
+    let mut findings = Vec::new();
+
+    let entries = match std::fs::read_dir(mods_dir) {
+        Ok(e) => e,
+        Err(_) => return findings,
+    };
+
+    let provider = tuffbox_core::ModrinthProvider::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.extension().map_or(false, |e| e == "jar") {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        // Skip if already tracked in manifest
+        if tracked.iter().any(|t| t == &file_name) {
+            continue;
+        }
+
+        // Try to identify via Modrinth hash lookup
+        let sha1: String = match tuffbox_core::mc_install::sha1_file(&path) {
+            Ok(h) => h,
+            Err(_) => continue,
+        };
+
+        let identified = provider
+            .get_version_by_hash(&sha1)
+            .ok()
+            .flatten();
+
+        if let Some(version) = identified {
+            let jar_loaders: Vec<&str> = version.loaders.iter().map(|s| s.as_str()).collect();
+            // Empty loader list = loader-agnostic jar; only flag real mismatches.
+            if !jar_loaders.is_empty() && !jar_loaders.contains(&project_loader) {
+                findings.push(WrongLoaderFinding {
+                    file_name,
+                    jar_loaders: jar_loaders.join(", "),
+                });
+            }
+        }
+    }
+    findings
+}
+
 /// Scans the `mods/` folder for `.jar` files that appear to be built for a
 /// different mod loader than what the project uses (e.g. a Forge mod in a
 /// Fabric project), and returns a list of suggestions with the file name
@@ -3269,59 +3332,29 @@ async fn detect_wrong_loader_mods(path: String) -> Result<Vec<serde_json::Value>
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
-        let mods_dir = project_dir.join("mods");
-        let project_loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
-        let mut results = Vec::new();
-
-        let entries = match std::fs::read_dir(&mods_dir) {
-            Ok(e) => e,
-            Err(_) => return Ok(results),
-        };
-
-        let provider = tuffbox_core::ModrinthProvider::new();
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.extension().map_or(false, |e| e == "jar") {
-                continue;
-            }
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            // Skip if already tracked in manifest
-            if manifest.mods.iter().any(|m| m.file_name.as_deref() == Some(&*file_name)) {
-                continue;
-            }
-
-            // Try to identify via Modrinth hash lookup
-            let sha1: String = match tuffbox_core::mc_install::sha1_file(&path) {
-                Ok(h) => h,
-                Err(_) => continue,
-            };
-
-            let identified = provider
-                .get_version_by_hash(&sha1)
-                .ok()
-                .flatten();
-
-            if let Some(version) = identified {
-                let jar_loaders: Vec<&str> = version.loaders.iter().map(|s| s.as_str()).collect();
-                let is_compatible = jar_loaders.is_empty()
-                    || jar_loaders.contains(&project_loader.as_str());
-
-                if !is_compatible && !jar_loaders.is_empty() {
-                    results.push(serde_json::json!({
-                        "fileName": file_name,
-                        "detectedLoader": jar_loaders.join(", "),
-                        "projectLoader": project_loader,
-                        "recommendation": "disable",
-                        "reason": format!(
-                            "{} was built for {} but this project uses {}. Disable it (.jar.disabled) or remove it.",
-                            file_name, jar_loaders.join(", "), project_loader
-                        ),
-                    }));
-                }
-            }
-        }
-        Ok(results)
+        let project_loader =
+            tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+        let tracked: Vec<String> = manifest
+            .mods
+            .iter()
+            .filter_map(|m| m.file_name.clone())
+            .collect();
+        let findings = scan_wrong_loader_jars(&project_dir.join("mods"), &project_loader, &tracked);
+        Ok(findings
+            .into_iter()
+            .map(|f| {
+                serde_json::json!({
+                    "fileName": f.file_name,
+                    "detectedLoader": f.jar_loaders,
+                    "projectLoader": project_loader,
+                    "recommendation": "disable",
+                    "reason": format!(
+                        "{} was built for {} but this project uses {}. Disable it (.jar.disabled) or remove it.",
+                        f.file_name, f.jar_loaders, project_loader
+                    ),
+                })
+            })
+            .collect())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -12380,6 +12413,89 @@ fn emit_launch_progress(
     );
 }
 
+/// A jar found in the instance's mods folder that was built for a different
+/// mod loader than the project uses.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreflightWrongLoaderJar {
+    file_name: String,
+    /// Loader the project expects (e.g. "fabric").
+    expected: String,
+    /// Loader(s) the jar was actually built for.
+    found: String,
+}
+
+/// Result of the pre-spawn 'Play does not lie' sanity check.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreflightReport {
+    wrong_loader: Vec<PreflightWrongLoaderJar>,
+    /// Manifest-tracked files absent on disk. Non-fatal: the caller announces
+    /// them as pending downloads instead of failing the launch.
+    missing_jars: Vec<String>,
+}
+
+/// Pre-spawn preflight ('Play does not lie'): before any long install work,
+/// verify that loose jars in the instance's mods folder match the project's
+/// loader and that manifest-tracked files actually exist on disk.
+///
+/// - Wrong-loader jars fail this launch: they crash the game mid-boot with a
+///   confusing loader error. The report names each offender so the UI can
+///   point at Mods → Wrong loader / Repair.
+/// - Missing tracked files are non-fatal: `ensure_project_mods_downloaded`
+///   fetches them right after this check runs.
+fn launch_preflight(
+    game_dir: &Path,
+    manifest: &ProjectManifest,
+) -> Result<PreflightReport, String> {
+    let project_loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+
+    // Tracked-but-missing files: same presence rule as
+    // tuffbox_core::materialize_mod_file (non-empty file inside its
+    // content-type folder). Entries disabled in the manifest are skipped so
+    // we never announce a download that sync won't attempt.
+    let mut missing_jars: Vec<String> = Vec::new();
+    for module in &manifest.mods {
+        let Some(file_name) = module.file_name.as_deref() else {
+            continue;
+        };
+        if module
+            .status
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("disabled"))
+        {
+            continue;
+        }
+        let target = tuffbox_core::content_dir_for(game_dir, module.content_type).join(file_name);
+        let present = target.is_file()
+            && std::fs::metadata(&target).map(|m| m.len() > 0).unwrap_or(false);
+        if !present && !missing_jars.iter().any(|m| m == file_name) {
+            missing_jars.push(file_name.to_string());
+        }
+    }
+
+    // Loose-jar wrong-loader scan: exact same heuristic as the Diagnostics
+    // command (scan_wrong_loader_jars).
+    let tracked: Vec<String> = manifest
+        .mods
+        .iter()
+        .filter_map(|m| m.file_name.clone())
+        .collect();
+    let wrong_loader = scan_wrong_loader_jars(&game_dir.join("mods"), &project_loader, &tracked)
+        .into_iter()
+        .map(|f| PreflightWrongLoaderJar {
+            expected: project_loader.clone(),
+            found: f.jar_loaders,
+            file_name: f.file_name,
+        })
+        .collect();
+
+    Ok(PreflightReport {
+        wrong_loader,
+        missing_jars,
+    })
+}
+
 fn build_and_spawn(
     path: String,
     profile: String,
@@ -12526,6 +12642,54 @@ fn build_and_spawn(
     // the staged server dir already has a filtered copy.
     emit_launch_progress(&app, "mods", "Checking mods…", Some(35));
     progress.log("# Verifying mod files...");
+    // 'Play does not lie' preflight: catch wrong-loader jars here instead of
+    // after a failed boot, and announce pending downloads up front.
+    emit_launch_progress(&app, "mods", "Preflight: checking mods…", Some(35));
+    let preflight = launch_preflight(&game_dir, &manifest).map_err(|e| {
+        LaunchErrorInfo::new(LaunchErrorKind::Install, e).with_log(&console_log)
+    })?;
+    if !preflight.wrong_loader.is_empty() {
+        emit_launch_progress(
+            &app,
+            "mods",
+            &format!(
+                "Preflight: {} wrong-loader mod(s)",
+                preflight.wrong_loader.len()
+            ),
+            Some(35),
+        );
+        let offenders: Vec<String> = preflight
+            .wrong_loader
+            .iter()
+            .map(|w| {
+                format!(
+                    "{} (built for {}, project uses {})",
+                    w.file_name, w.found, w.expected
+                )
+            })
+            .collect();
+        return Err(LaunchErrorInfo::new(
+            LaunchErrorKind::Install,
+            format!(
+                "{} wrong-loader mod(s) cannot load in this project: {}. Disable it in Mods → Wrong loader (or run Repair).",
+                preflight.wrong_loader.len(),
+                offenders.join("; ")
+            ),
+        )
+        .with_log(&console_log));
+    }
+    if !preflight.missing_jars.is_empty() {
+        emit_launch_progress(
+            &app,
+            "mods",
+            &format!("{} mods will be downloaded", preflight.missing_jars.len()),
+            Some(35),
+        );
+        progress.log(&format!(
+            "# Preflight: {} mod file(s) missing from disk, downloading…",
+            preflight.missing_jars.len()
+        ));
+    }
     let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &project_dir);
     if !sync_report.downloaded.is_empty() {
         progress.log(&format!(
