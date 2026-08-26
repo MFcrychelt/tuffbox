@@ -2203,6 +2203,17 @@ export const api = {
         reportId: reportId ?? null,
       });
     },
+    getPackHealth(p?: string) {
+      return cmd<{
+        diagnostics: { errors: number; warnings: number };
+        exportIssues: Array<{ severity: string; code: string; message: string }>;
+        wrongLoaderCount: number;
+        duplicateGroups: Array<{ modId: string; keepCandidate: string; count: number }>;
+        questIssues: number;
+        lastCrash: { at: string; exitCode: number | null } | null;
+        overall: "healthy" | "warnings" | "errors";
+      }>("get_pack_health", pathArg(p));
+    },
     applyActionPlan(plan: Record<string, unknown>, p?: string, fingerprintKey?: string | null) {
       return cmd<Record<string, unknown>>("apply_action_plan", {
         ...pathArg(p),

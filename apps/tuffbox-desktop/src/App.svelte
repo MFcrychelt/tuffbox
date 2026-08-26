@@ -7,6 +7,7 @@
   import CommandPalette from "./components/CommandPalette.svelte";
   import ScrollToTopButton from "./components/ScrollToTopButton.svelte";
   import ViewLoading from "./components/ViewLoading.svelte";
+  import PackHealthBadge from "./components/PackHealthBadge.svelte";
   import SwarmOnboarding from "./components/SwarmOnboarding.svelte";
   import ShareCapsuleDialog from "./components/ShareCapsuleDialog.svelte";
   import TaskProgressPanel from "./components/TaskProgressPanel.svelte";
@@ -664,7 +665,9 @@
   <Sidebar bind:currentView />
   <div class="main">
     {#if currentView !== "ide"}
-      <Header bind:currentView />
+      <Header bind:currentView>
+        <PackHealthBadge onOpenDiagnostics={() => { currentView = "diagnostics"; }} />
+      </Header>
     {/if}
     <main
       class="content"

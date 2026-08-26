@@ -11,7 +11,7 @@
 
   import type { View } from "../lib/types";
 
-  let { currentView = $bindable() }: { currentView: View } = $props();
+  let { currentView = $bindable(), children = null }: { currentView: View; children?: any } = $props();
 
   let onlineCount = $state(0);
   let onlineOk = $state(false);
@@ -118,6 +118,7 @@
   </div>
 
   <div class="right">
+    {@render children?.()}
     <div
       class="online-chip"
       class:live={onlineOk}
