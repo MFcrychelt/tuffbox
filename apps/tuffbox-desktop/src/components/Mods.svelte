@@ -1260,6 +1260,16 @@ import { trapFocus } from "../lib/focusTrap";
   let updateList = $state<any[]>([]);
   let updateCheckLoading = $state(false);
   let updateApplying = $state(false);
+  // Preview gate for Update All: user sees the diff (current → latest, channel,
+  // changelog snippet) and confirms before anything is written.
+  let showUpdateAllPreview = $state(false);
+
+  const updatePreviewBreaking = $derived(
+    updateList.filter((u) => {
+      const t = String(u.versionType ?? "release").toLowerCase();
+      return t === "beta" || t === "alpha";
+    }),
+  );
 
   async function checkForUpdates() {
     if (!$projectPath) return;
@@ -3062,7 +3072,18 @@ import { trapFocus } from "../lib/focusTrap";
             class="more-item"
             class:has-updates={updateList.length > 0}
             role="menuitem"
-            onclick={() => { actionsMenuOpen = false; void applyAllUpdates(); }}
+            onclick={() => {
+              actionsMenuOpen = false;
+              if (updateList.length === 0) {
+                // Nothing checked yet — check first, then open the preview.
+                void (async () => {
+                  await checkForUpdates();
+                  if (updateList.length > 0) showUpdateAllPreview = true;
+                })();
+              } else {
+                showUpdateAllPreview = true;
+              }
+            }}
             disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"}
             title="Update all mods to the latest build for this Minecraft version"
           >
@@ -4580,6 +4601,18 @@ import { trapFocus } from "../lib/focusTrap";
     confirmLabel="Delete"
     onconfirm={() => { if (deleteTarget) deleteList(deleteTarget); showDeleteConfirm = false; }}
     oncancel={() => (showDeleteConfirm = false)}
+  />
+{/if}
+
+{#if showUpdateAllPreview && updateList.length > 0}
+  <ConfirmDialog
+    title={`Update ${updateList.length} mod${updateList.length > 1 ? "s" : ""}?`}
+    message={updatePreviewBreaking.length > 0
+      ? `${updateList.map((u) => `• ${u.name}: ${u.currentVersion} → ${u.latestVersion} (${u.versionType ?? "release"})`).join("\n")}\n\n⚠ ${updatePreviewBreaking.length} update${updatePreviewBreaking.length > 1 ? "s are" : " is"} a pre-release (beta/alpha) — higher risk of breakage.`
+      : updateList.map((u) => `• ${u.name}: ${u.currentVersion} → ${u.latestVersion}`).join("\n")}
+    confirmLabel="Update all"
+    onconfirm={() => { showUpdateAllPreview = false; void applyAllUpdates(); }}
+    oncancel={() => (showUpdateAllPreview = false)}
   />
 {/if}
 
