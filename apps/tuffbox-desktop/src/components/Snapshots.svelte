@@ -906,11 +906,12 @@
     flex: 1;
     min-width: 0;
     padding: 10px 14px;
-    /* Task #67: buttons had no rounding/borders — flat slabs. Ore UI keys. */
+    /* Task #67: buttons had no rounding/borders — flat slabs. Ore UI keys,
+       theme-aware via tokens so light themes stay readable. */
     border-radius: var(--border-radius-md);
-    background: #39393b;
-    border: 1px solid #39393b;
-    border-bottom-color: #232425;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-bottom-color: color-mix(in srgb, var(--text-primary) 14%, var(--border-color));
     color: var(--text-muted);
     font-weight: 600;
     font-size: 12px;
@@ -919,29 +920,27 @@
       border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
   }
   .kind-btn:hover {
-    background: #47484a;
+    background: var(--bg-elevated);
     color: var(--text-primary);
   }
   .kind-btn:active {
-    background: #2a2b2c;
-    transform: translateY(1px);
+    background: color-mix(in srgb, var(--text-primary) 6%, var(--bg-tertiary));
   }
   .kind-btn :global(svg) { color: var(--text-muted); flex-shrink: 0; }
   .k-count { font-size: 18px; font-weight: 800; color: var(--text-primary); line-height: 1; }
   .k-label { color: var(--text-muted); }
   .kind-btn.active {
-    background: #491ac0;
-    border-color: #491ac0;
-    border-bottom-color: #32127f;
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 70%, #000);
   }
   .kind-btn.active .k-label { color: #ffffff; }
   .kind-btn.active .k-count { color: #ffffff; }
   .kind-btn.active :global(svg) { color: #ffffff; }
-  .kind-btn.auto.active { border-color: #491ac0; }
-  .kind-btn.auto.active :global(svg), .kind-btn.auto.active .k-count { color: #ffffff; }
-  .kind-btn.manual.active { border-color: #491ac0; }
-  .kind-btn.manual.active :global(svg) { color: #ffffff; }
-  .kind-btn.crash.active :global(svg), .kind-btn.crash.active .k-count { color: #ffffff; }
+  /* Active kind buttons inherit the shared accent styling above; per-kind
+     variants only need white text on the filled accent background. */
+  .kind-btn.active :global(svg),
+  .kind-btn.active .k-count { color: #ffffff; }
 
   /* ── Filters ─────────────────────────────────────────────── */
   .filters { display: flex; gap: 12px; align-items: center; flex-shrink: 0; }

@@ -911,18 +911,14 @@
   }
 
   /* Home: the quartz backdrop panel must start at the very top — no plain-bg
-     gap above it (task #56). Kill top padding and pull the panel up; side and
-     bottom padding/rounding stay. */
+     gap above it (task #56). Kill top padding and square only the top corners;
+     side/bottom padding and rounding stay, so the panel keeps its side gaps. */
   .content.home-flush {
     padding-top: 0;
   }
   .content.home-flush :global(.home) {
     border-top-left-radius: 0;
     border-top-right-radius: 0;
-    margin-left: calc(-1 * var(--content-pad-x, 32px));
-    margin-right: calc(-1 * var(--content-pad-x, 32px));
-    padding-left: calc(20px + var(--content-pad-x, 32px));
-    padding-right: calc(20px + var(--content-pad-x, 32px));
     padding-top: calc(20px + 24px);
   }
 

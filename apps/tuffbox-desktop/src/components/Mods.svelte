@@ -6054,14 +6054,14 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 22px;
   }
 
-  /* Add content browser: nearly full viewport — only a slim 12px dimmed
-     frame remains so the backdrop blur is barely visible behind it. */
+  /* Add content browser: large but not fullscreen — keep a visible dimmed
+     backdrop frame so the app chrome stays readable around the modal. */
   .modal.add-mods-modal {
     position: relative;
-    width: 100vw;
-    height: 100vh;
-    max-width: calc(100vw - 12px);
-    max-height: calc(100vh - 12px);
+    width: 95vw;
+    height: 95vh;
+    max-width: calc(100vw - 48px);
+    max-height: calc(100vh - 48px);
     display: flex;
     flex-direction: column;
     overflow: hidden;

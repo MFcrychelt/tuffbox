@@ -5567,7 +5567,62 @@ fn find_dependents_on_class(
 /// `logs/latest.log` and the current installed mod list). Otherwise the
 /// newest crash report is used — never the entire crash-reports folder.
 #[tauri::command(rename_all = "camelCase")]
-fn run_crash_assistant_full(
+async fn run_crash_assistant_full(
+    path: String,
+    report_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    // Task #66: same blocking-pool treatment as get_crash_diagnosis.
+    tokio::task::spawn_blocking(move || run_crash_assistant_full_impl(path, report_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Task #66: process-wide cache of class→jar lookups. Scanning every mod jar
+/// for a missing class is the dominant cost of the Diagnose tab; the same
+/// class names reappear on every run, so memoize across runs (keyed by mods
+/// dir + class). Entries are cheap (small Vec) and bounded by distinct classes.
+#[derive(Default)]
+struct ClassFinderCache(Mutex<std::collections::HashMap<(String, String), Vec<tuffbox_core::crash_assistant::ClassMatch>>>);
+
+static GLOBAL_APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+fn app_handle_global() -> Option<&'static tauri::AppHandle> {
+    GLOBAL_APP_HANDLE.get()
+}
+
+/// Look up `cls` in `mods_dir`, memoizing into the managed process-wide cache.
+/// Cache misses fall back to the full jar scan and store the result.
+fn find_class_in_mods_cached(
+    cls: &str,
+    mods_dir: &std::path::Path,
+    mods_dir_key: &str,
+) -> Vec<tuffbox_core::crash_assistant::ClassMatch> {
+    use tauri::Manager;
+    // AppHandle global: fall back to a direct scan if state isn't up yet
+    // (early startup) — correctness first, cache is only an accelerator.
+    let matches = {
+        match app_handle_global() {
+            Some(app) => {
+                let cache = app.state::<ClassFinderCache>();
+                let key = (mods_dir_key.to_string(), cls.to_string());
+                if let Ok(guard) = cache.0.lock() {
+                    if let Some(hit) = guard.get(&key) {
+                        return hit.clone();
+                    }
+                }
+                let found = tuffbox_core::crash_assistant::find_class_in_mods(cls, mods_dir);
+                if let Ok(mut guard) = cache.0.lock() {
+                    guard.insert(key, found.clone());
+                }
+                found
+            }
+            None => tuffbox_core::crash_assistant::find_class_in_mods(cls, mods_dir),
+        }
+    };
+    matches
+}
+
+fn run_crash_assistant_full_impl(
     path: String,
     report_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
@@ -5578,9 +5633,11 @@ fn run_crash_assistant_full(
 
     let mut class_finder = Vec::new();
     let mut combined = String::new();
-    // Task #66: per-run cache so repeated class names don't rescan all jars.
+    // Task #66: per-run memo plus the process-wide ClassFinderCache so repeat
+    // runs of the same project don't rescan every jar for known classes.
     let mut class_finder_cache: std::collections::HashMap<String, Vec<tuffbox_core::crash_assistant::ClassMatch>> =
         std::collections::HashMap::new();
+    let mods_dir_key = mods_dir.display().to_string();
     if let Some(text) = load_scoped_crash_report(&project_dir, report_id.as_deref()) {
         combined.push_str(&text);
         combined.push('\n');
@@ -5605,7 +5662,7 @@ fn run_crash_assistant_full(
                     let matches = class_finder_cache
                         .entry(cls.to_string())
                         .or_insert_with(|| {
-                            tuffbox_core::crash_assistant::find_class_in_mods(cls, &mods_dir)
+                            find_class_in_mods_cached(cls, &mods_dir, &mods_dir_key)
                         });
                     for m in matches.iter() {
                         class_finder.push(serde_json::json!({"className":m.class_name,"modId":m.mod_id,"modName":m.mod_name}));
@@ -8725,17 +8782,17 @@ fn lint_config(path: String, relative_path: String) -> Result<Vec<serde_json::Va
                 // line looks like a key: starts with an identifier-ish token and
                 // is short. Everything else is noise we must not warn about.
                 if !t.contains('=') && t.len() > 2 {
+                    // Real .properties keys are single tokens (dots/dashes/
+                    // underscores, no spaces). Anything with spaces is prose
+                    // (headers, license text) — never warn about it.
                     let looks_like_key = t
                         .chars()
                         .next()
                         .map(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
                         .unwrap_or(false)
                         && t.chars().all(|c| {
-                            c.is_ascii_alphanumeric()
-                                || "_-. /\\".contains(c)
-                                || c.is_ascii_punctuation() && !"{}[]()<>|&;:!\"'`~^$*+?,".contains(c)
-                        })
-                        && t.split_whitespace().count() <= 4;
+                            c.is_ascii_alphanumeric() || "_-.".contains(c)
+                        });
                     if looks_like_key {
                         issues.push(serde_json::json!({"severity":"warning","code":"PROPERTY_NO_EQ","message":"Line without = sign","line":line_no+1}));
                     }
@@ -10065,7 +10122,18 @@ async fn download_missing_files(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn get_crash_diagnosis(
+async fn get_crash_diagnosis(
+    path: String,
+    report_id: Option<String>,
+) -> Result<tuffbox_core::crash::CrashDiagnosis, String> {
+    // Task #66: heavy log/jar analysis must not block the IPC thread — run on
+    // the blocking pool so the UI stays responsive and other commands queue up.
+    tokio::task::spawn_blocking(move || get_crash_diagnosis_impl(path, report_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_crash_diagnosis_impl(
     path: String,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::crash::CrashDiagnosis, String> {
@@ -10244,7 +10312,7 @@ fn create_crash_fix_plan(
     path: String,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::ChangePlan, String> {
-    Ok(get_crash_diagnosis(path, report_id)?.fix_plan)
+    Ok(get_crash_diagnosis_impl(path, report_id)?.fix_plan)
 }
 
 /// Actually applies the crash-diagnosis fix plan (update/disable suspected
@@ -10268,7 +10336,7 @@ async fn apply_crash_fix_plan(
         let manifest_path = resolve_manifest_path(&path)?;
         let path_str = manifest_path.to_string_lossy().to_string();
         let project_dir = manifest_parent(&path_str)?;
-        let diagnosis = get_crash_diagnosis(path_str.clone(), report_id.clone())?;
+        let diagnosis = get_crash_diagnosis_impl(path_str.clone(), report_id.clone())?;
         let plan = diagnosis.fix_plan;
 
         // When the user picked a radio option, apply exactly that option's
@@ -16941,6 +17009,9 @@ pub fn run() {
     builder
         .setup(|app| {
             parse_launch_cli_args();
+            // Task #66: stash the handle for non-command helpers (class-finder
+            // cache) that run on the blocking pool without a State param.
+            let _ = GLOBAL_APP_HANDLE.set(app.handle().clone());
             // `tuffbox://install?repo=owner/repo` share links.
             #[cfg(desktop)]
             {
@@ -17451,6 +17522,7 @@ pub fn run() {
             launcher_presence::get_launcher_online,
             launcher_presence::get_launcher_recent_sessions,
         ])
+        .manage(ClassFinderCache::default())
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
