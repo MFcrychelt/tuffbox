@@ -204,7 +204,7 @@
   .pip-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
+    background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -237,7 +237,7 @@
     flex-shrink: 0;
   }
   .pip-spin { animation: pip-rotate 0.9s linear infinite; }
-  .pip-close { background: none; border: none; color: #fecaca; cursor: pointer; margin-left: auto; padding: 2px; }
+  .pip-close { background: none; border: none; color: var(--accent-danger); cursor: pointer; margin-left: auto; padding: 2px; }
 
   @keyframes pip-rotate {
     to { transform: rotate(360deg); }
@@ -297,5 +297,5 @@
 
   .pip-state { flex-shrink: 0; color: var(--text-muted); }
   .pip-more { color: var(--text-muted); font-size: 11px; }
-  .pip-fail { margin: 0; color: #fecaca; font-size: 12px; }
+  .pip-fail { margin: 0; color: var(--accent-danger); font-size: 12px; }
 </style>
