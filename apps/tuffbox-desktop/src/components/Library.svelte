@@ -570,7 +570,7 @@
 </script>
 
 <div class="library fade-slide-in">
-  <div class="library-subnav lib-header-enter">
+  {#snippet tabButtons()}
     <div class="tabs" role="tablist" aria-label="Library">
       <button type="button" class:active={tab === "yours"} onclick={() => switchTab("yours")}>
         <LayoutGrid size={15} /> Your packs
@@ -587,7 +587,11 @@
         <Plus size={15} /> Create
       </button>
     </div>
-    {#if tab !== "yours"}
+  {/snippet}
+
+  {#if tab !== "yours"}
+    <div class="library-subnav lib-header-enter">
+      {@render tabButtons()}
       <div class="import-wrap">
         <button
           type="button"
@@ -617,12 +621,14 @@
           </div>
         {/if}
       </div>
-    {/if}
-  </div>
+    </div>
+  {/if}
 
   {#if tab === "yours"}
     <div class="yours-wrap">
-      <LibraryInstancesPane bind:currentView />
+      <LibraryInstancesPane bind:currentView>
+        {#snippet toolbarLeading()}{@render tabButtons()}{/snippet}
+      </LibraryInstancesPane>
     </div>
   {:else if tab === "discover"}
   <div class="tab-scroll">

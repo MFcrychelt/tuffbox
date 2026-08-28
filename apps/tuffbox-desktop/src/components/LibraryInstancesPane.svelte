@@ -68,8 +68,11 @@
 
   let {
     currentView = $bindable(),
+    toolbarLeading,
   }: {
     currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world";
+    /** Optional leading toolbar slot (Library tabs render here). */
+    toolbarLeading?: import("svelte").Snippet;
   } = $props();
 
   const LONG_PRESS_MS = 420;
@@ -1009,6 +1012,9 @@
 <div class="prism-lib" class:drag-mode={dragging}>
   <div class="prism-toolbar lib-toolbar-enter">
     <div class="tb-left">
+      {#if toolbarLeading}
+        <div class="tb-leading">{@render toolbarLeading()}</div>
+      {/if}
       <div class="tb-add-wrap">
         <button
           type="button"
@@ -1534,40 +1540,65 @@
     gap: 6px;
     flex-wrap: wrap;
   }
+  /* Library tabs (Your packs / Discover / Create) rendered inside the toolbar. */
+  .tb-leading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 10px;
+    margin-right: 4px;
+    border-right: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
   .tb-right { margin-left: auto; }
   .tb-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 7px 10px;
-    border-radius: var(--border-radius-sm);
-    border: 1px solid transparent;
-    background: transparent;
+    padding: 7px 10px 6px;
+    border-radius: 3px;
+    border: 1px solid #39393b;
+    border-bottom: 3px solid #232425;
+    background: #39393b;
     color: var(--text-secondary);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition:
-      transform var(--motion-fast) var(--ease-spring),
-      background var(--motion-fast) var(--ease-out),
-      border-color var(--motion-fast) var(--ease-out),
-      color var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-fast) var(--ease-out);
+      background var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease),
+      color var(--motion-fast) var(--motion-ease);
   }
   .tb-btn:hover {
-    background: var(--bg-hover);
+    background: #47484a;
+    border-color: #47484a;
+    border-bottom-color: #232425;
     color: var(--text-primary);
   }
   .tb-btn:active:not(:disabled) {
-    transform: scale(0.94);
+    background: #2a2b2c;
+    border-bottom-width: 1px;
+    margin-top: 2px;
   }
+  /* Task: Ore UI treatment for the primary toolbar key (Add Instance). */
   .tb-btn.primary {
-    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
-    color: var(--accent-primary);
+    background: #491ac0;
+    border-color: #491ac0;
+    border-bottom-color: #32127f;
+    color: #ffffff;
+    font-weight: 700;
   }
   .tb-btn.primary:hover {
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 25%, transparent), 0 6px 16px color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    background: #5c2dd5;
+    border-color: #5c2dd5;
+    border-bottom-color: #3f1a96;
+    color: #ffffff;
+    box-shadow: none;
+  }
+  .tb-btn.primary:active:not(:disabled) {
+    background: #3b158f;
+    border-bottom-width: 1px;
+    margin-top: 2px;
   }
   .tb-btn:disabled { opacity: 0.5; cursor: default; }
   .tb-add-wrap,
