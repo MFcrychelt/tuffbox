@@ -83,3 +83,4 @@ packwiz/
 
 # Windows accidental NUL redirect artifact
 /NUL
+.hermes-tmp.*
