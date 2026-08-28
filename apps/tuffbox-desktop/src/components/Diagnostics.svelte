@@ -174,6 +174,8 @@
   const LATEST_LOG_SOURCE = "__latest_log__";
   const LAUNCHER_LOG_SOURCE = "__launcher_log__";
   let analysisBusy = $state(false);
+  /** Task #66: source id the last unified analysis ran against (dedupe key). */
+  let lastAnalyzedSource = $state<string | null>(null);
   /** Main Health canvas tab. */
   let mainTab = $state<"problems" | "evidence" | "ai" | "advanced">("problems");
   /** After a fix: ask user to verify with Test launch. */
@@ -351,6 +353,9 @@
     preferLatestLog = true;
     selectedReportId = "";
     appliedProblemIds = new Set();
+    lastAnalyzedSource = null; // new project → force a fresh unified analysis
+    crashFindings = [];
+    aiAnalysis = null;
     void load(true);
     void refreshSoftVerifyStatus(path);
   }
@@ -796,7 +801,7 @@
       preferLauncherLog = false;
       selectedReportId = id;
       await load(true);
-      await runUnifiedAnalysis();
+      await runUnifiedAnalysis({ force: true });
     } catch (e) {
       error = String(e);
     } finally {
@@ -828,7 +833,7 @@
       selectedReportId = id;
       importUrl = "";
       await load(true);
-      await runUnifiedAnalysis();
+      await runUnifiedAnalysis({ force: true });
     } catch (e) {
       error = String(e);
     } finally {
@@ -861,9 +866,17 @@
     }
   }
 
-  /** Crash Assistant first, then AI — equal analysis cards. */
-  async function runUnifiedAnalysis() {
+  /** Crash Assistant first, then AI — equal analysis cards.
+   * Task #66: with force=false (tab open / reload) reuse the previous run's
+   * results when the log source hasn't changed — re-running the full AI
+   * cascade on every tab visit made the tab appear stuck in "Analyzing…". */
+  async function runUnifiedAnalysis(opts: { force?: boolean } = {}) {
     if (!$projectPath || analysisBusy) return;
+    const source = activeReportId();
+    if (!opts.force && lastAnalyzedSource === source && (crashFindings.length > 0 || aiAnalysis)) {
+      return;
+    }
+    lastAnalyzedSource = source;
     analysisBusy = true;
     aiSoftError = null;
     try {
@@ -2646,7 +2659,7 @@
         </button>
         <button
           class="secondary"
-          onclick={() => runUnifiedAnalysis()}
+          onclick={() => runUnifiedAnalysis({ force: true })}
           disabled={!$projectPath || analysisBusy || loading || sessionOk}
           title="Re-run rules + AI"
         >
