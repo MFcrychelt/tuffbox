@@ -313,10 +313,31 @@ pub fn ensure_project_mods_downloaded_with_progress_filtered(
     only_mod_ids: Option<&std::collections::HashSet<String>>,
 ) -> ModSyncReport {
     use rayon::prelude::*;
+    use std::sync::atomic::Ordering;
     use std::sync::Mutex;
 
     let report = Mutex::new(ModSyncReport::default());
     let progress = progress.clone();
+
+    // Modrinth-style bounded concurrency: unbounded par_iter over 30–80 mods
+    // saturates the CDNs' per-host limits and trips circuit breakers, which
+    // made pack installs SLOWER than fewer parallel streams. Reuse the same
+    // user-configurable limit as the asset/library batch downloader.
+    let limit = crate::download_engine::configured_concurrency();
+    let in_flight = std::sync::atomic::AtomicUsize::new(0);
+    let gate = |active: &std::sync::atomic::AtomicUsize| {
+        loop {
+            let cur = active.load(Ordering::SeqCst);
+            if cur < limit
+                && active
+                    .compare_exchange(cur, cur + 1, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                break;
+            }
+            std::thread::yield_now();
+        }
+    };
 
     manifest
         .mods
@@ -333,21 +354,25 @@ pub fn ensure_project_mods_downloaded_with_progress_filtered(
                 .map(|ids| ids.contains(&module.id))
                 .unwrap_or(true)
         })
-        .for_each(|module| {
-            let outcome = materialize_mod_file_with_progress(instance_dir, module, &progress);
-            let mut report = report.lock().unwrap();
-            match outcome {
-                Ok(MaterializeOutcome::Downloaded) => report.downloaded.push(module.id.clone()),
-                Ok(MaterializeOutcome::AlreadyPresent) => {
-                    report.already_present.push(module.id.clone())
+        .for_each_init(
+            || gate(&in_flight),
+            |_permit, module| {
+                let outcome = materialize_mod_file_with_progress(instance_dir, module, &progress);
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                let mut report = report.lock().unwrap();
+                match outcome {
+                    Ok(MaterializeOutcome::Downloaded) => report.downloaded.push(module.id.clone()),
+                    Ok(MaterializeOutcome::AlreadyPresent) => {
+                        report.already_present.push(module.id.clone())
+                    }
+                    Ok(MaterializeOutcome::Skipped) => report.skipped.push(module.id.clone()),
+                    Err(e) => report.failed.push(ModSyncFailure {
+                        mod_id: module.id.clone(),
+                        error: e.to_string(),
+                    }),
                 }
-                Ok(MaterializeOutcome::Skipped) => report.skipped.push(module.id.clone()),
-                Err(e) => report.failed.push(ModSyncFailure {
-                    mod_id: module.id.clone(),
-                    error: e.to_string(),
-                }),
-            }
-        });
+            },
+        );
 
     report.into_inner().unwrap()
 }

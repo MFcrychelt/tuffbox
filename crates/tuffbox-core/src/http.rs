@@ -135,6 +135,7 @@ static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .timeout(Duration::from_secs(60))
         .connect_timeout(Duration::from_secs(15))
         .tcp_keepalive(Duration::from_secs(10))
+        .tcp_nodelay(true)
         .user_agent("TuffBox-IDE/0.1.0")
         .build()
         .expect("Failed to build HTTP client")
