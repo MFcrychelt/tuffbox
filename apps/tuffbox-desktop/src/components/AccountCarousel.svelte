@@ -7,10 +7,10 @@
    * Xbox-style account picker: a horizontal rail of skin heads steered with
    * the mouse wheel, arrow keys, or clicks. Navigation only moves a LOCAL
    * selection highlight; the real account switch happens on explicit confirm
-   * (Enter, the confirm chip, or clicking the already-selected head). Escape
-   * cancels back to the active account. The signed-in head keeps its glow; a
-   * pending pick wears a dashed ring instead. The selected head stays
-   * centered; neighbors scale down and fade, rail edges dim via a CSS mask.
+   * (Enter or clicking the selected head). Escape cancels back to the active
+   * account. The signed-in head wears a theme-colored glow rising from the
+   * nick up through the head; a pending pick glows softer. The selected head
+   * stays centered; neighbors scale down and fade, rail edges dim via mask.
    */
   let {
     accounts = [],
@@ -205,12 +205,6 @@
       {/each}
     </div>
   </div>
-
-  {#if pending}
-    <button type="button" class="carousel-confirm" disabled={busy} onclick={confirmSelection}>
-      Use “{selected?.name}” · Enter
-    </button>
-  {/if}
 </div>
 
 <style>
@@ -284,45 +278,52 @@
     overflow: visible;
   }
 
-  .carousel-slot.active .slot-head {
-    box-shadow:
-      0 0 0 2px var(--accent-primary),
-      0 0 18px color-mix(in srgb, var(--accent-primary) 45%, transparent),
-      0 10px 24px rgba(0, 0, 0, 0.45);
-  }
-
-  .carousel-slot.active .slot-head::after {
+  /* Signed-in head: theme-colored glow rising from the nick up through the
+     head (bottom → top), no ring/frame. */
+  .carousel-slot.active .slot-head::before {
     content: "";
     position: absolute;
-    left: 50%;
-    bottom: -7px;
-    width: 46px;
-    height: 6px;
-    transform: translateX(-50%);
-    border-radius: 999px;
-    background: var(--accent-primary);
-    opacity: 0.85;
-    box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 70%, transparent);
+    inset: -14px -20px -26px;
+    border-radius: 12px;
+    pointer-events: none;
+    background:
+      radial-gradient(
+        ellipse 62% 88% at 50% 108%,
+        color-mix(in srgb, var(--accent-primary) 55%, transparent) 0%,
+        color-mix(in srgb, var(--accent-primary) 22%, transparent) 46%,
+        transparent 78%
+      );
+    z-index: -1;
+    filter: blur(2px);
   }
 
-  /* Pending pick: dashed ring, distinct from the active glow above. */
-  .carousel-slot.selected:not(.active) .slot-head {
-    outline: 2px dashed color-mix(in srgb, var(--accent-primary) 75%, transparent);
-    outline-offset: 2px;
-  }
-
-  .carousel-slot.selected:not(.active) .slot-name {
-    color: var(--text-primary);
+  /* Pending pick: softer version of the same bottom-up glow. */
+  .carousel-slot.selected:not(.active) .slot-head::before {
+    content: "";
+    position: absolute;
+    inset: -10px -16px -22px;
+    border-radius: 12px;
+    pointer-events: none;
+    background:
+      radial-gradient(
+        ellipse 58% 84% at 50% 108%,
+        color-mix(in srgb, var(--accent-primary) 30%, transparent) 0%,
+        transparent 72%
+      );
+    z-index: -1;
+    filter: blur(2px);
   }
 
   .slot-name {
     font-family: var(--font-minecraft);
-    font-size: 12px;
+    font-size: 11px;
     letter-spacing: 0.3px;
-    max-width: 92px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    max-width: 120px;
     white-space: nowrap;
+    text-align: center;
+    line-height: 1.2;
+    display: inline-block;
+    overflow: visible;
     color: var(--text-secondary);
     transition: color var(--motion-fast) var(--ease-out);
   }
@@ -330,6 +331,20 @@
   .carousel-slot.active .slot-name {
     color: var(--text-primary);
     text-shadow: var(--mc-nick-shadow-soft);
+  }
+
+  /* Neutralize the global button hover/active chrome on carousel slots —
+     the white "button" highlight on the nick was the global button:hover. */
+  .carousel-slot:hover:not(:disabled),
+  .carousel-slot:active:not(:disabled) {
+    background: none;
+    border-color: transparent;
+    margin-top: 0;
+  }
+  .carousel-slot:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 60%, transparent);
+    outline-offset: 4px;
+    border-radius: 8px;
   }
 
   .carousel-arrow {
@@ -369,33 +384,6 @@
     cursor: default;
   }
 
-  .carousel-confirm {
-    display: block;
-    margin: 10px auto 0;
-    padding: 4px 14px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--text-primary);
-    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
-    border: 1px solid var(--accent-primary);
-    border-radius: var(--border-radius-sm);
-    cursor: pointer;
-    user-select: none;
-    transition:
-      background var(--motion-fast) var(--ease-out),
-      color var(--motion-fast) var(--ease-out);
-  }
-
-  .carousel-confirm:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-primary) 30%, transparent);
-  }
-
-  .carousel-confirm:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
   /* Weak GPUs / reduced motion: snap instead of sliding. */
   :global(html.potato-pc) .carousel-track,
   :global(html.potato-pc) .carousel-slot {
@@ -405,7 +393,6 @@
   @media (prefers-reduced-motion: reduce) {
     .carousel-track,
     .carousel-slot,
-    .carousel-confirm,
     .carousel-arrow {
       transition: none;
     }

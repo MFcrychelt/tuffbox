@@ -280,13 +280,15 @@ button {
   gap: 8px;
 }
 
+/* Hover/press must brighten/darken whatever fill a button already has —
+   overriding `background` here paints accent/danger buttons gray (Ore UI
+   theme regression), so tint via filter instead of a hard color swap. */
 button:hover:not(:disabled) {
-  background: #47484a;
-  border-color: #47484a;
+  filter: brightness(1.18);
 }
 
 button:active:not(:disabled) {
-  background: #2a2b2c;
+  filter: brightness(0.82);
   border-bottom-width: 1px;
   margin-top: 2px;
 }
