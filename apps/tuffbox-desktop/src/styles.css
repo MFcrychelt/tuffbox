@@ -445,6 +445,14 @@ textarea:focus {
   border-color: var(--accent-primary);
 }
 
+/* Checkbox / radio adopt the theme accent instead of the system blue.
+   Range follows too so any slider stays on-palette. */
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"] {
+  accent-color: var(--accent-primary);
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--bg-hover) var(--bg-elevated, rgba(255, 255, 255, 0.04));

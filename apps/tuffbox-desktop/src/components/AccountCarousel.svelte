@@ -284,7 +284,7 @@
     content: "";
     position: absolute;
     inset: -14px -20px -26px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     pointer-events: none;
     background:
       radial-gradient(
@@ -302,7 +302,7 @@
     content: "";
     position: absolute;
     inset: -10px -16px -22px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     pointer-events: none;
     background:
       radial-gradient(
@@ -344,7 +344,7 @@
   .carousel-slot:focus-visible {
     outline: 2px solid color-mix(in srgb, var(--accent-primary) 60%, transparent);
     outline-offset: 4px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
   }
 
   .carousel-arrow {

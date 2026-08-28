@@ -1215,6 +1215,7 @@
     background: #2a2b2c;
     border-bottom-width: 1px;
     transform: translateY(1px);
+    filter: none;
   }
   .preset.primary {
     background: #491ac0;
@@ -1274,7 +1275,9 @@
     color: var(--text-secondary);
     user-select: none;
     list-style: none;
+    transition: color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease);
   }
+  .secondary-panel summary:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.03); }
   .secondary-panel summary::-webkit-details-marker { display: none; }
   .secondary-panel[open] summary { border-bottom: 1px solid var(--border-color); }
   .secondary-body { padding: 12px 14px; }
