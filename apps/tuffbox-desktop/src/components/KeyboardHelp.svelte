@@ -5,7 +5,7 @@
   let { onclose }: { onclose?: () => void } = $props();
 
   const shortcuts = [
-    { keys: ["Ctrl", "K"], label: "Command palette" },
+    { keys: ["Ctrl", "K"], label: "Command palette (instances, stages, actions)" },
     { keys: ["Ctrl", "1"], label: "Home" },
     { keys: ["Ctrl", "2"], label: "Open IDE" },
     { keys: ["Ctrl", "3"], label: "IDE · Content" },
@@ -14,6 +14,8 @@
     { keys: ["Ctrl", "6"], label: "IDE · Diagnose" },
     { keys: ["Ctrl", "7"], label: "IDE · Snapshots" },
     { keys: ["Ctrl", "8"], label: "IDE · World map" },
+    { keys: ["Ctrl", "9"], label: "Library" },
+    { keys: ["Ctrl", ","], label: "Settings" },
     { keys: ["Ctrl", "Shift", "P"], label: "IDE · Play / Test launch" },
     { keys: ["["], label: "IDE · Prev stage in phase" },
     { keys: ["]"], label: "IDE · Next stage in phase" },

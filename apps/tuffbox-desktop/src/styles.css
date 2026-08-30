@@ -1,3 +1,10 @@
+/* Tailwind v4 без preflight: префлайт-ресет ломает существующие scoped-стили
+   приложения. Подключаем только theme-переменные и utilities. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "@tuffbox/layout-lib/styles.css";
+@source "../../../packages/layout-lib/src";
+
 :root {
   /* Cool steel-graphite surfacing — not pure black; a faint blue-violet
      undertone keeps the shell calm, layered in perceptible luminance steps. */

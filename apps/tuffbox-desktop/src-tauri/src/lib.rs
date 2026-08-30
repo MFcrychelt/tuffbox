@@ -7608,6 +7608,42 @@ async fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> 
 }
 
 #[cfg(test)]
+mod pack_format_sniff_tests {
+    use super::zip_has_entry;
+
+    /// A Modrinth .mrpack downloaded over HTTP lands in a temp `*.zip` file;
+    /// the install path must sniff `modrinth.index.json` from the archive
+    /// content instead of trusting the extension (task: "archive error:
+    /// specified file not found in archive" for Fabulously Optimized).
+    #[test]
+    fn zip_has_entry_sniffs_mrpack_index_in_zip_named_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tuffbox-pack-123.zip"); // zip extension on purpose
+        {
+            let file = std::fs::File::create(&path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options =
+                zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("modrinth.index.json", options).unwrap();
+            zip.write_all(br#"{"formatVersion":1,"game":"minecraft","name":"t","files":[],"dependencies":{}}"#)
+                .unwrap();
+            zip.finish().unwrap();
+        }
+        assert!(zip_has_entry(&path, "modrinth.index.json"));
+        assert!(!zip_has_entry(&path, "instance.cfg"));
+        assert!(!zip_has_entry(&path, "missing.json"));
+    }
+
+    #[test]
+    fn zip_has_entry_false_for_non_zip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-a-zip.zip");
+        std::fs::write(&path, b"definitely not a zip").unwrap();
+        assert!(!zip_has_entry(&path, "modrinth.index.json"));
+    }
+}
+
+#[cfg(test)]
 mod recommend_mod_tests {
     use super::{compact_mod_token, has_installed};
     use std::collections::HashSet;
@@ -13812,16 +13848,30 @@ async fn install_modpack(
             }
         }
 
+        // Content-sniff the archive type instead of trusting the file
+        // extension: remote downloads land in a temp file named `*.zip`
+        // regardless of their real format, so a Modrinth .mrpack fetched from
+        // Discover used to be misrouted to the Prism importer, which then
+        // failed with "archive error: specified file not found in archive"
+        // (it looks for instance.cfg, which .mrpack archives don't have).
+        let is_cf = is_curseforge_pack(&pack_path);
+        let has_mrpack_index = zip_has_entry(&pack_path, "modrinth.index.json");
+        let has_prism_cfg = zip_has_entry(&pack_path, "instance.cfg");
         let ext = pack_path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
-        let is_cf = is_curseforge_pack(&pack_path);
-        let is_mods_zip = ext == "zip" && !is_cf && is_mods_only_zip(&pack_path);
-        let is_prism_zip = ext == "zip" && !is_cf && !is_mods_zip;
-
-        let mut manifest = match ext.as_str() {
+        let effective_ext = if has_mrpack_index {
+            "mrpack".to_string()
+        } else if has_prism_cfg {
+            "zip".to_string()
+        } else {
+            ext.clone()
+        };
+        let is_mods_zip = effective_ext == "zip" && !is_cf && is_mods_only_zip(&pack_path);
+        let is_prism_zip = effective_ext == "zip" && !is_cf && !has_mrpack_index && !is_mods_zip;
+        let mut manifest = match effective_ext.as_str() {
             "mrpack" => import_modrinth_pack(&pack_path).map_err(|e| e.to_string())?,
             "zip" if is_cf => import_curseforge_pack(&pack_path).map_err(|e| e.to_string())?,
             "zip" if is_mods_zip => {
@@ -13906,7 +13956,7 @@ async fn install_modpack(
         // Modrinth .mrpack bundles config/resourcepack/shader files under
         // overrides/ — they must land in the instance or the pack installs
         // without its configs. Mirrors the CurseForge overrides step above.
-        if ext == "mrpack" {
+        if effective_ext == "mrpack" {
             let n = extract_mrpack_overrides(&pack_path, &instance_dir)
                 .map_err(|e| format!("failed to extract Modrinth overrides: {e}"))?;
             if n > 0 {
@@ -13974,7 +14024,7 @@ async fn install_modpack(
             "download": report,
             "provider": if is_cf {
                 "curseforge"
-            } else if ext == "mrpack" {
+            } else if effective_ext == "mrpack" {
                 "modrinth"
             } else if is_mods_zip {
                 "mods-zip"
@@ -14069,6 +14119,24 @@ fn extract_mrpack_overrides(pack_path: &Path, instance_dir: &Path) -> Result<usi
 /// Opens the archive and checks it contains at least one known pack marker.
 /// Guards against truncated/HTML-error-page downloads that would otherwise
 /// fail deep inside the importer with an opaque zip error.
+/// True when the zip contains the exact entry `name` (root level). Cheap
+/// header scan; used to content-sniff pack format instead of trusting the
+/// file extension (temp downloads are always named `*.zip`).
+fn zip_has_entry(path: &Path, name: &str) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let Ok(mut archive) = zip::ZipArchive::new(file) else {
+        return false;
+    };
+    (0..archive.len()).any(|i| {
+        archive
+            .by_index(i)
+            .map(|e| e.name().replace('\\', "/") == name)
+            .unwrap_or(false)
+    })
+}
+
 fn verify_pack_archive(path: &Path) -> Result<(), String> {
     let file = std::fs::File::open(path).map_err(|e| format!("cannot open pack: {e}"))?;
     let mut archive =

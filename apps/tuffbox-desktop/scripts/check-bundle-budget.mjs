@@ -38,7 +38,9 @@ const indexHtmlPath = path.join(distDir, "index.html");
 
 const BUDGETS_GZIP_BYTES = {
   ".js": 230 * 1024,
-  ".css": 32 * 1024,
+  // 2026-08 (layout-lib): Tailwind v4 theme vars + on-demand utilities for
+  // @tuffbox/layout-lib add ~3.3 KB gz; baseline was already ~32.4 KB.
+  ".css": 36 * 1024,
 };
 
 if (!existsSync(indexHtmlPath)) {

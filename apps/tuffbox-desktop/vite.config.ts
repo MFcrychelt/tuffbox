@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import tailwindcss from "@tailwindcss/vite";
 import sveltePreprocess from "svelte-preprocess";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.
 // https://v2.tauri.app/start/frontend/vite/
 export default defineConfig(async () => ({
   plugins: [
+    tailwindcss(),
     svelte({
       preprocess: sveltePreprocess({
         typescript: {

@@ -84,3 +84,8 @@ packwiz/
 # Windows accidental NUL redirect artifact
 /NUL
 .hermes-tmp.*
+
+# Agent scratch (Hermes/OMP/graphify)
+.omp/
+graphify-out/
+*.stackdump

@@ -2,7 +2,7 @@
   import { onMount, tick } from "svelte";
   import { Search, ArrowRight, CornerDownLeft } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
-  import { ideRecentCommands } from "../lib/store";
+  import { ideRecentCommands, recentProjects, projectPath } from "../lib/store";
 
   let {
     onclose,
@@ -68,13 +68,24 @@
     { id: "shortcuts", label: "Keyboard Shortcuts", category: "Actions" },
   ];
 
+  const instanceItems: Item[] = $derived(
+    ($recentProjects ?? [])
+      .filter((p) => p.path !== $projectPath)
+      .slice(0, 8)
+      .map((p) => ({
+        id: `instance:${p.path}`,
+        label: p.info?.name ?? p.path,
+        category: "Instances",
+      })),
+  );
+
   const allItems = $derived.by(() => {
     const recent: Item[] = ($ideRecentCommands ?? []).map((r) => ({
       id: r.id,
       label: r.label,
       category: "Recent",
     }));
-    return [...recent, ...viewItems, ...ideStageItems, ...actionItems];
+    return [...recent, ...instanceItems, ...viewItems, ...ideStageItems, ...actionItems];
   });
 
   function groupItems(items: Item[]) {

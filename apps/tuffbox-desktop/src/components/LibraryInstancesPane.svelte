@@ -23,6 +23,8 @@
     Minus,
     ImageIcon,
     Eraser,
+    Search,
+    X,
   } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
@@ -89,6 +91,7 @@
   let githubPendingSource = $state("");
   let githubInspectSummary = $state("");
   let foldersMenuOpen = $state(false);
+  let instanceFilter = $state("");
   let groupMap = $state<GroupMap>(loadGroupMap());
   let collapsed = $state(loadCollapsedGroups());
   let projectStats = $state<Record<string, { playtime: number }>>({});
@@ -158,8 +161,17 @@
   });
 
   const grouped = $derived((() => {
+    const q = instanceFilter.trim().toLowerCase();
+    const match = (p: RecentProject) =>
+      !q ||
+      p.info.name.toLowerCase().includes(q) ||
+      p.info.minecraftVersion.toLowerCase().includes(q) ||
+      p.info.loaderKind.toLowerCase().includes(q);
     const byGroup = new Map<string, RecentProject[]>();
+    let total = 0;
     for (const p of $recentProjects) {
+      if (!match(p)) continue;
+      total++;
       const g = getGroup(groupMap, p.path);
       const list = byGroup.get(g) ?? [];
       list.push(p);
@@ -169,12 +181,13 @@
       groupMap,
       $recentProjects.map((p) => p.path),
     ).filter((n) => byGroup.has(n));
-    return names.map((name) => ({
+    return { groups: names.map((name) => ({
       name,
       projects: byGroup.get(name) ?? [],
-      collapsed: collapsed.has(name),
-    }));
+      collapsed: q ? false : collapsed.has(name),
+    })), total, filtered: !!q };
   })());
+  const visibleCount = $derived(grouped.total);
 
   const existingGroups = $derived(listGroupNames(
     groupMap,
@@ -1044,6 +1057,27 @@
         {/if}
       </div>
 
+      <div class="tb-search" role="search">
+        <Search size={15} class="tb-search-icon" />
+        <input
+          type="text"
+          placeholder="Filter instances…"
+          aria-label="Filter instances"
+          spellcheck="false"
+          bind:value={instanceFilter}
+        />
+        {#if instanceFilter}
+          <button
+            type="button"
+            class="tb-search-clear"
+            aria-label="Clear filter"
+            onclick={() => (instanceFilter = "")}
+          >
+            <X size={13} />
+          </button>
+        {/if}
+      </div>
+
       <div class="tb-folders-wrap">
         <button
           type="button"
@@ -1128,11 +1162,19 @@
             <Plus size={16} /> Add Instance
           </button>
         </div>
+      {:else if visibleCount === 0}
+        <div class="empty-state">
+          <h3>No matches</h3>
+          <p>Nothing matches “{instanceFilter}”. Try another name, version or loader.</p>
+          <button type="button" class="empty-cta" onclick={() => (instanceFilter = "")}>
+            <X size={16} /> Clear filter
+          </button>
+        </div>
       {:else}
         <p class="drag-hint" class:visible={dragging}>
           Drop on another instance to make a folder
         </p>
-        {#each grouped as group (group.name)}
+        {#each grouped.groups as group (group.name)}
           <section class="inst-group">
             <button
               type="button"
@@ -1551,6 +1593,52 @@
     flex-shrink: 0;
   }
   .tb-right { margin-left: auto; }
+  /* Instance filter — live search over name / version / loader. */
+  .tb-search {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 180px;
+    max-width: 260px;
+    padding: 5px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    transition: border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out);
+  }
+  .tb-search:focus-within {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  }
+  .tb-search :global(.tb-search-icon) {
+    flex-shrink: 0;
+    pointer-events: none;
+  }
+  .tb-search input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    outline: none;
+  }
+  .tb-search input::placeholder { color: var(--text-muted); }
+  .tb-search-clear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    border: none;
+    border-radius: var(--border-radius-sm, 6px);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .tb-search-clear:hover { color: var(--text-primary); background: var(--bg-hover); }
+
   .tb-btn {
     display: inline-flex;
     align-items: center;

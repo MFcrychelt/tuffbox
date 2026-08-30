@@ -369,6 +369,33 @@
     };
     window.addEventListener("tuffbox:show-shortcuts", onShowShortcuts);
 
+    // Command palette: switch instance without leaving the palette flow.
+    // Mirrors Sidebar.selectInstance (validate → set project → go Home).
+    const onSelectInstance = (ev: Event) => {
+      const path = (ev as CustomEvent<{ path?: string }>).detail?.path;
+      if (!path || $projectPath === path) {
+        currentView = "dashboard";
+        return;
+      }
+      void (async () => {
+        try {
+          const info = await api.project.validate(path);
+          const manifestPath = info.manifestPath || path;
+          recentProjects.add({ path: manifestPath, info: info as any }, { reorder: false });
+          projectPath.set(manifestPath);
+          projectInfo.set(info as any);
+          void api.session.setLastOpened(manifestPath).catch(() => {});
+        } catch {
+          const cached = $recentProjects.find((p) => p.path === path);
+          if (!cached) return;
+          projectPath.set(cached.path);
+          projectInfo.set(cached.info);
+        }
+        currentView = "dashboard";
+      })();
+    };
+    window.addEventListener("tuffbox:select-instance", onSelectInstance);
+
     const onShareCapsule = (ev: Event) => {
       const detail = (ev as CustomEvent).detail as {
         path?: string;
@@ -471,6 +498,7 @@
       window.removeEventListener("tuffbox:open-library", onOpenLibrary);
       window.removeEventListener("tuffbox:open-crash-votes", onOpenCrashVotes);
       window.removeEventListener("tuffbox:show-shortcuts", onShowShortcuts);
+      window.removeEventListener("tuffbox:select-instance", onSelectInstance);
       window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
       window.removeEventListener("tuffbox:launcher-settings", onLauncherSettings);
       window.removeEventListener("resize", onUiScaleResize);
@@ -583,6 +611,11 @@
   };
 
   function handleCommandPaletteNavigate(id: string) {
+    if (id.startsWith("instance:")) {
+      const path = id.slice("instance:".length);
+      window.dispatchEvent(new CustomEvent("tuffbox:select-instance", { detail: { path } }));
+      return;
+    }
     if (id === "new-instance") {
       import("./lib/store").then(({ openAddInstance }) => {
         currentView = "dashboard";
@@ -850,6 +883,14 @@
         case "8":
           ideStageRequest.set("world-map");
           currentView = "ide";
+          e.preventDefault();
+          break;
+        case "9":
+          currentView = "library";
+          e.preventDefault();
+          break;
+        case ",":
+          currentView = "settings";
           e.preventDefault();
           break;
       }

@@ -195,6 +195,14 @@
           <FolderOpen size={14} />
           <span>Folder</span>
         </button>
+        <button type="button" class="glass-seg" onclick={onRename} disabled={actionBusy} title="Rename instance" aria-label="Rename instance">
+          <Pencil size={14} />
+          <span>Rename</span>
+        </button>
+        <button type="button" class="glass-seg" onclick={onClone} disabled={actionBusy} title="Clone instance" aria-label="Clone instance">
+          <Copy size={14} />
+          <span>Clone</span>
+        </button>
         <div class="poster-overflow">
           <button
             type="button"
@@ -211,14 +219,6 @@
       </div>
       {#if overflowOpen}
         <div class="poster-overflow-menu" role="menu">
-          <button type="button" role="menuitem" disabled={actionBusy} onclick={onRename}>
-            <Pencil size={14} />
-            Rename
-          </button>
-          <button type="button" role="menuitem" disabled={actionBusy} onclick={onClone}>
-            <Copy size={14} />
-            Clone
-          </button>
           <button type="button" role="menuitem" class="danger" disabled={actionBusy} onclick={onDelete}>
             <Trash2 size={14} />
             Delete
