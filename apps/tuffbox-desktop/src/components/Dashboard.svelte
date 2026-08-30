@@ -52,6 +52,7 @@
   import HomeInstanceShelf from "./HomeInstanceShelf.svelte";
   import YoutubeFeed from "./YoutubeFeed.svelte";
   import PromptDialog from "./PromptDialog.svelte";
+  import { Stack } from "@tuffbox/layout-lib";
 
   import type { View } from "../lib/types";
 
@@ -110,6 +111,7 @@
   });
   const youtubeOnHome = $derived($launcherSettingsLive?.showYoutubeOnHome === true);
   const youtubeBesideSkin = $derived(youtubeOnHome && $homeYoutubePlacement === "right");
+  const youtubeFullOnHome = $derived(youtubeOnHome && !youtubeBesideSkin);
   const homeBackdropOn = $derived($launcherSettingsLive?.homeBackdrop !== false);
   const skinPreviewHeight = $derived(youtubeBesideSkin ? 240 : 400);
   const skinAvatarSize = $derived(youtubeBesideSkin ? 72 : 120);
@@ -538,8 +540,10 @@
 </script>
 
 <div class="home fade-slide-in" data-home-backdrop={homeBackdropOn ? "on" : "off"}>
-  <div class="main-layout">
-    <div class="home-main">
+  <!-- Tailwind layout: 2-column grid (fluid + 320px side rail), collapses on narrow windows.
+       Arbitrary value classes are written statically so the Tailwind v4 scanner sees them. -->
+  <div class="grid grid-cols-1 home-2col gap-6 items-start">
+    <Stack direction="col" gap="5" class="home-main min-w-0 overflow-visible {youtubeFullOnHome ? 'min-h-[calc(100dvh-6.5rem)]' : ''}">
       {#if $projectPath}
         <GithubPackUpdateBanner />
       {/if}
@@ -603,9 +607,9 @@
           <YoutubeFeed variant="row" />
         </div>
       {/if}
-    </div>
+    </Stack>
 
-    <aside class="home-side" class:has-feed={youtubeBesideSkin}>
+    <aside class="home-side flex flex-col gap-4 w-full max-w-full lg:sticky lg:top-5 self-start" class:has-feed={youtubeBesideSkin}>
       <div class="skin-panel" aria-busy={!authReady}>
         {#if !authReady}
           <div class="skin-skel" aria-hidden="true">
@@ -626,7 +630,7 @@
           </div>
         {:else if $authState.loggedIn && $authState.profile}
           {#if potatoPc}
-            <div class="skin-static-fallback">
+            <div class="flex flex-col items-center justify-center gap-3 px-6 py-8 min-h-[400px] bg-[var(--bg-primary)]">
               <HeadAvatar skinSrc={$skinPath} size={skinAvatarSize} alt={$authState.profile.name} />
               <span class="skin-static-name" style={`font-size: ${skinNameFontPx}px`}>{$authState.profile.name}</span>
             </div>
@@ -642,8 +646,8 @@
             height={skinPreviewHeight}
           />
           {/if}
-          <div class="skin-panel-footer">
-            <div class="skin-meta">
+          <div class="skin-panel-footer flex items-center justify-between px-4 py-3 border-t border-[var(--border-color)] gap-2">
+            <div class="skin-meta flex items-center gap-2 min-w-0">
               <span
                 class={[
                   "type-badge",
@@ -666,17 +670,17 @@
             </button>
           </div>
           <div
-            class="skin-player-name"
+            class="skin-player-name text-center overflow-hidden whitespace-nowrap text-ellipsis box-border max-w-full -mt-1 pb-3 px-2.5"
             title={$authState.profile.name}
             style={`font-size: ${skinNameFontPx}px`}
           >
             {$authState.profile.name}
           </div>
         {:else}
-          <div class="skin-panel-empty">
+          <Stack direction="col" gap="3" align="center" class="skin-panel-empty text-center px-6 py-[60px]">
             <User size={48} aria-hidden="true" />
-            <h2 class="skin-panel-empty-title">Not signed in</h2>
-            <p class="skin-panel-empty-copy">
+            <h2 class="m-0 text-[15px] font-semibold text-[var(--text-primary)]">Not signed in</h2>
+            <p class="m-0 max-w-[220px] text-[13px] leading-normal text-[var(--text-muted)]">
               Sign in with Microsoft or an offline account to play.
             </p>
             <button class="action-btn accent" onclick={() => loginModalOpen.set(true)}>
@@ -685,12 +689,12 @@
             </button>
             <button
               type="button"
-              class="skin-panel-empty-manage"
+              class="mt-1 p-0 border-none bg-transparent text-[var(--text-muted)] text-xs font-medium cursor-pointer underline underline-offset-2 hover:text-[var(--text-secondary)]"
               onclick={() => loginModalOpen.set(true)}
             >
               More sign-in options
             </button>
-          </div>
+          </Stack>
         {/if}
       </div>
 
@@ -763,31 +767,19 @@
     margin: 0 auto;
   }
 
-  /* ─── Main Layout (2-column stack) ─── */
-  .main-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
-    align-items: start;
-    gap: 24px;
+  /* ─── Main layout: Tailwind grid + arbitrary template (see markup) ───
+     grid-cols-[minmax(0,1fr)_320px] at ≥1024px, single column below. */
+  .home-2col {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @media (min-width: 1024px) {
+    .home-2col {
+      grid-template-columns: minmax(0, 1fr) 320px;
+    }
   }
 
-  .home-main {
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-    min-width: 0;
-    overflow: visible;
-  }
-
-  .home-feed {
-    margin-top: 0;
-    min-width: 0;
-    width: 100%;
-  }
-
-  .home-main:has(:global(.youtube-feed.is-full)) {
-    min-height: calc(100dvh - 6.5rem);
-  }
+  /* .home-side.has-feed and the .home-main min-height rail are expressed with
+     Tailwind/conditional classes in markup. */
 
   .home-feed:has(:global(.youtube-feed.is-full)) {
     flex: 1 1 auto;
@@ -841,20 +833,8 @@
     max-width: 100%;
   }
 
-  .home-side {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    width: 320px;
-    max-width: 100%;
-    position: sticky;
-    top: 20px;
-    align-self: start;
-  }
-
-  .home-side.has-feed {
-    position: static;
-  }
+  /* .home-side layout (flex-col, gap, sticky) moved to Tailwind classes in markup;
+     .has-feed override stays below. */
 
   .home-feed-rail {
     min-width: 0;
@@ -992,58 +972,7 @@
     color: var(--accent-primary);
   }
 
-  .skin-panel-empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
-    padding: 60px 24px;
-    text-align: center;
-    color: var(--text-muted);
-  }
-
-  .skin-panel-empty-title {
-    margin: 0;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .skin-panel-empty-copy {
-    margin: 0;
-    max-width: 220px;
-    font-size: 13px;
-    line-height: 1.4;
-    color: var(--text-muted);
-  }
-
-  .skin-panel-empty-manage {
-    margin-top: 4px;
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--text-muted);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-
-  .skin-panel-empty-manage:hover {
-    color: var(--text-secondary);
-  }
-
-  .skin-static-fallback {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    padding: 32px 24px;
-    min-height: 400px;
-    background: var(--bg-primary);
-  }
+  /* skin-panel-empty* layouts moved to Tailwind classes in markup. */
 
   .skin-static-name {
     font-family: var(--font-minecraft);
