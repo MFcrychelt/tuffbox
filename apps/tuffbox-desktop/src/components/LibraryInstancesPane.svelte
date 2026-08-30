@@ -62,6 +62,12 @@
     folderFromDrop,
     type GroupMap,
   } from "../lib/libraryGroups";
+  import {
+    isValidSortMode,
+    matchesInstanceFilter,
+    sortInstances,
+    type SortMode,
+  } from "../lib/librarySort";
   import { portal } from "../lib/portal";
   import PromptDialog from "./PromptDialog.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
@@ -93,13 +99,12 @@
   let foldersMenuOpen = $state(false);
   let instanceFilter = $state("");
   /** Library sort mode; persisted in localStorage. */
-  type SortMode = "recent" | "name" | "playtime";
   const SORT_KEY = "tuffbox.library.sort";
   let sortMode = $state<SortMode>(
     ((): SortMode => {
       try {
         const v = localStorage.getItem(SORT_KEY);
-        return v === "name" || v === "playtime" ? v : "recent";
+        return isValidSortMode(v) ? v : "recent";
       } catch {
         return "recent";
       }
@@ -182,51 +187,26 @@
   });
 
   const grouped = $derived((() => {
-    const q = instanceFilter.trim().toLowerCase();
-    const match = (p: RecentProject) =>
-      !q ||
-      p.info.name.toLowerCase().includes(q) ||
-      p.info.minecraftVersion.toLowerCase().includes(q) ||
-      p.info.loaderKind.toLowerCase().includes(q);
-    const stats = $homeStats;
-    const lastLaunch = (p: RecentProject): number => {
-      const t = stats[p.path]?.lastLaunch;
-      if (!t) return 0;
-      const ms = Date.parse(t);
-      return Number.isNaN(ms) ? 0 : ms;
-    };
-    const sortProjects = (list: RecentProject[]): RecentProject[] => {
-      const arr = [...list];
-      if (sortMode === "name") {
-        arr.sort((a, b) => a.info.name.localeCompare(b.info.name));
-      } else if (sortMode === "playtime") {
-        arr.sort((a, b) => (stats[b.path]?.playtime ?? 0) - (stats[a.path]?.playtime ?? 0));
-      } else {
-        // recent: store order already reflects last-added / last-launched ordering,
-        // but keep "last played" first when stats know better.
-        arr.sort((a, b) => lastLaunch(b) - lastLaunch(a));
-      }
-      return arr;
-    };
     const byGroup = new Map<string, RecentProject[]>();
     let total = 0;
     for (const p of $recentProjects) {
-      if (!match(p)) continue;
+      if (!matchesInstanceFilter(p, instanceFilter)) continue;
       total++;
       const g = getGroup(groupMap, p.path);
       const list = byGroup.get(g) ?? [];
       list.push(p);
       byGroup.set(g, list);
     }
+    const q = instanceFilter.trim().length > 0;
     const names = listGroupNames(
       groupMap,
       $recentProjects.map((p) => p.path),
     ).filter((n) => byGroup.has(n));
     return { groups: names.map((name) => ({
       name,
-      projects: sortProjects(byGroup.get(name) ?? []),
+      projects: sortInstances(byGroup.get(name) ?? [], sortMode, $homeStats),
       collapsed: q ? false : collapsed.has(name),
-    })), total, filtered: !!q };
+    })), total, filtered: q };
   })());
   const visibleCount = $derived(grouped.total);
 

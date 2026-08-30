@@ -33,6 +33,7 @@
   import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
+  import { Grid, Stack } from "@tuffbox/layout-lib";
 
   let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world" } = $props();
 
@@ -645,7 +646,7 @@
         }}
       />
     {:else}
-    <div class="discover-bar">
+    <Stack direction="row" gap="3" wrap class="discover-bar">
       <div class="provider-toggle" role="group" aria-label="Catalog provider">
         <button
           type="button"
@@ -676,7 +677,7 @@
       <button class="search-btn" onclick={() => search()} disabled={loadingDiscover}>
         {loadingDiscover ? "Searching…" : "Search"}
       </button>
-    </div>
+    </Stack>
 
     <div class="download-path">
       <label for="lib-download-dir">Download to</label>
@@ -706,7 +707,7 @@
         <p>Try a different search.</p>
       </div>
     {:else}
-      <div class="pack-grid tb-stagger">
+      <Grid autoMin={220} gap="4" class="tb-stagger">
         {#each results as result, i (resultKey(result))}
           {@const key = resultKey(result)}
           {@const showIcon = !!result.iconUrl && !brokenIcons.includes(key)}
@@ -796,7 +797,7 @@
             </div>
           </div>
         {/each}
-      </div>
+      </Grid>
     {/if}
     {/if}
   </div>
@@ -1026,12 +1027,6 @@
     background: #5c2dd5;
     border-color: #5c2dd5;
     border-bottom-color: #3f1a96;
-  }
-
-  .pack-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 16px;
   }
 
   .pack-card {
@@ -1311,14 +1306,11 @@
     cursor: default;
   }
 
-  .discover-bar {
-    display: flex;
-    gap: 10px;
+  /* Panel surface for the discover toolbar; flex layout comes from <Stack>
+     in markup — scoped styles on component roots don't apply, so this lives
+     on the class passed through to the Stack's div. */
+  :global(.discover-bar) {
     margin-bottom: 20px;
-    align-items: center;
-    flex-wrap: wrap;
-    /* Task #61: the bar floated on the page bg with no surface — give it a
-       proper panel like other toolbars. */
     padding: 10px 12px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);

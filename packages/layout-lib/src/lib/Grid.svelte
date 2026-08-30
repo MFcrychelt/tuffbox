@@ -5,6 +5,9 @@
    * Grid — responsive 12-column grid system (Tailwind grid utilities).
    * All candidate classes are written out statically below so the Tailwind
    * v4 scanner can see them — dynamic `grid-cols-${n}` strings are NOT picked up.
+   *
+   * Auto-fill mode: pass `autoMin` (px) instead of cols to get
+   * `repeat(auto-fill, minmax(autoMin, 1fr))` — columns flow to fit the width.
    */
   interface Props {
     /** Base column count (1..12), applied at all breakpoints */
@@ -15,12 +18,14 @@
     md?: number;
     /** Column count at ≥1024px */
     lg?: number;
+    /** Auto-fill mode: minimum column width in px (overrides cols/sm/md/lg). */
+    autoMin?: number;
     gap?: string;
     class?: string;
     children: Snippet;
   }
 
-  const { cols = 12, sm, md, lg, gap = "4", class: cls = "", children }: Props = $props();
+  const { cols = 12, sm, md, lg, autoMin, gap = "4", class: cls = "", children }: Props = $props();
 
   const GRID_COLS: Record<number, string> = {
     1: "grid-cols-1",
@@ -90,10 +95,30 @@
   };
 
   const clamp = (n?: number) => (n === undefined ? undefined : Math.min(12, Math.max(1, n)));
+
+  const colsCls = $derived(
+    autoMin
+      ? ""
+      : `${GRID_COLS[clamp(cols) ?? 12] ?? "grid-cols-12"} ${sm !== undefined ? (SM_COLS[clamp(sm) ?? 1] ?? "") : ""} ${md !== undefined ? (MD_COLS[clamp(md) ?? 1] ?? "") : ""} ${lg !== undefined ? (LG_COLS[clamp(lg) ?? 1] ?? "") : ""}`,
+  );
+  const gapCls = $derived(autoMin ? "" : (GAPS[gap] ?? "gap-4"));
+  const autoStyle = $derived(autoMin ? `--auto-min:${autoMin}px` : undefined);
 </script>
 
 <div
-  class="grid {GRID_COLS[clamp(cols) ?? 12] ?? 'grid-cols-12'} {sm !== undefined ? (SM_COLS[clamp(sm) ?? 1] ?? '') : ''} {md !== undefined ? (MD_COLS[clamp(md) ?? 1] ?? '') : ''} {lg !== undefined ? (LG_COLS[clamp(lg) ?? 1] ?? '') : ''} {GAPS[gap] ?? 'gap-4'} {cls}"
+  class="grid {colsCls} {gapCls} {cls}"
+  class:auto-grid={autoMin !== undefined}
+  style={autoStyle}
 >
   {@render children()}
 </div>
+
+<style>
+  /* Auto-fill grid: column count adapts to container width. The px value comes
+     from the autoMin prop via --auto-min; gap uses the passed Tailwind gap via
+     the regular gap-* classes above when not in auto mode. */
+  .auto-grid {
+    grid-template-columns: repeat(auto-fill, minmax(var(--auto-min, 220px), 1fr));
+    gap: calc(var(--spacing, 0.25rem) * 4);
+  }
+</style>

@@ -100,7 +100,7 @@
     clearEmbedLoadTimer();
     resetEmbedLoadState();
     if (!embedAlive) return;
-    embedLoadTimer = window.setTimeout(() => {
+    embedLoadTimer = setTimeout(() => {
       if (!embedLoaded && !embedTipDismissed && embedAlive) {
         showEmbedTip = true;
       }

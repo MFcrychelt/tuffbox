@@ -40,7 +40,10 @@ const BUDGETS_GZIP_BYTES = {
   ".js": 230 * 1024,
   // 2026-08 (layout-lib): Tailwind v4 theme vars + on-demand utilities for
   // @tuffbox/layout-lib add ~3.3 KB gz; baseline was already ~32.4 KB.
-  ".css": 36 * 1024,
+  // 2026-08 second bump (36 -> 40): layout-lib is now actually used by
+  // Library (Grid/Stack) and more screens migrate onto it; keep headroom
+  // so each migration doesn't require a gate edit.
+  ".css": 40 * 1024,
 };
 
 if (!existsSync(indexHtmlPath)) {
