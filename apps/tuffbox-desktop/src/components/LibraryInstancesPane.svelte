@@ -45,7 +45,7 @@
     uiScalePercentLive,
     type RecentProject,
   } from "../lib/store";
-  import { homeIcons } from "../lib/homeBootstrap";
+  import { homeIcons, homeStats } from "../lib/homeBootstrap";
   import { toasts } from "../lib/toast";
   import { listen } from "@tauri-apps/api/event";
   import { api, githubInspectMeta } from "../lib/api";
@@ -92,6 +92,27 @@
   let githubInspectSummary = $state("");
   let foldersMenuOpen = $state(false);
   let instanceFilter = $state("");
+  /** Library sort mode; persisted in localStorage. */
+  type SortMode = "recent" | "name" | "playtime";
+  const SORT_KEY = "tuffbox.library.sort";
+  let sortMode = $state<SortMode>(
+    ((): SortMode => {
+      try {
+        const v = localStorage.getItem(SORT_KEY);
+        return v === "name" || v === "playtime" ? v : "recent";
+      } catch {
+        return "recent";
+      }
+    })(),
+  );
+  function setSortMode(m: SortMode) {
+    sortMode = m;
+    try {
+      localStorage.setItem(SORT_KEY, m);
+    } catch {
+      /* ignore */
+    }
+  }
   let groupMap = $state<GroupMap>(loadGroupMap());
   let collapsed = $state(loadCollapsedGroups());
   let projectStats = $state<Record<string, { playtime: number }>>({});
@@ -167,6 +188,26 @@
       p.info.name.toLowerCase().includes(q) ||
       p.info.minecraftVersion.toLowerCase().includes(q) ||
       p.info.loaderKind.toLowerCase().includes(q);
+    const stats = $homeStats;
+    const lastLaunch = (p: RecentProject): number => {
+      const t = stats[p.path]?.lastLaunch;
+      if (!t) return 0;
+      const ms = Date.parse(t);
+      return Number.isNaN(ms) ? 0 : ms;
+    };
+    const sortProjects = (list: RecentProject[]): RecentProject[] => {
+      const arr = [...list];
+      if (sortMode === "name") {
+        arr.sort((a, b) => a.info.name.localeCompare(b.info.name));
+      } else if (sortMode === "playtime") {
+        arr.sort((a, b) => (stats[b.path]?.playtime ?? 0) - (stats[a.path]?.playtime ?? 0));
+      } else {
+        // recent: store order already reflects last-added / last-launched ordering,
+        // but keep "last played" first when stats know better.
+        arr.sort((a, b) => lastLaunch(b) - lastLaunch(a));
+      }
+      return arr;
+    };
     const byGroup = new Map<string, RecentProject[]>();
     let total = 0;
     for (const p of $recentProjects) {
@@ -183,7 +224,7 @@
     ).filter((n) => byGroup.has(n));
     return { groups: names.map((name) => ({
       name,
-      projects: byGroup.get(name) ?? [],
+      projects: sortProjects(byGroup.get(name) ?? []),
       collapsed: q ? false : collapsed.has(name),
     })), total, filtered: !!q };
   })());
@@ -1078,6 +1119,18 @@
         {/if}
       </div>
 
+      <select
+        class="tb-sort"
+        aria-label="Sort instances"
+        title="Sort instances"
+        value={sortMode}
+        onchange={(e) => setSortMode((e.currentTarget as HTMLSelectElement).value as SortMode)}
+      >
+        <option value="recent">Last played</option>
+        <option value="name">Name</option>
+        <option value="playtime">Most played</option>
+      </select>
+
       <div class="tb-folders-wrap">
         <button
           type="button"
@@ -1638,6 +1691,22 @@
     cursor: pointer;
   }
   .tb-search-clear:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+  /* Sort selector — compact, matches toolbar buttons. */
+  .tb-sort {
+    padding: 6px 6px 6px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color var(--motion-fast) var(--ease-out);
+  }
+  .tb-sort:hover { border-color: var(--accent-primary); color: var(--text-primary); }
+
 
   .tb-btn {
     display: inline-flex;
