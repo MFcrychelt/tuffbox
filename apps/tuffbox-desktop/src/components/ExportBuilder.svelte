@@ -144,6 +144,48 @@
   const exportBlocked = $derived(
     exporting || (activeFormat.validation != null && blockingErrors.length > 0),
   );
+  // Warnings repeat per-mod (MOD_WITHOUT_HASH, UNKNOWN_MOD_SIDE, ...) — showing
+  // them all at once is noise. Group by code, collapse by default, let the user
+  // expand only what they care about. Errors stay flat (they block export).
+  type IssueGroup = {
+    code: string;
+    severity: "error" | "warning";
+    message: string;
+    count: number;
+    targets: string[];
+  };
+  let expandedGroups = $state<Set<string>>(new Set());
+  const groupedIssues = $derived.by(() => {
+    const groups = new Map<string, IssueGroup>();
+    for (const issue of activeIssues) {
+      let g = groups.get(issue.code);
+      if (!g) {
+        g = { code: issue.code, severity: issue.severity, message: issue.message, count: 0, targets: [] };
+        groups.set(issue.code, g);
+      }
+      g.count += 1;
+      if (issue.target && !g.targets.includes(issue.target)) g.targets.push(issue.target);
+    }
+    return [...groups.values()];
+  });
+  const errorGroups = $derived(groupedIssues.filter((g) => g.severity === "error"));
+  const warningGroups = $derived(groupedIssues.filter((g) => g.severity === "warning"));
+
+  function toggleGroup(code: string) {
+    const next = new Set(expandedGroups);
+    if (next.has(code)) next.delete(code);
+    else next.add(code);
+    expandedGroups = next;
+  }
+
+  function expandAllGroups() {
+    expandedGroups = new Set(groupedIssues.map((g) => g.code));
+  }
+
+  function collapseAllGroups() {
+    expandedGroups = new Set();
+  }
+
   const packSummary = $derived.by(() => {
     const info = $projectInfo;
     if (!info) return "";
@@ -307,15 +349,15 @@
   });
 </script>
 
-<div class="export-builder">
-  <div class="toolbar">
-    <div class="title-block">
-      <div class="title"><UploadCloud size={16} /> Export</div>
+<div class="export-builder w-full">
+  <div class="flex items-start justify-between gap-3 mb-3 flex-wrap">
+    <div class="min-w-0">
+      <div class="flex items-center gap-2 text-[color:var(--text-secondary)] font-bold text-[13px]"><UploadCloud size={16} /> Export</div>
       {#if packSummary}
-        <div class="pack-summary" title={packSummary}>{packSummary}</div>
+        <div class="mt-0.5 text-[11px] text-[color:var(--text-muted)] whitespace-nowrap overflow-hidden text-ellipsis max-w-[min(560px,55vw)]" title={packSummary}>{packSummary}</div>
       {/if}
     </div>
-    <div class="toolbar-actions">
+    <div class="flex gap-1.5 flex-wrap shrink-0">
       <button class="ghost mini" onclick={refreshDefaultPath} disabled={!$projectPath} title="Reset output paths">
         <RefreshCw size={14} />
         Defaults
@@ -332,20 +374,20 @@
     </div>
   </div>
 
-  {#if error}<div class="notice error"><AlertTriangle size={14} /> {error}</div>{/if}
+  {#if error}<div class="flex items-start gap-2 px-2.5 py-2 rounded-[length:var(--border-radius-md)] mb-2.5 border text-xs leading-snug text-[#fecaca] bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.28)]"><AlertTriangle size={14} class="shrink-0" /> {error}</div>{/if}
   {#if result}
-    <div class="notice success">
-      <CheckCircle2 size={14} />
-      <span>
+    <div class="flex items-start gap-2 px-2.5 py-2 rounded-[length:var(--border-radius-md)] mb-2.5 border text-xs leading-snug text-[color:var(--accent-primary)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)] border-[color-mix(in_srgb,var(--accent-primary)_25%,transparent)]">
+      <CheckCircle2 size={14} class="shrink-0 mt-0.5" />
+      <span class="min-w-0 break-all">
         Exported {result.fileCount} entries
         {#if result.overrideCount > 0}· {result.overrideCount} overrides{/if}
-        → <code title={result.path}>{result.path}</code>
+        → <code class="text-[11px] break-all">{result.path}</code>
       </span>
-      <button class="ghost mini" onclick={() => copyPath(result?.path)} title="Copy path">
+      <button class="ghost mini shrink-0" onclick={() => copyPath(result?.path)} title="Copy path">
         <Copy size={13} />
         {copiedFlash ? "Copied" : "Copy"}
       </button>
-      <button class="ghost mini" onclick={() => openPath(result?.path)} title="Open output">
+      <button class="ghost mini shrink-0" onclick={() => openPath(result?.path)} title="Open output">
         <ExternalLink size={13} />
       </button>
     </div>
@@ -354,14 +396,14 @@
   {#if !$projectPath}
     <EmptyState icon={PackageOpen} title="No project selected" description="Open a project to export a modpack." />
   {:else}
-    <section class="panel">
-      <div class="format-grid" role="listbox" aria-label="Export format">
+    <section class="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-3.5 grid gap-3">
+      <div class="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" role="listbox" aria-label="Export format">
         {#each FORMATS as fmt (fmt.id)}
           {@const errs = formatErrors(fmt.id)}
           {@const warns = formatWarns(fmt.id)}
           <button
             type="button"
-            class="format-card"
+            class="format-card grid grid-cols-[auto_minmax(0,1fr)] grid-rows-[auto_auto] gap-x-2 gap-y-0.5 items-start text-left px-2.5 py-2 rounded-[length:var(--border-radius-md)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[color:var(--text-secondary)] cursor-pointer min-w-0 overflow-hidden hover:border-[color-mix(in_srgb,var(--accent-primary)_35%,var(--border-color))]"
             class:active={exportMode === fmt.id}
             class:has-error={errs > 0}
             role="option"
@@ -369,42 +411,43 @@
             title="{fmt.title} {fmt.badge} — {fmt.blurb}"
             onclick={() => (exportMode = fmt.id)}
           >
-            <span class="fmt-icon" aria-hidden="true">
+            <span class="row-span-2 flex items-center justify-center w-7 h-7 rounded-md bg-[color-mix(in_srgb,var(--bg-secondary)_70%,transparent)] text-[color:var(--accent-primary)] mt-px" aria-hidden="true">
               {#if fmt.id === "mrpack"}<PackageOpen size={16} />
               {:else if fmt.id === "curseforge"}<FileArchive size={16} />
               {:else if fmt.id === "prism"}<Box size={16} />
               {:else if fmt.id === "server"}<Server size={16} />
               {:else}<FolderTree size={16} />{/if}
             </span>
-            <span class="fmt-text">
-              <span class="fmt-title">{fmt.title}</span>
-              <span class="fmt-badge">{fmt.badge}</span>
+            <span class="flex items-baseline gap-1.5 min-w-0 max-w-full overflow-hidden">
+              <span class="min-w-0 flex-1 text-xs font-bold leading-tight truncate">{fmt.title}</span>
+              <span class="text-[10px] font-semibold text-[color:var(--text-muted)] lowercase shrink-0">{fmt.badge}</span>
               {#if errs > 0}
-                <span class="fmt-chip err" title="{errs} blocking error(s)">{errs}</span>
+                <span class="shrink-0 min-w-3.5 h-3.5 px-1 rounded-full inline-flex items-center justify-center text-[10px] font-extrabold leading-none text-[#fecaca] bg-[rgba(239,68,68,0.15)] border border-[rgba(239,68,68,0.4)]" title="{errs} blocking error(s)">{errs}</span>
               {:else if warns > 0}
-                <span class="fmt-chip warn" title="{warns} warning(s)">{warns}</span>
+                <span class="shrink-0 min-w-3.5 h-3.5 px-1 rounded-full inline-flex items-center justify-center text-[10px] font-extrabold leading-none text-[#fbbf24] bg-[rgba(245,158,11,0.15)] border border-[rgba(245,158,11,0.35)]" title="{warns} warning(s)">{warns}</span>
               {/if}
             </span>
-            <span class="fmt-blurb">{fmt.blurb}</span>
+            <span class="col-start-2 min-w-0 text-[11px] text-[color:var(--text-muted)] leading-tight line-clamp-2 break-words">{fmt.blurb}</span>
           </button>
         {/each}
       </div>
 
-      <div class="detail">
-        <div class="detail-head">
-          <h2>{activeFormat.title}</h2>
-          <p>{activeFormat.detail}</p>
+      <div class="grid gap-2.5 p-3 border border-[var(--border-color)] rounded-[length:var(--border-radius-md)] bg-[var(--bg-tertiary)]">
+        <div>
+          <h2 class="m-0 mb-1 text-sm font-bold text-[color:var(--text-primary)]">{activeFormat.title}</h2>
+          <p class="m-0 text-xs text-[color:var(--text-muted)] leading-snug">{activeFormat.detail}</p>
         </div>
 
-        <label class="path-field">
+        <label class="grid gap-1 text-[11px] font-semibold text-[color:var(--text-secondary)]">
           {activeFormat.pathKind === "dir" ? "Output folder" : "Output file"}
-          <div class="path-row">
+          <div class="flex gap-1.5 items-stretch flex-wrap sm:flex-nowrap">
             <input
+              class="flex-1 min-w-0 text-xs px-2.5 py-[7px]"
               value={activePath}
               oninput={(e) => setActivePath(e.currentTarget.value)}
               placeholder={activeFormat.pathKind === "dir" ? ".../pack-packwiz" : ".../pack.zip"}
             />
-            <button type="button" class="ghost mini browse" onclick={browseOutput}>
+            <button type="button" class="ghost mini shrink-0" onclick={browseOutput}>
               <FolderOpen size={14} />
               Browse
             </button>
@@ -412,27 +455,63 @@
         </label>
 
         {#if activeIssues.length > 0}
-          <div class="issues">
-            <div class="issues-head">
+          <div class="flex flex-col gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
               {#if blockingErrors.length > 0}
-                <span class="chip err">{blockingErrors.length} error{blockingErrors.length === 1 ? "" : "s"}</span>
+                <span class="text-[10px] font-bold px-[7px] py-0.5 rounded-full text-[#fecaca] bg-[rgba(239,68,68,0.12)] border border-[rgba(239,68,68,0.3)]">{blockingErrors.length} error{blockingErrors.length === 1 ? "" : "s"}</span>
               {/if}
               {#if warnCount > 0}
-                <span class="chip warn">{warnCount} warning{warnCount === 1 ? "" : "s"}</span>
+                <span class="text-[10px] font-bold px-[7px] py-0.5 rounded-full text-[#fbbf24] bg-[rgba(245,158,11,0.12)] border border-[rgba(245,158,11,0.3)]">{warnCount} warning{warnCount === 1 ? "" : "s"}</span>
+              {/if}
+              {#if groupedIssues.length > 1}
+                <button type="button" class="ml-auto text-[10px] text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)] cursor-pointer" onclick={expandAllGroups}>Expand all</button>
+                <button type="button" class="text-[10px] text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)] cursor-pointer" onclick={collapseAllGroups}>Collapse all</button>
               {/if}
             </div>
-            {#each activeIssues as issue (issue.code + (issue.target ?? "") + issue.message)}
-              <div class="issue {issue.severity}">
-                <strong>{issue.code}</strong>
-                <span>{issue.message}</span>
-                {#if issue.target}<code>{issue.target}</code>{/if}
+
+            {#each errorGroups as g (g.code)}
+              <div class="grid gap-0.5 p-2 rounded-md bg-[var(--bg-secondary)] border border-[rgba(239,68,68,0.35)] text-[11px]">
+                <div class="flex items-baseline gap-2 flex-wrap">
+                  <strong class="text-[#fecaca]">{g.code}{#if g.count > 1}&nbsp;× {g.count}{/if}</strong>
+                  <span class="text-[color:var(--text-muted)] break-words">{g.message}</span>
+                </div>
+                {#if g.targets.length > 0}
+                  <div class="flex flex-wrap gap-x-2 gap-y-0.5">
+                    {#each g.targets.slice(0, 8) as tgt (tgt)}
+                      <code class="font-mono text-[10px] text-[color:var(--text-secondary)] break-all">{tgt}</code>
+                    {/each}
+                    {#if g.targets.length > 8}<span class="text-[10px] text-[color:var(--text-muted)]">+{g.targets.length - 8} more</span>{/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+
+            {#each warningGroups as g (g.code)}
+              <div class="rounded-md bg-[var(--bg-secondary)] border border-[rgba(245,158,11,0.35)] text-[11px]">
+                <button
+                  type="button"
+                  class="w-full flex items-center gap-2 px-2 py-2 text-left cursor-pointer hover:bg-[var(--bg-hover,var(--ftbq-btn-hover-top))] rounded-md"
+                  onclick={() => toggleGroup(g.code)}
+                  aria-expanded={expandedGroups.has(g.code)}
+                >
+                  <strong class="text-[#fbbf24] shrink-0">{g.code}{#if g.count > 1}&nbsp;× {g.count}{/if}</strong>
+                  <span class="text-[color:var(--text-muted)] truncate">{g.message}</span>
+                  <span class="ml-auto text-[10px] text-[color:var(--text-muted)] shrink-0">{expandedGroups.has(g.code) ? "▲" : "▼"}</span>
+                </button>
+                {#if expandedGroups.has(g.code)}
+                  <div class="flex flex-wrap gap-x-2 gap-y-0.5 px-2 pb-2">
+                    {#each g.targets as tgt (tgt)}
+                      <code class="font-mono text-[10px] text-[color:var(--text-secondary)] break-all">{tgt}</code>
+                    {/each}
+                  </div>
+                {/if}
               </div>
             {/each}
           </div>
         {/if}
 
-        <div class="export-actions">
-          <button class="export" onclick={runSelectedExport} disabled={exportBlocked || batching}>
+        <div class="flex gap-2 flex-wrap items-center">
+          <button class="inline-flex items-center gap-1.5" onclick={runSelectedExport} disabled={exportBlocked || batching}>
             <UploadCloud size={15} />
             {#if exporting}
               Exporting…
@@ -452,15 +531,19 @@
       </div>
 
       {#if batchResults.length > 0}
-        <div class="batch">
-          <h3>Batch results · ./export</h3>
-          <ul>
+        <div class="grid gap-1.5">
+          <h3 class="m-0 text-xs font-bold text-[color:var(--text-secondary)]">Batch results · ./export</h3>
+          <ul class="list-none m-0 p-0 grid gap-1">
             {#each batchResults as row (row.kind)}
-              <li class:ok={row.status === "ok"} class:err={row.status !== "ok"}>
-                <strong>{row.kind}</strong>
+              <li
+                class="grid grid-cols-[72px_minmax(0,1fr)] sm:grid-cols-[88px_minmax(0,1fr)_auto] gap-x-2.5 gap-y-1 px-2 py-1.5 rounded-md border items-center text-[11px] min-w-0 overflow-hidden"
+                class:ok={row.status === "ok"}
+                class:err={row.status !== "ok"}
+              >
+                <strong class="truncate">{row.kind}</strong>
                 {#if row.status === "ok"}
-                  <span>{row.files ?? "?"} files</span>
-                  <div class="batch-actions">
+                  <span class="min-w-0 truncate">{row.files ?? "?"} files</span>
+                  <div class="flex gap-1 sm:row-auto col-span-2 sm:col-span-1 sm:col-start-3">
                     {#if row.path}
                       <button class="ghost mini" onclick={() => openPath(row.path)} title={row.path}>
                         <ExternalLink size={12} /> Open
@@ -470,9 +553,9 @@
                       </button>
                     {/if}
                   </div>
-                  {#if row.path}<code title={row.path}>{row.path}</code>{/if}
+                  {#if row.path}<code class="col-span-2 sm:col-span-2 text-[10px] text-[color:var(--text-muted)] break-all" title={row.path}>{row.path}</code>{/if}
                 {:else}
-                  <span>{row.error ?? "failed"}</span>
+                  <span class="min-w-0 break-all sm:col-span-2">{row.error ?? "failed"}</span>
                 {/if}
               </li>
             {/each}
@@ -480,7 +563,7 @@
         </div>
       {/if}
 
-      <p class="publish-hint">
+      <p class="m-0 text-[11px] text-[color:var(--text-muted)] leading-snug">
         Publish tokens live in Settings · upload artifacts from the Release stage after export.
       </p>
     </section>
@@ -488,102 +571,7 @@
 </div>
 
 <style>
-  .export-builder {
-    width: 100%;
-    max-width: none;
-  }
-  .toolbar {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 12px;
-  }
-  .title-block {
-    min-width: 0;
-  }
-  .title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--text-secondary);
-    font-weight: 700;
-    font-size: 13px;
-  }
-  .pack-summary {
-    margin-top: 3px;
-    font-size: 11px;
-    color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: min(560px, 55vw);
-  }
-  .toolbar-actions {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-    flex-shrink: 0;
-  }
-  .notice {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 8px 10px;
-    border-radius: var(--border-radius-md);
-    margin-bottom: 10px;
-    border: 1px solid var(--border-color);
-    font-size: 12px;
-    line-height: 1.4;
-  }
-  .notice.error {
-    color: #fecaca;
-    background: rgba(239, 68, 68, 0.08);
-    border-color: rgba(239, 68, 68, 0.28);
-  }
-  .notice.success {
-    color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
-  }
-  .notice code {
-    font-size: 11px;
-    word-break: break-all;
-  }
-  .panel {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    padding: 14px;
-    display: grid;
-    gap: 12px;
-  }
-  .format-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
-    gap: 8px;
-  }
-  .format-card {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-rows: auto auto;
-    column-gap: 8px;
-    row-gap: 2px;
-    align-items: start;
-    text-align: left;
-    padding: 9px 10px;
-    border-radius: var(--border-radius-md);
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    cursor: pointer;
-    min-height: 0;
-    min-width: 0;
-    overflow: hidden;
-  }
-  .format-card:hover {
-    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
-  }
+  /* Theming/states only — layout lives in Tailwind utilities. */
   .format-card.active {
     color: var(--text-primary);
     border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
@@ -593,243 +581,10 @@
   .format-card.has-error:not(.active) {
     border-color: rgba(239, 68, 68, 0.35);
   }
-  .fmt-icon {
-    grid-row: 1 / span 2;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
-    color: var(--accent-primary);
-    margin-top: 1px;
-  }
-  .fmt-text {
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    min-width: 0;
-    max-width: 100%;
-    overflow: hidden;
-  }
-  .fmt-title {
-    min-width: 0;
-    flex: 1 1 auto;
-    font-size: 12px;
-    font-weight: 700;
-    line-height: 1.2;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .fmt-badge {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: lowercase;
-    flex-shrink: 0;
-  }
-  .fmt-chip {
-    flex-shrink: 0;
-    min-width: 14px;
-    height: 14px;
-    padding: 0 4px;
-    border-radius: 999px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    font-weight: 800;
-    line-height: 1;
-  }
-  .fmt-chip.warn {
-    color: #fbbf24;
-    background: rgba(245, 158, 11, 0.15);
-    border: 1px solid rgba(245, 158, 11, 0.35);
-  }
-  .fmt-chip.err {
-    color: #fecaca;
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.4);
-  }
-  .fmt-blurb {
-    grid-column: 2;
-    min-width: 0;
-    font-size: 11px;
-    color: var(--text-muted);
-    line-height: 1.3;
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-  }
-  .detail {
-    display: grid;
-    gap: 10px;
-    padding: 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    background: var(--bg-tertiary);
-  }
-  .detail-head h2 {
-    margin: 0 0 4px;
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--text-primary);
-  }
-  .detail-head p {
-    margin: 0;
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1.4;
-  }
-  .path-field {
-    display: grid;
-    gap: 5px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-  .path-row {
-    display: flex;
-    gap: 6px;
-    align-items: stretch;
-  }
-  .path-row input {
-    flex: 1;
-    min-width: 0;
-    font-size: 12px;
-    padding: 7px 9px;
-  }
-  .browse {
-    flex-shrink: 0;
-  }
-  .issues {
-    display: grid;
-    gap: 6px;
-    max-height: 160px;
-    overflow: auto;
-  }
-  .issues-head {
-    display: flex;
-    gap: 6px;
-  }
-  .chip {
-    font-size: 10px;
-    font-weight: 700;
-    padding: 2px 7px;
-    border-radius: 999px;
-  }
-  .chip.err {
-    color: #fecaca;
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-  }
-  .chip.warn {
-    color: #fbbf24;
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid rgba(245, 158, 11, 0.3);
-  }
-  .issue {
-    display: grid;
-    gap: 2px;
-    padding: 8px 9px;
-    border-radius: 6px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    font-size: 11px;
-  }
-  .issue.warning {
-    border-color: rgba(245, 158, 11, 0.35);
-  }
-  .issue.error {
-    border-color: rgba(239, 68, 68, 0.35);
-  }
-  .issue span {
-    color: var(--text-muted);
-    overflow-wrap: anywhere;
-    word-break: break-word;
-  }
-  .issue code {
-    font-family: ui-monospace, monospace;
-    color: var(--text-secondary);
-    font-size: 10px;
-    overflow-wrap: anywhere;
-    word-break: break-all;
-  }
-  .export-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-  .export {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .batch {
-    display: grid;
-    gap: 6px;
-  }
-  .batch h3 {
-    margin: 0;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-secondary);
-  }
-  .batch ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    gap: 4px;
-  }
-  .batch li {
-    display: grid;
-    grid-template-columns: 88px minmax(0, 1fr) auto;
-    gap: 6px 10px;
-    padding: 6px 8px;
-    border-radius: 6px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
-    font-size: 11px;
-    align-items: center;
-    min-width: 0;
-    overflow: hidden;
-  }
-  .batch li.ok {
+  li.ok {
     border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
   }
-  .batch li.err {
+  li.err {
     border-color: rgba(239, 68, 68, 0.35);
-  }
-  .batch-actions {
-    display: flex;
-    gap: 4px;
-  }
-  .batch code {
-    grid-column: 2 / -1;
-    font-size: 10px;
-    color: var(--text-muted);
-    word-break: break-all;
-  }
-  .publish-hint {
-    margin: 0;
-    font-size: 11px;
-    color: var(--text-muted);
-    line-height: 1.4;
-  }
-  @media (max-width: 720px) {
-    .batch li {
-      grid-template-columns: 72px 1fr;
-    }
-    .batch-actions {
-      grid-column: 2;
-    }
   }
 </style>
