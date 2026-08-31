@@ -2284,10 +2284,27 @@
     <div class="empty"><RefreshCw size={32} class="spin" /><p>Loading quest book…</p></div>
   {:else if chapters.length === 0}
     <div class="empty">
-      <ScrollText size={40} />
+      <div class="empty-art" aria-hidden="true">
+        <span class="art-chapter">
+          <span class="art-chapter-dot"></span>
+          <span class="art-line"></span>
+        </span>
+        <span class="art-quest q1"></span>
+        <span class="art-quest q2"></span>
+        <span class="art-quest q3"></span>
+      </div>
       <h3>Start a quest line</h3>
-      <p>Create a chapter, add quests on the canvas, then Save all to write SNBT.</p>
-      <button type="button" class="empty-cta" onclick={createChapter}><span>+</span> Create first chapter</button>
+      <p>
+        Chapters hold your quests. Create the first one, drop quests on the
+        canvas and connect them — then <strong>Save all</strong> writes the SNBT.
+      </p>
+      <div class="empty-ctas">
+        <button type="button" class="empty-cta" onclick={createChapter}>
+          <ScrollText size={15} />
+          Create first chapter
+        </button>
+      </div>
+      <p class="empty-hint">No files are written until you save.</p>
     </div>
   {:else}
     <div class="qe-body-row">
@@ -3208,9 +3225,15 @@
   }
   .empty {
     color: var(--ftbq-text-muted);
-    padding: 48px 32px;
+    padding: 56px 32px 44px;
     text-align: center;
-    background: var(--ftbq-bg-panel);
+    background:
+      radial-gradient(
+        ellipse 70% 46% at 50% 0%,
+        color-mix(in srgb, var(--accent-secondary) 7%, transparent),
+        transparent
+      ),
+      var(--ftbq-bg-panel);
     border: 1px solid var(--ftbq-frame);
     border-radius: var(--ftbq-radius-panel);
     box-shadow:
@@ -3220,42 +3243,123 @@
     flex-direction: column;
     align-items: center;
     gap: 12px;
+    max-width: 560px;
+    margin: 0 auto;
   }
+  /* Mini-diagram: a chapter node with a line and three quest tiles branching
+     off it — communicates "chapters hold quests" at a glance. */
+  .empty-art {
+    position: relative;
+    width: 168px;
+    height: 64px;
+    margin-bottom: 8px;
+  }
+  .art-chapter {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+  .art-chapter-dot {
+    width: 34px;
+    height: 34px;
+    border-radius: var(--ftbq-radius-control);
+    background: color-mix(in srgb, var(--accent-secondary) 26%, var(--ftbq-bg-panel));
+    border: 1.5px solid color-mix(in srgb, var(--accent-secondary) 60%, transparent);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent-secondary) 25%, transparent);
+  }
+  .art-line {
+    width: 44px;
+    height: 2px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent-secondary) 60%, transparent),
+      color-mix(in srgb, var(--ftbq-frame) 80%, transparent)
+    );
+  }
+  .art-quest {
+    position: absolute;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--ftbq-radius-control);
+    background: color-mix(in srgb, var(--ftbq-frame) 55%, transparent);
+    border: 1px solid var(--ftbq-frame);
+  }
+  .art-quest.q1 { left: 102px; top: 4px; }
+  .art-quest.q2 { left: 122px; top: 26px; opacity: 0.75; }
+  .art-quest.q3 { left: 102px; top: 46px; opacity: 0.55; }
   .empty h3 {
     margin: 0;
     color: var(--text-primary, var(--ftbq-text));
-    font-size: 16px;
-    font-weight: 600;
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
     text-shadow: none;
   }
   .empty p {
     margin: 0;
-    max-width: 360px;
+    max-width: 400px;
     font-size: 13px;
-    line-height: 1.45;
+    line-height: 1.55;
+  }
+  .empty p strong {
+    color: var(--text-primary, var(--ftbq-text));
+    font-weight: 600;
+  }
+  .empty-ctas {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
   }
   .empty-cta {
-    margin-top: 8px;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 10px 16px;
-    border: 1px solid color-mix(in srgb, var(--accent-secondary) 45%, var(--ftbq-frame));
+    gap: 8px;
+    padding: 11px 20px;
+    border: 1px solid color-mix(in srgb, var(--accent-secondary) 55%, transparent);
     border-radius: var(--ftbq-radius-control);
-    background: var(--accent-secondary);
-    box-shadow: none;
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--accent-secondary) 88%, #fff 6%),
+        var(--accent-secondary)
+      );
+    box-shadow:
+      0 4px 14px color-mix(in srgb, var(--accent-secondary) 28%, transparent),
+      inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent);
     color: #fff;
     text-shadow: none;
+    font-size: 13px;
     font-weight: 700;
+    letter-spacing: 0.01em;
     cursor: pointer;
-    transition: filter 0.15s ease, transform 0.15s ease;
+    transition:
+      filter 0.15s ease,
+      transform 0.15s ease,
+      box-shadow 0.15s ease;
   }
   .empty-cta:hover {
-    filter: brightness(1.12);
+    filter: brightness(1.1);
     transform: translateY(-1px);
+    box-shadow:
+      0 6px 18px color-mix(in srgb, var(--accent-secondary) 36%, transparent),
+      inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent);
   }
   .empty-cta:active {
     transform: translateY(0);
+    filter: brightness(0.98);
+  }
+  .empty-cta:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent-secondary) 70%, transparent);
+    outline-offset: 2px;
+  }
+  .empty-hint {
+    font-size: 11.5px !important;
+    color: color-mix(in srgb, var(--ftbq-text-muted) 75%, transparent) !important;
   }
   .qe-lay {
     flex: 1;
