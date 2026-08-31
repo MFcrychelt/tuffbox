@@ -219,32 +219,32 @@
   }
 </script>
 
-<div class="settings-page">
-  <header class="page-header">
+<div class="settings-page w-full">
+  <header class="page-header flex items-center gap-4 mb-6">
     {#if showBack}
-      <button class="ghost back" onclick={onBack}>
+      <button class="ghost back px-3 py-2" onclick={onBack}>
         <ArrowLeft size={18} />
         Back
       </button>
     {/if}
-    <h1>Instance Settings</h1>
+    <h1 class="text-2xl font-extrabold">Instance Settings</h1>
   </header>
 
   {#if $projectPath}
     {#if loading}
-      <div class="loading">
+      <div class="loading flex items-center gap-2.5 text-[color:var(--text-muted)] px-4 py-3.5 mb-4 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)]">
         <RefreshCw size={18} class="spin" />
         Loading instance settings…
       </div>
     {/if}
-    <div class="settings-groups" class:dimmed={loading}>
-      <div class="section-group">
-        <h2 class="section-heading">Runtime</h2>
-        <div class="settings-grid">
-      <section class="card">
-        <div class="card-title">
+    <div class="settings-groups flex flex-col gap-7 mb-6" class:dimmed={loading}>
+      <div class="section-group flex flex-col gap-3.5">
+        <h2 class="section-heading text-[13px] font-extrabold uppercase tracking-[0.06em] text-[color:var(--text-muted)] m-0 pb-1 border-b border-[var(--border-color)]">Runtime</h2>
+        <div class="settings-grid grid grid-cols-1 md:grid-cols-2 gap-5">
+      <section class="card bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
           <Container size={18} />
-          <h3>Game</h3>
+          <h3 class="text-base text-[color:var(--text-primary)]">Game</h3>
         </div>
         <div class="field">
           <label for="mc-version">Minecraft version</label>
@@ -256,7 +256,7 @@
             {/each}
           </select>
         </div>
-        <div class="field-row">
+        <div class="field-row grid grid-cols-2 gap-3">
           <div class="field">
             <label for="loader-kind">Loader</label>
             <select id="loader-kind" bind:value={loader} onchange={onLoaderChange}>
@@ -280,14 +280,14 @@
         </div>
       </section>
 
-      <section class="card">
-        <div class="card-title">
-          <Coffee size={18} />
-          <h3>Java</h3>
-        </div>
+      <section class="card bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+              <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
+                <Coffee size={18} />
+                <h3 class="text-base text-[color:var(--text-primary)]">Java</h3>
+              </div>
         <div class="field">
           <label for="java-path">Java executable</label>
-          <div class="input-row">
+          <div class="input-row flex gap-2">
             <input id="java-path" bind:value={javaPath} readonly />
             <button class="icon-btn" onclick={() => (showJavaPicker = true)} aria-label="Search Java">
               <Search size={18} />
@@ -299,13 +299,13 @@
         </div>
       </section>
 
-      <section class="card wide">
-        <div class="card-title">
+      <section class="card wide col-span-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
           <Cpu size={18} />
-          <h3>Memory</h3>
+          <h3 class="text-base text-[color:var(--text-primary)]">Memory</h3>
         </div>
-        <div class="memory-control">
-          <div class="memory-value">{formatMemory(memory)}</div>
+        <div class="memory-control flex flex-col gap-4">
+          <div class="memory-value text-[32px] font-black text-center">{formatMemory(memory)}</div>
           <input
             type="range"
             min={1024}
@@ -314,7 +314,7 @@
             bind:value={memory}
             class="memory-slider"
           />
-          <div class="memory-marks">
+          <div class="memory-marks flex justify-between gap-2 flex-wrap">
             {#each memoryMarks as mark}
               <button
                 class="mark"
@@ -328,10 +328,10 @@
         </div>
       </section>
 
-      <section class="card wide">
-        <div class="card-title">
+      <section class="card wide col-span-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
           <Terminal size={18} />
-          <h3>JVM Arguments</h3>
+          <h3 class="text-base text-[color:var(--text-primary)]">JVM Arguments</h3>
         </div>
         <div class="field">
           <textarea bind:value={jvmArgs} rows={4}></textarea>
@@ -340,13 +340,13 @@
         </div>
       </div>
 
-      <div class="section-group">
-        <h2 class="section-heading">Project</h2>
-        <div class="settings-grid">
-      <section class="card">
-        <div class="card-title">
+      <div class="section-group flex flex-col gap-3.5">
+        <h2 class="section-heading text-[13px] font-extrabold uppercase tracking-[0.06em] text-[color:var(--text-muted)] m-0 pb-1 border-b border-[var(--border-color)]">Project</h2>
+        <div class="settings-grid grid grid-cols-1 md:grid-cols-2 gap-5">
+      <section class="card bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
           <Terminal size={18} />
-          <h3>Player</h3>
+          <h3 class="text-base text-[color:var(--text-primary)]">Player</h3>
         </div>
         <div class="field">
           <label for="player-name">Player name (offline test launches)</label>
@@ -359,10 +359,10 @@
         </div>
       </section>
 
-      <section class="card wide">
-        <div class="card-title">
+      <section class="card wide col-span-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
           <Database size={18} />
-          <h3>Project schema</h3>
+          <h3 class="text-base text-[color:var(--text-primary)]">Project schema</h3>
         </div>
         <div class="schema-info">
           <div class="schema-row">
@@ -388,10 +388,10 @@
     </div>
 
     {#if error}
-      <div class="error">{error}</div>
+      <div class="error bg-[rgba(239,68,68,0.12)] text-[#ef4444] px-3 py-2.5 rounded-[length:var(--border-radius-md)] text-[13px] mb-4">{error}</div>
     {/if}
 
-    <div class="actions">
+    <div class="actions flex justify-end gap-3">
       {#if showBack}
         <button class="secondary" onclick={onBack}>Cancel</button>
       {/if}
@@ -414,33 +414,7 @@
 {/if}
 
 <style>
-  .settings-page {
-    max-width: none;
-    width: 100%;
-  }
-
-  .page-header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 24px;
-  }
-
-  .page-header h1 {
-    font-size: 24px;
-    font-weight: 800;
-  }
-
-  .back {
-    padding: 8px 12px;
-  }
-
-  .settings-groups {
-    display: flex;
-    flex-direction: column;
-    gap: 28px;
-    margin-bottom: 24px;
-  }
+  /* .settings-page layout moved to Tailwind utilities */
 
   /* While dropdown options stream in, the form stays visible and clickable —
      only a light veil hints that lists are still loading. No full lock-out:
@@ -449,65 +423,6 @@
   .settings-groups.dimmed {
     opacity: 0.85;
     transition: opacity var(--motion-fast) var(--ease-out);
-  }
-
-  .section-group {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  .section-heading {
-    font-size: 13px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
-    margin: 0;
-    padding-bottom: 4px;
-    border-bottom: 1px solid var(--border-color);
-  }
-
-  .settings-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 20px;
-  }
-
-  .loading {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--text-muted);
-    padding: 14px 16px;
-    margin-bottom: 16px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-  }
-
-  .card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    padding: 24px;
-  }
-
-  .card.wide {
-    grid-column: 1 / -1;
-  }
-
-  .card-title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--text-secondary);
-    margin-bottom: 20px;
-  }
-
-  .card-title h3 {
-    font-size: 16px;
-    color: var(--text-primary);
   }
 
   .field {
@@ -519,12 +434,6 @@
 
   .field:last-child {
     margin-bottom: 0;
-  }
-
-  .field-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
   }
 
   label {
@@ -558,11 +467,6 @@
 
   input:disabled {
     opacity: 0.6;
-  }
-
-  .input-row {
-    display: flex;
-    gap: 8px;
   }
 
   .input-row input {
@@ -616,18 +520,6 @@
     border-color: var(--accent-primary);
   }
 
-  .memory-control {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .memory-value {
-    font-size: 32px;
-    font-weight: 900;
-    text-align: center;
-  }
-
   .memory-slider {
     -webkit-appearance: none;
     appearance: none;
@@ -658,13 +550,6 @@
     border: none;
   }
 
-  .memory-marks {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
   .mark {
     padding: 6px 12px;
     background: var(--bg-elevated);
@@ -679,21 +564,6 @@
     background: var(--accent-primary);
     color: #000;
     border-color: var(--accent-primary);
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-  }
-
-  .error {
-    background: rgba(239, 68, 68, 0.12);
-    color: #ef4444;
-    padding: 10px 12px;
-    border-radius: var(--border-radius-md);
-    font-size: 13px;
-    margin-bottom: 16px;
   }
 
   .schema-info { display: grid; gap: 12px; }
