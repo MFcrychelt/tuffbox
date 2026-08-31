@@ -685,7 +685,10 @@
     left: 0;
     right: 0;
     bottom: 0;
-    height: 22px;
+    /* Slim strip: the editor's horizontal scrollbar sits 8px above the bottom
+       edge (cm-scroller padding-bottom), so this zone no longer sits on top of
+       the scrollbar and stealing its pointer events. */
+    height: 12px;
     z-index: 6;
   }
 

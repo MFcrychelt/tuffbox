@@ -1079,7 +1079,31 @@
     overflow: hidden;
   }
   .cm-wrapper :global(.cm-editor) { height: 100%; }
-  .cm-wrapper :global(.cm-scroller) { overflow: auto; }
+  .cm-wrapper :global(.cm-scroller) {
+    overflow: auto;
+    /* Lift the horizontal scrollbar above the IDE's bottom rail hotzone:
+       the rail slides over the lower edge on hover, which swallowed
+       bottom-edge pointer events and made the H-scrollbar unusable. */
+    padding-bottom: 8px;
+  }
+  /* Style the CodeMirror horizontal scrollbar into a clearly grabbable bar. */
+  .cm-wrapper :global(.cm-scroller)::-webkit-scrollbar {
+    height: 12px;
+  }
+  .cm-wrapper :global(.cm-scroller)::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .cm-wrapper :global(.cm-scroller)::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--accent-primary) 70%, transparent);
+    background-clip: content-box;
+    border: 3px solid transparent;
+  }
+  .cm-wrapper :global(.cm-scroller)::-webkit-scrollbar-track {
+    background: transparent;
+  }
   .cm-wrapper.line-hl :global(.cm-selectionBackground) { background: color-mix(in srgb, var(--accent-primary) 22%, transparent) !important; }
 
   :global(.spin) { animation: spin 900ms linear infinite; }
