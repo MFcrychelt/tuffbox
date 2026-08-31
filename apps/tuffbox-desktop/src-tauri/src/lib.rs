@@ -3090,7 +3090,6 @@ fn execute_fix_action_inner(
                 &loader_slug,
                 &manifest.minecraft.version,
             )
-            .map_err(|e| e.to_string())?
             .into_iter()
             .max_by(|a, b| a.id.cmp(&b.id))
             .ok_or_else(|| format!("no {loader_slug} build for {}", manifest.minecraft.version))?;
@@ -10242,6 +10241,82 @@ async fn get_crash_diagnosis(
 
 fn get_crash_diagnosis_impl(
     path: String,
+    report_id: Option<String>,
+) -> Result<tuffbox_core::crash::CrashDiagnosis, String> {
+    // Reopening the Diagnose tab re-ran the full log/jar analysis every time.
+    // Cache keyed by the input files' mtimes: any change to latest.log /
+    // crash-reports / mods folder produces a new key (correctness), while
+    // repeated tab switches within the same state hit the cache instantly.
+    let cache_key = crash_diagnosis_cache_key(&path, report_id.as_deref());
+    if let Some(cached) =
+        tuffbox_core::api_cache::get::<tuffbox_core::crash::CrashDiagnosis>(&cache_key)
+    {
+        return Ok(cached);
+    }
+    let diagnosis = get_crash_diagnosis_uncached(&path, report_id.clone())?;
+    tuffbox_core::api_cache::put(&cache_key, diagnosis.clone());
+    Ok(diagnosis)
+}
+
+/// Cache key: project + selected source + mtimes of everything the analysis
+/// reads (latest.log, newest crash report, manifest, mods folder timestamp).
+fn crash_diagnosis_cache_key(path: &str, report_id: Option<&str>) -> String {
+    let manifest_mtime = resolve_manifest_path(path)
+        .ok()
+        .and_then(|p| file_mtime_nanos(&p))
+        .unwrap_or(0);
+    let project_dir = resolve_manifest_path(path)
+        .ok()
+        .and_then(|p| manifest_parent(&p.to_string_lossy().to_string()).ok())
+        .unwrap_or_default();
+    let latest_mtime = file_mtime_nanos(&project_dir.join("logs").join("latest.log")).unwrap_or(0);
+    let crash_mtime = newest_crash_report_mtime(&project_dir).unwrap_or(0);
+    let mods_mtime = dir_mtime_nanos(&project_dir.join("mods")).unwrap_or(0);
+    format!(
+        "crashdiag:{}:{:?}:{}:{}:{}:{}",
+        path, report_id, manifest_mtime, latest_mtime, crash_mtime, mods_mtime
+    )
+}
+
+fn file_mtime_nanos(path: &Path) -> Option<u128> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+}
+
+fn dir_mtime_nanos(path: &Path) -> Option<u128> {
+    let mut latest = file_mtime_nanos(path);
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let m = file_mtime_nanos(&entry.path()).unwrap_or(0);
+            latest = Some(latest.unwrap_or(0).max(m));
+        }
+    }
+    latest
+}
+
+fn newest_crash_report_mtime(project_dir: &Path) -> Option<u128> {
+    let dir = project_dir.join("crash-reports");
+    let mut latest: Option<u128> = None;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().and_then(|e| e.to_str()) == Some("txt") {
+                let m = file_mtime_nanos(&entry.path());
+                latest = match (latest, m) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (None, Some(b)) => Some(b),
+                    (a, None) => a,
+                };
+            }
+        }
+    }
+    latest
+}
+
+fn get_crash_diagnosis_uncached(
+    path: &str,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::crash::CrashDiagnosis, String> {
     let manifest_path = resolve_manifest_path(&path)?;

@@ -57,7 +57,8 @@ pub fn fetch_minecraft_versions() -> Vec<MinecraftVersion> {
         "versions:minecraft",
         std::time::Duration::from_secs(60 * 60),
         || -> Vec<MinecraftVersion> {
-            let popular: HashSet<String> = POPULAR_MINECRAFT.iter().map(|s| s.to_string()).collect();
+            let popular: HashSet<String> =
+                POPULAR_MINECRAFT.iter().map(|s| s.to_string()).collect();
             let mut popular_versions: Vec<MinecraftVersion> = POPULAR_MINECRAFT
                 .iter()
                 .map(|id| MinecraftVersion {
@@ -91,7 +92,10 @@ pub fn fetch_minecraft_versions() -> Vec<MinecraftVersion> {
 
 /// Offline / failed-manifest fallback: return at least the popular pins so
 /// the Setup dropdown is usable; the error is logged to stderr.
-fn fallback_popular_only(popular_versions: Vec<MinecraftVersion>, e: String) -> Vec<MinecraftVersion> {
+fn fallback_popular_only(
+    popular_versions: Vec<MinecraftVersion>,
+    e: String,
+) -> Vec<MinecraftVersion> {
     eprintln!("[versions] manifest fetch failed, serving popular pins only: {e}");
     popular_versions
 }
@@ -313,10 +317,7 @@ pub struct LoaderVersion {
     pub stable: bool,
 }
 
-pub fn fetch_loader_versions(
-    loader: &str,
-    minecraft_version: &str,
-) -> Vec<LoaderVersion> {
+pub fn fetch_loader_versions(loader: &str, minecraft_version: &str) -> Vec<LoaderVersion> {
     // Loader metadata changes rarely; cache per loader+MC so switching back
     // and forth between Setup tabs (or changing MC version) doesn't re-hit
     // the meta endpoints on every open.
