@@ -78,20 +78,37 @@
   onMount(async () => {
     loading = true;
     error = "";
-    try {
-      // All fetches are independent and run in parallel.
-      const [versions] = await Promise.all([
-        invoke("get_minecraft_versions"),
-        detectJavaPreview(),
-        loadSchemaStatus(),
-        loadLoaderVersions(),
-      ]);
-      mcVersions = versions as { id: string; popular: boolean }[];
-    } catch (e) {
-      error = `${e}`;
-    } finally {
-      loading = false;
-    }
+    // Independent fetches start in parallel, but the form is usable as soon
+    // as the current project's settings are known — the dropdown options
+    // (MC versions / loader versions) stream in afterwards without blocking
+    // the page behind a dimmed overlay.
+    const localFill = (async () => {
+      try {
+        const info = await invoke("validate_project", { path: $projectPath });
+        applyProjectInfo(info as any);
+      } catch {
+        /* keep the seeded $projectInfo defaults */
+      }
+    })();
+    void detectJavaPreview();
+    void loadSchemaStatus();
+    void (async () => {
+      try {
+        const versions = (await invoke("get_minecraft_versions")) as {
+          id: string;
+          popular: boolean;
+        }[];
+        mcVersions = versions;
+        // MC list arrived: loader versions can now resolve against the
+        // selected Minecraft version.
+        await loadLoaderVersions();
+      } catch (e) {
+        error = `${e}`;
+      } finally {
+        loading = false;
+      }
+    })();
+    await localFill;
   });
 
   let loadingLoader = $state(false);
@@ -127,6 +144,25 @@
     }
   }
 
+  /** Seed the form fields from a validated project manifest. */
+  function applyProjectInfo(info: {
+    minecraftVersion?: string;
+    loaderKind?: string;
+    loaderVersion?: string;
+    memoryMb?: number;
+    jvmArgs?: string[];
+    javaPath?: string | null;
+    playerName?: string | null;
+  }) {
+    if (info.minecraftVersion) mcVersion = info.minecraftVersion;
+    if (info.loaderKind) loader = info.loaderKind;
+    if (info.loaderVersion) loaderVersion = info.loaderVersion;
+    if (info.memoryMb) memory = info.memoryMb;
+    if (info.jvmArgs?.length) jvmArgs = info.jvmArgs.join(" ");
+    if (info.javaPath) javaPath = info.javaPath;
+    if (info.playerName) playerName = info.playerName;
+  }
+
   async function save() {
     if (!$projectPath) return;
     saving = true;
@@ -143,6 +179,7 @@
         playerName: playerName.trim() || null,
       });
       const info = await invoke("validate_project", { path: $projectPath });
+      applyProjectInfo(info as any);
       projectInfo.set(info as any);
       recentProjects.updateInfo($projectPath, info as any);
       if (!stayAfterSave) onBack();
@@ -405,9 +442,13 @@
     margin-bottom: 24px;
   }
 
+  /* While dropdown options stream in, the form stays visible and clickable —
+     only a light veil hints that lists are still loading. No full lock-out:
+     blocking the whole panel behind pointer-events:none was why Setup felt
+     "stuck" until every network fetch resolved. */
   .settings-groups.dimmed {
-    opacity: 0.5;
-    pointer-events: none;
+    opacity: 0.85;
+    transition: opacity var(--motion-fast) var(--ease-out);
   }
 
   .section-group {

@@ -48,32 +48,52 @@ pub struct MinecraftVersion {
     pub popular: bool,
 }
 
-pub fn fetch_minecraft_versions() -> Result<Vec<MinecraftVersion>, VersionsError> {
-    let popular: HashSet<String> = POPULAR_MINECRAFT.iter().map(|s| s.to_string()).collect();
-    let mut popular_versions: Vec<MinecraftVersion> = POPULAR_MINECRAFT
-        .iter()
-        .map(|id| MinecraftVersion {
-            id: id.to_string(),
-            popular: true,
-        })
-        .collect();
+pub fn fetch_minecraft_versions() -> Vec<MinecraftVersion> {
+    // Process-global TTL cache: the Mojang manifest is large and rarely
+    // changes; re-fetching it on every Setup-tab open made the stage load
+    // for seconds. Stale entries are still served after TTL expiry so the
+    // tab opens instantly even when offline / rate-limited.
+    crate::api_cache::get_or_insert_with_ttl(
+        "versions:minecraft",
+        std::time::Duration::from_secs(60 * 60),
+        || -> Vec<MinecraftVersion> {
+            let popular: HashSet<String> = POPULAR_MINECRAFT.iter().map(|s| s.to_string()).collect();
+            let mut popular_versions: Vec<MinecraftVersion> = POPULAR_MINECRAFT
+                .iter()
+                .map(|id| MinecraftVersion {
+                    id: id.to_string(),
+                    popular: true,
+                })
+                .collect();
 
-    let manifest: Manifest =
-        crate::http::get_json_with_context(VERSION_MANIFEST_URL).map_err(VersionsError::Other)?;
-    let mut rest: Vec<MinecraftVersion> = manifest
-        .versions
-        .into_iter()
-        .filter(|v| v.kind == "release" && !popular.contains(&v.id))
-        .map(|v| MinecraftVersion {
-            id: v.id,
-            popular: false,
-        })
-        .collect();
+            let manifest: Manifest = match crate::http::get_json_with_context(VERSION_MANIFEST_URL)
+            {
+                Ok(m) => m,
+                Err(e) => return fallback_popular_only(popular_versions, e),
+            };
+            let mut rest: Vec<MinecraftVersion> = manifest
+                .versions
+                .into_iter()
+                .filter(|v| v.kind == "release" && !popular.contains(&v.id))
+                .map(|v| MinecraftVersion {
+                    id: v.id,
+                    popular: false,
+                })
+                .collect();
 
-    rest.sort_by(|a, b| compare_versions(&b.id, &a.id));
+            rest.sort_by(|a, b| compare_versions(&b.id, &a.id));
 
-    popular_versions.append(&mut rest);
-    Ok(popular_versions)
+            popular_versions.append(&mut rest);
+            popular_versions
+        },
+    )
+}
+
+/// Offline / failed-manifest fallback: return at least the popular pins so
+/// the Setup dropdown is usable; the error is logged to stderr.
+fn fallback_popular_only(popular_versions: Vec<MinecraftVersion>, e: String) -> Vec<MinecraftVersion> {
+    eprintln!("[versions] manifest fetch failed, serving popular pins only: {e}");
+    popular_versions
 }
 
 fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
@@ -296,14 +316,32 @@ pub struct LoaderVersion {
 pub fn fetch_loader_versions(
     loader: &str,
     minecraft_version: &str,
-) -> Result<Vec<LoaderVersion>, VersionsError> {
-    match loader {
-        "fabric" => fetch_fabric_versions(minecraft_version),
-        "quilt" => fetch_quilt_versions(minecraft_version),
-        "forge" => fetch_forge_versions(minecraft_version),
-        "neoforge" => fetch_neoforge_versions(minecraft_version),
-        _ => Ok(Vec::new()),
-    }
+) -> Vec<LoaderVersion> {
+    // Loader metadata changes rarely; cache per loader+MC so switching back
+    // and forth between Setup tabs (or changing MC version) doesn't re-hit
+    // the meta endpoints on every open.
+    let key = format!("versions:loader:{loader}:{minecraft_version}");
+    let loader = loader.to_string();
+    let mc = minecraft_version.to_string();
+    crate::api_cache::get_or_insert_with_ttl(
+        key.as_str(),
+        std::time::Duration::from_secs(10 * 60),
+        move || -> Vec<LoaderVersion> {
+            match loader.as_str() {
+                "fabric" => fetch_fabric_versions(&mc),
+                "quilt" => fetch_quilt_versions(&mc),
+                "forge" => fetch_forge_versions(&mc),
+                "neoforge" => fetch_neoforge_versions(&mc),
+                _ => Ok(Vec::new()),
+            }
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "[versions] loader fetch failed for {loader}/{mc}, serving empty list: {e}"
+                );
+                Vec::new()
+            })
+        },
+    )
 }
 
 fn fetch_fabric_versions(mc: &str) -> Result<Vec<LoaderVersion>, VersionsError> {
