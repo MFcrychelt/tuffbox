@@ -63,7 +63,7 @@
 <section class="shelf glass-panel" class:potato>
   <header class="shelf-head">
     <h2>
-      Packs
+      Modpacks
       {#if packCount > 0}
         <span class="shelf-count">{packCount}</span>
       {/if}
@@ -363,16 +363,17 @@
     line-height: 1.25;
     text-align: center;
     max-width: 100%;
-    /* Fixed two-line box: clamped pill label left a thin text sliver under
-       the name on hover (WebView2 artifact). */
-    height: calc(11px * 1.25 * 2 + 4px);
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
+    /* Clamp to two lines WITHOUT a fixed-height pill: the old fixed box left a
+       visible empty sliver under one-line names (hover pill rendered the
+       artifact). -webkit-line-clamp keeps the height content-driven. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
     padding: 2px 6px;
     border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
-    overflow: hidden;
   }
   .potato .pack-tile:hover .pack-icon-wrap {
     transform: none;
