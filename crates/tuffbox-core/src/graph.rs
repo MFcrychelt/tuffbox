@@ -232,10 +232,7 @@ impl DependencyGraph {
             // clustering. Pipe-separated so CF names with commas stay intact
             // if ever stored raw; Modrinth slugs never contain `|` or `,`.
             if !module.source.categories.is_empty() {
-                metadata.insert(
-                    "categories".to_string(),
-                    module.source.categories.join("|"),
-                );
+                metadata.insert("categories".to_string(), module.source.categories.join("|"));
             }
 
             let mod_id = NodeId::module(&module.id);
@@ -252,8 +249,10 @@ impl DependencyGraph {
             // Resource/shader packs live in their own folders — they don't load
             // through Fabric/Forge, so skip RequiresLoader. Minecraft version
             // still matters for pack format compatibility.
-            if matches!(module.content_type, crate::manifest::ContentType::Mod | crate::manifest::ContentType::Datapack)
-            {
+            if matches!(
+                module.content_type,
+                crate::manifest::ContentType::Mod | crate::manifest::ContentType::Datapack
+            ) {
                 graph.edges.push(GraphEdge {
                     from: mod_id.clone(),
                     to: loader_id.clone(),
@@ -339,7 +338,49 @@ impl DependencyGraph {
         // Missing dependencies are real graph nodes rather than a UI-only
         // invention. Only *required* unresolved deps become Missing nodes —
         // optional integrations must not appear as install prompts.
+        // Obsolete deps (requester bundles the feature in newer versions) are
+        // dropped entirely: e.g. Sodium 0.6+ no longer needs Indium, so an old
+        // fabric.mod.json `depends: indium` must not raise a diagnostic.
         let existing: HashSet<NodeId> = graph.nodes.iter().map(|node| node.id.clone()).collect();
+        let mut suppressed_obsolete: Vec<String> = Vec::new();
+        // Snapshot requester versions up front: the retain closure below needs
+        // them but cannot borrow `graph` immutably while mutating `graph.edges`.
+        // Scanned linearly — node_index isn't rebuilt until the end of from_manifest.
+        let requester_versions: HashMap<NodeId, Option<String>> = graph
+            .nodes
+            .iter()
+            .filter(|n| n.id.0.starts_with("mod:"))
+            .map(|n| (n.id.clone(), n.version.clone()))
+            .collect();
+        graph.edges.retain(|edge| {
+            if edge.kind != EdgeKind::Requires || !edge.to.0.starts_with("mod:") {
+                return true;
+            }
+            if existing.contains(&edge.to) {
+                return true;
+            }
+            let requester = edge.from.0.strip_prefix("mod:").unwrap_or(&edge.from.0);
+            let dep = edge.to.0.strip_prefix("mod:").unwrap_or(&edge.to.0);
+            let requester_version = requester_versions
+                .get(&edge.from)
+                .and_then(|v| v.as_deref());
+            if crate::knowledge::obsolete_deps::is_obsolete_dependency(
+                requester,
+                requester_version,
+                dep,
+            ) {
+                if let Some(reason) =
+                    crate::knowledge::obsolete_deps::obsolete_dependency_reason(requester, dep)
+                {
+                    suppressed_obsolete.push(format!("{requester} -> {dep}: {reason}"));
+                }
+                return false;
+            }
+            true
+        });
+        for note in &suppressed_obsolete {
+            eprintln!("[graph] suppressed obsolete dependency edge: {note}");
+        }
         let missing: HashSet<NodeId> = graph
             .edges
             .iter()
@@ -370,12 +411,7 @@ impl DependencyGraph {
                 .nodes
                 .iter()
                 .filter(|n| n.kind == NodeKind::Mod)
-                .map(|n| {
-                    n.id.0
-                        .strip_prefix("mod:")
-                        .unwrap_or(&n.id.0)
-                        .to_string()
-                })
+                .map(|n| n.id.0.strip_prefix("mod:").unwrap_or(&n.id.0).to_string())
                 .collect();
             let mut existing_pairs: HashSet<(String, String)> = graph
                 .edges
@@ -644,6 +680,71 @@ mod tests {
     }
 
     #[test]
+    fn obsolete_dependency_edge_is_suppressed() {
+        // Sodium 0.6+ bundles the Fabric Rendering API: an old fabric.mod.json
+        // `depends: indium` must not surface as "Indium is missing" in Health.
+        let raw = r#"{
+          "schemaVersion": "0.1.0",
+          "project": { "id": "test", "name": "Test", "version": "1.0.0" },
+          "minecraft": { "version": "1.21.1" },
+          "loader": { "type": "fabric", "version": "0.16.0" },
+          "profiles": [{ "id": "client", "name": "Client", "side": "client" }],
+          "mods": [
+            {
+              "id": "sodium",
+              "name": "Sodium",
+              "source": { "type": "modrinth", "projectId": "AANobbMI" },
+              "version": "0.6.13",
+              "side": "client",
+              "dependencies": [
+                { "type": "requires", "target": "indium" },
+                { "type": "requires", "target": "fabric-api" }
+              ]
+            }
+          ]
+        }"#;
+        let manifest: ProjectManifest = serde_json::from_str(raw).unwrap();
+        let graph = DependencyGraph::from_manifest(&manifest);
+        let indium_missing = graph.has_node(&NodeId::module("indium"));
+        assert!(
+            !indium_missing,
+            "obsolete sodium->indium dep must not become a Missing node"
+        );
+        // Non-obsolete deps of the same requester stay intact.
+        assert!(
+            graph.has_node(&NodeId::module("fabric-api")),
+            "fabric-api dep must still be flagged missing"
+        );
+    }
+
+    #[test]
+    fn old_requester_version_keeps_dependency_diagnostic() {
+        let raw = r#"{
+          "schemaVersion": "0.1.0",
+          "project": { "id": "test", "name": "Test", "version": "1.0.0" },
+          "minecraft": { "version": "1.20.1" },
+          "loader": { "type": "fabric", "version": "0.15.11" },
+          "profiles": [{ "id": "client", "name": "Client", "side": "client" }],
+          "mods": [
+            {
+              "id": "sodium",
+              "name": "Sodium",
+              "source": { "type": "modrinth", "projectId": "AANobbMI" },
+              "version": "0.5.8",
+              "side": "client",
+              "dependencies": [{ "type": "requires", "target": "indium" }]
+            }
+          ]
+        }"#;
+        let manifest: ProjectManifest = serde_json::from_str(raw).unwrap();
+        let graph = DependencyGraph::from_manifest(&manifest);
+        assert!(
+            graph.has_node(&NodeId::module("indium")),
+            "sodium 0.5.x really needs indium — keep the Missing node"
+        );
+    }
+
+    #[test]
     fn missing_nodes_only_for_required_deps_not_optional() {
         let raw = r#"{
           "schemaVersion": "0.1.0",
@@ -679,7 +780,9 @@ mod tests {
             "required missing dep should be a Missing node: {missing:?}"
         );
         assert!(
-            !missing.iter().any(|id| *id == "mod:sodium" || *id == "mod:iris"),
+            !missing
+                .iter()
+                .any(|id| *id == "mod:sodium" || *id == "mod:iris"),
             "optional deps must not become Missing nodes: {missing:?}"
         );
     }
@@ -838,9 +941,10 @@ mod tests {
 
         // Packs must not declare RequiresLoader.
         assert!(
-            !graph.edges.iter().any(|e| {
-                e.from.0 == "mod:complementary" && e.kind == EdgeKind::RequiresLoader
-            }),
+            !graph
+                .edges
+                .iter()
+                .any(|e| { e.from.0 == "mod:complementary" && e.kind == EdgeKind::RequiresLoader }),
             "shader packs should not require the mod loader"
         );
         assert!(
