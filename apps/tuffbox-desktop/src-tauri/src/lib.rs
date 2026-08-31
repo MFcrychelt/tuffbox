@@ -14615,10 +14615,12 @@ async fn repair_project(path: String) -> Result<tuffbox_core::ModSyncReport, Str
 
 #[tauri::command(rename_all = "camelCase")]
 async fn get_minecraft_versions() -> Result<Vec<tuffbox_core::versions::MinecraftVersion>, String> {
-    tokio::task::spawn_blocking(|| tuffbox_core::versions::fetch_minecraft_versions())
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    // Never fails: cached / popular-pins fallback inside fetch_minecraft_versions.
+    Ok(tokio::task::spawn_blocking(|| {
+        tuffbox_core::versions::fetch_minecraft_versions()
+    })
+    .await
+    .map_err(|e| e.to_string())?)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -14626,12 +14628,12 @@ async fn get_loader_versions(
     loader: String,
     minecraft_version: String,
 ) -> Result<Vec<tuffbox_core::versions::LoaderVersion>, String> {
-    tokio::task::spawn_blocking(move || {
+    // Never fails: cache + empty-list fallback inside fetch_loader_versions.
+    Ok(tokio::task::spawn_blocking(move || {
         tuffbox_core::versions::fetch_loader_versions(&loader, &minecraft_version)
     })
     .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?)
 }
 
 #[tauri::command(rename_all = "camelCase")]
