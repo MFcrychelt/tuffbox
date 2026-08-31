@@ -9,6 +9,9 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
+pub mod packwiz;
+pub use packwiz::{detect_packwiz_dir, detect_packwiz_zip, extract_packwiz_overrides, import_packwiz};
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -27,6 +30,10 @@ pub enum ImportError {
     MissingInstanceCfg,
     #[error("unknown loader: {0}")]
     UnknownLoader(String),
+    #[error("packwiz import error: {0}")]
+    Packwiz(String),
+    #[error("hash mismatch: {0}")]
+    PackwizHashMismatch(String),
 }
 
 #[derive(Debug, Deserialize)]

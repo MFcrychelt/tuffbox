@@ -149,6 +149,54 @@ impl ModrinthProvider {
         Ok((info, body))
     }
 
+    /// Full project detail for the in-launcher catalog page: everything
+    /// [`Self::get_project_with_body`] returns plus gallery images, loaders,
+    /// game-version lines, external links (discord / wiki / donate) and the
+    /// team member list. Two requests total (project + team members), both
+    /// team/gallery/links failures degrade gracefully instead of failing the
+    /// whole page.
+    pub fn get_project_detail(&self, id: &str) -> Result<ProjectDetail, ProviderError> {
+        let project: ModrinthProjectFull = self.get_json(&format!("/project/{id}"))?;
+        let body = project
+            .project
+            .body
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let info: ProjectInfo = project.project.clone().into();
+        let key = crate::api_cache::project_key("modrinth", id);
+        crate::api_cache::put(key, info);
+
+        // Team members: a project id is also a valid team id on Modrinth
+        // (`GET /project/{id}/members` proxies to the team endpoint).
+        let creators: Vec<ProjectCreator> = self
+            .get_json::<Vec<ModrinthTeamMember>>(&format!("/project/{}", project.project.id))
+            .map(|members| {
+                members
+                    .into_iter()
+                    .filter(|m| m.user.username.is_some())
+                    .map(Into::into)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(ProjectDetail {
+            project: project.project.into(),
+            body,
+            gallery: project.gallery.unwrap_or_default(),
+            loaders: project.loaders.unwrap_or_default(),
+            game_versions: project.game_versions.unwrap_or_default(),
+            discord_url: project.discord_url.filter(|s| !s.trim().is_empty()),
+            wiki_url: project.wiki_url.filter(|s| !s.trim().is_empty()),
+            donate_url: project
+                .donation_urls
+                .unwrap_or_default()
+                .into_iter()
+                .find_map(|d| d.url),
+            creators,
+        })
+    }
+
     /// Best-effort reverse deps via search facet `required_dependencies:{id}*`.
     /// Returns empty if the facet is unsupported / request fails (not blocking).
     pub fn search_dependents(&self, project_id: &str, limit: u32) -> Vec<ProjectInfo> {
@@ -363,7 +411,7 @@ fn build_facets(query: &ProviderSearchQuery) -> String {
     serde_json::to_string(&facets).unwrap_or_default()
 }
 
-fn urlencode(value: &str) -> String {
+pub fn urlencode(value: &str) -> String {
     value
         .replace('%', "%25")
         .replace(' ', "%20")
@@ -448,6 +496,7 @@ impl From<ModrinthSearchHit> for ProjectInfo {
             server_side: hit.server_side,
             issues_url: None,
             source_url: None,
+            date_created: None,
         }
     }
 }
@@ -471,6 +520,9 @@ struct ModrinthProject {
     /// Search hits use `date_modified`; GET /project uses `updated`.
     #[serde(default, alias = "updated")]
     date_modified: Option<String>,
+    /// Project creation timestamp (`published` on GET /project).
+    #[serde(default)]
+    published: Option<String>,
     #[serde(default)]
     categories: Vec<String>,
     /// Secondary Modrinth tags (merged into categories for graph clustering).
@@ -516,8 +568,106 @@ impl From<ModrinthProject> for ProjectInfo {
             server_side: project.server_side,
             issues_url: project.issues_url,
             source_url: project.source_url,
+            date_created: project.published,
         }
     }
+}
+
+/// Full Modrinth project payload (`GET /v2/project/{id}`) — everything the
+/// detail page needs in one request. Reuses the base project via `flatten`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ModrinthProjectFull {
+    #[serde(flatten)]
+    project: ModrinthProject,
+    #[serde(default)]
+    loaders: Option<Vec<String>>,
+    #[serde(default)]
+    game_versions: Option<Vec<String>>,
+    #[serde(default)]
+    gallery: Option<Vec<ProjectGalleryImage>>,
+    #[serde(default)]
+    discord_url: Option<String>,
+    #[serde(default)]
+    wiki_url: Option<String>,
+    #[serde(default)]
+    donation_urls: Option<Vec<ModrinthDonationUrl>>,
+}
+
+/// One entry of a project gallery (`gallery[]` on the project payload).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectGalleryImage {
+    pub url: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModrinthDonationUrl {
+    #[serde(default)]
+    url: Option<String>,
+}
+
+/// Team member of a Modrinth project (`GET /v2/project/{id}/members`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ModrinthTeamMember {
+    #[serde(default)]
+    user: ModrinthTeamUser,
+    #[serde(default)]
+    role: Option<String>,
+    /// Modrinth ordering: Owner first, then by `ordering`/join date.
+    #[serde(default)]
+    ordering: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ModrinthTeamUser {
+    username: Option<String>,
+    #[serde(default)]
+    avatar_url: Option<String>,
+}
+
+/// Creator shown on the catalog sidebar (username + role + avatar).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCreator {
+    pub username: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+}
+
+impl From<ModrinthTeamMember> for ProjectCreator {
+    fn from(m: ModrinthTeamMember) -> Self {
+        Self {
+            username: m.user.username.unwrap_or_default(),
+            role: m.role,
+            avatar_url: m.user.avatar_url,
+        }
+    }
+}
+
+/// Detail payload for the in-launcher catalog page (Modrinth side).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDetail {
+    pub project: ProjectInfo,
+    /// Long-form Markdown body, pre-trimmed.
+    pub body: Option<String>,
+    pub gallery: Vec<ProjectGalleryImage>,
+    pub loaders: Vec<String>,
+    pub game_versions: Vec<String>,
+    pub discord_url: Option<String>,
+    pub wiki_url: Option<String>,
+    pub donate_url: Option<String>,
+    pub creators: Vec<ProjectCreator>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
