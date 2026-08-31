@@ -7,14 +7,18 @@ use std::path::Path;
 ///
 /// Avoids truncated/corrupt targets if the process crashes mid-write.
 pub fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<(), String> {
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let mut tmp = tempfile::Builder::new()
         .prefix(".tuffbox-")
         .suffix(".tmp")
         .tempfile_in(parent)
         .map_err(|e| e.to_string())?;
-    tmp.write_all(contents.as_ref()).map_err(|e| e.to_string())?;
+    tmp.write_all(contents.as_ref())
+        .map_err(|e| e.to_string())?;
     tmp.flush().map_err(|e| e.to_string())?;
     tmp.persist(path)
         .map(|_| ())

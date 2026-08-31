@@ -205,7 +205,9 @@ pub fn build_quest_author_user_message(request: &str, ctx: &QuestAuthorContext) 
         }
     }
     p.push_str("<<<END_CONTEXT>>>\n");
-    p.push_str("\nRespond with ONLY compact quest JSON (content fields; launcher fills ids/schema).\n");
+    p.push_str(
+        "\nRespond with ONLY compact quest JSON (content fields; launcher fills ids/schema).\n",
+    );
     p
 }
 
@@ -242,9 +244,9 @@ pub fn try_heuristic_quest_plan(request: &str) -> Option<QuestPlan> {
         || lower.contains("chapter");
     let has_numbered_item = {
         let chars: Vec<char> = text.chars().collect();
-        chars.windows(2).any(|w| {
-            w[0].is_ascii_digit() && (w[1] == '.' || w[1] == ')' || w[1] == '）')
-        })
+        chars
+            .windows(2)
+            .any(|w| w[0].is_ascii_digit() && (w[1] == '.' || w[1] == ')' || w[1] == '）'))
     };
     let looks_like_list = has_quest_word && has_numbered_item;
     if !looks_like_list {
@@ -275,9 +277,7 @@ pub fn try_heuristic_quest_plan(request: &str) -> Option<QuestPlan> {
         if tasks.is_empty() {
             continue;
         }
-        let rewards = reward_part
-            .map(parse_reward_clause)
-            .unwrap_or_default();
+        let rewards = reward_part.map(parse_reward_clause).unwrap_or_default();
         let title = quest_title_from_tasks(&tasks, i);
         let mut deps = Vec::new();
         if let Some(p) = &prev_title {
@@ -391,7 +391,10 @@ fn extract_chapter_title(text: &str) -> Option<String> {
                 .or_else(|| find_ci(rest, "квест"))
                 .or_else(|| find_ci(rest, "quest"))
                 .unwrap_or(rest.len());
-            let title = rest[..end].trim().trim_matches(|c| c == '-' || c == '–').trim();
+            let title = rest[..end]
+                .trim()
+                .trim_matches(|c| c == '-' || c == '–')
+                .trim();
             if title.is_empty() {
                 continue;
             }
@@ -416,7 +419,8 @@ fn split_numbered_items(body: &str) -> Vec<String> {
                 j += 1;
             }
             if j < bytes.len() && (bytes[j] == b'.' || bytes[j] == b')') {
-                let at_boundary = i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b'-';
+                let at_boundary =
+                    i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b'-';
                 if at_boundary {
                     starts.push(i);
                 }
@@ -428,9 +432,7 @@ fn split_numbered_items(body: &str) -> Vec<String> {
     }
     if starts.is_empty() {
         // Single blob after dash: "квесты - добудь..."
-        let cleaned = body
-            .trim_start_matches(|c: char| !c.is_alphabetic())
-            .trim();
+        let cleaned = body.trim_start_matches(|c: char| !c.is_alphabetic()).trim();
         if cleaned.len() > 8 {
             return vec![cleaned.to_string()];
         }
@@ -452,8 +454,7 @@ fn split_numbered_items(body: &str) -> Vec<String> {
 }
 
 fn split_reward(chunk: &str) -> (&str, Option<&str>) {
-    let key_at = find_ci(chunk, "наград")
-        .or_else(|| find_ci(chunk, "reward"));
+    let key_at = find_ci(chunk, "наград").or_else(|| find_ci(chunk, "reward"));
     if let Some(idx) = key_at {
         let before = chunk[..idx]
             .trim()
@@ -480,11 +481,7 @@ fn split_reward(chunk: &str) -> (&str, Option<&str>) {
 }
 
 fn after_dash_len(s: &str, idx: usize) -> usize {
-    s[idx..]
-        .chars()
-        .next()
-        .map(|c| c.len_utf8())
-        .unwrap_or(1)
+    s[idx..].chars().next().map(|c| c.len_utf8()).unwrap_or(1)
 }
 
 fn looks_like_item_amount(s: &str) -> bool {
@@ -541,7 +538,15 @@ fn looks_like_gather(s: &str) -> bool {
     let l = s.to_ascii_lowercase();
     l.contains(char::is_numeric)
         || [
-            "добы", "накоп", "собери", "принеси", "craft", "mine", "get", "gather", "kill",
+            "добы",
+            "накоп",
+            "собери",
+            "принеси",
+            "craft",
+            "mine",
+            "get",
+            "gather",
+            "kill",
         ]
         .iter()
         .any(|k| l.contains(k))
@@ -559,7 +564,9 @@ fn parse_one_gather(clause: &str) -> Option<QuestPlanTask> {
     let mut item_words = Vec::new();
     let mut seen_count = false;
     for w in &re_parts {
-        let wl = w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+        let wl = w
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_lowercase();
         if wl.is_empty() {
             continue;
         }
@@ -993,8 +1000,8 @@ pub fn parse_quest_plan_value(v: &Value) -> Result<QuestPlan, String> {
         .get("chapters")
         .cloned()
         .ok_or_else(|| "QuestPlan missing chapters".to_string())?;
-    let chapters: Vec<QuestPlanChapter> = serde_json::from_value(chapters_val)
-        .map_err(|e| format!("QuestPlan chapters: {e}"))?;
+    let chapters: Vec<QuestPlanChapter> =
+        serde_json::from_value(chapters_val).map_err(|e| format!("QuestPlan chapters: {e}"))?;
     let groups = v
         .get("chapterGroups")
         .or_else(|| v.get("chapter_groups"))
@@ -1106,8 +1113,7 @@ fn expand_compact_quest_value(v: &mut Value) {
                             for (k, &ci) in questless.iter().enumerate() {
                                 if let Some(ch) = chapters.get_mut(ci) {
                                     let take = base + usize::from(k < extra);
-                                    ch["quests"] =
-                                        Value::Array(arr.drain(0..take).collect());
+                                    ch["quests"] = Value::Array(arr.drain(0..take).collect());
                                 }
                             }
                             // Any remainder lands on the last quest-less chapter.
@@ -1424,7 +1430,10 @@ pub fn validate_quest_plan(plan: &QuestPlan) -> QuestPlanValidation {
 /// Merge plan into a copy of `book`. Resolves title deps, generates missing ids.
 /// Soft: invalid plans return `Ok` with `validation.valid = false` and an untouched book
 /// (preview / chat). Prefer [`merge_quest_plan_strict`] for Apply.
-pub fn merge_quest_plan(book: &QuestBook, plan: &QuestPlan) -> Result<QuestPlanMergeResult, String> {
+pub fn merge_quest_plan(
+    book: &QuestBook,
+    plan: &QuestPlan,
+) -> Result<QuestPlanMergeResult, String> {
     let mut validation = validate_quest_plan(plan);
     if !validation.valid {
         return Ok(QuestPlanMergeResult {
@@ -1674,9 +1683,9 @@ pub fn merge_quest_plan(book: &QuestBook, plan: &QuestPlan) -> Result<QuestPlanM
             || e.message.contains("missing")
     }) {
         // Soft: still return merged book; UI can refuse Apply if desired
-        validation.warnings.push(
-            "Merged book has validation issues — review before saving".into(),
-        );
+        validation
+            .warnings
+            .push("Merged book has validation issues — review before saving".into());
     }
 
     Ok(QuestPlanMergeResult {
@@ -1725,11 +1734,10 @@ fn materialize_quest(pq: &QuestPlanQuest, id: &str, used_ids: &mut HashSet<Strin
         .tasks
         .iter()
         .map(|t| {
-            let tid = t
-                .id
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| alloc_hex_id(12, used_ids));
+            let tid =
+                t.id.clone()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| alloc_hex_id(12, used_ids));
             used_ids.insert(tid.clone());
             Task {
                 id: tid,
@@ -1749,11 +1757,10 @@ fn materialize_quest(pq: &QuestPlanQuest, id: &str, used_ids: &mut HashSet<Strin
         .rewards
         .iter()
         .map(|r| {
-            let rid = r
-                .id
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| alloc_hex_id(12, used_ids));
+            let rid =
+                r.id.clone()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| alloc_hex_id(12, used_ids));
             used_ids.insert(rid.clone());
             Reward {
                 id: rid,
@@ -2060,8 +2067,8 @@ pub fn detect_target_chapter_count(prompt: &str) -> Option<usize> {
     // "chapters: 3" / "глав: 3" / "chapters of 3"
     for marker in ["chapters", "chapter", "глав"] {
         if let Some(pos) = lower.find(marker) {
-            let after = lower[pos + marker.len()..]
-                .trim_start_matches(|c: char| !c.is_ascii_digit());
+            let after =
+                lower[pos + marker.len()..].trim_start_matches(|c: char| !c.is_ascii_digit());
             let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
             if let Ok(n) = num.parse::<usize>() {
                 if (1..=8).contains(&n) {
@@ -2087,7 +2094,9 @@ pub fn split_heuristic_into_chapters(plan: &mut QuestPlan, count: usize) {
     }
     let n = quests.len();
     let per = (n + count - 1) / count;
-    let labels = ["Early", "Mid", "Late", "End", "Bonus", "Extra", "Side", "Finale"];
+    let labels = [
+        "Early", "Mid", "Late", "End", "Bonus", "Extra", "Side", "Finale",
+    ];
     let mut pushed = 0;
     for (i, chunk) in quests.chunks(per).enumerate() {
         if i >= count {
@@ -2366,9 +2375,10 @@ pub fn stitch_extend_plan(pending: &QuestPlan, ai: QuestPlan) -> (QuestPlan, Vec
                         continue;
                     }
                     // Also skip if already in out (from earlier AI chapter merge)
-                    let exists = out.chapters.iter().any(|c| {
-                        c.quests.iter().any(|oq| quest_plan_key(oq) == qk)
-                    });
+                    let exists = out
+                        .chapters
+                        .iter()
+                        .any(|c| c.quests.iter().any(|oq| quest_plan_key(oq) == qk));
                     if exists {
                         continue;
                     }
@@ -2437,14 +2447,20 @@ pub fn fill_template_lore(plan: &mut QuestPlan) {
             let title = q.title.clone();
             q.description = vec![
                 format!("&7Complete: &f{title}"),
-                format!("&8Part of chapter progress — finish the objectives to unlock the next step."),
+                format!(
+                    "&8Part of chapter progress — finish the objectives to unlock the next step."
+                ),
                 if q.optional {
                     "&eOptional side objective.".into()
                 } else {
                     "&aRequired for the main line.".into()
                 },
             ];
-            if q.subtitle.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+            if q.subtitle
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+            {
                 q.subtitle = Some(format!("Progress · {title}"));
             }
         }
@@ -2475,8 +2491,7 @@ pub fn ground_items_in_plan(plan: &mut QuestPlan, catalog: &[String]) -> Vec<Str
                                 "Grounded task item '{}' → '{}' ({})",
                                 item, resolved, q.title
                             ));
-                            t.properties
-                                .insert("item".into(), Value::String(resolved));
+                            t.properties.insert("item".into(), Value::String(resolved));
                         }
                     } else if !item.contains(':') {
                         notes.push(format!(
@@ -2498,8 +2513,7 @@ pub fn ground_items_in_plan(plan: &mut QuestPlan, catalog: &[String]) -> Vec<Str
                                 "Grounded reward item '{}' → '{}' ({})",
                                 item, resolved, q.title
                             ));
-                            r.properties
-                                .insert("item".into(), Value::String(resolved));
+                            r.properties.insert("item".into(), Value::String(resolved));
                         }
                     }
                 }
@@ -2571,8 +2585,7 @@ pub fn stitch_lore_into_plan(plan: &mut QuestPlan, lore_json: &str) -> Result<us
             .map(|s| s.to_string());
         for ch in &mut plan.chapters {
             for q in &mut ch.quests {
-                let match_id = !id.is_empty()
-                    && q.id.as_ref().map(|x| x.as_str()) == Some(id);
+                let match_id = !id.is_empty() && q.id.as_ref().map(|x| x.as_str()) == Some(id);
                 let match_for = !title.is_empty()
                     && (norm_title(&q.title) == norm_title(title)
                         || q.id.as_ref().map(|x| x.as_str()) == Some(title));
@@ -2672,9 +2685,10 @@ pub fn build_branch_user_message(
     target_count: usize,
 ) -> Result<String, String> {
     let mut p = build_quest_author_user_message(request, ctx);
-    let anchor = ctx.anchor_quest.as_ref().ok_or_else(|| {
-        "build_branch_user_message requires ctx.anchor_quest".to_string()
-    })?;
+    let anchor = ctx
+        .anchor_quest
+        .as_ref()
+        .ok_or_else(|| "build_branch_user_message requires ctx.anchor_quest".to_string())?;
     p.push_str(&format!(
         "\nTarget: about {target_count} quests forming a BRANCH from the anchor quest.\n"
     ));
@@ -2730,7 +2744,10 @@ mod tests {
 
     #[test]
     fn detects_quest_count() {
-        assert_eq!(detect_target_quest_count("линейка на 24 квеста early game"), 24);
+        assert_eq!(
+            detect_target_quest_count("линейка на 24 квеста early game"),
+            24
+        );
         assert_eq!(detect_target_quest_count("make 20 quests about nether"), 20);
         assert!(detect_target_quest_count("something vague") >= 4);
     }
@@ -2967,8 +2984,14 @@ mod tests {
         };
         let (stitched, notes) = stitch_extend_plan(&pending, ai);
         assert_eq!(stitched.chapters[0].quests.len(), 3);
-        assert!(stitched.chapters[0].quests.iter().any(|q| q.id.as_deref() == Some("Q1")));
-        assert!(stitched.chapters[0].quests.iter().any(|q| q.id.as_deref() == Some("Q3")));
+        assert!(stitched.chapters[0]
+            .quests
+            .iter()
+            .any(|q| q.id.as_deref() == Some("Q1")));
+        assert!(stitched.chapters[0]
+            .quests
+            .iter()
+            .any(|q| q.id.as_deref() == Some("Q3")));
         assert!(stitched.needs_user_review);
         assert!(!notes.is_empty());
         let q1 = stitched.chapters[0]
@@ -3374,7 +3397,10 @@ mod tests {
             Some("minecraft:stick")
         );
         assert_eq!(
-            q.rewards[0].properties.get("count").and_then(|v| v.as_i64()),
+            q.rewards[0]
+                .properties
+                .get("count")
+                .and_then(|v| v.as_i64()),
             Some(10)
         );
         let merged = merge_quest_plan(&empty_book(), &plan).unwrap();
@@ -3547,9 +3573,18 @@ mod tests {
 
     #[test]
     fn detects_chapter_count() {
-        assert_eq!(detect_target_chapter_count("3 chapters: early / mid / late"), Some(3));
-        assert_eq!(detect_target_chapter_count("сделай 2 главы early game"), Some(2));
-        assert_eq!(detect_target_chapter_count("make 20 quests about nether"), None);
+        assert_eq!(
+            detect_target_chapter_count("3 chapters: early / mid / late"),
+            Some(3)
+        );
+        assert_eq!(
+            detect_target_chapter_count("сделай 2 главы early game"),
+            Some(2)
+        );
+        assert_eq!(
+            detect_target_chapter_count("make 20 quests about nether"),
+            None
+        );
     }
 
     #[test]
@@ -3675,14 +3710,8 @@ mod tests {
         let raw = "```JSON\n{\"schemaVersion\":1}\n```";
         assert_eq!(strip_fences(raw), "{\"schemaVersion\":1}");
         assert_eq!(strip_fences("```json\n{}\n```"), "{}");
-        assert_eq!(
-            strip_fences("```json\n{\"a\":1}\n```json"),
-            "{\"a\":1}"
-        );
-        assert_eq!(
-            strip_fences("```\n{\"b\":2}\n```JSON"),
-            "{\"b\":2}"
-        );
+        assert_eq!(strip_fences("```json\n{\"a\":1}\n```json"), "{\"a\":1}");
+        assert_eq!(strip_fences("```\n{\"b\":2}\n```JSON"), "{\"b\":2}");
     }
 
     #[test]

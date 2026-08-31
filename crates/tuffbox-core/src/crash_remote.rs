@@ -129,7 +129,9 @@ pub fn lookup_remote(
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
     }
-    let response = req.send().map_err(|e| format!("crash KB lookup failed: {e}"))?;
+    let response = req
+        .send()
+        .map_err(|e| format!("crash KB lookup failed: {e}"))?;
     let status = response.status();
     let body: Value = response.json().map_err(|e| e.to_string())?;
     if !status.is_success() {
@@ -197,10 +199,7 @@ pub async fn lookup_remote_async(
         .await
         .map_err(|e| format!("crash KB lookup failed: {e}"))?;
     let status = response.status();
-    let body: Value = response
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
+    let body: Value = response.json().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
         let msg = body
             .get("message")
@@ -231,10 +230,7 @@ pub async fn diagnose_remote_async(
         .await
         .map_err(|e| format!("crash KB diagnose failed: {e}"))?;
     let status = response.status();
-    let body: Value = response
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
+    let body: Value = response.json().await.map_err(|e| e.to_string())?;
     let body = unwrap_n8n_diagnose_body(body);
     if !status.is_success() {
         let msg = body

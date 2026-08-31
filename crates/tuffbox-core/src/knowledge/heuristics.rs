@@ -169,8 +169,7 @@ pub fn is_plausible_ore_config_path(path: &str) -> bool {
         return false;
     }
     // Client-only configs almost never control worldgen.
-    if lower.contains("-client.") || lower.contains("_client.") || lower.ends_with("/client.toml")
-    {
+    if lower.contains("-client.") || lower.contains("_client.") || lower.ends_with("/client.toml") {
         return false;
     }
     true
@@ -220,13 +219,11 @@ pub fn scan_configs_for_ore_gen(config_contents: &[(String, String)]) -> Vec<Heu
                 continue;
             }
 
-            let Some(resource_name) =
-                infer_resource_name(key, file_path).or_else(|| {
-                    toml_section
-                        .as_deref()
-                        .and_then(|s| infer_resource_name(s, file_path))
-                })
-            else {
+            let Some(resource_name) = infer_resource_name(key, file_path).or_else(|| {
+                toml_section
+                    .as_deref()
+                    .and_then(|s| infer_resource_name(s, file_path))
+            }) else {
                 continue;
             };
 
@@ -234,13 +231,10 @@ pub fn scan_configs_for_ore_gen(config_contents: &[(String, String)]) -> Vec<Heu
                 find_related_key(&lines, line_no, VEIN_SIZE_SUFFIXES, &resource_name, true);
             let frequency =
                 find_related_key(&lines, line_no, FREQUENCY_SUFFIXES, &resource_name, true);
-            let (min_height, max_height) =
-                find_height_range(&lines, line_no, &resource_name, true);
+            let (min_height, max_height) = find_height_range(&lines, line_no, &resource_name, true);
 
             let key_lower = key.to_lowercase();
-            let confidence = if STRONG_KEY_PATTERNS
-                .iter()
-                .any(|p| key_lower.contains(p))
+            let confidence = if STRONG_KEY_PATTERNS.iter().any(|p| key_lower.contains(p))
                 || RESOURCE_PATTERNS.iter().any(|r| key_lower.contains(r))
             {
                 HeuristicConfidence::Medium
@@ -299,12 +293,7 @@ fn is_ore_gen_key(key: &str) -> bool {
     let has_gen_token = tokens.iter().any(|t| {
         matches!(
             t.as_str(),
-            "generate"
-                | "generation"
-                | "worldgen"
-                | "spawn"
-                | "spawns"
-                | "gen"
+            "generate" | "generation" | "worldgen" | "spawn" | "spawns" | "gen"
         )
     });
     let has_toggle_token = tokens.iter().any(|t| {
@@ -336,10 +325,7 @@ fn is_ore_gen_key(key: &str) -> bool {
 
 fn looks_like_structure_value(value: &str) -> bool {
     let v = value.trim();
-    v.starts_with('[')
-        || v.starts_with('{')
-        || v == "null"
-        || v.is_empty()
+    v.starts_with('[') || v.starts_with('{') || v == "null" || v.is_empty()
 }
 
 /// Split `enableCopperOre` / `tin_should_generate` into lowercase tokens.
@@ -552,7 +538,10 @@ fn same_toml_section(lines: &[&str], a: usize, b: usize) -> bool {
 }
 
 fn section_at(lines: &[&str], idx: usize) -> Option<String> {
-    for line in lines[..=idx.min(lines.len().saturating_sub(1))].iter().rev() {
+    for line in lines[..=idx.min(lines.len().saturating_sub(1))]
+        .iter()
+        .rev()
+    {
         if let Some(s) = parse_toml_section(line.trim()) {
             return Some(s);
         }
@@ -724,8 +713,14 @@ copperMaxHeight = 112
             scan_configs_for_ore_gen(&[("config/mekanism/world.toml".into(), toml.into())]);
         assert!(!results.is_empty());
         assert_eq!(results[0].resource_name, "copper");
-        assert_eq!(results[0].min_height.as_ref().map(|(_, v)| v.as_str()), Some("-16"));
-        assert_eq!(results[0].max_height.as_ref().map(|(_, v)| v.as_str()), Some("112"));
+        assert_eq!(
+            results[0].min_height.as_ref().map(|(_, v)| v.as_str()),
+            Some("-16")
+        );
+        assert_eq!(
+            results[0].max_height.as_ref().map(|(_, v)| v.as_str()),
+            Some("112")
+        );
     }
 
     #[test]
@@ -741,7 +736,10 @@ topOffset = 64
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].resource_name, "tin");
         assert_eq!(
-            results[0].spawns_per_chunk.as_ref().map(|(_, v)| v.as_str()),
+            results[0]
+                .spawns_per_chunk
+                .as_ref()
+                .map(|(_, v)| v.as_str()),
             Some("4")
         );
         assert_eq!(
@@ -829,16 +827,27 @@ tinMaxHeight = 64
 ";
         let results =
             scan_configs_for_ore_gen(&[("config/example-common.toml".into(), toml.into())]);
-        let copper = results.iter().find(|r| r.resource_name == "copper").expect("copper");
-        assert!(copper.vein_size.is_none(), "copper must not steal tinVeinSize");
+        let copper = results
+            .iter()
+            .find(|r| r.resource_name == "copper")
+            .expect("copper");
+        assert!(
+            copper.vein_size.is_none(),
+            "copper must not steal tinVeinSize"
+        );
         assert!(copper.min_height.is_none());
-        let tin = results.iter().find(|r| r.resource_name == "tin").expect("tin");
+        let tin = results
+            .iter()
+            .find(|r| r.resource_name == "tin")
+            .expect("tin");
         assert_eq!(tin.vein_size.as_ref().map(|(_, v)| v.as_str()), Some("8"));
     }
 
     #[test]
     fn plausible_path_skips_unify() {
-        assert!(!is_plausible_ore_config_path("config/almostunified/unify.json"));
+        assert!(!is_plausible_ore_config_path(
+            "config/almostunified/unify.json"
+        ));
         assert!(is_plausible_ore_config_path("config/mekanism/world.toml"));
     }
 }

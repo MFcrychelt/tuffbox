@@ -189,14 +189,15 @@ pub fn install_game(
     // an exact `.find()` against the version manifest and fail with the
     // cryptic "Minecraft latest not found in manifest". Concrete versions
     // pass through untouched and make no network call.
-    let resolved = crate::versions::resolve_minecraft_version_alias_offline(mc_version_raw, launcher_dir)
-        .map_err(|e| {
-            InstallError::MissingDownload(format!(
-                "could not resolve Minecraft version '{}': {e}. \
+    let resolved =
+        crate::versions::resolve_minecraft_version_alias_offline(mc_version_raw, launcher_dir)
+            .map_err(|e| {
+                InstallError::MissingDownload(format!(
+                    "could not resolve Minecraft version '{}': {e}. \
                  Pin a concrete version (e.g. 1.20.1) or check your network connection.",
-                mc_version_raw
-            ))
-        })?;
+                    mc_version_raw
+                ))
+            })?;
     let mc_version: &str = &resolved;
     if mc_version != mc_version_raw {
         progress.log(&format!(

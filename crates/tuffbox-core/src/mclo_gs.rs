@@ -146,6 +146,9 @@ mod tests {
 
     #[test]
     fn truncate_empty_stays_empty() {
-        assert!(truncate_log_content("   \n  ").trim().is_empty() || truncate_log_content("").is_empty());
+        assert!(
+            truncate_log_content("   \n  ").trim().is_empty()
+                || truncate_log_content("").is_empty()
+        );
     }
 }

@@ -334,10 +334,7 @@ pub async fn fetch_kudos_balance_supabase(
         .or_else(|| row.get("totalKudos"))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let rac = row
-        .get("rac")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
+    let rac = row.get("rac").and_then(|v| v.as_f64()).unwrap_or(0.0);
     Ok(json!({
         "beneficiaryKey": beneficiary,
         "totalKudos": total,
@@ -415,10 +412,7 @@ fn urlencoding_minimal(s: &str) -> String {
 
 fn row_to_hit(row: &Value) -> Option<CrashLookupHit> {
     let id = row.get("id")?.as_str()?.to_string();
-    let status = row
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("open");
+    let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("open");
     if status == "rejected" || status == "quarantined" {
         return None;
     }
@@ -827,10 +821,7 @@ fn row_to_community_card(row: &Value) -> Option<CommunityCapsuleCard> {
             .get("success_count")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as u32,
-        fail_count: row
-            .get("fail_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32,
+        fail_count: row.get("fail_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         created_at: row
             .get("created_at")
             .and_then(|v| v.as_str())
@@ -927,8 +918,7 @@ pub async fn fetch_cooccurrence_supabase(
     let mc = mc_version.trim();
 
     // Prefer exact mc+loader; fall back to loader-only if sparse.
-    let mut pairs =
-        fetch_cooccurrence_rows(url, key, Some(mc), Some(&loader), limit).await?;
+    let mut pairs = fetch_cooccurrence_rows(url, key, Some(mc), Some(&loader), limit).await?;
     if pairs.len() < (limit as usize / 3).max(5) {
         let broader = fetch_cooccurrence_rows(url, key, None, Some(&loader), limit).await?;
         pairs = crate::swarm::merge_cooccurrence_pairs(&pairs, &broader, limit as usize);
@@ -1276,8 +1266,7 @@ pub async fn fetch_mpi_cooccurrence_supabase(
     let limit = limit.clamp(1, 100);
     let loader = loader.trim().to_ascii_lowercase();
     let mc = mc_version.trim();
-    let mut pairs =
-        fetch_mpi_cooccurrence_rows(url, key, Some(mc), Some(&loader), limit).await?;
+    let mut pairs = fetch_mpi_cooccurrence_rows(url, key, Some(mc), Some(&loader), limit).await?;
     if pairs.len() < (limit as usize / 3).max(5) {
         let broader = fetch_mpi_cooccurrence_rows(url, key, None, Some(&loader), limit).await?;
         pairs = crate::swarm::merge_cooccurrence_pairs(&pairs, &broader, limit as usize);
@@ -1694,10 +1683,7 @@ pub async fn optimize_mods_for_supabase(
             }
             Some(OptimizeModRow {
                 modrinth_slug: slug.to_ascii_lowercase(),
-                sort_order: row
-                    .get("sort_order")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0) as i32,
+                sort_order: row.get("sort_order").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
                 name: row
                     .get("name")
                     .and_then(|v| v.as_str())
@@ -1716,7 +1702,9 @@ pub async fn optimize_mods_for_supabase(
 }
 
 /// Convert DB rows into local OptimizeModCandidate shape (reason/risk defaults).
-pub fn optimize_rows_to_candidates(rows: &[OptimizeModRow]) -> Vec<crate::optimize_pack::OptimizeModCandidate> {
+pub fn optimize_rows_to_candidates(
+    rows: &[OptimizeModRow],
+) -> Vec<crate::optimize_pack::OptimizeModCandidate> {
     let mut out = Vec::with_capacity(rows.len());
     let mut seen = std::collections::HashSet::new();
     for row in rows {
@@ -1724,10 +1712,7 @@ pub fn optimize_rows_to_candidates(rows: &[OptimizeModRow]) -> Vec<crate::optimi
         if slug.is_empty() || !seen.insert(slug.clone()) {
             continue;
         }
-        let name = row
-            .name
-            .clone()
-            .unwrap_or_else(|| slug.clone());
+        let name = row.name.clone().unwrap_or_else(|| slug.clone());
         let source = row.source.as_deref().unwrap_or("fabulously-optimized");
         out.push(crate::optimize_pack::OptimizeModCandidate {
             slug: slug.clone(),

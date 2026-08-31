@@ -284,7 +284,11 @@ pub fn list_quest_scripts(project_dir: &Path) -> Vec<QuestKubeJsScriptFile> {
 pub fn index_all_handlers(project_dir: &Path) -> Vec<QuestKubeJsHandler> {
     let mut all = Vec::new();
     for script in list_quest_scripts(project_dir) {
-        let path = project_dir.join(script.relative_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let path = project_dir.join(
+            script
+                .relative_path
+                .replace('/', std::path::MAIN_SEPARATOR_STR),
+        );
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -308,7 +312,11 @@ pub fn book_custom_objects(book: &serde_json::Value) -> Vec<QuestKubeJsBookObjec
             continue;
         };
         for q in quests {
-            let quest_id = q.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let quest_id = q
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let quest_title = q
                 .get("title")
                 .and_then(|v| v.as_str())
@@ -320,7 +328,11 @@ pub fn book_custom_objects(book: &serde_json::Value) -> Vec<QuestKubeJsBookObjec
                     if ty != "custom" {
                         continue;
                     }
-                    let id = t.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let id = t
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     if id.is_empty() {
                         continue;
                     }
@@ -349,7 +361,11 @@ pub fn book_custom_objects(book: &serde_json::Value) -> Vec<QuestKubeJsBookObjec
                     if ty != "custom" {
                         continue;
                     }
-                    let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let id = r
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     if id.is_empty() {
                         continue;
                     }

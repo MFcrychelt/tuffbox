@@ -102,11 +102,7 @@ pub fn put<T: Clone + Send + 'static>(key: impl Into<String>, value: T) {
 }
 
 /// Inserts a value into the cache with a custom TTL.
-pub fn put_with_ttl<T: Clone + Send + 'static>(
-    key: impl Into<String>,
-    value: T,
-    ttl: Duration,
-) {
+pub fn put_with_ttl<T: Clone + Send + 'static>(key: impl Into<String>, value: T, ttl: Duration) {
     let mut cache = CACHE.lock().expect("api_cache lock poisoned");
 
     // Evict stale entries first, then if still over capacity evict oldest.
@@ -181,9 +177,7 @@ pub fn invalidate(key: &str) {
 /// Removes all entries whose keys start with `prefix`.
 pub fn invalidate_prefix(prefix: &str) {
     let mut cache = CACHE.lock().expect("api_cache lock poisoned");
-    cache
-        .entries
-        .retain(|k, _| !k.starts_with(prefix));
+    cache.entries.retain(|k, _| !k.starts_with(prefix));
 }
 
 /// Clears the entire cache.
@@ -345,10 +339,7 @@ mod tests {
             // `get` should return None (stale).
             assert!(get::<String>("stale_key").is_none());
             // `get_stale` should still return the value.
-            assert_eq!(
-                get_stale::<String>("stale_key"),
-                Some("value".to_string())
-            );
+            assert_eq!(get_stale::<String>("stale_key"), Some("value".to_string()));
         });
     }
 
@@ -365,9 +356,6 @@ mod tests {
 
     #[test]
     fn project_key_format() {
-        assert_eq!(
-            project_key("modrinth", "abc123"),
-            "modrinth:project:abc123"
-        );
+        assert_eq!(project_key("modrinth", "abc123"), "modrinth:project:abc123");
     }
 }

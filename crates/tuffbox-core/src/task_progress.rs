@@ -143,7 +143,9 @@ mod tests {
         set_progress(&id, 0.5, Some("halfway".into()));
         succeed(&id, None);
         let listed = list_tasks();
-        assert!(listed.iter().any(|t| t.id == id && t.status == TaskStatus::Succeeded));
+        assert!(listed
+            .iter()
+            .any(|t| t.id == id && t.status == TaskStatus::Succeeded));
         dismiss(&id);
     }
 }

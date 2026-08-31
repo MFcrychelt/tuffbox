@@ -103,7 +103,10 @@ pub fn materialize_mod_file_with_progress(
     // Fast path for Play: if the jar is already on disk, do not SHA-1 it and
     // do not resolve CurseForge CDN URLs. Both used to run on every launch.
     if target.is_file() {
-        if std::fs::metadata(&target).map(|m| m.len() > 0).unwrap_or(false) {
+        if std::fs::metadata(&target)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false)
+        {
             return Ok(MaterializeOutcome::AlreadyPresent);
         }
     }
@@ -325,18 +328,16 @@ pub fn ensure_project_mods_downloaded_with_progress_filtered(
     // user-configurable limit as the asset/library batch downloader.
     let limit = crate::download_engine::configured_concurrency();
     let in_flight = std::sync::atomic::AtomicUsize::new(0);
-    let gate = |active: &std::sync::atomic::AtomicUsize| {
-        loop {
-            let cur = active.load(Ordering::SeqCst);
-            if cur < limit
-                && active
-                    .compare_exchange(cur, cur + 1, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-            {
-                break;
-            }
-            std::thread::yield_now();
+    let gate = |active: &std::sync::atomic::AtomicUsize| loop {
+        let cur = active.load(Ordering::SeqCst);
+        if cur < limit
+            && active
+                .compare_exchange(cur, cur + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            break;
         }
+        std::thread::yield_now();
     };
 
     manifest
@@ -502,7 +503,7 @@ mod tests {
             status: vec!["ok".to_string()],
             content_type,
             authors: Vec::new(),
-        option: None,
+            option: None,
         }
     }
 

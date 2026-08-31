@@ -70,8 +70,11 @@ pub fn default_action(cat: ModCategory) -> &'static str {
     match cat {
         ModCategory::Library => "update",
         ModCategory::Content => "keep",
-        ModCategory::Duplicate | ModCategory::Optimization | ModCategory::RenderCompat
-        | ModCategory::Legacy | ModCategory::ApiCompanion => "disable",
+        ModCategory::Duplicate
+        | ModCategory::Optimization
+        | ModCategory::RenderCompat
+        | ModCategory::Legacy
+        | ModCategory::ApiCompanion => "disable",
         _ => "review",
     }
 }
@@ -203,7 +206,13 @@ const TECH_SLUGS: &[&str] = &[
     "framedblocks",
 ];
 
-const MAGIC_SLUGS: &[&str] = &["botania", "ars-nouveau", "malum", "occultism", "allthetweaks"];
+const MAGIC_SLUGS: &[&str] = &[
+    "botania",
+    "ars-nouveau",
+    "malum",
+    "occultism",
+    "allthetweaks",
+];
 
 const DECOR_SLUGS: &[&str] = &["quark", "decorative-blocks", "charm", "supplementaries"];
 
@@ -249,11 +258,16 @@ pub fn classify(slug: &str, name: &str) -> ModCategory {
         return ModCategory::Optimization;
     }
     if LibraryMatch::matches(&key)
-        || LIBRARY_SLUGS.iter().any(|s| key == *s || key.starts_with(s))
+        || LIBRARY_SLUGS
+            .iter()
+            .any(|s| key == *s || key.starts_with(s))
     {
         return ModCategory::Library;
     }
-    if API_COMPANION_SLUGS.iter().any(|s| key == *s || key.starts_with(s)) {
+    if API_COMPANION_SLUGS
+        .iter()
+        .any(|s| key == *s || key.starts_with(s))
+    {
         return ModCategory::ApiCompanion;
     }
     if WORLDGEN_SLUGS.iter().any(|s| key == *s) {
@@ -297,8 +311,7 @@ pub fn classify(slug: &str, name: &str) -> ModCategory {
     }
     // Name-based heuristics as a last pass.
     let name_l = name.to_ascii_lowercase();
-    if name_l.contains("optimiz") || name_l.contains("performance") || name_l.contains(" fps")
-    {
+    if name_l.contains("optimiz") || name_l.contains("performance") || name_l.contains(" fps") {
         return ModCategory::Optimization;
     }
     if name_l.contains("shader") || name_l.contains("optifine") || name_l.contains("iris") {
@@ -345,7 +358,9 @@ impl LibraryMatch {
 /// True when a mod slug is flagged legacy (abandoned / old-build / fork-base).
 pub fn is_legacy(slug: &str) -> bool {
     classify(slug, "") == ModCategory::Legacy
-        || LEGACY_MARKERS.iter().any(|m| slug.to_ascii_lowercase().contains(m))
+        || LEGACY_MARKERS
+            .iter()
+            .any(|m| slug.to_ascii_lowercase().contains(m))
 }
 
 /// Known conflict slugs for a mod (from the curated knowledge base).
@@ -404,10 +419,7 @@ mod tests {
 
     #[test]
     fn replaceability_prefers_disableable_over_content() {
-        assert!(
-            replaceability(ModCategory::Optimization)
-                > replaceability(ModCategory::Content)
-        );
+        assert!(replaceability(ModCategory::Optimization) > replaceability(ModCategory::Content));
         assert!(replaceability(ModCategory::Duplicate) >= 90);
         assert!(is_safe_to_disable(ModCategory::Optimization));
         assert!(is_safe_to_disable(ModCategory::ApiCompanion));

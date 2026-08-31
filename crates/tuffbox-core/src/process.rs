@@ -79,8 +79,7 @@ pub fn pid_is_alive(pid: u32) -> bool {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
-        matches!(status, Ok(s) if s.success())
-            || Path::new(&format!("/proc/{pid}")).exists()
+        matches!(status, Ok(s) if s.success()) || Path::new(&format!("/proc/{pid}")).exists()
     }
     #[cfg(not(any(windows, unix)))]
     {
@@ -501,10 +500,7 @@ pub fn format_minecraft_log_for_display(raw: &str) -> String {
 
     let mut out = String::with_capacity(stripped.len() / 2);
     let mut rest = stripped.as_str();
-    while let Some(start) = rest
-        .find("<log4j:event")
-        .or_else(|| rest.find("<Event "))
-    {
+    while let Some(start) = rest.find("<log4j:event").or_else(|| rest.find("<Event ")) {
         if start > 0 {
             let prefix = rest[..start].trim();
             if !prefix.is_empty() {

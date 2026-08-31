@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Mutex,
@@ -106,12 +105,18 @@ pub fn find_runtime_for(runtimes: &[JavaRuntime], required_major: u32) -> Option
 /// Directory where TuffBox stores a managed GraalVM install.
 pub fn managed_java_root() -> PathBuf {
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        return PathBuf::from(local).join("TuffBox").join("runtime").join("java");
+        return PathBuf::from(local)
+            .join("TuffBox")
+            .join("runtime")
+            .join("java");
     }
     if let Some(data) = dirs::data_local_dir() {
         return data.join("TuffBox").join("runtime").join("java");
     }
-    std::env::temp_dir().join("tuffbox").join("runtime").join("java")
+    std::env::temp_dir()
+        .join("tuffbox")
+        .join("runtime")
+        .join("java")
 }
 
 pub fn invalidate_runtime_cache() {
@@ -385,16 +390,14 @@ pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
     };
     if let Some((len, mtime_secs)) = java_bin_fingerprint(&java_bin) {
         if let Ok(mut guard) = JAVA_PATH_CACHE.lock() {
-            guard
-                .get_or_insert_with(HashMap::new)
-                .insert(
-                    java_bin,
-                    JavaPathCacheEntry {
-                        len,
-                        mtime_secs,
-                        runtime: runtime.clone(),
-                    },
-                );
+            guard.get_or_insert_with(HashMap::new).insert(
+                java_bin,
+                JavaPathCacheEntry {
+                    len,
+                    mtime_secs,
+                    runtime: runtime.clone(),
+                },
+            );
         }
     }
     Ok(runtime)
@@ -507,8 +510,7 @@ where
         if let Ok(rt) = find_java_under(&install_dir) {
             log(&format!(
                 "# Reusing managed GraalVM {} at {}",
-                release.tag_name,
-                rt.path
+                release.tag_name, rt.path
             ));
             return Ok(rt);
         }

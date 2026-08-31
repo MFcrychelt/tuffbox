@@ -10,7 +10,8 @@ use std::sync::OnceLock;
 
 pub const MPI_UA: &str = "TuffBox/0.1 (https://github.com/MFcrychelt/tuffbox)";
 /// Hub analytics crawl User-Agent (Modpack Index policy: descriptive UA).
-pub const MPI_ANALYTICS_UA: &str = "TuffSwarm-Analytics/1.0 (https://github.com/MFcrychelt/tuffbox)";
+pub const MPI_ANALYTICS_UA: &str =
+    "TuffSwarm-Analytics/1.0 (https://github.com/MFcrychelt/tuffbox)";
 pub const MPI_BASE: &str = "https://www.modpackindex.com/api/v1";
 
 /// CurseForge modpack class categories mirrored by Modpack Index (root 4471).
@@ -187,8 +188,7 @@ fn get_value_ua(path: &str, query: &[(String, String)], ua: &str) -> Result<Valu
         let body = resp.text().unwrap_or_default();
         return Err(format!("Modpack Index {status}: {body}"));
     }
-    resp.json()
-        .map_err(|e| format!("Modpack Index JSON: {e}"))
+    resp.json().map_err(|e| format!("Modpack Index JSON: {e}"))
 }
 
 fn page_total(body: &Value) -> u32 {
@@ -225,10 +225,7 @@ fn map_modpack_hit(item: &Value) -> Value {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let icon_url = item
-        .get("thumbnail_url")
-        .cloned()
-        .unwrap_or(Value::Null);
+    let icon_url = item.get("thumbnail_url").cloned().unwrap_or(Value::Null);
     let downloads = item.get("download_count").and_then(|v| v.as_u64());
     let page_url = item
         .get("page_url")
@@ -282,10 +279,7 @@ fn map_mod_hit(item: &Value) -> Value {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let icon_url = item
-        .get("thumbnail_url")
-        .cloned()
-        .unwrap_or(Value::Null);
+    let icon_url = item.get("thumbnail_url").cloned().unwrap_or(Value::Null);
     let downloads = item.get("download_count").and_then(|v| v.as_u64());
     let categories = item
         .get("categories")
@@ -293,7 +287,11 @@ fn map_mod_hit(item: &Value) -> Value {
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|c| c.get("slug").and_then(|s| s.as_str()).map(|s| s.to_string()))
+        .filter_map(|c| {
+            c.get("slug")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+        })
         .collect::<Vec<_>>();
     let page_url = item
         .get("page_url")
@@ -325,8 +323,8 @@ pub fn resolve_theme_category_id(theme: &str) -> Option<u32> {
         return Some(id);
     }
     let alias = match t.as_str() {
-        "industrial" | "industry" | "tech" | "technology" | "create" | "mekanism"
-        | "factory" | "automation" => "tech",
+        "industrial" | "industry" | "tech" | "technology" | "create" | "mekanism" | "factory"
+        | "automation" => "tech",
         "magic" | "magical" | "wizard" | "witchery" => "magic",
         "scifi" | "sci-fi" | "science-fiction" => "sci-fi",
         "rpg" | "adventure" | "adventure-and-rpg" => "adventure-and-rpg",
@@ -335,10 +333,7 @@ pub fn resolve_theme_category_id(theme: &str) -> Option<u32> {
         "kitchen-sink" | "kitchen" | "extra-large" | "kitchen_sink" => "extra-large",
         other => other,
     };
-    PACK_THEMES
-        .iter()
-        .find(|c| c.slug == alias)
-        .map(|c| c.id)
+    PACK_THEMES.iter().find(|c| c.slug == alias).map(|c| c.id)
 }
 
 /// Mod-category slug useful as a secondary filter for theme (API `/categories`).
@@ -636,28 +631,29 @@ fn value_to_hint(item: &Value, source: &str) -> Option<MpiModHint> {
 }
 
 /// Gather mod name/tag candidates for Create Mode (step 3 context).
-pub fn gather_search_hints(query: &MpiSearchQuery, per_source: usize) -> Result<Vec<MpiModHint>, String> {
+pub fn gather_search_hints(
+    query: &MpiSearchQuery,
+    per_source: usize,
+) -> Result<Vec<MpiModHint>, String> {
     let per_source = per_source.clamp(1, 15);
     let mut out = Vec::new();
     let mut seen = HashSet::new();
 
-    let push_page = |out: &mut Vec<MpiModHint>,
-                     seen: &mut HashSet<String>,
-                     hits: Vec<Value>,
-                     source: &str| {
-        for h in hits {
-            if let Some(hint) = value_to_hint(&h, source) {
-                let key = if hint.slug.is_empty() {
-                    hint.name.to_ascii_lowercase()
-                } else {
-                    hint.slug.to_ascii_lowercase()
-                };
-                if seen.insert(key) {
-                    out.push(hint);
+    let push_page =
+        |out: &mut Vec<MpiModHint>, seen: &mut HashSet<String>, hits: Vec<Value>, source: &str| {
+            for h in hits {
+                if let Some(hint) = value_to_hint(&h, source) {
+                    let key = if hint.slug.is_empty() {
+                        hint.name.to_ascii_lowercase()
+                    } else {
+                        hint.slug.to_ascii_lowercase()
+                    };
+                    if seen.insert(key) {
+                        out.push(hint);
+                    }
                 }
             }
-        }
-    };
+        };
 
     if let Some(theme) = query.theme.as_deref().filter(|s| !s.trim().is_empty()) {
         if let Some(pack_id) = resolve_theme_category_id(theme) {
@@ -754,7 +750,12 @@ pub fn prefer_modrinth_slug(item: &Value) -> Option<String> {
         .and_then(|l| l.get("modrinth"))
         .and_then(|v| v.as_str())
     {
-        if let Some(slug) = url.rsplit('/').next().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(slug) = url
+            .rsplit('/')
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             return Some(slug.to_ascii_lowercase());
         }
     }
@@ -785,7 +786,11 @@ pub fn modpack_mods(
 }
 
 /// Collect unique Modrinth-oriented slugs from a pack (up to `max_mods`).
-pub fn modpack_mod_slugs(pack_id: u64, max_mods: usize, analytics: bool) -> Result<Vec<String>, String> {
+pub fn modpack_mod_slugs(
+    pack_id: u64,
+    max_mods: usize,
+    analytics: bool,
+) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     let mut page = 1u32;

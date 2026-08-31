@@ -162,7 +162,9 @@ pub fn read_world_map_cached(
     let dim = normalize_dimension(dimension);
     let region_dir = dimension_region_dir(world_dir, dim);
     if !region_dir.is_dir() {
-        return Err(format!("no region folder for dimension '{dim}' (not generated yet)"));
+        return Err(format!(
+            "no region folder for dimension '{dim}' (not generated yet)"
+        ));
     }
 
     let cache_dir = if use_cache {
@@ -257,7 +259,10 @@ pub fn read_world_map_cached(
 /// Root directory for TuffBox world-map region caches.
 pub fn world_map_cache_root() -> PathBuf {
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        return PathBuf::from(local).join("TuffBox").join("cache").join("world-map");
+        return PathBuf::from(local)
+            .join("TuffBox")
+            .join("cache")
+            .join("world-map");
     }
     if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
         return PathBuf::from(xdg).join("tuffbox").join("world-map");
@@ -272,8 +277,7 @@ pub fn world_map_cache_root() -> PathBuf {
 }
 
 fn world_cache_id(world_dir: &Path) -> String {
-    let canon = std::fs::canonicalize(world_dir)
-        .unwrap_or_else(|_| world_dir.to_path_buf());
+    let canon = std::fs::canonicalize(world_dir).unwrap_or_else(|_| world_dir.to_path_buf());
     let mut hasher = Sha1::new();
     hasher.update(canon.to_string_lossy().as_bytes());
     hex::encode(hasher.finalize())[..16].to_string()
@@ -577,8 +581,14 @@ fn meta_from_nbt(nbt: &[u8]) -> ChunkMeta {
             ("InhabitedTime", 4) => {
                 if p + 8 <= nbt.len() {
                     inhabited_time = u64::from_be_bytes([
-                        nbt[p], nbt[p + 1], nbt[p + 2], nbt[p + 3],
-                        nbt[p + 4], nbt[p + 5], nbt[p + 6], nbt[p + 7],
+                        nbt[p],
+                        nbt[p + 1],
+                        nbt[p + 2],
+                        nbt[p + 3],
+                        nbt[p + 4],
+                        nbt[p + 5],
+                        nbt[p + 6],
+                        nbt[p + 7],
                     ]);
                     p += 8;
                 } else {
@@ -970,7 +980,13 @@ fn set_root_int(nbt: &mut [u8], key: &str, value: i32) -> bool {
     false
 }
 
-fn rewrite_chunk_coords(chunk_blob: &[u8], cx: i32, cz: i32, src_cx: i32, src_cz: i32) -> Option<Vec<u8>> {
+fn rewrite_chunk_coords(
+    chunk_blob: &[u8],
+    cx: i32,
+    cz: i32,
+    src_cx: i32,
+    src_cz: i32,
+) -> Option<Vec<u8>> {
     if chunk_blob.len() < 5 {
         return None;
     }
@@ -988,7 +1004,13 @@ fn rewrite_chunk_coords(chunk_blob: &[u8], cx: i32, cz: i32, src_cx: i32, src_cz
     let block_dx = (cx - src_cx) * 16;
     let block_dz = (cz - src_cz) * 16;
     if block_dx != 0 || block_dz != 0 {
-        offset_entity_positions(&mut nbt, block_dx as f64, block_dz as f64, block_dx, block_dz);
+        offset_entity_positions(
+            &mut nbt,
+            block_dx as f64,
+            block_dz as f64,
+            block_dx,
+            block_dz,
+        );
     }
     let compressed = compress(compression, &nbt)?;
     let new_len = (1 + compressed.len()) as u32;
@@ -1056,7 +1078,8 @@ fn offset_in_compound(
                 if name == "Pos" && list_type == 6 && len >= 3 && in_entity_list {
                     // Double list: x, y, z
                     if *pos + 24 <= nbt.len() {
-                        let x = f64::from_be_bytes(nbt[*pos..*pos + 8].try_into().unwrap_or([0; 8]));
+                        let x =
+                            f64::from_be_bytes(nbt[*pos..*pos + 8].try_into().unwrap_or([0; 8]));
                         let z = f64::from_be_bytes(
                             nbt[*pos + 16..*pos + 24].try_into().unwrap_or([0; 8]),
                         );
@@ -1241,11 +1264,9 @@ pub fn copy_world_chunks(
         max_rz = max_rz.max(c.region_z);
     }
 
-    let entities = extract_chunks_from_dir(
-        &dimension_data_dir(world_dir, dim, "entities"),
-        selections,
-    )
-    .unwrap_or_default();
+    let entities =
+        extract_chunks_from_dir(&dimension_data_dir(world_dir, dim, "entities"), selections)
+            .unwrap_or_default();
     let poi = extract_chunks_from_dir(&dimension_data_dir(world_dir, dim, "poi"), selections)
         .unwrap_or_default();
 
@@ -1672,10 +1693,7 @@ pub fn swap_world_chunks(
     if a == b {
         return Err("cannot swap a chunk with itself".into());
     }
-    let selections = vec![
-        (a.0, a.1, vec![a.2]),
-        (b.0, b.1, vec![b.2]),
-    ];
+    let selections = vec![(a.0, a.1, vec![a.2]), (b.0, b.1, vec![b.2])];
     let clipboard = copy_world_chunks(world_dir, "swap", &selections, Some(dim))?;
     if clipboard.chunks.len() < 2 {
         return Err("both chunks must be present to swap".into());
@@ -1699,10 +1717,10 @@ pub fn swap_world_chunks(
     let (bx, bz) = world_chunk_coords(b.0, b.1, b.2);
 
     // Rewrite A→B location and B→A.
-    let a_at_b = rewrite_chunk_coords(&chunk_a.data, bx, bz, ax, az)
-        .unwrap_or_else(|| chunk_a.data.clone());
-    let b_at_a = rewrite_chunk_coords(&chunk_b.data, ax, az, bx, bz)
-        .unwrap_or_else(|| chunk_b.data.clone());
+    let a_at_b =
+        rewrite_chunk_coords(&chunk_a.data, bx, bz, ax, az).unwrap_or_else(|| chunk_a.data.clone());
+    let b_at_a =
+        rewrite_chunk_coords(&chunk_b.data, ax, az, bx, bz).unwrap_or_else(|| chunk_b.data.clone());
 
     chunk_a.data = b_at_a;
     chunk_a.region_x = a.0;

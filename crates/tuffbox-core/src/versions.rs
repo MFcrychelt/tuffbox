@@ -58,8 +58,8 @@ pub fn fetch_minecraft_versions() -> Result<Vec<MinecraftVersion>, VersionsError
         })
         .collect();
 
-    let manifest: Manifest = crate::http::get_json_with_context(VERSION_MANIFEST_URL)
-        .map_err(VersionsError::Other)?;
+    let manifest: Manifest =
+        crate::http::get_json_with_context(VERSION_MANIFEST_URL).map_err(VersionsError::Other)?;
     let mut rest: Vec<MinecraftVersion> = manifest
         .versions
         .into_iter()
@@ -197,11 +197,11 @@ fn resolve_alias_offline(
             }
         }
     }
-    best
-        .map(|(id, _)| id)
-        .ok_or_else(|| VersionsError::Other(format!(
+    best.map(|(id, _)| id).ok_or_else(|| {
+        VersionsError::Other(format!(
             "no locally installed {kind} version found for alias '{alias}' (offline)"
-        )))
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -222,10 +222,7 @@ mod tests {
     fn unknown_aliases_are_not_special_cased() {
         // Anything that isn't a recognized alias passes through untouched
         // (e.g. a loader-ish string someone typo'd into the version field).
-        assert_eq!(
-            resolve_minecraft_version_alias("fabric").unwrap(),
-            "fabric"
-        );
+        assert_eq!(resolve_minecraft_version_alias("fabric").unwrap(), "fabric");
     }
 
     #[test]
@@ -234,17 +231,25 @@ mod tests {
         // We can't assert the resolved value (it changes over time / needs
         // network), but we can assert each known alias maps to *some*
         // concrete version and not back to the alias string.
-        for alias in ["latest", "release", "latest-release", "snapshot", "latest-snapshot"] {
+        for alias in [
+            "latest",
+            "release",
+            "latest-release",
+            "snapshot",
+            "latest-snapshot",
+        ] {
             let resolved = resolve_minecraft_version_alias(alias).unwrap();
-            assert_ne!(resolved, alias, "alias {alias} should resolve to a concrete version");
+            assert_ne!(
+                resolved, alias,
+                "alias {alias} should resolve to a concrete version"
+            );
         }
     }
 
     #[test]
     fn offline_alias_picks_newest_installed_of_kind() {
         // Deterministically exercises the local-scan fallback (no network).
-        let base =
-            std::env::temp_dir().join(format!("tuffbox_va_test_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("tuffbox_va_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let versions_dir = base.join("versions");
         for (id, kind) in [
@@ -272,8 +277,7 @@ mod tests {
             "25w14craftmine"
         );
         // a kind with no installed matches errors rather than cross-contaminating
-        let empty =
-            std::env::temp_dir().join(format!("tuffbox_va_empty_{}", std::process::id()));
+        let empty = std::env::temp_dir().join(format!("tuffbox_va_empty_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&empty);
         std::fs::create_dir_all(empty.join("versions")).unwrap();
         assert!(resolve_alias_offline("latest", &empty, "release").is_err());
@@ -304,8 +308,8 @@ pub fn fetch_loader_versions(
 
 fn fetch_fabric_versions(mc: &str) -> Result<Vec<LoaderVersion>, VersionsError> {
     let url = format!("https://meta.fabricmc.net/v2/versions/loader/{mc}");
-    let entries: Vec<FabricLoaderEntry> = crate::http::get_json_with_context(&url)
-        .map_err(VersionsError::Other)?;
+    let entries: Vec<FabricLoaderEntry> =
+        crate::http::get_json_with_context(&url).map_err(VersionsError::Other)?;
     Ok(entries
         .into_iter()
         .map(|e| LoaderVersion {
@@ -328,8 +332,8 @@ struct FabricLoader {
 
 fn fetch_quilt_versions(mc: &str) -> Result<Vec<LoaderVersion>, VersionsError> {
     let url = format!("https://meta.quiltmc.org/v3/versions/loader/{mc}");
-    let entries: Vec<QuiltLoaderEntry> = crate::http::get_json_with_context(&url)
-        .map_err(VersionsError::Other)?;
+    let entries: Vec<QuiltLoaderEntry> =
+        crate::http::get_json_with_context(&url).map_err(VersionsError::Other)?;
     Ok(entries
         .into_iter()
         .map(|e| LoaderVersion {
@@ -375,8 +379,8 @@ struct ModrinthLoaderEntry {
 
 fn fetch_forge_versions(mc: &str) -> Result<Vec<LoaderVersion>, VersionsError> {
     let url = "https://launcher-meta.modrinth.com/forge/v0/manifest.json";
-    let manifest: ModrinthLoaderManifest = crate::http::get_json_with_context(url)
-        .map_err(VersionsError::Other)?;
+    let manifest: ModrinthLoaderManifest =
+        crate::http::get_json_with_context(url).map_err(VersionsError::Other)?;
     Ok(manifest
         .game_versions
         .into_iter()

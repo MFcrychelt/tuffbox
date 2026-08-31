@@ -60,7 +60,9 @@ fn chat_file_path(project_dir: &Path, chat_id: &str) -> Result<PathBuf, String> 
     validate_chat_id(chat_id)?;
     let dir = tune_chats_dir(project_dir);
     let path = dir.join(format!("{chat_id}.json"));
-    let parent = path.parent().ok_or_else(|| "invalid chat path".to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "invalid chat path".to_string())?;
     if parent != dir.as_path() {
         return Err(format!("invalid chat id: {chat_id}"));
     }
@@ -80,7 +82,10 @@ pub fn list_tune_chats_detailed(project_dir: &Path) -> Result<TuneChatListResult
     }
     let mut sessions = Vec::new();
     let mut corrupt_skipped = 0u32;
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+    for entry in std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;

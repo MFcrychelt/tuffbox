@@ -219,7 +219,13 @@ pub fn validate_curseforge_export(manifest: &ProjectManifest) -> Vec<ExportIssue
                 "No CurseForge project/file IDs; jar will be embedded in overrides/mods if present locally.",
                 Some(module.id.clone()),
             ));
-        } else if module.source.url.as_deref().map(|u| !u.is_empty()).unwrap_or(false) {
+        } else if module
+            .source
+            .url
+            .as_deref()
+            .map(|u| !u.is_empty())
+            .unwrap_or(false)
+        {
             issues.push(issue(
                 ExportIssueSeverity::Warning,
                 "CF_REMOTE_SIDE_CHANNEL",
@@ -377,7 +383,13 @@ pub fn export_modrinth_pack(
         zip.write_all(&fs::read(src)?)?;
         override_count += 1;
     }
-    override_count += add_listing_pack_icon(&mut zip, manifest, project_dir, options, ListingIconMode::Modrinth)?;
+    override_count += add_listing_pack_icon(
+        &mut zip,
+        manifest,
+        project_dir,
+        options,
+        ListingIconMode::Modrinth,
+    )?;
     zip.finish()?;
 
     Ok(ExportResult {
@@ -569,9 +581,10 @@ pub fn export_curseforge_pack(
     let remotes: Vec<ServerPackRemoteMod> = remote_mod_manifest(manifest)
         .into_iter()
         .filter(|r| {
-            !manifest.mods.iter().any(|m| {
-                m.id == r.id && matches!(m.source.kind, SourceKind::Curseforge)
-            })
+            !manifest
+                .mods
+                .iter()
+                .any(|m| m.id == r.id && matches!(m.source.kind, SourceKind::Curseforge))
         })
         .collect();
     if !remotes.is_empty() {
@@ -627,8 +640,16 @@ fn curseforge_files_and_jars(
         let required = !matches!(module.side, Side::Optional);
         if matches!(module.source.kind, SourceKind::Curseforge) {
             if let (Some(pid), Some(fid)) = (
-                module.source.project_id.as_deref().and_then(|s| s.parse().ok()),
-                module.source.file_id.as_deref().and_then(|s| s.parse().ok()),
+                module
+                    .source
+                    .project_id
+                    .as_deref()
+                    .and_then(|s| s.parse().ok()),
+                module
+                    .source
+                    .file_id
+                    .as_deref()
+                    .and_then(|s| s.parse().ok()),
             ) {
                 let key = (pid, fid);
                 if seen.insert(key) {
@@ -681,17 +702,11 @@ fn curseforge_files_and_jars(
     (files, override_jars)
 }
 
-fn resolve_mod_jar_path(
-    project_dir: &Path,
-    module: &crate::manifest::ModSpec,
-) -> Option<PathBuf> {
+fn resolve_mod_jar_path(project_dir: &Path, module: &crate::manifest::ModSpec) -> Option<PathBuf> {
     resolve_content_path(project_dir, module)
 }
 
-fn resolve_content_path(
-    project_dir: &Path,
-    module: &crate::manifest::ModSpec,
-) -> Option<PathBuf> {
+fn resolve_content_path(project_dir: &Path, module: &crate::manifest::ModSpec) -> Option<PathBuf> {
     if let Some(rel) = module.source.path.as_ref() {
         let p = project_dir.join(rel);
         if p.is_file() {
@@ -715,7 +730,11 @@ fn resolve_content_path(
 fn modrinth_files_and_overrides(
     manifest: &ProjectManifest,
     project_dir: &Path,
-) -> (Vec<ModrinthFile>, Vec<(PathBuf, String)>, std::collections::HashSet<String>) {
+) -> (
+    Vec<ModrinthFile>,
+    Vec<(PathBuf, String)>,
+    std::collections::HashSet<String>,
+) {
     let mut files = Vec::new();
     let mut override_content = Vec::new();
     let mut skip_paths = std::collections::HashSet::new();
@@ -966,7 +985,14 @@ fn add_server_overrides<W: Write + Seek>(
     for root in ["config", "defaultconfigs", "kubejs", "scripts"] {
         let dir = project_dir.join(root);
         if dir.is_dir() {
-            count += add_dir(zip, project_dir, &dir, options, &ignore, &std::collections::HashSet::new())?;
+            count += add_dir(
+                zip,
+                project_dir,
+                &dir,
+                options,
+                &ignore,
+                &std::collections::HashSet::new(),
+            )?;
         }
     }
     Ok(count)
@@ -1275,7 +1301,7 @@ mod tests {
                     status: vec![],
                     content_type: ContentType::Mod,
                     authors: Vec::new(),
-                option: None,
+                    option: None,
                 },
                 ModSpec {
                     id: "clientmod".to_string(),
@@ -1297,7 +1323,7 @@ mod tests {
                     status: vec![],
                     content_type: ContentType::Mod,
                     authors: Vec::new(),
-                option: None,
+                    option: None,
                 },
                 ModSpec {
                     id: "cf-jei".to_string(),
@@ -1319,7 +1345,7 @@ mod tests {
                     status: vec![],
                     content_type: ContentType::Mod,
                     authors: Vec::new(),
-                option: None,
+                    option: None,
                 },
             ],
             overrides: None,
@@ -1370,7 +1396,11 @@ mod tests {
         fs::create_dir_all(dir.join("mods")).unwrap();
         fs::create_dir_all(dir.join("resourcepacks")).unwrap();
         fs::write(dir.join("mods").join("localmod.jar"), b"local-jar-bytes").unwrap();
-        fs::write(dir.join("resourcepacks").join("vanilla-tweaks.zip"), b"rp-bytes").unwrap();
+        fs::write(
+            dir.join("resourcepacks").join("vanilla-tweaks.zip"),
+            b"rp-bytes",
+        )
+        .unwrap();
 
         let manifest = ProjectManifest {
             schema_version: "1.0".to_string(),
@@ -1459,7 +1489,10 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
         let res = result.unwrap();
         assert_eq!(res.file_count, 2);
-        assert_eq!(res.override_count, 1, "only local jar embedded, not remote rp on disk");
+        assert_eq!(
+            res.override_count, 1,
+            "only local jar embedded, not remote rp on disk"
+        );
 
         let file = fs::File::open(&out).unwrap();
         let mut zip = ZipArchive::new(file).unwrap();
@@ -1477,15 +1510,16 @@ mod tests {
             .iter()
             .find(|f| f.get("path").and_then(|p| p.as_str()) == Some("mods/localmod.jar"))
             .expect("local mod in index");
-        assert!(
-            local_entry
-                .get("downloads")
-                .and_then(|d| d.as_array())
-                .unwrap()
-                .is_empty()
-        );
+        assert!(local_entry
+            .get("downloads")
+            .and_then(|d| d.as_array())
+            .unwrap()
+            .is_empty());
         assert_eq!(
-            local_entry.get("hashes").and_then(|h| h.get("sha1")).and_then(|s| s.as_str()),
+            local_entry
+                .get("hashes")
+                .and_then(|h| h.get("sha1"))
+                .and_then(|s| s.as_str()),
             Some("local-sha1")
         );
 
@@ -1511,7 +1545,8 @@ mod tests {
             .unwrap();
         assert_eq!(embedded, b"local-jar-bytes");
         assert!(
-            zip.by_name("overrides/resourcepacks/vanilla-tweaks.zip").is_err(),
+            zip.by_name("overrides/resourcepacks/vanilla-tweaks.zip")
+                .is_err(),
             "remote resourcepack on disk must not be double-packed"
         );
 
@@ -1679,8 +1714,14 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&manifest_raw).unwrap();
         let files = value.get("files").and_then(|v| v.as_array()).unwrap();
         assert_eq!(files.len(), 1, "expected one CF file entry, got {files:?}");
-        assert_eq!(files[0].get("projectID").and_then(|v| v.as_u64()), Some(238222));
-        assert_eq!(files[0].get("fileID").and_then(|v| v.as_u64()), Some(5101366));
+        assert_eq!(
+            files[0].get("projectID").and_then(|v| v.as_u64()),
+            Some(238222)
+        );
+        assert_eq!(
+            files[0].get("fileID").and_then(|v| v.as_u64()),
+            Some(5101366)
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

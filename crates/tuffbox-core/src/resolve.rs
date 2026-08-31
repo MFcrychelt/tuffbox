@@ -125,10 +125,7 @@ pub fn ranked_candidates(
             if victim_disabled {
                 continue;
             }
-            let reason = format!(
-                "Disable {} to resolve conflict with {}",
-                victim, keeper
-            );
+            let reason = format!("Disable {} to resolve conflict with {}", victim, keeper);
             if seen_reasons.iter().any(|r| r == &reason) {
                 continue;
             }
@@ -279,20 +276,20 @@ mod tests {
     fn spb_prefers_disable_optimization_side() {
         let graph = DependencyGraph::default();
         let manifest = minimal_manifest();
-        let suspects = vec![suspect("spb-revamped"), suspect("sodium"), suspect("indium")];
+        let suspects = vec![
+            suspect("spb-revamped"),
+            suspect("sodium"),
+            suspect("indium"),
+        ];
         let ranked = ranked_candidates(&make_conflicts(), &suspects, &ctx(graph, &manifest));
         let preferred: Vec<&RankedFix> = ranked.iter().filter(|c| c.preferred).collect();
         // Preferred first moves = the optimization/bridge sides, not the content.
-        assert!(
-            preferred.iter().any(|c| {
-                matches!(&c.action, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:sodium")
-            })
-        );
-        assert!(
-            preferred.iter().any(|c| {
-                matches!(&c.action, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:indium")
-            })
-        );
+        assert!(preferred.iter().any(|c| {
+            matches!(&c.action, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:sodium")
+        }));
+        assert!(preferred.iter().any(|c| {
+            matches!(&c.action, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:indium")
+        }));
         // The content side (spb) must NOT be a preferred default.
         assert!(
             !preferred.iter().any(|c| {
@@ -323,7 +320,9 @@ mod tests {
         let ranked = ranked_candidates(&conflicts, &suspects, &ctx(graph, &manifest));
         let best = ranked.first().unwrap();
         // sodium still preferred (higher replaceability) for non-legacy content.
-        assert!(matches!(&best.action, ChangeAction::DisableMod { node_id } if node_id.0 != "mod:spb-revamped"));
+        assert!(
+            matches!(&best.action, ChangeAction::DisableMod { node_id } if node_id.0 != "mod:spb-revamped")
+        );
     }
 
     #[test]

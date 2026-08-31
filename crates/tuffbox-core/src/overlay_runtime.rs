@@ -135,8 +135,7 @@ fn find_overlay_jar(mc: &str, loader: &LoaderKind) -> Option<(PathBuf, &'static 
 
 const WATERMEDIA_URL: &str =
     "https://cdn.modrinth.com/data/G922NeHS/versions/xp27BzFX/watermedia-2.1.1.jar";
-const WATERMEDIA_SHA256: &str =
-    "23c7e9ae03f28b234cfdb4b8a642a67f7dd1a7c336d87ced19e617dce9f8b58a";
+const WATERMEDIA_SHA256: &str = "23c7e9ae03f28b234cfdb4b8a642a67f7dd1a7c336d87ced19e617dce9f8b58a";
 const WATERMEDIA_DEST: &str = "watermedia-2.1.1.jar";
 
 fn watermedia_url() -> String {
@@ -167,11 +166,7 @@ fn watermedia_present(mods_dir: &Path) -> bool {
     false
 }
 
-fn ensure_watermedia(
-    mods_dir: &Path,
-    cleanup: &mut Vec<PathBuf>,
-    notes: &mut Vec<String>,
-) {
+fn ensure_watermedia(mods_dir: &Path, cleanup: &mut Vec<PathBuf>, notes: &mut Vec<String>) {
     if watermedia_present(mods_dir) {
         notes.push("WATERMeDIA already present in mods".to_string());
         return;
@@ -246,12 +241,13 @@ pub fn prepare_overlay_bridge(
                     notes.push(format!("legacy JVM overlay jar ({anchor})"));
                     ensure_watermedia(&mods_dir, &mut cleanup, &mut notes);
                 }
-                None => notes.push(
-                    "TUFFBOX_OVERLAY_JVM set but jar missing — build bridges/overlay".into(),
-                ),
+                None => notes
+                    .push("TUFFBOX_OVERLAY_JVM set but jar missing — build bridges/overlay".into()),
             }
         } else {
-            notes.push("TUFFBOX_OVERLAY_JVM set but MC/loader is not exact 1.21.1 Fabric/NeoForge".into());
+            notes.push(
+                "TUFFBOX_OVERLAY_JVM set but MC/loader is not exact 1.21.1 Fabric/NeoForge".into(),
+            );
         }
     }
 
@@ -281,10 +277,16 @@ mod tests {
             Some(("1.21.1", "fabric"))
         );
         // No silent fallback for newer MC
-        assert_eq!(resolve_overlay_artifact("1.21.4", &LoaderKind::Neoforge), None);
+        assert_eq!(
+            resolve_overlay_artifact("1.21.4", &LoaderKind::Neoforge),
+            None
+        );
         assert_eq!(resolve_overlay_artifact("1.21.4", &LoaderKind::Quilt), None);
         assert_eq!(resolve_overlay_artifact("1.21", &LoaderKind::Fabric), None);
         assert_eq!(resolve_overlay_artifact("1.21.1", &LoaderKind::Forge), None);
-        assert_eq!(resolve_overlay_artifact("1.20.1", &LoaderKind::Fabric), None);
+        assert_eq!(
+            resolve_overlay_artifact("1.20.1", &LoaderKind::Fabric),
+            None
+        );
     }
 }

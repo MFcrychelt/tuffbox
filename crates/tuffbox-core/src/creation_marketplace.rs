@@ -355,7 +355,9 @@ pub fn apply_creation_artifacts_to_dir(
         let rel = normalize_rel_path(&art.path)?;
         let dest = root.join(&rel);
         // Ensure dest stays under root even after join (Windows prefix quirks).
-        let parent = dest.parent().ok_or_else(|| "artifact has no parent".to_string())?;
+        let parent = dest
+            .parent()
+            .ok_or_else(|| "artifact has no parent".to_string())?;
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         let canon_parent = parent
             .canonicalize()
@@ -363,8 +365,7 @@ pub fn apply_creation_artifacts_to_dir(
         if !canon_parent.starts_with(&root) {
             return Err(format!("refusing write outside project: {rel}"));
         }
-        std::fs::write(&dest, art.content.as_bytes())
-            .map_err(|e| format!("write {rel}: {e}"))?;
+        std::fs::write(&dest, art.content.as_bytes()).map_err(|e| format!("write {rel}: {e}"))?;
         written.push(rel);
     }
     Ok(written)

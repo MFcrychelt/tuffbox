@@ -36,7 +36,11 @@ fn copy_tuffswarm_node_sidecar() {
         }
         match fs::copy(&src, &dest) {
             Ok(_) => {
-                println!("cargo:warning=copied {} → binaries/{}", src.display(), bin_name);
+                println!(
+                    "cargo:warning=copied {} → binaries/{}",
+                    src.display(),
+                    bin_name
+                );
                 println!("cargo:rerun-if-changed={}", src.display());
             }
             Err(e) => {
@@ -49,5 +53,8 @@ fn copy_tuffswarm_node_sidecar() {
         break;
     }
 
-    println!("cargo:rerun-if-changed={}", dest_dir.join(".gitkeep").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        dest_dir.join(".gitkeep").display()
+    );
 }

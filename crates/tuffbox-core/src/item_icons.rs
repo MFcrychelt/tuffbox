@@ -224,7 +224,8 @@ fn resolve_modern_model_node(
     if let Some(entries) = obj.get("entries").and_then(|v| v.as_array()) {
         for entry in entries {
             if let Some(model) = entry.get("model") {
-                if let Some(png) = resolve_modern_model_node(archives, namespace, model, depth + 1) {
+                if let Some(png) = resolve_modern_model_node(archives, namespace, model, depth + 1)
+                {
                     return Some(png);
                 }
             }
@@ -281,22 +282,30 @@ fn extract_texture_from_model_json(
 
     // Block-item parents often point straight at a block texture.
     if let Some(rest) = parent.strip_prefix("minecraft:block/") {
-        if let Some(png) =
-            read_png_any(archives, &format!("assets/minecraft/textures/block/{rest}.png"))
-        {
+        if let Some(png) = read_png_any(
+            archives,
+            &format!("assets/minecraft/textures/block/{rest}.png"),
+        ) {
             return Some(png);
         }
-        return resolve_model_ref(archives, "minecraft", &format!("minecraft:block/{rest}"), depth + 1);
+        return resolve_model_ref(
+            archives,
+            "minecraft",
+            &format!("minecraft:block/{rest}"),
+            depth + 1,
+        );
     }
     if let Some(rest) = parent.strip_prefix("block/") {
-        if let Some(png) =
-            read_png_any(archives, &format!("assets/{namespace}/textures/block/{rest}.png"))
-        {
+        if let Some(png) = read_png_any(
+            archives,
+            &format!("assets/{namespace}/textures/block/{rest}.png"),
+        ) {
             return Some(png);
         }
-        if let Some(png) =
-            read_png_any(archives, &format!("assets/minecraft/textures/block/{rest}.png"))
-        {
+        if let Some(png) = read_png_any(
+            archives,
+            &format!("assets/minecraft/textures/block/{rest}.png"),
+        ) {
             return Some(png);
         }
         return resolve_model_ref(archives, namespace, &format!("block/{rest}"), depth + 1);
@@ -319,7 +328,12 @@ fn extract_texture_from_model_json(
     if parent_path.starts_with("item/") || parent_path.starts_with("block/") {
         resolve_model_file(archives, parent_ns, parent_path, depth + 1)
     } else {
-        resolve_model_file(archives, parent_ns, &format!("item/{parent_path}"), depth + 1)
+        resolve_model_file(
+            archives,
+            parent_ns,
+            &format!("item/{parent_path}"),
+            depth + 1,
+        )
     }
 }
 

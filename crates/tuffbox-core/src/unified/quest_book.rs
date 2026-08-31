@@ -15,16 +15,28 @@ pub struct QuestBook {
     #[serde(default, rename = "rewardTables")]
     pub reward_tables: Vec<RewardTable>,
     /// Remaining keys from `data.snbt` (defaults, loot, etc.) for round-trip.
-    #[serde(default, rename = "bookSettings", skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        rename = "bookSettings",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub book_settings: HashMap<String, serde_json::Value>,
     /// `lang/<code>.snbt` translation maps (string or string[] values).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub locales: HashMap<String, HashMap<String, serde_json::Value>>,
     /// Active locale code after overlay (set by clients; optional on load).
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "activeLocale")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "activeLocale"
+    )]
     pub active_locale: Option<String>,
     /// Non-fatal load problems (corrupt chapter SNBT, bad lang file, etc.).
-    #[serde(default, rename = "loadWarnings", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "loadWarnings",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub load_warnings: Vec<String>,
 }
 
@@ -51,11 +63,19 @@ pub struct Chapter {
     pub quests: Vec<Quest>,
     pub group: Option<String>,
     /// FTB chapter sort key (`order_index` in SNBT).
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "orderIndex")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "orderIndex"
+    )]
     pub order_index: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "defaultQuestShape")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "defaultQuestShape"
+    )]
     pub default_quest_shape: Option<String>,
     #[serde(
         default,
@@ -100,9 +120,17 @@ pub struct Quest {
     pub optional: bool,
     pub shape: Option<String>,
     pub size: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "hideDependencyLines")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "hideDependencyLines"
+    )]
     pub hide_dependency_lines: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "hideDependentLines")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "hideDependentLines"
+    )]
     pub hide_dependent_lines: Option<bool>,
     #[serde(
         default,
@@ -114,7 +142,11 @@ pub struct Quest {
     pub can_repeat: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invisible: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "disableToast")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "disableToast"
+    )]
     pub disable_toast: Option<bool>,
     #[serde(
         default,
@@ -239,7 +271,10 @@ impl QuestBook {
     }
 
     /// Write `data.snbt` (book title + settings).
-    pub fn save_book_data(project_dir: &std::path::Path, book: &QuestBook) -> Result<String, String> {
+    pub fn save_book_data(
+        project_dir: &std::path::Path,
+        book: &QuestBook,
+    ) -> Result<String, String> {
         let quests_dir = Self::quests_dir_for_project(project_dir);
         std::fs::create_dir_all(&quests_dir).map_err(|e| e.to_string())?;
         let rel = {
@@ -350,7 +385,9 @@ impl QuestBook {
         }
         atomic_write(&target, snbt)?;
         // Prefer config/… relative path when under standard layout
-        let candidate = project_dir.join("config/ftbquests/quests/lang").join(&file_name);
+        let candidate = project_dir
+            .join("config/ftbquests/quests/lang")
+            .join(&file_name);
         let rel = if target == candidate || target.starts_with(project_dir.join("config")) {
             format!("config/ftbquests/quests/lang/{file_name}")
         } else {
@@ -492,7 +529,9 @@ impl QuestBook {
                 }
                 if let Some(items) = available_items {
                     for item in extract_quest_item_ids(q) {
-                        if item.is_empty() || item.starts_with('#') || item.starts_with("itemfilters:")
+                        if item.is_empty()
+                            || item.starts_with('#')
+                            || item.starts_with("itemfilters:")
                         {
                             continue;
                         }
@@ -510,7 +549,10 @@ impl QuestBook {
         for cycle in self.find_cycles() {
             let msg = format!("Dependency cycle: {}", cycle.join(" → "));
             let quest_id = cycle.first().cloned().unwrap_or_default();
-            errors.push(QuestValidationError { quest_id, message: msg });
+            errors.push(QuestValidationError {
+                quest_id,
+                message: msg,
+            });
         }
 
         for qid in self.unreachable_quest_ids_with(&task_owners) {
@@ -532,10 +574,7 @@ impl QuestBook {
     }
 
     /// Same as [`Self::unreachable_quest_ids`] but reuses a precomputed task-owner map.
-    pub fn unreachable_quest_ids_with(
-        &self,
-        task_owners: &HashMap<String, String>,
-    ) -> Vec<String> {
+    pub fn unreachable_quest_ids_with(&self, task_owners: &HashMap<String, String>) -> Vec<String> {
         let graph = self.resolved_dep_graph();
         if graph.is_empty() {
             return Vec::new();
@@ -1037,9 +1076,8 @@ fn load_chapter_groups(dir: &std::path::Path) -> (Vec<ChapterGroup>, Vec<String>
     };
     let mut warnings = Vec::new();
     if loose {
-        warnings.push(
-            "chapter_groups.snbt: used whitespace-only separators (FTB may reject)".into(),
-        );
+        warnings
+            .push("chapter_groups.snbt: used whitespace-only separators (FTB may reject)".into());
     }
     let groups = j
         .get("chapter_groups")
@@ -1062,7 +1100,12 @@ fn load_chapter_groups(dir: &std::path::Path) -> (Vec<ChapterGroup>, Vec<String>
 }
 
 /// Load `lang/<code>.snbt` into locale maps.
-fn load_locales(dir: &std::path::Path) -> (HashMap<String, HashMap<String, serde_json::Value>>, Vec<String>) {
+fn load_locales(
+    dir: &std::path::Path,
+) -> (
+    HashMap<String, HashMap<String, serde_json::Value>>,
+    Vec<String>,
+) {
     let lang_dir = dir.join("lang");
     let Ok(entries) = std::fs::read_dir(&lang_dir) else {
         return (HashMap::new(), Vec::new());
@@ -1170,7 +1213,10 @@ fn parse_snbt_chapter(c: &str) -> Result<(Chapter, Vec<String>), String> {
     };
     Ok((chapter, warnings))
 }
-fn parse_snbt_quest(v: &serde_json::Value, used_ids: &mut HashSet<String>) -> Result<Quest, String> {
+fn parse_snbt_quest(
+    v: &serde_json::Value,
+    used_ids: &mut HashSet<String>,
+) -> Result<Quest, String> {
     let m = v.as_object().ok_or("not object")?;
     let dependencies = m
         .get("dependencies")
@@ -1288,7 +1334,10 @@ fn parse_snbt_task(v: &serde_json::Value, used_ids: &mut HashSet<String>) -> Res
             .collect(),
     })
 }
-fn parse_snbt_reward(v: &serde_json::Value, used_ids: &mut HashSet<String>) -> Result<Reward, String> {
+fn parse_snbt_reward(
+    v: &serde_json::Value,
+    used_ids: &mut HashSet<String>,
+) -> Result<Reward, String> {
     let m = v.as_object().ok_or("not object")?;
     Ok(Reward {
         id: resolve_hex_id(gs(m, "id"), 12, used_ids),
@@ -1306,7 +1355,9 @@ fn gs(m: &serde_json::Map<String, serde_json::Value>, k: &str) -> Option<String>
 }
 
 /// FTB icons may be a string id or an item-stack object `{ id: "mod:item", ... }`.
-fn icon_value_from_map(m: &serde_json::Map<String, serde_json::Value>) -> Option<serde_json::Value> {
+fn icon_value_from_map(
+    m: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Value> {
     match m.get("icon") {
         None => None,
         Some(serde_json::Value::Null) => None,
@@ -1680,7 +1731,11 @@ pub struct RewardTable {
     pub rewards: Vec<serde_json::Value>,
     #[serde(default, rename = "emptyWeight")]
     pub empty_weight: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sourceFile")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sourceFile"
+    )]
     pub source_file: Option<String>,
     /// Unknown top-level keys preserved on save.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -1932,7 +1987,11 @@ mod tests {
             Some("minecraft:apple")
         );
         assert_eq!(
-            ch.quests[0].icon.as_ref().and_then(icon_display_id).as_deref(),
+            ch.quests[0]
+                .icon
+                .as_ref()
+                .and_then(icon_display_id)
+                .as_deref(),
             Some("minecraft:diamond")
         );
         // Compound Count preserved
@@ -2101,7 +2160,10 @@ mod tests {
         let stage = q("STAGE", &["TASK_CHECK"]);
         let book = book_from_quests(vec![unlock, stage]);
         assert_eq!(book.resolve_dep("TASK_CHECK").as_deref(), Some("UNLOCK"));
-        assert!(book.validate().iter().all(|e| !e.message.contains("missing")));
+        assert!(book
+            .validate()
+            .iter()
+            .all(|e| !e.message.contains("missing")));
         assert!(book.find_cycles().is_empty());
         let order = book.topo_order().unwrap();
         let pos = |id: &str| order.iter().position(|x| x == id).unwrap();
@@ -2365,14 +2427,20 @@ mod tests {
         assert_eq!(ch.quests[0].hide_dependency_lines, Some(true));
         assert_eq!(ch.quests[0].can_repeat, Some(true));
         assert_eq!(
-            ch.quests[0].extras.get("custom_flag").and_then(|v| v.as_str()),
+            ch.quests[0]
+                .extras
+                .get("custom_flag")
+                .and_then(|v| v.as_str()),
             Some("kept")
         );
         let out = serialize_chapter_to_snbt(&ch);
         let (ch2, _) = parse_snbt_chapter(&out).unwrap();
         assert_eq!(ch2.quests[0].hide_dependency_lines, Some(true));
         assert_eq!(
-            ch2.quests[0].extras.get("custom_flag").and_then(|v| v.as_str()),
+            ch2.quests[0]
+                .extras
+                .get("custom_flag")
+                .and_then(|v| v.as_str()),
             Some("kept")
         );
     }
@@ -2382,7 +2450,10 @@ mod tests {
         let v = parse_snbt("{ id: [I; 1 -2 3] }").unwrap();
         let obj = v.as_object().unwrap();
         let tagged = obj.get("id").unwrap().as_object().unwrap();
-        assert_eq!(tagged.get("__snbtArray").and_then(|x| x.as_str()), Some("I"));
+        assert_eq!(
+            tagged.get("__snbtArray").and_then(|x| x.as_str()),
+            Some("I")
+        );
         let vals = tagged.get("values").unwrap().as_array().unwrap();
         assert_eq!(vals.len(), 3);
         assert_eq!(vals[0].as_i64(), Some(1));

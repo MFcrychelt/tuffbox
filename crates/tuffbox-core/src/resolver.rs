@@ -11,10 +11,7 @@ use std::collections::{HashMap, HashSet};
 /// Pick which mod node of a conflict pair is safest to disable: prefer a
 /// higher replaceability category (optimization / bridge / legacy / duplicate)
 /// and fewer dependents, falling back to the last node (legacy behaviour).
-fn pick_conflict_removable(
-    graph: &DependencyGraph,
-    related_nodes: &[NodeId],
-) -> Option<NodeId> {
+fn pick_conflict_removable(graph: &DependencyGraph, related_nodes: &[NodeId]) -> Option<NodeId> {
     let score = |nid: &NodeId| -> f32 {
         let slug = nid.0.strip_prefix("mod:").unwrap_or(&nid.0);
         let cat = mod_category::classify(slug, "");
@@ -84,7 +81,7 @@ impl Resolver {
                 risk: ChangeRisk::Low,
                 actions,
                 requires_snapshot: true,
-        options: Vec::new(),
+                options: Vec::new(),
             });
         }
 
@@ -124,7 +121,7 @@ impl Resolver {
                 risk: ChangeRisk::Medium,
                 actions: vec![],
                 requires_snapshot: true,
-        options: Vec::new(),
+                options: Vec::new(),
             });
         }
 
@@ -323,10 +320,11 @@ mod tests {
 
         let graph = DependencyGraph::default();
         let plan = Resolver::create_fix_plan(&graph, &diagnostics).expect("plan");
-        assert_eq!(plan.actions.len(), 2, "duplicate meteor-client must collapse");
         assert_eq!(
-            plan.summary,
-            "Install 2 missing dependencies"
+            plan.actions.len(),
+            2,
+            "duplicate meteor-client must collapse"
         );
+        assert_eq!(plan.summary, "Install 2 missing dependencies");
     }
 }

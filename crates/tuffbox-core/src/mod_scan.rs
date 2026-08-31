@@ -164,18 +164,24 @@ struct ForgeDependency {
     _kind: Option<String>,
 }
 
-fn read_entry(archive: &mut ZipArchive<std::fs::File>, name: &str, path: &str) -> Result<String, ModScanError> {
+fn read_entry(
+    archive: &mut ZipArchive<std::fs::File>,
+    name: &str,
+    path: &str,
+) -> Result<String, ModScanError> {
     let mut entry = archive.by_name(name).map_err(|e| ModScanError::Entry {
         entry: name.to_string(),
         path: path.to_string(),
         source: std::io::Error::other(e.to_string()),
     })?;
     let mut content = String::new();
-    entry.read_to_string(&mut content).map_err(|e| ModScanError::Entry {
-        entry: name.to_string(),
-        path: path.to_string(),
-        source: std::io::Error::other(e.to_string()),
-    })?;
+    entry
+        .read_to_string(&mut content)
+        .map_err(|e| ModScanError::Entry {
+            entry: name.to_string(),
+            path: path.to_string(),
+            source: std::io::Error::other(e.to_string()),
+        })?;
     Ok(content)
 }
 
@@ -242,11 +248,10 @@ fn parse_forge_mods_toml(
     content: &str,
     loader: &str,
 ) -> Result<Option<ModScanResult>, ModScanError> {
-    let toml: ForgeModsToml =
-        toml::from_str(content).map_err(|source| ModScanError::Parse {
-            entry: format!("META-INF/{loader}.mods.toml"),
-            source: serde::de::Error::custom(source.to_string()),
-        })?;
+    let toml: ForgeModsToml = toml::from_str(content).map_err(|source| ModScanError::Parse {
+        entry: format!("META-INF/{loader}.mods.toml"),
+        source: serde::de::Error::custom(source.to_string()),
+    })?;
 
     let side = Side::Both;
     let first = toml.mods.first();
@@ -266,9 +271,15 @@ fn parse_forge_mods_toml(
     }))
 }
 
-fn parse_fabric_mod_json(content: &str, _path: &str) -> Result<Option<ModScanResult>, ModScanError> {
-    let json: FabricModJson = serde_json::from_str(content)
-        .map_err(|source| ModScanError::Parse { entry: "fabric.mod.json".into(), source })?;
+fn parse_fabric_mod_json(
+    content: &str,
+    _path: &str,
+) -> Result<Option<ModScanResult>, ModScanError> {
+    let json: FabricModJson =
+        serde_json::from_str(content).map_err(|source| ModScanError::Parse {
+            entry: "fabric.mod.json".into(),
+            source,
+        })?;
     let side = match json.environment.as_deref() {
         Some("client") => Side::Client,
         Some("server") => Side::Server,
@@ -292,8 +303,11 @@ fn parse_fabric_mod_json(content: &str, _path: &str) -> Result<Option<ModScanRes
 }
 
 fn parse_quilt_mod_json(content: &str, _path: &str) -> Result<Option<ModScanResult>, ModScanError> {
-    let json: QuiltModJson = serde_json::from_str(content)
-        .map_err(|source| ModScanError::Parse { entry: "quilt.mod.json".into(), source })?;
+    let json: QuiltModJson =
+        serde_json::from_str(content).map_err(|source| ModScanError::Parse {
+            entry: "quilt.mod.json".into(),
+            source,
+        })?;
     let side = if let Some(env) = &json.env_obj {
         match (env.client.as_deref(), env.dedicated.as_deref()) {
             (Some("available"), Some("available")) => Side::Both,
@@ -322,11 +336,18 @@ struct McModInfoEntry {
 }
 
 fn parse_mcmod_info(content: &str) -> Result<Option<ModScanResult>, ModScanError> {
-    let entries: Vec<McModInfoEntry> = serde_json::from_str(content)
-        .map_err(|source| ModScanError::Parse { entry: "mcmod.info".into(), source })?;
-    let side = if entries.iter().any(|e| e.client_side_only == Some(true)) && !entries.iter().any(|e| e.server_side_only == Some(true)) {
+    let entries: Vec<McModInfoEntry> =
+        serde_json::from_str(content).map_err(|source| ModScanError::Parse {
+            entry: "mcmod.info".into(),
+            source,
+        })?;
+    let side = if entries.iter().any(|e| e.client_side_only == Some(true))
+        && !entries.iter().any(|e| e.server_side_only == Some(true))
+    {
         Side::Client
-    } else if entries.iter().any(|e| e.server_side_only == Some(true)) && !entries.iter().any(|e| e.client_side_only == Some(true)) {
+    } else if entries.iter().any(|e| e.server_side_only == Some(true))
+        && !entries.iter().any(|e| e.client_side_only == Some(true))
+    {
         Side::Server
     } else {
         Side::Both

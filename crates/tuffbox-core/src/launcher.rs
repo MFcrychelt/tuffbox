@@ -707,8 +707,14 @@ mod tests {
 
     #[test]
     fn split_server_address_defaults_port() {
-        assert_eq!(split_server_address("play.example.com"), ("play.example.com", 25565));
-        assert_eq!(split_server_address("play.example.com:25566"), ("play.example.com", 25566));
+        assert_eq!(
+            split_server_address("play.example.com"),
+            ("play.example.com", 25565)
+        );
+        assert_eq!(
+            split_server_address("play.example.com:25566"),
+            ("play.example.com", 25566)
+        );
         assert_eq!(split_server_address("::1"), ("::1", 25565));
         assert_eq!(split_server_address("[::1]:25566"), ("::1", 25566));
     }
@@ -731,16 +737,26 @@ mod tests {
             Some("multiplayer"),
             Some("mc.example.com:25565"),
         );
-        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert!(args.windows(2).any(|w| w[0] == "--quickPlayMultiplayer" && w[1] == "mc.example.com:25565"));
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--quickPlayMultiplayer" && w[1] == "mc.example.com:25565"));
     }
 
     #[test]
     fn apply_quick_play_multiplayer_legacy() {
         let mut cmd = Command::new("java");
         apply_quick_play_args(&mut cmd, "1.19.2", Some("multiplayer"), Some("host:25566"));
-        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert!(args.windows(2).any(|w| w[0] == "--server" && w[1] == "host"));
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--server" && w[1] == "host"));
         assert!(args.windows(2).any(|w| w[0] == "--port" && w[1] == "25566"));
     }
 }

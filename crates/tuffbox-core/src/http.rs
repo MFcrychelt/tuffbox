@@ -47,10 +47,13 @@ static CIRCUIT: LazyLock<Mutex<CircuitBreakerState>> = LazyLock::new(|| {
 pub(crate) fn circuit_check(host: &str) -> Result<(), CircuitBreakerOpen> {
     let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
     let now = Instant::now();
-    let entry = cb.hosts.entry(host.to_string()).or_insert_with(|| HostBreaker {
-        failures: Vec::new(),
-        state: CircuitState::Closed,
-    });
+    let entry = cb
+        .hosts
+        .entry(host.to_string())
+        .or_insert_with(|| HostBreaker {
+            failures: Vec::new(),
+            state: CircuitState::Closed,
+        });
 
     match entry.state {
         CircuitState::Open { opened_at } => {
@@ -85,10 +88,13 @@ pub(crate) fn circuit_record_success(host: &str) {
 pub(crate) fn circuit_record_failure(host: &str) {
     let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
     let now = Instant::now();
-    let entry = cb.hosts.entry(host.to_string()).or_insert_with(|| HostBreaker {
-        failures: Vec::new(),
-        state: CircuitState::Closed,
-    });
+    let entry = cb
+        .hosts
+        .entry(host.to_string())
+        .or_insert_with(|| HostBreaker {
+            failures: Vec::new(),
+            state: CircuitState::Closed,
+        });
 
     entry.failures.push(now);
     // Prune stale failures.
@@ -399,8 +405,8 @@ pub fn download_streaming(
     progress: Option<Box<dyn FnMut(u64, u64) + Send>>,
 ) -> Result<(), StreamingDownloadError> {
     let expected = expected_sha1.map(|s| (s, crate::download_engine::ChecksumKind::Sha1));
-    crate::download_engine::download_resumable(url, dest, expected, progress, None).map_err(
-        |e| match e {
+    crate::download_engine::download_resumable(url, dest, expected, progress, None).map_err(|e| {
+        match e {
             crate::download_engine::DownloadEngineError::Http(err) => {
                 StreamingDownloadError::Http(err)
             }
@@ -412,8 +418,8 @@ pub fn download_streaming(
                 std::io::ErrorKind::Other,
                 other.to_string(),
             )),
-        },
-    )
+        }
+    })
 }
 
 #[cfg(test)]

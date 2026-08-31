@@ -181,10 +181,7 @@ async fn publish_capsule(
         || body.get("rawLogs").is_some()
         || body.get("crashReport").is_some()
         || body.get("latestLog").is_some()
-        || body
-            .pointer("/privacy/rawLogs")
-            .and_then(|v| v.as_bool())
-            == Some(true)
+        || body.pointer("/privacy/rawLogs").and_then(|v| v.as_bool()) == Some(true)
     {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -200,12 +197,8 @@ async fn publish_capsule(
         ));
     }
 
-    let capsule = ExperienceCapsule::from_public_value(&body).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": e })),
-        )
-    })?;
+    let capsule = ExperienceCapsule::from_public_value(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))))?;
 
     match capsule.verify_signature() {
         Ok(true) => {}
@@ -216,10 +209,7 @@ async fn publish_capsule(
             ));
         }
         Err(e) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e })),
-            ));
+            return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": e }))));
         }
     }
 
@@ -263,10 +253,7 @@ async fn lookup(
         lib.lookup(&req.fingerprint, &hay, limit)
     };
     Ok(Json(CrashLookupResponse {
-        kb_version: Some(format!(
-            "p2p-{}",
-            tuffbox_core::time_util::compact_now()
-        )),
+        kb_version: Some(format!("p2p-{}", tuffbox_core::time_util::compact_now())),
         hits,
     }))
 }
@@ -299,7 +286,10 @@ async fn diagnose_volunteer(
             } else {
                 StatusCode::SERVICE_UNAVAILABLE
             };
-            (status, Json(serde_json::to_value(result).unwrap_or(json!({ "ok": false }))))
+            (
+                status,
+                Json(serde_json::to_value(result).unwrap_or(json!({ "ok": false }))),
+            )
         }
         Err(e) => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -314,7 +304,11 @@ async fn diagnose_volunteer(
 async fn jobs_pending(State(state): State<AppState>) -> impl IntoResponse {
     let mut jobs = state.pending_jobs.lock().await;
     match jobs.take_pending() {
-        Some(job) => (StatusCode::OK, Json(serde_json::to_value(job).unwrap_or(json!({})))).into_response(),
+        Some(job) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(job).unwrap_or(json!({}))),
+        )
+            .into_response(),
         None => StatusCode::NO_CONTENT.into_response(),
     }
 }

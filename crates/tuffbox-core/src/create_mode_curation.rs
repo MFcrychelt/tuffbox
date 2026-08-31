@@ -263,10 +263,7 @@ const GAMEPLAY_CATS: &[&str] = &[
 pub fn classify_role(slug: &str, name: &str, categories: &[String]) -> CandidateRole {
     let s = slug.trim().to_ascii_lowercase();
     let n = name.trim().to_ascii_lowercase();
-    let cats: Vec<String> = categories
-        .iter()
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
+    let cats: Vec<String> = categories.iter().map(|c| c.to_ascii_lowercase()).collect();
 
     if cats.iter().any(|c| c == "library")
         || s.ends_with("-api")
@@ -279,20 +276,21 @@ pub fn classify_role(slug: &str, name: &str, categories: &[String]) -> Candidate
     {
         return CandidateRole::Library;
     }
-    if PERF_SLUGS.iter().any(|p| s == *p || s.starts_with(&format!("{p}-")))
-        || cats.iter().any(|c| c == "optimization" || c == "performance")
+    if PERF_SLUGS
+        .iter()
+        .any(|p| s == *p || s.starts_with(&format!("{p}-")))
+        || cats
+            .iter()
+            .any(|c| c == "optimization" || c == "performance")
         || n.contains("fps")
         || n.contains("optimization")
     {
         return CandidateRole::Performance;
     }
     if SUPPORT_SLUGS.iter().any(|p| s == *p)
-        || cats.iter().any(|c| {
-            matches!(
-                c.as_str(),
-                "utility" | "management" | "information" | "hud"
-            )
-        })
+        || cats
+            .iter()
+            .any(|c| matches!(c.as_str(), "utility" | "management" | "information" | "hud"))
             && !cats.iter().any(|c| GAMEPLAY_CATS.contains(&c.as_str()))
     {
         return CandidateRole::Support;
@@ -318,28 +316,66 @@ const PILLAR_TEMPLATES: &[PillarTemplate] = &[
     PillarTemplate {
         id: "create_automation",
         label: "Create / automation",
-        keywords: &["create", "create-steam-n-rails", "create-enchantment-industry", "mechanisms"],
-        aliases: &["create", "automation", "factory", "industrial", "contraption"],
+        keywords: &[
+            "create",
+            "create-steam-n-rails",
+            "create-enchantment-industry",
+            "mechanisms",
+        ],
+        aliases: &[
+            "create",
+            "automation",
+            "factory",
+            "industrial",
+            "contraption",
+        ],
         priority: 1,
     },
     PillarTemplate {
         id: "flight",
         label: "Flight / aircraft",
-        keywords: &["aircraft", "aeronautics", "plane", "immersive-aircraft", "create-aeronautics"],
-        aliases: &["flight", "airplane", "aircraft", "plane", "flying", "самолёт", "самолет", "авиа"],
+        keywords: &[
+            "aircraft",
+            "aeronautics",
+            "plane",
+            "immersive-aircraft",
+            "create-aeronautics",
+        ],
+        aliases: &[
+            "flight",
+            "airplane",
+            "aircraft",
+            "plane",
+            "flying",
+            "самолёт",
+            "самолет",
+            "авиа",
+        ],
         priority: 1,
     },
     PillarTemplate {
         id: "tech_power",
         label: "Power / tech progression",
         keywords: &["mekanism", "powah", "energy", "tech", "rftools"],
-        aliases: &["mekanism", "tech", "technology", "power", "energy", "industrial"],
+        aliases: &[
+            "mekanism",
+            "tech",
+            "technology",
+            "power",
+            "energy",
+            "industrial",
+        ],
         priority: 1,
     },
     PillarTemplate {
         id: "magic",
         label: "Magic progression",
-        keywords: &["botania", "ars-nouveau", "irons-spells-n-spellbooks", "magic"],
+        keywords: &[
+            "botania",
+            "ars-nouveau",
+            "irons-spells-n-spellbooks",
+            "magic",
+        ],
         aliases: &["magic", "magical", "wizard", "spell", "botania", "магия"],
         priority: 1,
     },
@@ -374,7 +410,12 @@ const PILLAR_TEMPLATES: &[PillarTemplate] = &[
     PillarTemplate {
         id: "storage_logistics",
         label: "Storage / logistics",
-        keywords: &["ae2", "applied-energistics-2", "refined-storage", "storage-drawers"],
+        keywords: &[
+            "ae2",
+            "applied-energistics-2",
+            "refined-storage",
+            "storage-drawers",
+        ],
         aliases: &["storage", "ae2", "logistics", "warehouse"],
         priority: 2,
     },
@@ -471,9 +512,11 @@ pub fn extract_pillars_from_brief(brief: &CreateModeBrief, user_goal: &str) -> V
                 priority: 1,
             });
         }
-        for c in brief.categories.iter().filter(|c| {
-            GAMEPLAY_CATS.contains(&c.id.to_ascii_lowercase().as_str())
-        }) {
+        for c in brief
+            .categories
+            .iter()
+            .filter(|c| GAMEPLAY_CATS.contains(&c.id.to_ascii_lowercase().as_str()))
+        {
             if out.len() >= 5 {
                 break;
             }
@@ -650,8 +693,14 @@ pub fn compact_draft_cards(
         .collect();
     // Gameplay / pillar evidence first, then by cooccur, then downloads.
     cards.sort_by(|a, b| {
-        let ag = (!a.covers_pillars.is_empty(), a.role == CandidateRole::Gameplay);
-        let bg = (!b.covers_pillars.is_empty(), b.role == CandidateRole::Gameplay);
+        let ag = (
+            !a.covers_pillars.is_empty(),
+            a.role == CandidateRole::Gameplay,
+        );
+        let bg = (
+            !b.covers_pillars.is_empty(),
+            b.role == CandidateRole::Gameplay,
+        );
         bg.cmp(&ag)
             .then_with(|| {
                 b.cooccur_count
@@ -867,9 +916,7 @@ pub fn validate_and_sync_verdict(
         .collect();
     // Keep wins over reject if both listed.
     let keep_set: HashSet<_> = verdict.keep_mod_ids.iter().cloned().collect();
-    verdict
-        .rejected_mod_ids
-        .retain(|r| !keep_set.contains(r));
+    verdict.rejected_mod_ids.retain(|r| !keep_set.contains(r));
 
     verdict.coverage_score = verdict.coverage_score.clamp(0.0, 1.0);
     verdict.next_search_keywords = subtract_searched(&verdict.next_search_keywords, searched);
@@ -1116,9 +1163,10 @@ pub fn apply_verdict_to_brief(
         });
     }
 
-    for p in partner_boosts.iter().filter(|p| {
-        p.role == CandidateRole::Gameplay || !p.covers_pillars.is_empty()
-    }) {
+    for p in partner_boosts
+        .iter()
+        .filter(|p| p.role == CandidateRole::Gameplay || !p.covers_pillars.is_empty())
+    {
         let key = p.slug.to_ascii_lowercase();
         if brief.exclude.iter().any(|e| e.eq_ignore_ascii_case(&key)) {
             continue;
@@ -1154,7 +1202,12 @@ pub fn known_slugs_from_draft(draft: &PackDraft) -> HashSet<String> {
     draft
         .mods
         .iter()
-        .flat_map(|m| [m.slug.to_ascii_lowercase(), m.project_id.to_ascii_lowercase()])
+        .flat_map(|m| {
+            [
+                m.slug.to_ascii_lowercase(),
+                m.project_id.to_ascii_lowercase(),
+            ]
+        })
         .filter(|s| !s.is_empty())
         .collect()
 }
@@ -1429,10 +1482,7 @@ pub fn build_graph_hints(
                 && s != "fabric-api"
                 && classify_role(&m.slug, &m.name, &[m.category.clone()]) != CandidateRole::Library
         });
-        if needs_fabric_api
-            && !pool.contains("fabric-api")
-            && !pool.iter().any(|s| s == "fabric")
-        {
+        if needs_fabric_api && !pool.contains("fabric-api") && !pool.iter().any(|s| s == "fabric") {
             hints.push(GraphHint {
                 code: "missing_dep".into(),
                 mod_id: "fabric-api".into(),
@@ -1440,7 +1490,9 @@ pub fn build_graph_hints(
             });
         }
         // Create ecosystem often needs JEI/EMI for playability (support, not pillar).
-        let has_create = pool.iter().any(|s| s == "create" || s.starts_with("create-"));
+        let has_create = pool
+            .iter()
+            .any(|s| s == "create" || s.starts_with("create-"));
         let has_jei = pool.iter().any(|s| {
             matches!(
                 s.as_str(),
@@ -1495,13 +1547,11 @@ impl KeywordSearchCache {
     }
 
     pub fn seen(&self, loader: &str, mc: &str, keyword: &str) -> bool {
-        self.keys
-            .contains(&Self::cache_key(loader, mc, keyword))
+        self.keys.contains(&Self::cache_key(loader, mc, keyword))
     }
 
     pub fn mark(&mut self, loader: &str, mc: &str, keyword: &str) {
-        self.keys
-            .insert(Self::cache_key(loader, mc, keyword));
+        self.keys.insert(Self::cache_key(loader, mc, keyword));
     }
 }
 
@@ -1514,7 +1564,12 @@ pub fn merge_mods_into_draft(
     let mut seen: HashSet<String> = draft
         .mods
         .iter()
-        .flat_map(|m| [m.slug.to_ascii_lowercase(), m.project_id.to_ascii_lowercase()])
+        .flat_map(|m| {
+            [
+                m.slug.to_ascii_lowercase(),
+                m.project_id.to_ascii_lowercase(),
+            ]
+        })
         .collect();
     let mut mods = draft.mods.clone();
     for m in extra {
@@ -1644,9 +1699,7 @@ pub fn sanitize_search_keywords(
         .filter_map(|k| normalize_keyword(k))
         .collect();
     let cleaned = subtract_searched(&cleaned, searched);
-    if cleaned.is_empty()
-        || cleaned.iter().all(|k| is_utility_noise(k))
-        || priority1_unmet(status)
+    if cleaned.is_empty() || cleaned.iter().all(|k| is_utility_noise(k)) || priority1_unmet(status)
     {
         let forced = keywords_for_unmet_pillars(pillars, status, searched, 6);
         if !forced.is_empty() {
@@ -1671,7 +1724,9 @@ pub fn parse_curation_search(raw: &str) -> Result<CurationSearchQuery, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::create_mode::{CategoryBudget, CreateModeBrief, MustHaveSpec, PackDraft, PackDraftMod};
+    use crate::create_mode::{
+        CategoryBudget, CreateModeBrief, MustHaveSpec, PackDraft, PackDraftMod,
+    };
 
     fn sample_brief() -> CreateModeBrief {
         CreateModeBrief {
@@ -1829,7 +1884,10 @@ mod tests {
         let sw = compute_pillar_status(&pillars, &weak.mods);
         let ss = compute_pillar_status(&pillars, &strong.mods);
         let empty = HashSet::new();
-        assert!(launcher_score(&strong, &pillars, &ss, &empty) > launcher_score(&weak, &pillars, &sw, &empty));
+        assert!(
+            launcher_score(&strong, &pillars, &ss, &empty)
+                > launcher_score(&weak, &pillars, &sw, &empty)
+        );
     }
 
     #[test]
@@ -1843,7 +1901,12 @@ mod tests {
     #[test]
     fn subtract_drops_searched_and_noise() {
         let next = subtract_searched(
-            &["Aircraft".into(), "sodium".into(), "aircraft".into(), "create".into()],
+            &[
+                "Aircraft".into(),
+                "sodium".into(),
+                "aircraft".into(),
+                "create".into(),
+            ],
             &["create".into()],
         );
         assert_eq!(next, vec!["aircraft".to_string()]);
@@ -1864,12 +1927,7 @@ mod tests {
         let brief = sample_brief();
         let pillars = extract_pillars_from_brief(&brief, "create airplanes");
         let status = compute_pillar_status(&pillars, &[mod_("sodium", "Sodium", "utility")]);
-        let kw = sanitize_search_keywords(
-            &["fps".into(), "sodium".into()],
-            &pillars,
-            &status,
-            &[],
-        );
+        let kw = sanitize_search_keywords(&["fps".into(), "sodium".into()], &pillars, &status, &[]);
         assert!(!kw.is_empty());
         assert!(!kw.iter().any(|k| k == "fps" || k == "sodium"));
     }

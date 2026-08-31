@@ -60,7 +60,7 @@ impl GraphCache {
             .map_err(|error| format!("failed to parse graph cache {}: {error}", path.display()))?;
         Ok((cache.cache_version == CACHE_VERSION
             && cache.manifest_fingerprint == manifest_fingerprint(manifest))
-            .then_some(cache))
+        .then_some(cache))
     }
 
     pub fn save(&self, manifest_path: &Path) -> Result<PathBuf, String> {
@@ -238,8 +238,7 @@ pub fn enrich_manifest_from_installed_jars(manifest_path: &Path, manifest: &mut 
             .dependencies
             .into_iter()
             .filter(|dependency| {
-                dependency.mod_id != module.id
-                    && !is_platform_dependency(&dependency.mod_id)
+                dependency.mod_id != module.id && !is_platform_dependency(&dependency.mod_id)
             })
             .map(|dependency| ModDependencySpec {
                 target: dependency.mod_id,
@@ -352,7 +351,11 @@ mod tests {
     fn diagnostic_counts_split_errors_and_warnings() {
         use crate::{Diagnostic, DiagnosticSeverity, NodeId};
         let diags = vec![
-            Diagnostic::error("MISSING_DEPENDENCY", "missing", vec![NodeId("mod:a".into())]),
+            Diagnostic::error(
+                "MISSING_DEPENDENCY",
+                "missing",
+                vec![NodeId("mod:a".into())],
+            ),
             Diagnostic::warning("UNKNOWN_SIDE", "side", vec![]),
             Diagnostic {
                 severity: DiagnosticSeverity::Info,

@@ -6,7 +6,10 @@ use ed25519_dalek::SigningKey;
 use futures::StreamExt;
 use libp2p::gossipsub::{self, IdentTopic, MessageAuthenticity};
 use libp2p::identity::Keypair;
-use libp2p::kad::{store::MemoryStore, Behaviour as KadBehaviour, Event as KadEvent, GetRecordOk, Mode, QueryResult, RecordKey};
+use libp2p::kad::{
+    store::MemoryStore, Behaviour as KadBehaviour, Event as KadEvent, GetRecordOk, Mode,
+    QueryResult, RecordKey,
+};
 use libp2p::mdns;
 use libp2p::request_response::{self, OutboundRequestId, ProtocolSupport, ResponseChannel};
 use libp2p::swarm::{behaviour::toggle::Toggle, NetworkBehaviour, SwarmEvent};
@@ -17,19 +20,13 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex, oneshot};
-use tuffbox_core::swarm::{
-    CapsuleLibrary, ExperienceCapsule, MAX_CAPSULE_GOSSIP_BYTES,
-};
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tuffbox_core::swarm::{CapsuleLibrary, ExperienceCapsule, MAX_CAPSULE_GOSSIP_BYTES};
 
-use crate::diagnose::{
-    DiagnoseJob, DiagnoseResult, DIAGNOSE_PROTOCOL,
-};
-use crate::jobs::{PendingEntry, PendingJobs};
 use crate::creation_jobs::{PendingCreationEntry, PendingCreationJobs};
-use tuffbox_core::creation_marketplace::{
-    CreationJob, CreationResult, CREATION_PROTOCOL,
-};
+use crate::diagnose::{DiagnoseJob, DiagnoseResult, DIAGNOSE_PROTOCOL};
+use crate::jobs::{PendingEntry, PendingJobs};
+use tuffbox_core::creation_marketplace::{CreationJob, CreationResult, CREATION_PROTOCOL};
 
 pub const CAPSULE_TOPIC: &str = "tuffswarm/capsules/v1";
 pub const CAPABILITY_PREFIX: &str = "tuffswarm/cap/v1/";
@@ -233,10 +230,7 @@ impl P2pHandle {
     pub async fn publish_capsule(&self, capsule: ExperienceCapsule) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(P2pCommand::PublishCapsule {
-                capsule,
-                reply: tx,
-            })
+            .send(P2pCommand::PublishCapsule { capsule, reply: tx })
             .await
             .map_err(|_| "p2p node command channel closed".to_string())?;
         rx.await
@@ -245,7 +239,12 @@ impl P2pHandle {
 
     pub async fn peer_count(&self) -> usize {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(P2pCommand::PeerCount { reply: tx }).await.is_err() {
+        if self
+            .cmd_tx
+            .send(P2pCommand::PeerCount { reply: tx })
+            .await
+            .is_err()
+        {
             return 0;
         }
         rx.await.unwrap_or(0)
@@ -412,8 +411,8 @@ pub async fn run_swarm(
     let mut kad = KadBehaviour::new(peer_id, store);
     kad.set_mode(Some(Mode::Server));
 
-    let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id)
-        .context("mdns behaviour")?;
+    let mdns =
+        mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id).context("mdns behaviour")?;
     let identify = identify::Behaviour::new(
         identify::Config::new("/tuffswarm/1.0.0".into(), id_keys.public())
             .with_agent_version(capability_agent_version(&opts.capability)),
@@ -470,10 +469,7 @@ pub async fn run_swarm(
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
-    let listen_addr: Multiaddr = opts
-        .listen
-        .parse()
-        .context("invalid --listen multiaddr")?;
+    let listen_addr: Multiaddr = opts.listen.parse().context("invalid --listen multiaddr")?;
     swarm.listen_on(listen_addr)?;
     if opts.relay_server {
         tracing::info!("relay server mode enabled — publish this node's multiaddr as --bootstrap for NAT peers");
@@ -484,7 +480,10 @@ pub async fn run_swarm(
             .parse()
             .with_context(|| format!("invalid bootstrap multiaddr: {boot}"))?;
         let boot_peer = extract_peer_id(&addr).unwrap_or(peer_id);
-        swarm.behaviour_mut().kad.add_address(&boot_peer, addr.clone());
+        swarm
+            .behaviour_mut()
+            .kad
+            .add_address(&boot_peer, addr.clone());
         swarm.listen_on(addr.clone().with(libp2p::multiaddr::Protocol::P2pCircuit))?;
         if let Err(e) = swarm.dial(addr.clone()) {
             tracing::warn!(error = %e, %addr, "bootstrap dial failed");
@@ -1018,10 +1017,10 @@ async fn handle_inbound_diagnose(
 ) {
     let job_id = request.job_id.clone();
     if !local_is_volunteer {
-        let _ = swarm.behaviour_mut().diagnose.send_response(
-            channel,
-            DiagnoseResult::err(job_id, "not a volunteer"),
-        );
+        let _ = swarm
+            .behaviour_mut()
+            .diagnose
+            .send_response(channel, DiagnoseResult::err(job_id, "not a volunteer"));
         return;
     }
     if let Err(e) = request.validate_size() {
@@ -1045,10 +1044,10 @@ async fn handle_inbound_diagnose(
             tracing::info!(%peer, %job_id, "fog diagnose job queued for desktop");
         }
         Err(entry) => {
-            let _ = swarm.behaviour_mut().diagnose.send_response(
-                entry.channel,
-                DiagnoseResult::err(job_id, "busy"),
-            );
+            let _ = swarm
+                .behaviour_mut()
+                .diagnose
+                .send_response(entry.channel, DiagnoseResult::err(job_id, "busy"));
         }
     }
 }
@@ -1099,10 +1098,10 @@ async fn handle_inbound_creation(
         return;
     }
     if let Err(e) = request.validate() {
-        let _ = swarm.behaviour_mut().creation.send_response(
-            channel,
-            CreationResult::err(job_id, e),
-        );
+        let _ = swarm
+            .behaviour_mut()
+            .creation
+            .send_response(channel, CreationResult::err(job_id, e));
         return;
     }
 
@@ -1117,10 +1116,10 @@ async fn handle_inbound_creation(
             tracing::info!(%peer, %job_id, "creation job queued for desktop");
         }
         Err(entry) => {
-            let _ = swarm.behaviour_mut().creation.send_response(
-                entry.channel,
-                CreationResult::err(job_id, "busy"),
-            );
+            let _ = swarm
+                .behaviour_mut()
+                .creation
+                .send_response(entry.channel, CreationResult::err(job_id, "busy"));
         }
     }
 }
@@ -1185,10 +1184,7 @@ fn pick_volunteer_peers(
     peers.into_iter().map(|(_, p)| p).collect()
 }
 
-fn allow_gossip_recv(
-    windows: &mut HashMap<PeerId, VecDeque<Instant>>,
-    peer: PeerId,
-) -> bool {
+fn allow_gossip_recv(windows: &mut HashMap<PeerId, VecDeque<Instant>>, peer: PeerId) -> bool {
     let now = Instant::now();
     let q = windows.entry(peer).or_default();
     while let Some(front) = q.front() {

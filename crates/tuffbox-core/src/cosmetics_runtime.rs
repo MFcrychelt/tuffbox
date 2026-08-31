@@ -521,7 +521,12 @@ fn download_csl_from_modrinth(
     if dest.is_file() {
         return Ok(Some(dest));
     }
-    let bytes = client.get(dl).send().map_err(|e| e.to_string())?.bytes().map_err(|e| e.to_string())?;
+    let bytes = client
+        .get(dl)
+        .send()
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .map_err(|e| e.to_string())?;
     fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
     Ok(Some(dest))
 }
@@ -534,7 +539,8 @@ mod tests {
     fn csl_config_mentions_tuffbox_and_mojang() {
         let dir = tempfile::tempdir().unwrap();
         write_csl_config(dir.path()).unwrap();
-        let text = fs::read_to_string(dir.path().join("CustomSkinLoader/CustomSkinLoader.json")).unwrap();
+        let text =
+            fs::read_to_string(dir.path().join("CustomSkinLoader/CustomSkinLoader.json")).unwrap();
         assert!(text.contains("TuffBox"));
         assert!(text.contains("Mojang"));
         assert!(text.contains("ElyBy"));

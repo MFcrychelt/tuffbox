@@ -896,6 +896,7 @@ async fn search_unified_mods(
                 offset / 2,
                 per,
                 None,
+                None,
             ) {
                 cf_total = page_result.total;
                 for hit in page_result.hits {
@@ -1123,6 +1124,7 @@ async fn search_curseforge_mods(
     game_version: Option<String>,
     loader: Option<String>,
     content_type: Option<String>,
+    category_id: Option<u32>,
     page: Option<u32>,
     page_size: Option<u32>,
     sort_field: Option<u32>,
@@ -1149,7 +1151,16 @@ async fn search_curseforge_mods(
         let offset = (page.unwrap_or(1).saturating_sub(1)) * page_size;
         let sort_field = sort_field.unwrap_or(2);
         let page_result = provider
-            .search_content(class_id, &query, Some(&gv), mod_loader, offset, page_size, Some(sort_field))
+            .search_content(
+                class_id,
+                &query,
+                Some(&gv),
+                mod_loader,
+                offset,
+                page_size,
+                Some(sort_field),
+                category_id,
+            )
             .map_err(|e| e.to_string())?;
         let results = page_result
             .hits
@@ -1447,6 +1458,39 @@ async fn list_modrinth_categories(
     .map_err(|e| e.to_string())?
 }
 
+/// CurseForge categories for a project type (resolved to its class id).
+#[tauri::command(rename_all = "camelCase")]
+async fn list_curseforge_categories(
+    project_type: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(move || {
+        let provider = tuffbox_core::CurseForgeProvider::new();
+        if !provider.is_configured() {
+            return Err("CurseForge API key is not configured".to_string());
+        }
+        let class_id = tuffbox_core::CurseForgeProvider::class_id_for_project_type(
+            project_type.as_deref().unwrap_or("mod"),
+        );
+        provider
+            .list_categories(class_id)
+            .map(|cats| {
+                cats.into_iter()
+                    .map(|(id, name, parent)| {
+                        serde_json::json!({
+                            "id": id,
+                            "name": name,
+                            "parentCategoryId": parent,
+                        })
+                    })
+                    .collect()
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+
 /// Unified catalog project detail for the in-launcher project page
 /// (Modrinth or CurseForge), GDLauncher-style.
 #[tauri::command(rename_all = "camelCase")]
@@ -1474,6 +1518,7 @@ async fn get_catalog_project(
                 4471 => "modpack",
                 _ => "mod",
             };
+            let links = cf.get_mod_links(id).unwrap_or_default();
             return Ok(serde_json::json!({
                 "id": hit.id.to_string(),
                 "slug": hit.slug,
@@ -1487,16 +1532,24 @@ async fn get_catalog_project(
                 "downloads": hit.download_count,
                 "follows": hit.thumbs_up_count,
                 "dateModified": hit.date_modified.clone().or(hit.date_created.clone()),
+                "dateCreated": hit.date_created,
                 "categories": hit.categories,
+                "issuesUrl": links.issues_url,
+                "sourceUrl": links.source_url,
+                "wikiUrl": links.wiki_url,
+                "discordUrl": links.discord_url,
+                "donateUrl": links.donate_url,
                 "provider": "curseforge",
             }));
         }
 
         let mr = tuffbox_core::ModrinthProvider::new();
-        let (project, body_md) = mr
-            .get_project_with_body(&project_id)
+        let detail = mr
+            .get_project_detail(&project_id)
             .map_err(|e| e.to_string())?;
-        let description_html = body_md
+        let project = detail.project;
+        let description_html = detail
+            .body
             .as_deref()
             .map(tuffbox_core::markdown_to_html)
             .filter(|s| !s.trim().is_empty());
@@ -1513,12 +1566,20 @@ async fn get_catalog_project(
             "downloads": project.downloads,
             "follows": project.follows,
             "dateModified": project.date_modified,
+            "dateCreated": project.date_created,
             "categories": project.categories,
             "license": project.license,
             "clientSide": project.client_side,
             "serverSide": project.server_side,
             "issuesUrl": project.issues_url,
             "sourceUrl": project.source_url,
+            "discordUrl": detail.discord_url,
+            "wikiUrl": detail.wiki_url,
+            "donateUrl": detail.donate_url,
+            "loaders": detail.loaders,
+            "gameVersions": detail.game_versions,
+            "gallery": detail.gallery,
+            "creators": detail.creators,
             "provider": "modrinth",
         }))
     })
@@ -1578,6 +1639,8 @@ async fn get_catalog_versions(
                         "loaders": [],
                         "datePublished": f.file_date,
                         "versionType": channel,
+                        // CurseForge ships the changelog as HTML already.
+                        "changelogHtml": f.changelog,
                         "compatible": mc_ok && loader_ok,
                         "compatibleMinecraft": mc_ok,
                         "compatibleLoader": loader_ok,
@@ -2593,13 +2656,20 @@ async fn get_mod_versions(
                     None => true,
                 };
                 let compatible = mc_ok && loader_ok;
+                // Modrinth changelogs are Markdown — render once server-side
+                // so the UI receives uniform `changelogHtml` for both providers.
+                let changelog_html = v
+                    .changelog
+                    .as_deref()
+                    .map(tuffbox_core::markdown_to_html)
+                    .filter(|s| !s.trim().is_empty());
                 serde_json::json!({
                     "id": v.id,
                     "versionNumber": v.version_number,
                     "gameVersions": v.game_versions,
                     "loaders": v.loaders,
                     "name": v.name,
-                    "changelog": v.changelog,
+                    "changelogHtml": changelog_html,
                     "datePublished": v.date_published,
                     "versionType": v.version_type.unwrap_or_else(|| "release".to_string()),
                     "compatible": compatible,
@@ -4593,6 +4663,7 @@ fn resolve_opt_mod_curseforge(
             0,
             10,
             Some(2),
+            None,
         )
         .ok()?;
     let name_l = name.to_lowercase();
@@ -16347,6 +16418,7 @@ fn project_info_from_mod(module: &ModSpec) -> tuffbox_core::ProjectInfo {
         downloads: None,
         follows: None,
         date_modified: None,
+        date_created: None,
         categories: Vec::new(),
         license: None,
         client_side: None,
@@ -17176,6 +17248,7 @@ pub fn run() {
             get_modrinth_project_icon,
             get_modrinth_project,
             list_modrinth_categories,
+            list_curseforge_categories,
             get_catalog_project,
             get_catalog_versions,
             get_modrinth_pack_download,

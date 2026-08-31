@@ -90,9 +90,7 @@ async fn main() -> anyhow::Result<()> {
 
     if args.mpi_sync_once {
         let Some(creds) = supabase.as_ref() else {
-            anyhow::bail!(
-                "--mpi-sync-once requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"
-            );
+            anyhow::bail!("--mpi-sync-once requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY");
         };
         mpi_analytics::run_mpi_sync_once(creds, args.mpi_packs)
             .await
@@ -244,10 +242,7 @@ async fn publish_capsule(
         || body.get("rawLogs").is_some()
         || body.get("crashReport").is_some()
         || body.get("latestLog").is_some()
-        || body
-            .pointer("/privacy/rawLogs")
-            .and_then(|v| v.as_bool())
-            == Some(true)
+        || body.pointer("/privacy/rawLogs").and_then(|v| v.as_bool()) == Some(true)
     {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -263,12 +258,8 @@ async fn publish_capsule(
         ));
     }
 
-    let capsule = ExperienceCapsule::from_public_value(&body).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": e })),
-        )
-    })?;
+    let capsule = ExperienceCapsule::from_public_value(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))))?;
 
     match capsule.verify_signature() {
         Ok(true) => {}
@@ -279,10 +270,7 @@ async fn publish_capsule(
             ));
         }
         Err(e) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e })),
-            ));
+            return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": e }))));
         }
     }
 
@@ -293,12 +281,8 @@ async fn publish_capsule(
                 Json(json!({ "error": "hub lock poisoned" })),
             )
         })?;
-        lib.publish(&capsule).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e })),
-            )
-        })?
+        lib.publish(&capsule)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))))?
     };
 
     tracing::info!(id = %stored.id, key = %stored.fingerprint.key, "capsule stored");
@@ -555,15 +539,14 @@ async fn modpack_categories_get(State(state): State<Arc<HubState>>) -> impl Into
         return (StatusCode::OK, Json(cached)).into_response();
     }
     // Prefer full hub list; on MPI failure still return static pack themes.
-    let body = match tokio::task::spawn_blocking(tuffbox_core::modpack_index::list_categories_hub)
-        .await
-    {
-        Ok(Ok(cats)) => json!({ "categories": cats, "source": "mpi-hub" }),
-        _ => json!({
-            "categories": tuffbox_core::modpack_index::list_pack_theme_categories(),
-            "source": "builtin-themes",
-        }),
-    };
+    let body =
+        match tokio::task::spawn_blocking(tuffbox_core::modpack_index::list_categories_hub).await {
+            Ok(Ok(cats)) => json!({ "categories": cats, "source": "mpi-hub" }),
+            _ => json!({
+                "categories": tuffbox_core::modpack_index::list_pack_theme_categories(),
+                "source": "builtin-themes",
+            }),
+        };
     cache_put(&state, cache_key, body.clone());
     (StatusCode::OK, Json(body)).into_response()
 }
@@ -582,7 +565,13 @@ fn cache_get(state: &HubState, key: &str) -> Option<Value> {
 
 fn cache_put(state: &HubState, key: String, body: Value) {
     if let Ok(mut map) = state.mpi_cache.lock() {
-        map.insert(key, CacheEntry { at: Instant::now(), body });
+        map.insert(
+            key,
+            CacheEntry {
+                at: Instant::now(),
+                body,
+            },
+        );
         // ponytail: O(n) prune when map grows; upgrade to timed sweep if hub is busy.
         if map.len() > 256 {
             map.retain(|_, e| e.at.elapsed() <= MPI_CACHE_TTL);
@@ -590,12 +579,7 @@ fn cache_put(state: &HubState, key: String, body: Value) {
     }
 }
 
-async fn resolve_cooccurrence(
-    state: &HubState,
-    version: &str,
-    loader: &str,
-    limit: u32,
-) -> Value {
+async fn resolve_cooccurrence(state: &HubState, version: &str, loader: &str, limit: u32) -> Value {
     if let Some(creds) = &state.supabase {
         let launcher = tuffbox_core::swarm_supabase::fetch_cooccurrence_supabase(
             &creds.url,

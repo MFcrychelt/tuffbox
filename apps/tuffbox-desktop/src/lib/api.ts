@@ -1600,6 +1600,7 @@ export const api = {
     },
     searchCurseforge(query: string, opts?: {
       gameVersion?: string | null; loader?: string | null; contentType?: string | null;
+      categoryId?: number | null;
       page?: number; pageSize?: number; sortField?: number | null; p?: string;
     }) {
       const { p, ...rest } = opts ?? {};
@@ -1629,6 +1630,12 @@ export const api = {
     listCategories(projectType?: string | null) {
       return cmd<Array<{ name: string; projectType: string; header: string; icon: string }>>(
         "list_modrinth_categories",
+        { projectType: projectType ?? null },
+      );
+    },
+    listCurseforgeCategories(projectType?: string | null) {
+      return cmd<Array<{ id: number; name: string; parentCategoryId: number | null }>>(
+        "list_curseforge_categories",
         { projectType: projectType ?? null },
       );
     },

@@ -362,8 +362,7 @@ fn load_or_fetch_client_meta(
         .ok_or_else(|| format!("Minecraft {resolved} not found in Mojang version manifest"))?;
     let raw = crate::http::get_text(&entry.url)
         .map_err(|e| format!("failed to fetch version JSON for {resolved}: {e}"))?;
-    let meta: VanillaVersionClientJson =
-        serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let meta: VanillaVersionClientJson = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(version_dir).map_err(|e| e.to_string())?;
     std::fs::write(&version_json, &raw).map_err(|e| e.to_string())?;
     Ok((meta.downloads.client.url, meta.downloads.client.sha1))
@@ -471,7 +470,10 @@ fn normalize_zip_path(name: &str) -> String {
     name.replace('\\', "/")
 }
 
-fn collect_lang_from_archive(archive: &mut ZipArchive<std::fs::File>, lang: &mut HashMap<String, String>) {
+fn collect_lang_from_archive(
+    archive: &mut ZipArchive<std::fs::File>,
+    lang: &mut HashMap<String, String>,
+) {
     let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
     for name in names {
         let normalized = normalize_zip_path(&name);
@@ -499,7 +501,9 @@ fn collect_lang_from_archive(archive: &mut ZipArchive<std::fs::File>, lang: &mut
 
 /// `item.minecraft.diamond` / `block.minecraft.stone` → `minecraft:diamond` / `minecraft:stone`.
 fn lang_key_to_item_id(key: &str) -> Option<String> {
-    let rest = key.strip_prefix("item.").or_else(|| key.strip_prefix("block."))?;
+    let rest = key
+        .strip_prefix("item.")
+        .or_else(|| key.strip_prefix("block."))?;
     let mut parts = rest.split('.');
     let ns = parts.next()?;
     if ns.is_empty() {
@@ -512,7 +516,10 @@ fn lang_key_to_item_id(key: &str) -> Option<String> {
     Some(format!("{ns}:{path}"))
 }
 
-fn collect_ids_from_lang(lang: &HashMap<String, String>, by_id: &mut BTreeMap<String, CatalogItemEntry>) {
+fn collect_ids_from_lang(
+    lang: &HashMap<String, String>,
+    by_id: &mut BTreeMap<String, CatalogItemEntry>,
+) {
     for (key, display) in lang {
         let Some(id) = lang_key_to_item_id(key) else {
             continue;

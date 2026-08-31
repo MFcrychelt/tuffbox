@@ -43,6 +43,8 @@
     FilePlus,
     MoreHorizontal,
     Columns2,
+    Monitor,
+    Server,
   } from "@lucide/svelte";
   import { projectPath, projectInfo, ideStageRequest, pushWorkTrail, requestIdeIssuesRefresh, modsFocusId, modsFocusFileName } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
@@ -467,11 +469,14 @@ import { trapFocus } from "../lib/focusTrap";
   let filterGameVersion = $state("");
   let filterLoader = $state("fabric");
   let filterCategory = $state("");
+  let filterCategoryId = $state<number | null>(null);
   let filterEnvironment = $state("");
   let filterLicense = $state("");
   let sortBy = $state("relevance");
   let cfSortField = $state(2);
   let previewLoadingId = $state("");
+  let cfCategories = $state<Array<{ id: number; name: string; parentCategoryId: number | null }>>([]);
+  let cfCategorySearch = $state("");
 
   // --- Add-mods browser chrome ---
   const ADD_VIEW_KEY = "tuffbox.mods.addView";
@@ -511,7 +516,10 @@ import { trapFocus } from "../lib/focusTrap";
     gameVersion: true,
     loader: true,
     category: true,
+    cfCategory: true,
     cfSort: true,
+    environment: true,
+    license: true,
   });
 
   function persistAddView() {
@@ -675,7 +683,33 @@ import { trapFocus } from "../lib/focusTrap";
     searchTotal = 0;
     selectedResultIds = {};
     pendingInstall = null;
+    filterCategory = "";
+    filterCategoryId = null;
+    void loadCatalogCategories();
     searchMods(1);
+  }
+
+  /** Load catalog categories for the active provider + content type. */
+  async function loadCatalogCategories() {
+    const contentType = contentTypeForFilter(contentFilter);
+    try {
+      if (catalogProvider === "curseforge") {
+        const cats = await api.mods.listCurseforgeCategories(contentType);
+        cfCategories = cats;
+        mrCategories.length = 0;
+      } else {
+        const cats = await api.mods.listCategories(contentType);
+        mrCategories.length = 0;
+        mrCategories.push(
+          ...cats
+            .filter((c) => c.name !== "fabric" && c.name !== "forge" && c.name !== "quilt" && c.name !== "neoforge" && c.name !== "magma" && c.name !== "catnet" && c.name !== "bukkit" && c.name !== "paper" && c.name !== "purpur" && c.name !== "spigot" && c.name !== "sponge" && c.name !== "waterfall" && c.name !== "velocity" && c.name !== "bungee-cord" && c.name !== "folia" && c.name !== "datapack")
+            .map((c) => ({ header: humanize(c.header || "categories"), name: c.name }))
+        );
+        cfCategories = [];
+      }
+    } catch {
+      // Catalog filters stay empty — search still works without them.
+    }
   }
 
   function savedViewLabel(filter: string): string {
@@ -2101,20 +2135,44 @@ import { trapFocus } from "../lib/focusTrap";
   // instead of a hand-maintained list, so it never goes stale as new
   // Minecraft versions ship.
   let gameVersions = $state<string[]>([]);
+  let showAllVersions = $state(false);
   const loaders = ["Fabric", "Forge", "NeoForge", "Quilt"];
 
-  const filteredVersions = $derived(gameVersions.filter((v) =>
-    v.toLowerCase().includes(versionSearch.trim().toLowerCase())
-  ));
+  const filteredVersions = $derived.by(() => {
+    const q = versionSearch.trim().toLowerCase();
+    const list = q
+      ? gameVersions.filter((v) => v.toLowerCase().includes(q))
+      : showAllVersions
+        ? gameVersions
+        : gameVersions.slice(0, 12);
+    return list;
+  });
 
   const shownLoaders = $derived(loaderExpanded
     ? loaders
     : loaders.slice(0, 3));
-  const categories = [
-    "Adventure", "Cursed", "Decoration", "Economy", "Equipment", "Food", "Game Mechanics", "Library",
-    "Magic", "Management", "Minigame", "Mobs", "Optimization", "Social", "Storage", "Technology",
-    "Transportation", "Utility", "World Generation"
-  ];
+  /**
+   * Modrinth categories for the active content type, grouped by header
+   * (mirrors the Modrinth launcher: filter sections per category header).
+   * Populated from `GET /v2/tag/category` via list_modrinth_categories.
+   */
+  const mrCategories = $state<{ header: string; name: string }[]>([]);
+  const categoryGroups = $derived.by(() => {
+    const groups: Array<{ header: string; names: string[] }> = [];
+    for (const cat of mrCategories) {
+      let group = groups.find((g) => g.header === cat.header);
+      if (!group) {
+        group = { header: cat.header, names: [] };
+        groups.push(group);
+      }
+      group.names.push(cat.name);
+    }
+    return groups;
+  });
+  const filteredCfCategories = $derived.by(() => {
+    const q = cfCategorySearch.trim().toLowerCase();
+    return q ? cfCategories.filter((c) => c.name.toLowerCase().includes(q)) : cfCategories;
+  });
   const sortOptions = [
     { id: "relevance", label: "Relevance" },
     { id: "downloads", label: "Downloads" },
@@ -2325,9 +2383,14 @@ import { trapFocus } from "../lib/focusTrap";
   function switchContentFilter(next: string) {
     contentFilter = next;
     filter = "";
+    filterCategory = "";
+    filterCategoryId = null;
     clearSelection();
     clearFocusedMod();
-    if (addOpen) searchMods(1);
+    if (addOpen) {
+      void loadCatalogCategories();
+      searchMods(1);
+    }
     if (isSavedViewFilter(next)) {
       loadUserState().then(() => loadSavedModsView()).catch(() => {});
     }
@@ -2349,6 +2412,7 @@ import { trapFocus } from "../lib/focusTrap";
     } catch {
       // keep defaults
     }
+    await loadCatalogCategories();
     await loadUserState();
     await searchMods(1);
   }
@@ -2414,6 +2478,7 @@ import { trapFocus } from "../lib/focusTrap";
       if (catalogProvider === "curseforge") {
         payload = await api.mods.searchCurseforge(searchQuery.trim(), {
           ...common,
+          categoryId: filterCategoryId,
           sortField: cfSortField,
         });
       } else if (catalogProvider === "both") {
@@ -3742,6 +3807,11 @@ import { trapFocus } from "../lib/focusTrap";
                 <label class="check-row">
                   <input type="checkbox" checked={filterGameVersion === ""} onchange={() => { filterGameVersion = ""; searchMods(1); }} /> Show all versions
                 </label>
+                {#if !versionSearch.trim()}
+                  <label class="check-row">
+                    <input type="checkbox" bind:checked={showAllVersions} /> Show full version list
+                  </label>
+                {/if}
               </div>
             {/if}
           </section>
@@ -3781,12 +3851,74 @@ import { trapFocus } from "../lib/focusTrap";
               <div class="filter-body">
                 <div class="filter-list">
                   <button class:active={!filterCategory} onclick={() => { filterCategory = ""; searchMods(1); }}>All categories</button>
-                  {#each categories as category (category)}
-                    <button class="cat-row" class:active={filterCategory === category} onclick={() => { filterCategory = category; searchMods(1); }}>
+                  {#each categoryGroups as group (group.header)}
+                    <div class="filter-group-label">{group.header}</div>
+                    {#each group.names as category (category)}
+                      <button class="cat-row" class:active={filterCategory === category} onclick={() => { filterCategory = category; searchMods(1); }}>
+                        <Tag size={14} />
+                        <span>{humanize(category)}</span>
+                      </button>
+                    {/each}
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </section>
+
+          <section class="filter-block" class:closed={!accordionOpen.cfCategory} hidden={catalogProvider !== "curseforge"}>
+            <button class="filter-head" onclick={() => toggleAccordion("cfCategory")}>
+              <span>Category</span>
+              <ChevronDown size={16} class={!accordionOpen.cfCategory ? "rot" : ""} />
+            </button>
+            {#if accordionOpen.cfCategory}
+              <div class="filter-body">
+                <div class="search mini">
+                  <span class="search-glyph"><Search size={14} /></span>
+                  <input bind:value={cfCategorySearch} placeholder="Search category..." />
+                </div>
+                <div class="filter-list">
+                  <button class:active={filterCategoryId === null} onclick={() => { filterCategoryId = null; searchMods(1); }}>All categories</button>
+                  {#each filteredCfCategories as cat (cat.id)}
+                    <button class="cat-row" class:active={filterCategoryId === cat.id} onclick={() => { filterCategoryId = cat.id; searchMods(1); }}>
                       <Tag size={14} />
-                      <span>{humanize(category)}</span>
+                      <span>{cat.name}</span>
                     </button>
                   {/each}
+                </div>
+              </div>
+            {/if}
+          </section>
+
+          <section class="filter-block" class:closed={!accordionOpen.environment} hidden={catalogProvider === "curseforge" || contentFilter !== "mod"}>
+            <button class="filter-head" onclick={() => toggleAccordion("environment")}>
+              <span>Environment</span>
+              <ChevronDown size={16} class={!accordionOpen.environment ? "rot" : ""} />
+            </button>
+            {#if accordionOpen.environment}
+              <div class="filter-body">
+                <div class="filter-list">
+                  <button class:active={!filterEnvironment} onclick={() => { filterEnvironment = ""; searchMods(1); }}>Any</button>
+                  <button class="cat-row" class:active={filterEnvironment === "client"} onclick={() => { filterEnvironment = "client"; searchMods(1); }}>
+                    <Monitor size={14} /><span>Client</span>
+                  </button>
+                  <button class="cat-row" class:active={filterEnvironment === "server"} onclick={() => { filterEnvironment = "server"; searchMods(1); }}>
+                    <Server size={14} /><span>Server</span>
+                  </button>
+                </div>
+              </div>
+            {/if}
+          </section>
+
+          <section class="filter-block" class:closed={!accordionOpen.license} hidden={catalogProvider === "curseforge"}>
+            <button class="filter-head" onclick={() => toggleAccordion("license")}>
+              <span>License</span>
+              <ChevronDown size={16} class={!accordionOpen.license ? "rot" : ""} />
+            </button>
+            {#if accordionOpen.license}
+              <div class="filter-body">
+                <div class="filter-list">
+                  <button class:active={!filterLicense} onclick={() => { filterLicense = ""; searchMods(1); }}>Any</button>
+                  <button class:active={filterLicense === "open-source"} onclick={() => { filterLicense = "open-source"; searchMods(1); }}>Open source</button>
                 </div>
               </div>
             {/if}
@@ -6170,8 +6302,47 @@ import { trapFocus } from "../lib/focusTrap";
   .modal.add-mods-modal .filter-sidebar {
     max-height: none;
     height: 100%;
+    min-height: 0;
     overflow: hidden;
     transition: width 0.22s ease, min-width 0.22s ease, padding 0.22s ease;
+  }
+
+  /* Sidebar body must actually scroll between filter sections inside the
+     modal — without min-height:0 the grid child overflows and the lower
+     sections (category / environment / license) become unreachable. */
+  .modal.add-mods-modal .filter-sidebar-body {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-elevated) transparent;
+    padding-right: 4px;
+  }
+
+  .modal.add-mods-modal .filter-sidebar-body::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .modal.add-mods-modal .filter-sidebar-body::-webkit-scrollbar-thumb {
+    background: var(--bg-elevated);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .filter-group-label {
+    padding: 6px 9px 2px;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+
+  .filter-group-label:not(:first-child) {
+    margin-top: 4px;
+    border-top: 1px solid var(--border-color);
+    padding-top: 8px;
   }
 
   .modal.add-mods-modal .filter-sidebar.collapsed {

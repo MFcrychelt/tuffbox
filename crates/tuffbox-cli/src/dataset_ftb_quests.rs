@@ -113,9 +113,9 @@ pub fn parse_category_arg(raw: &str) -> Result<Option<u32>> {
     if t.eq_ignore_ascii_case("quests") {
         return Ok(Some(CATEGORY_QUESTS));
     }
-    let id: u32 = t
-        .parse()
-        .with_context(|| format!("invalid --category '{raw}' (use quests, none, or a numeric id)"))?;
+    let id: u32 = t.parse().with_context(|| {
+        format!("invalid --category '{raw}' (use quests, none, or a numeric id)")
+    })?;
     Ok(Some(id))
 }
 
@@ -516,7 +516,9 @@ mod tests {
 
     #[test]
     fn detects_ftb_paths() {
-        assert!(is_ftb_quests_snbt("overrides/config/ftbquests/chapter.snbt"));
+        assert!(is_ftb_quests_snbt(
+            "overrides/config/ftbquests/chapter.snbt"
+        ));
         assert!(is_ftb_quests_snbt("config/ftbquests/quests/foo.snbt"));
         assert!(!is_ftb_quests_snbt("overrides/config/ftbquests/readme.txt"));
         assert!(!is_ftb_quests_snbt("overrides/config/other/foo.snbt"));

@@ -559,7 +559,11 @@ pub fn build_crash_diagnosis(
     for archived in &session_logs {
         let label = format_session_picker_label(archived);
         reports.push(CrashReportSummary {
-            id: format!("{}{}", launch_history::SESSION_REPORT_PREFIX, archived.session_id),
+            id: format!(
+                "{}{}",
+                launch_history::SESSION_REPORT_PREFIX,
+                archived.session_id
+            ),
             name: label,
             path: archived.analysis.path.clone(),
             size: 0,
@@ -583,9 +587,7 @@ pub fn build_crash_diagnosis(
                 || reports.iter().any(|report| report.id == *id)
                 || validate_report_id(id).is_ok()
         });
-    let newest = reports
-        .iter()
-        .find(|r| r.id.starts_with("crash-reports/"));
+    let newest = reports.iter().find(|r| r.id.starts_with("crash-reports/"));
     let stale = newest
         .map(|r| latest_log_supersedes_crash(project_dir, Some(r.path.as_path()), &latest_log.tail))
         .unwrap_or(false);
@@ -597,7 +599,8 @@ pub fn build_crash_diagnosis(
             .map(|s| s.analysis.clone())
     });
 
-    let selected_id = if force_latest_log || force_launcher_log || force_archived_session.is_some() {
+    let selected_id = if force_latest_log || force_launcher_log || force_archived_session.is_some()
+    {
         None
     } else if let Some(id) = explicit {
         Some(id)
@@ -1159,7 +1162,9 @@ fn detect_log_section(line: &str, current: LogSection) -> LogSection {
 
 fn is_mod_list_table_row(line: &str) -> bool {
     let trimmed = line.trim();
-    trimmed.starts_with('|') && trimmed.contains('|') && !trimmed.to_ascii_lowercase().contains("mod id")
+    trimmed.starts_with('|')
+        && trimmed.contains('|')
+        && !trimmed.to_ascii_lowercase().contains("mod id")
 }
 
 /// First mod id from a pipe-formatted `-- Mods --` table row, e.g. `| fabric-api | 0.92.0 |`.
@@ -1205,13 +1210,21 @@ fn stack_context_for_line(
         if primary_frames == 0 {
             return (StackContext::PrimaryHead, false, 1);
         }
-        return (StackContext::PrimaryFrame, false, primary_frames.saturating_add(1));
+        return (
+            StackContext::PrimaryFrame,
+            false,
+            primary_frames.saturating_add(1),
+        );
     }
     if in_caused_by && !is_frame && !lower.contains("exception") {
         // Plain line after Caused by before frames — still part of caused-by block.
         return (StackContext::CausedByHead, true, primary_frames);
     }
-    (StackContext::Plain, false, if is_frame { primary_frames } else { 0 })
+    (
+        StackContext::Plain,
+        false,
+        if is_frame { primary_frames } else { 0 },
+    )
 }
 
 fn evidence_weight(ctx: StackContext, section: LogSection) -> u8 {
@@ -1259,7 +1272,13 @@ pub fn analyze_text_for_suspects(
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
-                        evidence_weighted(source, line_number, CrashSignalKind::SuspectedMods, line, 12),
+                        evidence_weighted(
+                            source,
+                            line_number,
+                            CrashSignalKind::SuspectedMods,
+                            line,
+                            12,
+                        ),
                         scaled_confidence(confidence_for_kind(CrashSignalKind::SuspectedMods), 12),
                     );
                 }
@@ -1423,8 +1442,7 @@ pub fn analyze_text_for_suspects(
                         evidence_weighted(source, line_number, kind, line, weight.max(100)),
                         scaled_confidence(confidence_for_kind(kind), weight.max(100)),
                     );
-                } else if !is_noise_token(&mod_id)
-                    && !is_invented_vanilla_resource_mod_id(&mod_id)
+                } else if !is_noise_token(&mod_id) && !is_invented_vanilla_resource_mod_id(&mod_id)
                 {
                     add_inferred_suspect(
                         &mut suspects,
@@ -1522,12 +1540,11 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
             .iter()
             .filter(|e| e.weight >= 70 || is_strong_match_source(&match_source_for_kind(e.kind)))
             .count();
-        entry.confidence = entry.confidence.saturating_add((strong_count.saturating_sub(1) as u8).min(5));
-        let distinct_sources: HashSet<String> = entry
-            .evidence
-            .iter()
-            .map(|e| e.source.clone())
-            .collect();
+        entry.confidence = entry
+            .confidence
+            .saturating_add((strong_count.saturating_sub(1) as u8).min(5));
+        let distinct_sources: HashSet<String> =
+            entry.evidence.iter().map(|e| e.source.clone()).collect();
         if distinct_sources.len() >= 2 {
             entry.confidence = entry.confidence.saturating_add(4).min(99);
         }
@@ -1614,8 +1631,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
             id: "eula".into(),
             title: "EULA not accepted".into(),
             severity: "critical".into(),
-            detail: "The server refuses to start until you accept Mojang's EULA."
-                .into(),
+            detail: "The server refuses to start until you accept Mojang's EULA.".into(),
             steps: vec![
                 "Open eula.txt in the instance folder and set eula=true.".into(),
                 "Restart the server afterwards.".into(),
@@ -1683,9 +1699,10 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
             id: "duplicate-mod".into(),
             title: "Duplicate mod detected".into(),
             severity: "critical".into(),
-            detail: "Two copies of the same mod are present (often an old jar left after updating). \
+            detail:
+                "Two copies of the same mod are present (often an old jar left after updating). \
                 The loader refuses to start."
-                .into(),
+                    .into(),
             steps: vec![
                 "Open the mods folder and delete the older/duplicate jar of the named mod.".into(),
                 "Keep only one version of each mod.".into(),
@@ -1728,19 +1745,19 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 stack trace names the exact class, which identifies the culprit mod."
                 .into(),
             steps: vec![
-                "Identify the entity/block from the stack trace and remove or update that mod.".into(),
-                "If a chunk is corrupted, restore it from a backup or delete the region file.".into(),
+                "Identify the entity/block from the stack trace and remove or update that mod."
+                    .into(),
+                "If a chunk is corrupted, restore it from a backup or delete the region file."
+                    .into(),
                 "As a last resort, remove the most recently added mod and retest.".into(),
             ],
             related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
-            fix: top
-                .filter(|s| s.known_in_manifest)
-                .map(|s| FixAction {
-                    kind: "disableMod".into(),
-                    label: format!("Disable {}", s.name),
-                    mod_id: Some(s.id.clone()),
-                }),
-                fixes: vec![],
+            fix: top.filter(|s| s.known_in_manifest).map(|s| FixAction {
+                kind: "disableMod".into(),
+                label: format!("Disable {}", s.name),
+                mod_id: Some(s.id.clone()),
+            }),
+            fixes: vec![],
         });
     }
 
@@ -1757,14 +1774,12 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 "Keep server-only mods out of the client instance.".into(),
             ],
             related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
-            fix: top
-                .filter(|s| s.known_in_manifest)
-                .map(|s| FixAction {
-                    kind: "disableMod".into(),
-                    label: format!("Disable {}", s.name),
-                    mod_id: Some(s.id.clone()),
-                }),
-                fixes: vec![],
+            fix: top.filter(|s| s.known_in_manifest).map(|s| FixAction {
+                kind: "disableMod".into(),
+                label: format!("Disable {}", s.name),
+                mod_id: Some(s.id.clone()),
+            }),
+            fixes: vec![],
         });
     }
 
@@ -1799,7 +1814,10 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 ids.push(id);
             }
         };
-        for signal in signals.iter().filter(|s| s.kind == CrashSignalKind::MissingDependency) {
+        for signal in signals
+            .iter()
+            .filter(|s| s.kind == CrashSignalKind::MissingDependency)
+        {
             for id in extract_missing_dependency_ids(&signal.text) {
                 push_missing(&mut missing_ids, id);
             }
@@ -1889,21 +1907,18 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
             id: "minecraft-version".into(),
             title: "Wrong Minecraft version for mod".into(),
             severity: "high".into(),
-            detail: "A mod requires a different Minecraft version than the one installed."
-                .into(),
+            detail: "A mod requires a different Minecraft version than the one installed.".into(),
             steps: vec![
                 "Either downgrade/upgrade Minecraft to the version the mod supports, or".into(),
                 "Replace the mod with a build for your current Minecraft version.".into(),
             ],
             related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
-            fix: top
-                .filter(|s| s.known_in_manifest)
-                .map(|s| FixAction {
-                    kind: "updateMod".into(),
-                    label: format!("Update {}", s.name),
-                    mod_id: Some(s.id.clone()),
-                }),
-                fixes: vec![],
+            fix: top.filter(|s| s.known_in_manifest).map(|s| FixAction {
+                kind: "updateMod".into(),
+                label: format!("Update {}", s.name),
+                mod_id: Some(s.id.clone()),
+            }),
+            fixes: vec![],
         });
     }
 
@@ -1912,8 +1927,9 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
             id: "wrong-loader".into(),
             title: "Wrong mod loader".into(),
             severity: "high".into(),
-            detail: "A mod is built for a different loader (e.g. Forge mod on Fabric, or vice versa)."
-                .into(),
+            detail:
+                "A mod is built for a different loader (e.g. Forge mod on Fabric, or vice versa)."
+                    .into(),
             steps: vec![
                 "Install the correct loader (Fabric/Forge/NeoForge/Quilt) for the mod.".into(),
                 "Or replace the mod with a port for your current loader.".into(),
@@ -1929,8 +1945,9 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
             id: "loader-version".into(),
             title: "Wrong loader version".into(),
             severity: "high".into(),
-            detail: "A mod requires a newer (or older) version of the mod loader than is installed."
-                .into(),
+            detail:
+                "A mod requires a newer (or older) version of the mod loader than is installed."
+                    .into(),
             steps: vec![
                 "Update the mod loader to the version the mod requires.".into(),
                 "Fabric Loader, Forge, NeoForge and Quilt each have their own version line.".into(),
@@ -2010,17 +2027,16 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 .into(),
             steps: vec![
                 "Update the mod whose mixin failed (named in the error / stack trace).".into(),
-                "If two mods conflict on the same class, keep only one or add a compat patch.".into(),
+                "If two mods conflict on the same class, keep only one or add a compat patch."
+                    .into(),
                 "Verify the mod supports your exact Minecraft + loader version.".into(),
             ],
             related_mods: related,
-            fix: top
-                .filter(|s| s.known_in_manifest)
-                .map(|s| FixAction {
-                    kind: "updateMod".into(),
-                    label: format!("Update {}", s.name),
-                    mod_id: Some(s.id.clone()),
-                }),
+            fix: top.filter(|s| s.known_in_manifest).map(|s| FixAction {
+                kind: "updateMod".into(),
+                label: format!("Update {}", s.name),
+                mod_id: Some(s.id.clone()),
+            }),
             fixes: vec![],
         });
     }
@@ -2202,7 +2218,7 @@ pub fn create_crash_fix_plan(
             risk: ChangeRisk::Medium,
             actions,
             requires_snapshot: true,
-        options: Vec::new(),
+            options: Vec::new(),
         };
     }
 
@@ -2370,8 +2386,7 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
     {
         return Some(CrashSignalKind::TickingEntity);
     }
-    if lower.contains("attempted to load class")
-        && lower.contains("invalid side")
+    if lower.contains("attempted to load class") && lower.contains("invalid side")
         || lower.contains("for invalid side")
         || (lower.contains("client class") && lower.contains("server"))
     {
@@ -2439,9 +2454,7 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
             return Some(CrashSignalKind::MissingDependency);
         }
         if mentions_minecraft
-            && (lower.contains("requires")
-                || lower.contains("needs")
-                || mentions_version_mismatch)
+            && (lower.contains("requires") || lower.contains("needs") || mentions_version_mismatch)
         {
             return Some(CrashSignalKind::MinecraftVersionMismatch);
         }
@@ -2749,7 +2762,10 @@ fn assign_blame_roles(suspects: &mut [SuspectedMod]) {
             .filter(|src| is_strong_match_source(src))
             .count();
         // Multi-signal agreement → primary; single strong → secondary; else related.
-        let has_caused = s.evidence.iter().any(|e| e.kind == CrashSignalKind::CausedBy);
+        let has_caused = s
+            .evidence
+            .iter()
+            .any(|e| e.kind == CrashSignalKind::CausedBy);
         let has_entry = s.match_sources.iter().any(|src| src == "entrypoint");
         if has_caused || has_entry || (s.confidence >= 92 && strong >= 1) {
             s.blame_role = BlameRole::Primary;
@@ -2787,7 +2803,11 @@ fn enrich_diagnosis_suspects(
 ) -> Vec<SuspectedMod> {
     // 1) Force high confidence for Fabric "Suspected mods" / report mod entries.
     if let Some(report) = selected_report {
-        for signal in report.signals.iter().filter(|s| s.kind == CrashSignalKind::SuspectedMods) {
+        for signal in report
+            .signals
+            .iter()
+            .filter(|s| s.kind == CrashSignalKind::SuspectedMods)
+        {
             for token in tokenize(&signal.text) {
                 if token.len() < 2 || is_noise_token(&token) {
                     continue;
@@ -2835,9 +2855,11 @@ fn enrich_diagnosis_suspects(
                         blame_role: BlameRole::Related,
                         match_sources: vec!["suspected_mods_line".into()],
                     };
-                    if let Some(module) = manifest.mods.iter().find(|m| {
-                        normalize_token(&m.id) == normalize_token(&entry.id)
-                    }) {
+                    if let Some(module) = manifest
+                        .mods
+                        .iter()
+                        .find(|m| normalize_token(&m.id) == normalize_token(&entry.id))
+                    {
                         inferred.id = module.id.clone();
                         inferred.name = module.name.clone();
                         inferred.version = Some(module.version.clone());
@@ -2846,9 +2868,8 @@ fn enrich_diagnosis_suspects(
                         inferred.authors = module.authors.clone();
                         inferred.confidence = 97;
                     }
-                    suspects = merge_suspected_mods(
-                        suspects.into_iter().chain(std::iter::once(inferred)),
-                    );
+                    suspects =
+                        merge_suspected_mods(suspects.into_iter().chain(std::iter::once(inferred)));
                 }
             }
         }
@@ -2906,7 +2927,11 @@ fn enrich_diagnosis_suspects(
                     source: "class-finder".into(),
                     line_number: 0,
                     kind: CrashSignalKind::Exception,
-                    text: format!("{} provided by {}", hit.class_name, hit.file_name.as_deref().unwrap_or(&hit.mod_id)),
+                    text: format!(
+                        "{} provided by {}",
+                        hit.class_name,
+                        hit.file_name.as_deref().unwrap_or(&hit.mod_id)
+                    ),
                     weight: 93,
                 };
                 if let Some(module) = manifest.mods.iter().find(|m| {
@@ -2917,13 +2942,7 @@ fn enrich_diagnosis_suspects(
                             .map(|(a, b)| a.eq_ignore_ascii_case(b))
                             .unwrap_or(false)
                 }) {
-                    boost_or_insert_suspect(
-                        &mut suspects,
-                        module,
-                        evidence,
-                        93,
-                        "class_in_jar",
-                    );
+                    boost_or_insert_suspect(&mut suspects, module, evidence, 93, "class_in_jar");
                 } else {
                     let inferred = SuspectedMod {
                         id: hit.mod_id.clone(),
@@ -2942,9 +2961,8 @@ fn enrich_diagnosis_suspects(
                         blame_role: BlameRole::Related,
                         match_sources: vec!["class_in_jar".into()],
                     };
-                    suspects = merge_suspected_mods(
-                        suspects.into_iter().chain(std::iter::once(inferred)),
-                    );
+                    suspects =
+                        merge_suspected_mods(suspects.into_iter().chain(std::iter::once(inferred)));
                 }
             }
         }
@@ -2981,9 +2999,10 @@ fn boost_or_insert_suspect(
             existing.match_sources.push(match_source.to_string());
         }
         if existing.evidence.len() < MAX_EVIDENCE_PER_SUSPECT
-            && !existing.evidence.iter().any(|e| {
-                e.source == evidence.source && e.line_number == evidence.line_number
-            })
+            && !existing
+                .evidence
+                .iter()
+                .any(|e| e.source == evidence.source && e.line_number == evidence.line_number)
         {
             existing.evidence.push(evidence);
         }
@@ -3103,9 +3122,7 @@ fn extract_missing_dependency_ids(text: &str) -> Vec<String> {
             }
         }
     }
-    ids.retain(|id| {
-        !is_noise_token(id) && !is_invented_vanilla_resource_mod_id(id)
-    });
+    ids.retain(|id| !is_noise_token(id) && !is_invented_vanilla_resource_mod_id(id));
     let mut uniq = Vec::new();
     for id in ids {
         if !uniq.iter().any(|x| x == &id) {
@@ -3340,7 +3357,8 @@ fn validate_report_id(report_id: &str) -> Result<PathBuf, CrashError> {
         return Err(CrashError::InvalidReportPath(report_id.to_string()));
     }
     let normalized = report_id.replace('\\', "/");
-    let ok = (normalized.starts_with("crash-reports/") && normalized.to_lowercase().ends_with(".txt"))
+    let ok = (normalized.starts_with("crash-reports/")
+        && normalized.to_lowercase().ends_with(".txt"))
         || (normalized.starts_with("hs_err/")
             && normalized
                 .rsplit('/')
@@ -3420,7 +3438,8 @@ pub fn summarize_hs_err(content: &str) -> (String, Option<String>, String) {
         || lower.contains("# there is insufficient memory")
     {
         "oom".to_string()
-    } else if lower.contains("problematic frame") || lower.contains("a fatal error has been detected")
+    } else if lower.contains("problematic frame")
+        || lower.contains("a fatal error has been detected")
     {
         "native".to_string()
     } else {
@@ -3750,7 +3769,7 @@ mod tests {
                 status: Vec::new(),
                 content_type: crate::manifest::ContentType::Mod,
                 authors: Vec::new(),
-            option: None,
+                option: None,
             }],
             overrides: None,
         }
@@ -3838,24 +3857,27 @@ mod tests {
         );
         let preferred: Vec<&ChangeOption> = plan.options.iter().filter(|o| o.preferred).collect();
         // Preferred first moves = the optimisation / bridge sides, not the content.
-        assert!(preferred.iter().any(|o| o.label.to_lowercase().contains("sodium")));
-        assert!(preferred.iter().any(|o| o.label.to_lowercase().contains("indium")));
-        assert!(!preferred.iter().any(|o| o.label.to_lowercase().contains("backrooms")));
+        assert!(preferred
+            .iter()
+            .any(|o| o.label.to_lowercase().contains("sodium")));
+        assert!(preferred
+            .iter()
+            .any(|o| o.label.to_lowercase().contains("indium")));
+        assert!(!preferred
+            .iter()
+            .any(|o| o.label.to_lowercase().contains("backrooms")));
         // The content side must be present as a (non-preferred) alternative.
-        assert!(plan.options.iter().any(|o| {
-            o.label.to_lowercase().contains("spb-revamped") && !o.preferred
-        }));
+        assert!(plan
+            .options
+            .iter()
+            .any(|o| { o.label.to_lowercase().contains("spb-revamped") && !o.preferred }));
         // Default (applied) actions disable the replaceable sides, never content.
-        assert!(
-            plan.actions
-                .iter()
-                .any(|a| matches!(a, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:sodium"))
-        );
-        assert!(
-            plan.actions
-                .iter()
-                .any(|a| matches!(a, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:indium"))
-        );
+        assert!(plan.actions.iter().any(
+            |a| matches!(a, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:sodium")
+        ));
+        assert!(plan.actions.iter().any(
+            |a| matches!(a, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:indium")
+        ));
         assert!(!plan.actions.iter().any(
             |a| matches!(a, ChangeAction::DisableMod { node_id } if node_id.0 == "mod:spb-revamped")
         ));
@@ -3891,7 +3913,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
-        option: None,
+            option: None,
         });
         // A different "critters*" mod must not steal the provided-by match via
         // the shared short name token "critters".
@@ -3915,7 +3937,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
-        option: None,
+            option: None,
         });
         let text = "Could not execute entrypoint stage 'main' due to errors, provided by 'crittersandcompanions'!";
 
@@ -3956,13 +3978,14 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
-        option: None,
+            option: None,
         });
         let text = "[Fabric] Loading 120 mods:\n\t- crittersandcompanions 2.1.0 provided by 'crittersandcompanions'\nDone.";
-        let (signals, suspects) =
-            analyze_text_for_suspects(text, "logs/latest.log", &manifest);
+        let (signals, suspects) = analyze_text_for_suspects(text, "logs/latest.log", &manifest);
         assert!(
-            !signals.iter().any(|s| s.kind == CrashSignalKind::Entrypoint),
+            !signals
+                .iter()
+                .any(|s| s.kind == CrashSignalKind::Entrypoint),
             "benign 'provided by' must not be Entrypoint"
         );
         assert!(
@@ -4052,7 +4075,7 @@ Failed to load required shader programs:\n\
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
-        option: None,
+            option: None,
         });
         // Real Fabric loader resolution error format.
         let text = "net.fabricmc.loader.impl.discovery.ModResolutionException: Mod 'Lithium' (lithium) requires version 1.0.0 or later of mod 'jellysquid3's sodium' (sodium), which is missing!";
@@ -4071,12 +4094,17 @@ Failed to load required shader programs:\n\
             .find(|h| h.id == "missing-dependency")
             .expect("missing-dependency hint");
         assert!(
-            hint.fixes.iter().any(|f| f.mod_id.as_deref() == Some("sodium")),
+            hint.fixes
+                .iter()
+                .any(|f| f.mod_id.as_deref() == Some("sodium")),
             "expected per-mod Install for sodium, got {:?}",
             hint.fixes
         );
         assert!(
-            !hint.fixes.iter().any(|f| f.mod_id.as_deref() == Some("lithium")),
+            !hint
+                .fixes
+                .iter()
+                .any(|f| f.mod_id.as_deref() == Some("lithium")),
             "requester lithium must not get an Install button"
         );
     }
@@ -4086,8 +4114,7 @@ Failed to load required shader programs:\n\
         // `missing` + substring `mod` inside `model` used to classify this as
         // MissingDependency and invent Install minecraftbuiltinentity.
         let text = "Missing model 'minecraft:builtin/entity' referenced from: item/foo";
-        let (signals, suspects) =
-            analyze_text_for_suspects(text, "logs/latest.log", &manifest());
+        let (signals, suspects) = analyze_text_for_suspects(text, "logs/latest.log", &manifest());
         assert!(
             !signals
                 .iter()
@@ -4096,10 +4123,8 @@ Failed to load required shader programs:\n\
             signals.iter().map(|s| &s.kind).collect::<Vec<_>>()
         );
         assert!(
-            !suspects
-                .iter()
-                .any(|s| s.id == "minecraftbuiltinentity"
-                    || crate::action_plan::is_invented_vanilla_resource_mod_id(&s.id)),
+            !suspects.iter().any(|s| s.id == "minecraftbuiltinentity"
+                || crate::action_plan::is_invented_vanilla_resource_mod_id(&s.id)),
             "must not invent suspects from vanilla resource paths, got {:?}",
             suspects.iter().map(|s| &s.id).collect::<Vec<_>>()
         );
@@ -4166,7 +4191,7 @@ Failed to load required shader programs:\n\
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
-        option: None,
+            option: None,
         });
         let text = "Incompatible mod set!\nMod 'Iris' (iris) requires version 1.21.4 or later of 'Minecraft' (minecraft), but a non-matching version 1.20.1 is present!";
         let (signals, suspects) =
@@ -4205,7 +4230,7 @@ Failed to load required shader programs:\n\
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
-        option: None,
+            option: None,
         });
         let text = "Mod 'Create' (create) requires the Forge mod loader, but Fabric Loader 0.15.0 is in use!";
         let (signals, suspects) =
@@ -4237,7 +4262,7 @@ Failed to load required shader programs:\n\
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
-        option: None,
+            option: None,
         });
         let text = "Mod 'Reese's Sodium Options' (reeses-sodium-options) 1.8.0 conflicts with 'Sodium' (sodium) 0.6.0 (incompatible).";
         let (signals, suspects) =
@@ -4249,30 +4274,28 @@ Failed to load required shader programs:\n\
     #[test]
     fn detects_loader_version_mismatch() {
         let mut manifest = manifest();
-        manifest
-            .mods
-            .push(ModSpec {
-                id: "fabric-api".to_string(),
-                name: "Fabric API".to_string(),
-                source: ModSource {
-                    kind: SourceKind::Modrinth,
-                    project_id: Some("fabric-api".to_string()),
-                    file_id: None,
-                    url: None,
-                    path: None,
-                    icon_url: None,
-                    categories: Vec::new(),
-                },
-                version: "0.92.0".to_string(),
-                file_name: Some("fabric-api-0.92.0.jar".to_string()),
-                hashes: None,
-                side: Side::Both,
-                dependencies: Vec::new(),
-                status: Vec::new(),
-                content_type: crate::manifest::ContentType::Mod,
-                authors: Vec::new(),
+        manifest.mods.push(ModSpec {
+            id: "fabric-api".to_string(),
+            name: "Fabric API".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("fabric-api".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+                categories: Vec::new(),
+            },
+            version: "0.92.0".to_string(),
+            file_name: Some("fabric-api-0.92.0.jar".to_string()),
+            hashes: None,
+            side: Side::Both,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
             option: None,
-            });
+        });
         let text = "Mod 'Fabric API' (fabric-api) requires Fabric Loader 0.16.0 or later, but 0.15.0 is present!";
         let (signals, suspects) =
             analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
@@ -4304,7 +4327,7 @@ Failed to load required shader programs:\n\
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
-        option: None,
+            option: None,
         });
         let text = "java.lang.NullPointerException: Cannot read field \"field_7512\" because \"player\" is null\n\tat knot//net.earthcomputer.clientcommands.features.PlayerRandCracker.throwItem(PlayerRandCracker.java:412)";
         let (_signals, suspects) =
@@ -4338,7 +4361,7 @@ Failed to load required shader programs:\n\
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
-        option: None,
+            option: None,
         });
         let text = "\
 java.lang.NullPointerException: Cannot read field \"field_7512\" because \"player\" is null
@@ -4355,11 +4378,9 @@ Resource Packs: vanilla, fabric, animatica, antip2w, betterconfig, clientcommand
             "clientcommands should be attributed via Java package / mixin / incompatible marker"
         );
         // The stack-trace lines must carry a high-confidence signal.
-        assert!(
-            signals
-                .iter()
-                .any(|s| s.kind == CrashSignalKind::Exception || s.kind == CrashSignalKind::Mixin)
-        );
+        assert!(signals
+            .iter()
+            .any(|s| s.kind == CrashSignalKind::Exception || s.kind == CrashSignalKind::Mixin));
     }
 
     #[test]
@@ -4385,7 +4406,7 @@ Resource Packs: vanilla, fabric, animatica, antip2w, betterconfig, clientcommand
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
-        option: None,
+            option: None,
         });
         let text = "Resource Packs: vanilla, fabric, animatica, antip2w, betterconfig, clientcommands (incompatible), cloth-config";
         let (signals, suspects) =
@@ -4394,11 +4415,9 @@ Resource Packs: vanilla, fabric, animatica, antip2w, betterconfig, clientcommand
             suspects.iter().any(|s| s.id == "clientcommands"),
             "clientcommands should be attributed via the (incompatible) marker"
         );
-        assert!(
-            signals
-                .iter()
-                .any(|s| s.kind == CrashSignalKind::ModVersionMismatch)
-        );
+        assert!(signals
+            .iter()
+            .any(|s| s.kind == CrashSignalKind::ModVersionMismatch));
     }
 
     #[test]
@@ -4595,7 +4614,10 @@ Caused by: java.lang.IllegalStateException: boom
         let sodium = suspects.iter().find(|s| s.id == "sodium").expect("sodium");
         assert!(sodium.confidence >= 90);
         assert!(
-            sodium.match_sources.iter().any(|s| s == "suspected_mods_line")
+            sodium
+                .match_sources
+                .iter()
+                .any(|s| s == "suspected_mods_line")
                 || sodium.match_sources.iter().any(|s| s == "mod_file")
         );
         // Multi-signal → primary after merge/assign.
@@ -4715,7 +4737,9 @@ Caused by: org.spongepowered.asm.mixin.transformer.throwables.MixinTransformerEr
             "mixin conflict should not invent multiple primaries: {:?}",
             primaries.iter().map(|s| &s.id).collect::<Vec<_>>()
         );
-        assert!(suspects.iter().any(|s| s.id == "indium" || s.id == "sodium"));
+        assert!(suspects
+            .iter()
+            .any(|s| s.id == "indium" || s.id == "sodium"));
     }
 
     #[test]
@@ -4744,4 +4768,3 @@ Caused by: java.lang.IllegalStateException: create entity stuck
         }
     }
 }
-

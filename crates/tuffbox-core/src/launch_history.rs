@@ -47,9 +47,7 @@ fn launches_jsonl(project_dir: &Path) -> PathBuf {
 }
 
 fn session_dir(project_dir: &Path, session_id: &str) -> PathBuf {
-    history_root(project_dir)
-        .join("launches")
-        .join(session_id)
+    history_root(project_dir).join("launches").join(session_id)
 }
 
 fn rel_path(project_dir: &Path, abs: &Path) -> Option<String> {
@@ -227,7 +225,11 @@ mod tests {
         ));
         let logs = tmp.join("logs");
         fs::create_dir_all(&logs).unwrap();
-        fs::write(logs.join("latest.log"), "---- Minecraft Crash Report ----\n").unwrap();
+        fs::write(
+            logs.join("latest.log"),
+            "---- Minecraft Crash Report ----\n",
+        )
+        .unwrap();
 
         let entry = archive_crashed_session(&tmp, Some(1), 42, Some("fp-abc".into()), None)
             .expect("archive");

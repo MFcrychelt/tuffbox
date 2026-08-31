@@ -127,7 +127,7 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
                 status: vec!["ok".to_string()],
                 content_type,
                 authors: Vec::new(),
-            option: None,
+                option: None,
             })
         })
         .collect();
@@ -309,7 +309,7 @@ pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest,
                 status: vec!["imported-curseforge".into()],
                 content_type: crate::manifest::ContentType::Mod,
                 authors: Vec::new(),
-            option: None,
+                option: None,
             }
         })
         .collect();
@@ -425,7 +425,9 @@ pub fn resolve_curseforge_pack_files(
         module.file_name = Some(info.file_name.clone());
         module.version = info.display_name.clone();
         // Prefer API URL, then reconstructed CDN / Modrinth fallback already applied above.
-        module.source.url = info.resolved_download_url().or_else(|| info.download_url.clone());
+        module.source.url = info
+            .resolved_download_url()
+            .or_else(|| info.download_url.clone());
         module.hashes = Some(FileHashes {
             sha1: info.hashes.sha1.clone(),
             sha512: info.hashes.sha512.clone(),
@@ -682,9 +684,8 @@ pub fn import_instance_directory(
     }
 
     if crate::packwiz::is_packwiz_pack(path) {
-        let manifest = crate::packwiz::import_packwiz_pack(path).map_err(|e| {
-            ImportError::UnsupportedFormat(format!("packwiz import failed: {e}"))
-        })?;
+        let manifest = crate::packwiz::import_packwiz_pack(path)
+            .map_err(|e| ImportError::UnsupportedFormat(format!("packwiz import failed: {e}")))?;
         return Ok((manifest, path.to_path_buf()));
     }
 
@@ -698,8 +699,7 @@ pub fn import_instance_directory(
         || path.join("manifest.json").is_file();
     if !looks_like_instance {
         return Err(ImportError::UnsupportedFormat(
-            "folder does not look like a Minecraft / Prism / MultiMC / CurseForge instance"
-                .into(),
+            "folder does not look like a Minecraft / Prism / MultiMC / CurseForge instance".into(),
         ));
     }
 
@@ -729,7 +729,11 @@ pub fn import_instance_directory(
 
     if let Ok(raw) = fs::read_to_string(path.join("minecraftinstance.json")) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(n) = v.get("name").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
+            if let Some(n) = v
+                .get("name")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 name = n.to_string();
             }
             if let Some(m) = v
@@ -803,7 +807,8 @@ fn detect_instance_meta(
     if let Some(meta) = parse_mmc_pack(&instance_root.join("mmc-pack.json")) {
         return Ok(meta);
     }
-    if let Some(meta) = parse_curseforge_instance_json(&instance_root.join("minecraftinstance.json"))
+    if let Some(meta) =
+        parse_curseforge_instance_json(&instance_root.join("minecraftinstance.json"))
     {
         return Ok(meta);
     }
@@ -1031,9 +1036,7 @@ pub fn is_mods_only_zip(path: impl AsRef<Path>) -> bool {
         if lower == "modrinth.index.json" {
             has_mrpack = true;
         }
-        if lower.ends_with(".jar")
-            && (lower.starts_with("mods/") || !lower.contains('/'))
-        {
+        if lower.ends_with(".jar") && (lower.starts_with("mods/") || !lower.contains('/')) {
             jar_count += 1;
         }
     }

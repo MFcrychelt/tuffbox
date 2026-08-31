@@ -95,6 +95,10 @@ pub struct ProjectInfo {
     pub issues_url: Option<String>,
     #[serde(default)]
     pub source_url: Option<String>,
+    /// Project creation timestamp (`published` on Modrinth GET /project,
+    /// `dateCreated` on CurseForge). Absent for search hits / local projects.
+    #[serde(default)]
+    pub date_created: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,10 +190,7 @@ impl ProviderFileInfo {
 
         // Check if this version actually supports the requested loader
         // (accounting for aliases like neoforge↔neo, paper↔bukkit).
-        let version_matches_loader = version
-            .loaders
-            .iter()
-            .any(|vl| loaders_match(vl, loader));
+        let version_matches_loader = version.loaders.iter().any(|vl| loaders_match(vl, loader));
 
         // A version declaring a single loader only has one kind of file.
         let single_loader = version.loaders.len() <= 1;
@@ -243,9 +244,7 @@ fn loader_aliases(loader: &str) -> &'static [&'static str] {
     match loader.to_lowercase().as_str() {
         "neoforge" => &["neo"],
         "neo" => &["neoforge"],
-        "paper" | "purpur" | "spigot" | "bukkit" => {
-            &["paper", "purpur", "spigot", "bukkit"]
-        }
+        "paper" | "purpur" | "spigot" | "bukkit" => &["paper", "purpur", "spigot", "bukkit"],
         _ => &[],
     }
 }

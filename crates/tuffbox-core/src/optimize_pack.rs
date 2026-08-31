@@ -128,11 +128,7 @@ fn parse_mc_version_parts(v: &str) -> Option<(u32, u32, u32)> {
     let mut it = v.split('.');
     let major = it.next()?.parse().ok()?;
     let minor = it.next()?.parse().ok()?;
-    let patch = it
-        .next()
-        .map(|p| p.parse().ok())
-        .flatten()
-        .unwrap_or(0);
+    let patch = it.next().map(|p| p.parse().ok()).flatten().unwrap_or(0);
     Some((major, minor, patch))
 }
 
@@ -171,20 +167,23 @@ pub fn resolve_version_profile_key(
     {
         return Some((*best).clone());
     }
-    profiles.contains_key("default").then(|| "default".to_string())
+    profiles
+        .contains_key("default")
+        .then(|| "default".to_string())
 }
 
 fn resolve_curated_pack(
     map: &HashMap<String, CuratedPackRef>,
     mc_version: &str,
 ) -> Option<CuratedPackRef> {
-    if let Some(p) = map.get(mc_version).filter(|p| !is_unpublished_curated_stub(p)) {
+    if let Some(p) = map
+        .get(mc_version)
+        .filter(|p| !is_unpublished_curated_stub(p))
+    {
         return Some(p.clone());
     }
-    let keys_map: HashMap<String, Vec<String>> = map
-        .keys()
-        .map(|k| (k.clone(), Vec::new()))
-        .collect();
+    let keys_map: HashMap<String, Vec<String>> =
+        map.keys().map(|k| (k.clone(), Vec::new())).collect();
     if let Some(key) = resolve_version_profile_key(&keys_map, mc_version) {
         if let Some(p) = map.get(&key).filter(|p| !is_unpublished_curated_stub(p)) {
             return Some(p.clone());
@@ -262,10 +261,13 @@ fn mod_entry_supports_loader(entry: &OptimizeModEntry, loader: &str) -> bool {
 /// Version- and loader-aware optimization mod list (Fabulously Optimized–inspired).
 pub fn optimization_candidates(loader: &str, mc_version: &str) -> Vec<OptimizeModCandidate> {
     let file = load_optimize_mods_with_override();
-    let loader_profiles = file
-        .profiles
-        .get(loader)
-        .or_else(|| if loader == "quilt" { file.profiles.get("fabric") } else { None });
+    let loader_profiles = file.profiles.get(loader).or_else(|| {
+        if loader == "quilt" {
+            file.profiles.get("fabric")
+        } else {
+            None
+        }
+    });
     let Some(loader_profiles) = loader_profiles else {
         return Vec::new();
     };
@@ -398,7 +400,13 @@ pub fn inventory_tokens(manifest: &ProjectManifest) -> Vec<String> {
     out
 }
 
-fn edit_action(path: &str, patch_type: &str, patch: Value, reason: &str, risk: &str) -> LauncherAction {
+fn edit_action(
+    path: &str,
+    patch_type: &str,
+    patch: Value,
+    reason: &str,
+    risk: &str,
+) -> LauncherAction {
     LauncherAction {
         op: "edit_config".into(),
         mod_id: None,

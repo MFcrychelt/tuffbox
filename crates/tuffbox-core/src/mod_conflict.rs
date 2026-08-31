@@ -157,12 +157,7 @@ pub fn parse_breakage_line(line: &str) -> Option<Conflict> {
         }
         if let (Some(a), Some(b)) = (owner, target) {
             if a != b && !a.is_empty() && !b.is_empty() {
-                return Some(Conflict {
-                    a,
-                    b,
-                    kind,
-                    reason,
-                });
+                return Some(Conflict { a, b, kind, reason });
             }
         }
         return None;
@@ -194,12 +189,7 @@ pub fn parse_breakage_line(line: &str) -> Option<Conflict> {
             .or_else(|| mod_token(after, TokenSide::First));
         if let (Some(a), Some(b)) = (owner, target) {
             if a != b && !a.is_empty() && !b.is_empty() {
-                return Some(Conflict {
-                    a,
-                    b,
-                    kind,
-                    reason,
-                });
+                return Some(Conflict { a, b, kind, reason });
             }
         }
     }
@@ -284,10 +274,9 @@ mod tests {
 
     #[test]
     fn parses_incompatible_with_quoted() {
-        let c = parse_breakage_line(
-            "SP-Backrooms is incompatible with any version of mod 'Sodium'",
-        )
-        .expect("should parse");
+        let c =
+            parse_breakage_line("SP-Backrooms is incompatible with any version of mod 'Sodium'")
+                .expect("should parse");
         assert_eq!(c.a, "sp-backrooms");
         assert_eq!(c.b, "sodium");
         assert_eq!(c.kind, ConflictKind::Breaking);
@@ -295,8 +284,7 @@ mod tests {
 
     #[test]
     fn parses_breaks_quoted() {
-        let c = parse_breakage_line("spb-revamped 1.2.0 breaks 'indium'")
-            .expect("should parse");
+        let c = parse_breakage_line("spb-revamped 1.2.0 breaks 'indium'").expect("should parse");
         assert_eq!(c.b, "indium");
         assert_eq!(c.kind, ConflictKind::Breaking);
     }

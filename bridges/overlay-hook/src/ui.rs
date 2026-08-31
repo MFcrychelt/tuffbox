@@ -4,10 +4,10 @@ use crate::gl;
 use crate::ipc;
 use crate::lru;
 use crate::mpv;
+use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Gdi::HDC;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-use windows::Win32::Foundation::POINT;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -83,7 +83,8 @@ impl UiState {
 
         for (tab, _label, i) in tabs {
             let ty = py + 24.0 + i as f32 * 48.0;
-            let hot = mouse.0 >= px && mouse.0 <= px + rail_w && mouse.1 >= ty && mouse.1 <= ty + 40.0;
+            let hot =
+                mouse.0 >= px && mouse.0 <= px + rail_w && mouse.1 >= ty && mouse.1 <= ty + 40.0;
             let active = self.tab == tab;
             let (r, g, b) = if active {
                 (0.15, 0.45, 0.85)
@@ -104,38 +105,59 @@ impl UiState {
         let content_h = panel_h - 32.0;
 
         match self.tab {
-            Tab::Youtube => self.draw_youtube(content_x, content_y, content_w, content_h, mouse, click),
+            Tab::Youtube => {
+                self.draw_youtube(content_x, content_y, content_w, content_h, mouse, click)
+            }
             Tab::Friends => {
                 gl::fill_rect(content_x, content_y, content_w, 40.0, 0.12, 0.14, 0.18, 1.0);
                 // JSON blob as colored bars proxy for list length
                 let n = self.friends_json.len().min(4000) as f32 / 4000.0;
-                gl::fill_rect(content_x, content_y + 56.0, content_w * n.max(0.05), 12.0, 0.3, 0.7, 0.4, 1.0);
+                gl::fill_rect(
+                    content_x,
+                    content_y + 56.0,
+                    content_w * n.max(0.05),
+                    12.0,
+                    0.3,
+                    0.7,
+                    0.4,
+                    1.0,
+                );
                 self.status = format!("Friends IPC ({} bytes)", self.friends_json.len());
             }
             Tab::Chat => {
                 gl::fill_rect(content_x, content_y, content_w, 40.0, 0.12, 0.14, 0.18, 1.0);
                 let n = self.chat_json.len().min(4000) as f32 / 4000.0;
-                gl::fill_rect(content_x, content_y + 56.0, content_w * n.max(0.05), 12.0, 0.4, 0.5, 0.9, 1.0);
+                gl::fill_rect(
+                    content_x,
+                    content_y + 56.0,
+                    content_w * n.max(0.05),
+                    12.0,
+                    0.4,
+                    0.5,
+                    0.9,
+                    1.0,
+                );
                 self.status = format!("Chat IPC ({} bytes)", self.chat_json.len());
             }
         }
 
         // Status bar
-        gl::fill_rect(px, py + panel_h - 28.0, panel_w, 28.0, 0.04, 0.05, 0.07, 1.0);
+        gl::fill_rect(
+            px,
+            py + panel_h - 28.0,
+            panel_w,
+            28.0,
+            0.04,
+            0.05,
+            0.07,
+            1.0,
+        );
         let _ = &self.status;
 
         gl::end_overlay_frame();
     }
 
-    fn draw_youtube(
-        &mut self,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        mouse: (f32, f32),
-        click: bool,
-    ) {
+    fn draw_youtube(&mut self, x: f32, y: f32, w: f32, h: f32, mouse: (f32, f32), click: bool) {
         let row_h = 72.0;
         let mut cy = y - self.scroll;
         for item in &self.feed {
@@ -189,7 +211,16 @@ impl UiState {
             let ph = ph as f32;
             let mx = x + w - pw - 12.0;
             let my = y + h - ph - 48.0;
-            gl::fill_rect(mx - 8.0, my - 8.0, pw + 16.0, ph + 40.0, 0.05, 0.05, 0.08, 0.95);
+            gl::fill_rect(
+                mx - 8.0,
+                my - 8.0,
+                pw + 16.0,
+                ph + 40.0,
+                0.05,
+                0.05,
+                0.08,
+                0.95,
+            );
             gl::textured_rect(tex, mx, my, pw, ph);
             // Transport hit targets
             let pause = hit(mouse, mx, my + ph + 4.0, 60.0, 22.0);

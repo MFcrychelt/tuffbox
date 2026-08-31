@@ -600,7 +600,11 @@ mod tests {
             )
             .unwrap();
 
-        fs::write(&lockfile_path, "{\"schemaVersion\":\"0.1.0\",\"mods\":[\"new\"]}").unwrap();
+        fs::write(
+            &lockfile_path,
+            "{\"schemaVersion\":\"0.1.0\",\"mods\":[\"new\"]}",
+        )
+        .unwrap();
         store.rollback(&snapshot.id).unwrap();
 
         let restored = fs::read_to_string(&lockfile_path).unwrap();
@@ -643,10 +647,7 @@ mod tests {
         fs::write(project_dir.join("mods/added.jar"), b"new").unwrap();
         store.rollback(&snapshot.id).unwrap();
 
-        assert_eq!(
-            fs::read(project_dir.join("mods/kept.jar")).unwrap(),
-            b"old"
-        );
+        assert_eq!(fs::read(project_dir.join("mods/kept.jar")).unwrap(), b"old");
         assert!(
             !project_dir.join("mods/added.jar").is_file(),
             "files added after the snapshot must be removed on rollback"

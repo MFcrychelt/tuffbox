@@ -77,9 +77,8 @@ unsafe fn try_load() -> Option<MpvApi> {
 }
 
 pub fn play_url(url: &str) -> Result<(), String> {
-    let api = load_api().ok_or_else(|| {
-        "libmpv not found (place mpv-2.dll next to the hook)".to_string()
-    })?;
+    let api = load_api()
+        .ok_or_else(|| "libmpv not found (place mpv-2.dll next to the hook)".to_string())?;
     shutdown();
     unsafe {
         let handle = (api.create)();

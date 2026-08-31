@@ -103,7 +103,9 @@ fn chat_file_path(project_dir: &Path, chat_id: &str) -> Result<PathBuf, String> 
     let dir = quest_chats_dir(project_dir);
     let path = dir.join(format!("{chat_id}.json"));
     // Ensure join did not escape the chats directory (defense in depth).
-    let parent = path.parent().ok_or_else(|| "invalid chat path".to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "invalid chat path".to_string())?;
     if parent != dir.as_path() {
         return Err(format!("invalid chat id: {chat_id}"));
     }
@@ -131,7 +133,10 @@ pub fn list_quest_chats_detailed(project_dir: &Path) -> Result<QuestChatListResu
     }
     let mut sessions = Vec::new();
     let mut corrupt_skipped = 0u32;
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+    for entry in std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
@@ -155,10 +160,7 @@ pub fn list_quest_chats_detailed(project_dir: &Path) -> Result<QuestChatListResu
     })
 }
 
-pub fn save_quest_chat(
-    project_dir: &Path,
-    session: &QuestChatSession,
-) -> Result<PathBuf, String> {
+pub fn save_quest_chat(project_dir: &Path, session: &QuestChatSession) -> Result<PathBuf, String> {
     let path = chat_file_path(project_dir, &session.id)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -213,7 +215,10 @@ mod tests {
         let path = chat_file_path(dir.path(), "qchat-1").unwrap();
         assert_eq!(
             path,
-            dir.path().join(".tuffbox").join("quest_chats").join("qchat-1.json")
+            dir.path()
+                .join(".tuffbox")
+                .join("quest_chats")
+                .join("qchat-1.json")
         );
         assert!(chat_file_path(dir.path(), "../escape").is_err());
     }

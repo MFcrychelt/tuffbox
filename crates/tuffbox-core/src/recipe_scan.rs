@@ -656,7 +656,9 @@ fn ingredient_js(id: &str) -> String {
 }
 
 fn slot_at(grid: &[Option<String>], i: usize) -> Option<&str> {
-    grid.get(i).and_then(|s| s.as_deref()).filter(|s| !s.is_empty())
+    grid.get(i)
+        .and_then(|s| s.as_deref())
+        .filter(|s| !s.is_empty())
 }
 
 fn resolve_craft_kind(draft: &CraftDraft) -> String {
@@ -678,7 +680,11 @@ fn normalize_tag_id(tag_id: &str) -> String {
 }
 
 /// Emit `event.shaped(...)` for a 3×3 grid (compact bounding box).
-pub fn kubejs_shaped_line(grid: &[Option<String>], output: &str, count: u32) -> Result<String, String> {
+pub fn kubejs_shaped_line(
+    grid: &[Option<String>],
+    output: &str,
+    count: u32,
+) -> Result<String, String> {
     if output.trim().is_empty() {
         return Err("output item is required".into());
     }
@@ -750,7 +756,11 @@ pub fn kubejs_shaped_line(grid: &[Option<String>], output: &str, count: u32) -> 
 }
 
 /// Emit `event.shapeless(...)` from non-empty grid slots (max 9).
-pub fn kubejs_shapeless_line(grid: &[Option<String>], output: &str, count: u32) -> Result<String, String> {
+pub fn kubejs_shapeless_line(
+    grid: &[Option<String>],
+    output: &str,
+    count: u32,
+) -> Result<String, String> {
     if output.trim().is_empty() {
         return Err("output item is required".into());
     }
@@ -850,11 +860,7 @@ pub fn kubejs_smithing_line(
     if base.trim().is_empty() || addition.trim().is_empty() {
         return Err("smithing requires base and addition".into());
     }
-    let out = format!(
-        "Item.of('{}', {})",
-        escape_js_single(output),
-        count.max(1)
-    );
+    let out = format!("Item.of('{}', {})", escape_js_single(output), count.max(1));
     if let Some(t) = template.map(str::trim).filter(|s| !s.is_empty()) {
         Ok(format!(
             "  event.smithing({}, {}, {}, {})",
@@ -928,13 +934,7 @@ fn craft_line_from_draft(draft: &CraftDraft) -> Result<String, String> {
                 .as_deref()
                 .or_else(|| slot_at(&draft.grid, 3))
                 .filter(|s| !s.is_empty());
-            kubejs_smithing_line(
-                &draft.output,
-                draft.output_count,
-                template,
-                base,
-                addition,
-            )
+            kubejs_smithing_line(&draft.output, draft.output_count, template, base, addition)
         }
         other => Err(format!("unsupported recipe kind: {other}")),
     }
@@ -1017,7 +1017,10 @@ pub fn write_kubejs_craft(project_dir: &Path, draft: &CraftDraft) -> Result<Stri
     if let Some(ref replace_id) = draft.replace_id {
         let id = replace_id.trim();
         if !id.is_empty() && id != companion_id {
-            lines.push(format!("  event.remove({{ id: '{}' }})", escape_js_single(id)));
+            lines.push(format!(
+                "  event.remove({{ id: '{}' }})",
+                escape_js_single(id)
+            ));
         }
     }
     // Prefer datapack companion for visibility; still emit KubeJS for packs that load scripts.
@@ -1054,7 +1057,11 @@ fn companion_recipe_id(draft: &CraftDraft) -> String {
     draft.base.hash(&mut hasher);
     draft.addition.hash(&mut hasher);
     let short = format!("{:x}", hasher.finish());
-    format!("tuffbox:{}_{}", sanitize_recipe_file_stem(&out), &short[..8.min(short.len())])
+    format!(
+        "tuffbox:{}_{}",
+        sanitize_recipe_file_stem(&out),
+        &short[..8.min(short.len())]
+    )
 }
 
 fn sanitize_recipe_file_stem(s: &str) -> String {
@@ -1236,7 +1243,8 @@ fn companion_shaped_json(
             match slot_at(grid, r * 3 + c) {
                 None => row.push(' '),
                 Some(id) => {
-                    let ch = if let Some((ch, _)) = key_map.iter().find(|(_, existing)| existing == id)
+                    let ch = if let Some((ch, _)) =
+                        key_map.iter().find(|(_, existing)| existing == id)
                     {
                         *ch
                     } else {
@@ -1389,8 +1397,15 @@ mod tests {
 
     #[test]
     fn smelting_and_stonecutting_emit() {
-        let line = kubejs_cooking_line("smelting", "minecraft:glass", 1, "minecraft:sand", Some(0.1), Some(200))
-            .unwrap();
+        let line = kubejs_cooking_line(
+            "smelting",
+            "minecraft:glass",
+            1,
+            "minecraft:sand",
+            Some(0.1),
+            Some(200),
+        )
+        .unwrap();
         assert!(line.contains("event.smelting(Item.of('minecraft:glass', 1), 'minecraft:sand')"));
         assert!(line.contains(".xp(0.1)"));
         assert!(line.contains(".cookingTime(200)"));

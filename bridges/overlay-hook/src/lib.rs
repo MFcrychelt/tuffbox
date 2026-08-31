@@ -146,7 +146,8 @@ mod win {
     fn bootstrap() {
         std::thread::spawn(|| {
             for _ in 0..50 {
-                if unsafe { GetModuleHandleA(PCSTR::from_raw(b"opengl32.dll\0".as_ptr())).is_ok() } {
+                if unsafe { GetModuleHandleA(PCSTR::from_raw(b"opengl32.dll\0".as_ptr())).is_ok() }
+                {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));

@@ -1,9 +1,7 @@
 //! Create Mode intent pipeline: search JSON → seed mods → co-occur partners → descriptions.
 
 use crate::modpack_index::MpiSearchQuery;
-use crate::provider::{
-    ContentProvider, ModrinthProvider, ProjectInfo, ProviderSearchQuery,
-};
+use crate::provider::{ContentProvider, ModrinthProvider, ProjectInfo, ProviderSearchQuery};
 use crate::swarm::ModPairStat;
 use crate::swarm_supabase::PartnerStat;
 use serde::{Deserialize, Serialize};
@@ -25,8 +23,9 @@ pub struct CandidateAddon {
 pub fn theme_seed_queries(theme: &str) -> Vec<&'static str> {
     let t = theme.trim().to_ascii_lowercase().replace('_', "-");
     match t.as_str() {
-        "industrial" | "industry" | "tech" | "technology" | "create" | "factory"
-        | "automation" => vec!["create", "mekanism"],
+        "industrial" | "industry" | "tech" | "technology" | "create" | "factory" | "automation" => {
+            vec!["create", "mekanism"]
+        }
         "magic" | "magical" => vec!["botania", "ars nouveau", "iron's spells"],
         "sci-fi" | "scifi" => vec!["ad astra", "create"],
         "adventure" | "adventure-and-rpg" | "rpg" => vec!["origins", "simply swords"],
@@ -142,10 +141,7 @@ pub fn enrich_partners_with_descriptions(
 ) -> Vec<CandidateAddon> {
     let provider = ModrinthProvider::new();
     let mut out = seeds.to_vec();
-    let mut seen: HashSet<String> = seeds
-        .iter()
-        .map(|c| c.slug.to_ascii_lowercase())
-        .collect();
+    let mut seen: HashSet<String> = seeds.iter().map(|c| c.slug.to_ascii_lowercase()).collect();
 
     for p in partners.iter().take(limit.max(1)) {
         let key = p.partner.to_ascii_lowercase();
@@ -242,7 +238,10 @@ pub fn merge_partner_stats(batches: &[Vec<PartnerStat>], limit: usize) -> Vec<Pa
     }
     let mut out: Vec<PartnerStat> = best
         .into_iter()
-        .map(|(partner, pack_count)| PartnerStat { partner, pack_count })
+        .map(|(partner, pack_count)| PartnerStat {
+            partner,
+            pack_count,
+        })
         .collect();
     out.sort_by(|a, b| b.pack_count.cmp(&a.pack_count));
     out.truncate(limit.max(1));
@@ -337,7 +336,9 @@ mod tests {
         let out = soft_boost_partners(&sb, &local, 10);
         assert_eq!(out.len(), 2, "local-only must not replace SB graph");
         assert_eq!(out[0].partner, "jei");
-        assert!(out.iter().any(|p| p.partner == "sodium" && p.pack_count >= 50));
+        assert!(out
+            .iter()
+            .any(|p| p.partner == "sodium" && p.pack_count >= 50));
         let empty_sb = soft_boost_partners(&[], &local, 5);
         assert_eq!(empty_sb[0].partner, "local-only");
     }
@@ -386,6 +387,9 @@ mod tests {
         }"#;
         let plan = parse_action_plan(json).unwrap();
         assert_eq!(plan.actions.len(), 2);
-        assert_eq!(plan.actions[1].mod_id.as_deref(), Some("create-aeronautics"));
+        assert_eq!(
+            plan.actions[1].mod_id.as_deref(),
+            Some("create-aeronautics")
+        );
     }
 }
