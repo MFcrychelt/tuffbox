@@ -37,9 +37,7 @@ impl LocalJarProvider {
     }
 
     fn mod_id(&self) -> String {
-        self.file_name()
-            .trim_end_matches(".jar")
-            .to_string()
+        self.file_name().trim_end_matches(".jar").to_string()
     }
 }
 
@@ -69,6 +67,7 @@ impl ContentProvider for LocalJarProvider {
             server_side: None,
             issues_url: None,
             source_url: None,
+            date_created: None,
         })
     }
 

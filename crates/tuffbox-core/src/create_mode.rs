@@ -244,7 +244,10 @@ pub fn parse_create_mode_ai_response(raw: &str) -> Result<CreateModeAiResponse, 
     if let Ok(brief) = parse_pack_brief(trimmed) {
         let search = search_from_brief(&brief);
         return Ok(CreateModeAiResponse {
-            reply: format!("Draft plan ready: {} ({} mods).", brief.title, brief.target_count),
+            reply: format!(
+                "Draft plan ready: {} ({} mods).",
+                brief.title, brief.target_count
+            ),
             brief: Some(brief),
             search: Some(search).filter(|s| s.theme.is_some() || !s.keywords.is_empty()),
         });
@@ -302,10 +305,7 @@ pub fn merge_mpi_hints_into_brief(
         .flat_map(|m| {
             [
                 m.query.to_ascii_lowercase(),
-                m.slug_hint
-                    .as_deref()
-                    .unwrap_or("")
-                    .to_ascii_lowercase(),
+                m.slug_hint.as_deref().unwrap_or("").to_ascii_lowercase(),
             ]
         })
         .filter(|s| !s.is_empty())
@@ -362,9 +362,9 @@ fn normalize_brief(mut brief: CreateModeBrief) -> CreateModeBrief {
                 if i + 1 == n {
                     cat.count = brief.target_count.saturating_sub(allocated).max(1);
                 } else {
-                    let scaled =
-                        ((cat.count.max(1) as f64) * (brief.target_count as f64) / (sum as f64))
-                            .round() as u32;
+                    let scaled = ((cat.count.max(1) as f64) * (brief.target_count as f64)
+                        / (sum as f64))
+                        .round() as u32;
                     cat.count = scaled.max(1);
                     allocated = allocated.saturating_add(cat.count);
                 }
@@ -415,11 +415,7 @@ pub fn validate_pack_brief(brief: &CreateModeBrief) -> Result<(), String> {
         return Err("CreateModeBrief.mcVersion is empty".into());
     }
     // Coarse Minecraft version: 1.20, 1.20.1, 1.21.4-pre…
-    let ver_ok = ver
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_digit())
-        && ver.contains('.');
+    let ver_ok = ver.chars().next().is_some_and(|c| c.is_ascii_digit()) && ver.contains('.');
     if !ver_ok {
         return Err(format!(
             "CreateModeBrief.mcVersion looks invalid: '{ver}' (expected e.g. 1.20.1)"
@@ -808,6 +804,7 @@ impl LiveCatalogSearch {
                 query.offset.unwrap_or(0),
                 query.limit.unwrap_or(10).clamp(1, 20),
                 Some(2), // popularity
+                None,
             )
             .map_err(|e| e.to_string())?;
 
@@ -844,6 +841,7 @@ impl LiveCatalogSearch {
                     server_side: None,
                     issues_url: None,
                     source_url: None,
+                    date_created: None,
                 });
             }
         }
@@ -867,15 +865,10 @@ impl ModSearch for LiveCatalogSearch {
             Err(mr_err) => {
                 // CF lookup by slug → retry Modrinth with CF slug (often identical).
                 let loader = None;
-                if let Ok(page) = self.curseforge.search_content(
-                    6,
-                    id_or_slug,
-                    None,
-                    loader,
-                    0,
-                    5,
-                    Some(2),
-                ) {
+                if let Ok(page) =
+                    self.curseforge
+                        .search_content(6, id_or_slug, None, loader, 0, 5, Some(2), None)
+                {
                     for hit in page.hits {
                         if hit.slug.eq_ignore_ascii_case(id_or_slug)
                             || hit.name.eq_ignore_ascii_case(id_or_slug)
@@ -900,7 +893,11 @@ pub struct AssembleOptions<'a> {
     pub on_progress: Option<&'a mut dyn FnMut(&str, usize, usize, &str)>,
 }
 
-fn base_query(brief: &CreateModeBrief, query: Option<String>, category: Option<String>) -> ProviderSearchQuery {
+fn base_query(
+    brief: &CreateModeBrief,
+    query: Option<String>,
+    category: Option<String>,
+) -> ProviderSearchQuery {
     ProviderSearchQuery {
         query,
         minecraft_version: Some(brief.mc_version.clone()),
@@ -914,13 +911,12 @@ fn base_query(brief: &CreateModeBrief, query: Option<String>, category: Option<S
     }
 }
 
-fn category_search_plans(cat: &CategoryBudget) -> Vec<(Option<String>, Option<String>, &'static str)> {
+fn category_search_plans(
+    cat: &CategoryBudget,
+) -> Vec<(Option<String>, Option<String>, &'static str)> {
     // (query, facet, sort) — try focused strategies until budget filled.
     let mut plans = Vec::new();
-    let facet = cat
-        .facet
-        .clone()
-        .or_else(|| modrinth_facet_for_id(&cat.id));
+    let facet = cat.facet.clone().or_else(|| modrinth_facet_for_id(&cat.id));
     let primary = cat.query.trim().to_string();
 
     if !primary.is_empty() {
@@ -998,7 +994,9 @@ fn must_have_score(query: &str, p: &ProjectInfo) -> u64 {
 }
 
 fn pick_best_must_have(query: &str, results: Vec<ProjectInfo>) -> Option<ProjectInfo> {
-    results.into_iter().max_by_key(|p| must_have_score(query, p))
+    results
+        .into_iter()
+        .max_by_key(|p| must_have_score(query, p))
 }
 
 fn is_library_mod(p: &ProjectInfo) -> bool {
@@ -1470,11 +1468,7 @@ mod tests {
     impl ModSearch for MockSearch {
         fn search(&self, query: &ProviderSearchQuery) -> Result<SearchPage, String> {
             let q = query.query.clone().unwrap_or_default().to_ascii_lowercase();
-            let facet = query
-                .category
-                .as_deref()
-                .unwrap_or("")
-                .to_ascii_lowercase();
+            let facet = query.category.as_deref().unwrap_or("").to_ascii_lowercase();
             // Prefer exact query key; empty query matches fill/"", optionally filtered by facet tag in key "facet:utility".
             for (key, hits) in &self.by_query {
                 let key_l = key.to_ascii_lowercase();
@@ -1490,9 +1484,7 @@ mod tests {
                     let mut filtered = hits.clone();
                     if !facet.is_empty() {
                         filtered.retain(|p| {
-                            p.categories
-                                .iter()
-                                .any(|c| c.eq_ignore_ascii_case(&facet))
+                            p.categories.iter().any(|c| c.eq_ignore_ascii_case(&facet))
                                 || p.categories.is_empty()
                         });
                     }
@@ -1547,6 +1539,7 @@ mod tests {
             server_side: None,
             issues_url: None,
             source_url: None,
+            date_created: None,
         }
     }
 
@@ -1630,12 +1623,7 @@ mod tests {
 
     #[test]
     fn brief_from_prompt_picks_must_haves() {
-        let b = brief_from_prompt(
-            "tech with Create and JEI",
-            "1.20.1",
-            "fabric",
-            80,
-        );
+        let b = brief_from_prompt("tech with Create and JEI", "1.20.1", "fabric", 80);
         assert!(!b.categories.is_empty());
         assert_eq!(b.mc_version, "1.20.1");
         assert_eq!(b.loader, "fabric");
@@ -1825,7 +1813,15 @@ mod tests {
         };
         // normalize soft-caps library
         let brief = normalize_brief(brief);
-        assert!(brief.categories.iter().find(|c| c.id == "library").unwrap().count <= 5);
+        assert!(
+            brief
+                .categories
+                .iter()
+                .find(|c| c.id == "library")
+                .unwrap()
+                .count
+                <= 5
+        );
 
         let draft = assemble_pack_draft(
             &searcher,
@@ -1886,7 +1882,9 @@ mod pack_theme_tests {
     #[test]
     fn pack_themes_are_nonempty_offline() {
         let cats = crate::modpack_index::list_pack_theme_categories();
-        assert!(cats.iter().any(|c| c.slug == "sci-fi" || c.kind == "modpack"));
+        assert!(cats
+            .iter()
+            .any(|c| c.slug == "sci-fi" || c.kind == "modpack"));
         assert!(cats.len() >= 5);
     }
 }
