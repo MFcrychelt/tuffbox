@@ -45,6 +45,8 @@
     Columns2,
     Monitor,
     Server,
+    Layers,
+    Scale,
   } from "@lucide/svelte";
   import { projectPath, projectInfo, ideStageRequest, pushWorkTrail, requestIdeIssuesRefresh, modsFocusId, modsFocusFileName } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
@@ -710,6 +712,34 @@ import { trapFocus } from "../lib/focusTrap";
     } catch {
       // Catalog filters stay empty — search still works without them.
     }
+  }
+
+  /** Sidebar footer badge: how many optional filters are engaged. */
+  function activeFilterCount(): number {
+    let n = 0;
+    if (filterGameVersion) n += 1;
+    if (catalogProvider !== "curseforge" && contentFilter === "mod" && filterLoader) n += 1;
+    if (catalogProvider !== "curseforge" && filterCategory) n += 1;
+    if (catalogProvider === "curseforge" && filterCategoryId !== null) n += 1;
+    if (catalogProvider !== "curseforge" && contentFilter === "mod" && filterEnvironment) n += 1;
+    if (catalogProvider !== "curseforge" && filterLicense) n += 1;
+    return n;
+  }
+
+  function resetCatalogFilters() {
+    filterGameVersion = "";
+    filterCategory = "";
+    filterCategoryId = null;
+    filterEnvironment = "";
+    filterLicense = "";
+    try {
+      const info = $projectInfo;
+      filterLoader = info?.loaderKind ? String(info.loaderKind).toLowerCase() : "fabric";
+      filterGameVersion = info?.minecraftVersion ?? "";
+    } catch {
+      filterLoader = "fabric";
+    }
+    searchMods(1);
   }
 
   function savedViewLabel(filter: string): string {
@@ -3787,76 +3817,123 @@ import { trapFocus } from "../lib/focusTrap";
             {/if}
           </button>
           {#if !filtersCollapsed}
-          <div class="filter-sidebar-body">
-          <section class="filter-block" class:closed={!accordionOpen.gameVersion}>
-            <button class="filter-head" onclick={() => toggleAccordion("gameVersion")}>
-              <span>Game version</span>
-              <ChevronDown size={16} class={!accordionOpen.gameVersion ? "rot" : ""} />
+          <div class="flex-1 min-h-0 overflow-y-auto px-2 py-2 space-y-1 overscroll-contain [scrollbar-width:thin] [scrollbar-color:var(--bg-elevated)_transparent]">
+
+          <!-- Game version -->
+          <section class="rounded-lg transition-colors duration-150 {(accordionOpen.gameVersion) ? "bg-[var(--bg-tertiary)]/60" : ""}">
+            <button
+              type="button"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              onclick={() => toggleAccordion("gameVersion")}
+            >
+              <span class="flex items-center gap-2"><Layers size={13} class="text-[var(--text-muted)]" /> Game version</span>
+              <ChevronDown size={15} class="text-[var(--text-muted)] transition-transform duration-200 {accordionOpen.gameVersion ? "" : "-rotate-90"}" />
             </button>
             {#if accordionOpen.gameVersion}
-              <div class="filter-body">
+              <div class="px-2 pb-2 pt-0.5 flex flex-col gap-1.5">
                 <div class="search mini">
                   <span class="search-glyph"><Search size={14} /></span>
                   <input bind:value={versionSearch} placeholder="Search version..." />
                 </div>
-                <div class="filter-list">
+                <div class="max-h-44 overflow-y-auto pr-0.5 flex flex-col gap-0.5 [scrollbar-width:thin] [scrollbar-color:var(--bg-elevated)_transparent]">
                   {#each filteredVersions as version (version)}
-                    <button class:active={filterGameVersion === version} onclick={() => { filterGameVersion = version; searchMods(1); }}>{version}</button>
+                    <button
+                      type="button"
+                      class="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-150 cursor-pointer {filterGameVersion === version
+                        ? "bg-[var(--bg-elevated)] font-semibold text-[var(--accent-primary)]"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                      onclick={() => { filterGameVersion = version; searchMods(1); }}
+                    >
+                      <span>{version}</span>
+                      {#if filterGameVersion === version}<Check size={13} />{/if}
+                    </button>
                   {/each}
                 </div>
-                <label class="check-row">
-                  <input type="checkbox" checked={filterGameVersion === ""} onchange={() => { filterGameVersion = ""; searchMods(1); }} /> Show all versions
+                <label class="flex cursor-pointer items-center gap-2 px-2.5 py-1 text-[12px] text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
+                  <input type="checkbox" class="accent-[var(--accent-primary)]" checked={filterGameVersion === ""} onchange={() => { filterGameVersion = ""; searchMods(1); }} /> Any version
                 </label>
                 {#if !versionSearch.trim()}
-                  <label class="check-row">
-                    <input type="checkbox" bind:checked={showAllVersions} /> Show full version list
+                  <label class="flex cursor-pointer items-center gap-2 px-2.5 py-1 text-[12px] text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
+                    <input type="checkbox" class="accent-[var(--accent-primary)]" bind:checked={showAllVersions} /> Show full version list
                   </label>
                 {/if}
               </div>
             {/if}
           </section>
 
-          <section class="filter-block" class:closed={!accordionOpen.loader} hidden={contentFilter !== "mod"}>
-            <button class="filter-head" onclick={() => toggleAccordion("loader")}>
-              <span>Loader</span>
-              <ChevronDown size={16} class={!accordionOpen.loader ? "rot" : ""} />
+          <!-- Loader -->
+          <section class="rounded-lg transition-colors duration-150 {(accordionOpen.loader) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={contentFilter !== "mod"}>
+            <button
+              type="button"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              onclick={() => toggleAccordion("loader")}
+            >
+              <span class="flex items-center gap-2"><Hammer size={13} class="text-[var(--text-muted)]" /> Loader</span>
+              <ChevronDown size={15} class="text-[var(--text-muted)] transition-transform duration-200 {accordionOpen.loader ? "" : "-rotate-90"}" />
             </button>
             {#if accordionOpen.loader}
-              <div class="filter-body">
-                <div class="filter-list loader-list">
+              <div class="px-2 pb-2 pt-0.5">
+                <div class="grid grid-cols-2 gap-1.5">
                   {#each shownLoaders as loaderName (loaderName)}
-                    <button class="loader-row" class:active={filterLoader === loaderName.toLowerCase()} onclick={() => { filterLoader = loaderName.toLowerCase(); searchMods(1); }}>
-                      <span class="loader-ic">
-                        {#if loaderName === "Fabric"}<Scroll size={16} />{:else if loaderName === "Forge"}<Hammer size={16} />{:else}<Anvil size={16} />{/if}
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {filterLoader === loaderName.toLowerCase()
+                        ? "border-[color-mix(in_srgb,var(--accent-primary)_55%,transparent)] bg-[var(--bg-elevated)] font-semibold text-[var(--text-primary)]"
+                        : "border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                      onclick={() => { filterLoader = loaderName.toLowerCase(); searchMods(1); }}
+                    >
+                      <span class="text-[var(--accent-secondary)]">
+                        {#if loaderName === "Fabric"}<Scroll size={14} />{:else if loaderName === "Forge"}<Hammer size={14} />{:else}<Anvil size={14} />{/if}
                       </span>
                       <span>{loaderName}</span>
                     </button>
                   {/each}
                 </div>
                 {#if loaders.length > 3}
-                  <button class="show-more" onclick={() => (loaderExpanded = !loaderExpanded)}>
-                    {loaderExpanded ? "Show less" : "Show more"} <ChevronDown size={14} class={loaderExpanded ? "rot" : ""} />
+                  <button type="button" class="mt-1 flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] text-[var(--text-muted)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer" onclick={() => (loaderExpanded = !loaderExpanded)}>
+                    {loaderExpanded ? "Show less" : "Show more"}
+                    <ChevronDown size={14} class="transition-transform duration-200 {loaderExpanded ? "rotate-180" : ""}" />
                   </button>
                 {/if}
               </div>
             {/if}
           </section>
 
-          <section class="filter-block" class:closed={!accordionOpen.category} hidden={catalogProvider === "curseforge"}>
-            <button class="filter-head" onclick={() => toggleAccordion("category")}>
-              <span>Category</span>
-              <ChevronDown size={16} class={!accordionOpen.category ? "rot" : ""} />
+          <!-- Category (Modrinth) -->
+          <section class="rounded-lg transition-colors duration-150 {(accordionOpen.category) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={catalogProvider === "curseforge"}>
+            <button
+              type="button"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              onclick={() => toggleAccordion("category")}
+            >
+              <span class="flex items-center gap-2"><Tag size={13} class="text-[var(--text-muted)]" /> Category</span>
+              <ChevronDown size={15} class="text-[var(--text-muted)] transition-transform duration-200 {accordionOpen.category ? "" : "-rotate-90"}" />
             </button>
             {#if accordionOpen.category}
-              <div class="filter-body">
-                <div class="filter-list">
-                  <button class:active={!filterCategory} onclick={() => { filterCategory = ""; searchMods(1); }}>All categories</button>
+              <div class="px-2 pb-2 pt-0.5">
+                <div class="flex flex-col gap-0.5">
+                  <button
+                    type="button"
+                    class="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-150 cursor-pointer {!filterCategory
+                      ? "bg-[var(--bg-elevated)] font-semibold text-[var(--accent-primary)]"
+                      : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                    onclick={() => { filterCategory = ""; searchMods(1); }}
+                  >
+                    <span>All categories</span>
+                    {#if !filterCategory}<Check size={13} />{/if}
+                  </button>
                   {#each categoryGroups as group (group.header)}
-                    <div class="filter-group-label">{group.header}</div>
+                    <div class="px-2.5 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{group.header}</div>
                     {#each group.names as category (category)}
-                      <button class="cat-row" class:active={filterCategory === category} onclick={() => { filterCategory = category; searchMods(1); }}>
-                        <Tag size={14} />
+                      <button
+                        type="button"
+                        class="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-150 cursor-pointer {filterCategory === category
+                          ? "bg-[var(--bg-elevated)] font-semibold text-[var(--accent-primary)]"
+                          : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                        onclick={() => { filterCategory = category; searchMods(1); }}
+                      >
                         <span>{humanize(category)}</span>
+                        {#if filterCategory === category}<Check size={13} />{/if}
                       </button>
                     {/each}
                   {/each}
@@ -3865,23 +3942,43 @@ import { trapFocus } from "../lib/focusTrap";
             {/if}
           </section>
 
-          <section class="filter-block" class:closed={!accordionOpen.cfCategory} hidden={catalogProvider !== "curseforge"}>
-            <button class="filter-head" onclick={() => toggleAccordion("cfCategory")}>
-              <span>Category</span>
-              <ChevronDown size={16} class={!accordionOpen.cfCategory ? "rot" : ""} />
+          <!-- Category (CurseForge) -->
+          <section class="rounded-lg transition-colors duration-150 {(accordionOpen.cfCategory) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={catalogProvider !== "curseforge"}>
+            <button
+              type="button"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              onclick={() => toggleAccordion("cfCategory")}
+            >
+              <span class="flex items-center gap-2"><Tag size={13} class="text-[var(--text-muted)]" /> Category</span>
+              <ChevronDown size={15} class="text-[var(--text-muted)] transition-transform duration-200 {accordionOpen.cfCategory ? "" : "-rotate-90"}" />
             </button>
             {#if accordionOpen.cfCategory}
-              <div class="filter-body">
+              <div class="px-2 pb-2 pt-0.5 flex flex-col gap-1.5">
                 <div class="search mini">
                   <span class="search-glyph"><Search size={14} /></span>
                   <input bind:value={cfCategorySearch} placeholder="Search category..." />
                 </div>
-                <div class="filter-list">
-                  <button class:active={filterCategoryId === null} onclick={() => { filterCategoryId = null; searchMods(1); }}>All categories</button>
+                <div class="max-h-56 overflow-y-auto pr-0.5 flex flex-col gap-0.5 [scrollbar-width:thin] [scrollbar-color:var(--bg-elevated)_transparent]">
+                  <button
+                    type="button"
+                    class="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-150 cursor-pointer {filterCategoryId === null
+                      ? "bg-[var(--bg-elevated)] font-semibold text-[var(--accent-primary)]"
+                      : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                    onclick={() => { filterCategoryId = null; searchMods(1); }}
+                  >
+                    <span>All categories</span>
+                    {#if filterCategoryId === null}<Check size={13} />{/if}
+                  </button>
                   {#each filteredCfCategories as cat (cat.id)}
-                    <button class="cat-row" class:active={filterCategoryId === cat.id} onclick={() => { filterCategoryId = cat.id; searchMods(1); }}>
-                      <Tag size={14} />
+                    <button
+                      type="button"
+                      class="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-150 cursor-pointer {filterCategoryId === cat.id
+                        ? "bg-[var(--bg-elevated)] font-semibold text-[var(--accent-primary)]"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                      onclick={() => { filterCategoryId = cat.id; searchMods(1); }}
+                    >
                       <span>{cat.name}</span>
+                      {#if filterCategoryId === cat.id}<Check size={13} />{/if}
                     </button>
                   {/each}
                 </div>
@@ -3889,56 +3986,123 @@ import { trapFocus } from "../lib/focusTrap";
             {/if}
           </section>
 
-          <section class="filter-block" class:closed={!accordionOpen.environment} hidden={catalogProvider === "curseforge" || contentFilter !== "mod"}>
-            <button class="filter-head" onclick={() => toggleAccordion("environment")}>
-              <span>Environment</span>
-              <ChevronDown size={16} class={!accordionOpen.environment ? "rot" : ""} />
+          <!-- Environment (Modrinth) -->
+          <section class="rounded-lg transition-colors duration-150 {(accordionOpen.environment) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={catalogProvider === "curseforge" || contentFilter !== "mod"}>
+            <button
+              type="button"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              onclick={() => toggleAccordion("environment")}
+            >
+              <span class="flex items-center gap-2"><Monitor size={13} class="text-[var(--text-muted)]" /> Environment</span>
+              <ChevronDown size={15} class="text-[var(--text-muted)] transition-transform duration-200 {accordionOpen.environment ? "" : "-rotate-90"}" />
             </button>
             {#if accordionOpen.environment}
-              <div class="filter-body">
-                <div class="filter-list">
-                  <button class:active={!filterEnvironment} onclick={() => { filterEnvironment = ""; searchMods(1); }}>Any</button>
-                  <button class="cat-row" class:active={filterEnvironment === "client"} onclick={() => { filterEnvironment = "client"; searchMods(1); }}>
-                    <Monitor size={14} /><span>Client</span>
+              <div class="px-2 pb-2 pt-0.5">
+                <div class="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    class="flex items-center justify-center gap-1.5 rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {!filterEnvironment
+                      ? "border-[color-mix(in_srgb,var(--accent-primary)_55%,transparent)] bg-[var(--bg-elevated)] font-semibold text-[var(--text-primary)]"
+                      : "border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                    onclick={() => { filterEnvironment = ""; searchMods(1); }}
+                  >Any</button>
+                  <button
+                    type="button"
+                    class="flex items-center justify-center gap-1.5 rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {filterEnvironment === "client"
+                      ? "border-[color-mix(in_srgb,var(--accent-primary)_55%,transparent)] bg-[var(--bg-elevated)] font-semibold text-[var(--text-primary)]"
+                      : "border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                    onclick={() => { filterEnvironment = "client"; searchMods(1); }}
+                  >
+                    <Monitor size={13} /> Client
                   </button>
-                  <button class="cat-row" class:active={filterEnvironment === "server"} onclick={() => { filterEnvironment = "server"; searchMods(1); }}>
-                    <Server size={14} /><span>Server</span>
+                  <button
+                    type="button"
+                    class="col-span-2 flex items-center justify-center gap-1.5 rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {filterEnvironment === "server"
+                      ? "border-[color-mix(in_srgb,var(--accent-primary)_55%,transparent)] bg-[var(--bg-elevated)] font-semibold text-[var(--text-primary)]"
+                      : "border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                    onclick={() => { filterEnvironment = "server"; searchMods(1); }}
+                  >
+                    <Server size={13} /> Server
                   </button>
                 </div>
               </div>
             {/if}
           </section>
 
-          <section class="filter-block" class:closed={!accordionOpen.license} hidden={catalogProvider === "curseforge"}>
-            <button class="filter-head" onclick={() => toggleAccordion("license")}>
-              <span>License</span>
-              <ChevronDown size={16} class={!accordionOpen.license ? "rot" : ""} />
+          <!-- License (Modrinth) -->
+          <section class="rounded-lg transition-colors duration-150 {(accordionOpen.license) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={catalogProvider === "curseforge"}>
+            <button
+              type="button"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              onclick={() => toggleAccordion("license")}
+            >
+              <span class="flex items-center gap-2"><Scale size={13} class="text-[var(--text-muted)]" /> License</span>
+              <ChevronDown size={15} class="text-[var(--text-muted)] transition-transform duration-200 {accordionOpen.license ? "" : "-rotate-90"}" />
             </button>
             {#if accordionOpen.license}
-              <div class="filter-body">
-                <div class="filter-list">
-                  <button class:active={!filterLicense} onclick={() => { filterLicense = ""; searchMods(1); }}>Any</button>
-                  <button class:active={filterLicense === "open-source"} onclick={() => { filterLicense = "open-source"; searchMods(1); }}>Open source</button>
+              <div class="px-2 pb-2 pt-0.5">
+                <div class="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    class="rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {!filterLicense
+                      ? "border-[color-mix(in_srgb,var(--accent-primary)_55%,transparent)] bg-[var(--bg-elevated)] font-semibold text-[var(--text-primary)]"
+                      : "border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                    onclick={() => { filterLicense = ""; searchMods(1); }}
+                  >Any</button>
+                  <button
+                    type="button"
+                    class="rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {filterLicense === "open-source"
+                      ? "border-[color-mix(in_srgb,var(--accent-primary)_55%,transparent)] bg-[var(--bg-elevated)] font-semibold text-[var(--text-primary)]"
+                      : "border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                    onclick={() => { filterLicense = "open-source"; searchMods(1); }}
+                  >Open source</button>
                 </div>
               </div>
             {/if}
           </section>
 
-          <section class="filter-block" class:closed={!accordionOpen.cfSort} hidden={catalogProvider !== "curseforge"}>
-            <button class="filter-head" onclick={() => toggleAccordion("cfSort")}>
-              <span>Sort (CurseForge)</span>
-              <ChevronDown size={16} class={!accordionOpen.cfSort ? "rot" : ""} />
+          <!-- Sort (CurseForge) -->
+          <section class="rounded-lg transition-colors duration-150 {(accordionOpen.cfSort) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={catalogProvider !== "curseforge"}>
+            <button
+              type="button"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              onclick={() => toggleAccordion("cfSort")}
+            >
+              <span class="flex items-center gap-2"><ArrowUpDown size={13} class="text-[var(--text-muted)]" /> Sort</span>
+              <ChevronDown size={15} class="text-[var(--text-muted)] transition-transform duration-200 {accordionOpen.cfSort ? "" : "-rotate-90"}" />
             </button>
             {#if accordionOpen.cfSort}
-              <div class="filter-body">
-                <div class="filter-list">
+              <div class="px-2 pb-2 pt-0.5">
+                <div class="flex flex-col gap-0.5">
                   {#each [{ id: 1, label: "Featured" }, { id: 2, label: "Popularity" }, { id: 3, label: "Last Updated" }, { id: 4, label: "Name" }, { id: 5, label: "Total Downloads" }, { id: 6, label: "Views" }] as opt (opt.id)}
-                    <button class:active={cfSortField === opt.id} onclick={() => { cfSortField = opt.id; searchMods(1); }}>{opt.label}</button>
+                    <button
+                      type="button"
+                      class="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-150 cursor-pointer {cfSortField === opt.id
+                        ? "bg-[var(--bg-elevated)] font-semibold text-[var(--accent-primary)]"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                      onclick={() => { cfSortField = opt.id; searchMods(1); }}
+                    >
+                      <span>{opt.label}</span>
+                      {#if cfSortField === opt.id}<Check size={13} />{/if}
+                    </button>
                   {/each}
                 </div>
               </div>
             {/if}
           </section>
+          </div>
+
+          <!-- Sidebar footer: reset -->
+          <div class="shrink-0 border-t border-[var(--border-color)] px-3 py-2.5 flex items-center justify-between">
+            <span class="text-[11px] text-[var(--text-muted)]">
+              {activeFilterCount() > 0 ? `${activeFilterCount()} active filter${activeFilterCount() === 1 ? "" : "s"}` : "No extra filters"}
+            </span>
+            <button
+              type="button"
+              class="rounded-md border border-[var(--border-color)] px-2.5 py-1 text-[12px] text-[var(--text-secondary)] transition-colors duration-150 hover:border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+              disabled={activeFilterCount() === 0}
+              onclick={resetCatalogFilters}
+            >Reset</button>
           </div>
           {/if}
         </aside>
@@ -6300,49 +6464,42 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .modal.add-mods-modal .filter-sidebar {
-    max-height: none;
+    /* One unified panel — no per-section card borders ("stuck-on rectangles").
+       Sections are separated by hover/tint states, not boxes. */
     height: 100%;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
-    transition: width 0.22s ease, min-width 0.22s ease, padding 0.22s ease;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    transition: width 0.22s ease, min-width 0.22s ease;
   }
 
-  /* Sidebar body must actually scroll between filter sections inside the
-     modal — without min-height:0 the grid child overflows and the lower
-     sections (category / environment / license) become unreachable. */
-  .modal.add-mods-modal .filter-sidebar-body {
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    scrollbar-width: thin;
-    scrollbar-color: var(--bg-elevated) transparent;
-    padding-right: 4px;
-  }
-
-  .modal.add-mods-modal .filter-sidebar-body::-webkit-scrollbar {
-    width: 8px;
-  }
-
-  .modal.add-mods-modal .filter-sidebar-body::-webkit-scrollbar-thumb {
-    background: var(--bg-elevated);
-    border-radius: 4px;
-    border: 2px solid transparent;
-    background-clip: padding-box;
-  }
-
-  .filter-group-label {
-    padding: 6px 9px 2px;
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+  .modal.add-mods-modal .filter-collapse-toggle {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    margin: 6px auto 2px;
+    padding: 0 !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: transparent;
+    border: 1px solid transparent;
     color: var(--text-muted);
+    cursor: pointer;
+    transform: none !important;
+    transition: background var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
   }
 
-  .filter-group-label:not(:first-child) {
-    margin-top: 4px;
-    border-top: 1px solid var(--border-color);
-    padding-top: 8px;
+  .modal.add-mods-modal .filter-collapse-toggle:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+    border-color: transparent;
+    transform: none !important;
   }
 
   .modal.add-mods-modal .filter-sidebar.collapsed {
@@ -6354,35 +6511,6 @@ import { trapFocus } from "../lib/focusTrap";
     flex-direction: column;
     align-items: center;
     gap: 0;
-  }
-
-  .modal.add-mods-modal .filter-collapse-toggle {
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    margin: 4px 0 6px;
-    padding: 0 !important;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 10px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    color: var(--text-muted);
-    cursor: pointer;
-    transform: none !important;
-  }
-
-  .modal.add-mods-modal .filter-collapse-toggle:hover {
-    color: var(--text-primary);
-    background: var(--bg-elevated);
-    border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
-    transform: none !important;
-  }
-
-  .modal.add-mods-modal .filter-sidebar.collapsed .filter-collapse-toggle {
-    margin: 8px auto;
-    align-self: center;
   }
 
   .modal.add-mods-modal .search,
