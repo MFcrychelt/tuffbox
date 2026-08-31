@@ -148,10 +148,7 @@ impl CurseForgeProvider {
 
     /// Categories for a CurseForge class id (`GET /categories?gameId&classId`).
     /// Returns `(id, name, parentCategoryId)` sorted by name.
-    pub fn list_categories(
-        &self,
-        class_id: u32,
-    ) -> Result<Vec<(u32, String, Option<u32>)>, ProviderError> {
+    pub fn list_categories(&self, class_id: u32) -> Result<Vec<(u32, String, Option<u32>)>, ProviderError> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct CfCategoryRaw {
@@ -159,7 +156,9 @@ impl CurseForgeProvider {
             name: String,
             parent_category_id: Option<u32>,
         }
-        let path = format!("/categories?gameId={MINECRAFT_GAME_ID}&classId={class_id}");
+        let path = format!(
+            "/categories?gameId={MINECRAFT_GAME_ID}&classId={class_id}"
+        );
         let resp: CfData<Vec<CfCategoryRaw>> = self.get_json(&path)?;
         let mut out: Vec<(u32, String, Option<u32>)> = resp
             .data

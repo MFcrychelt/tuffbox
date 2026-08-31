@@ -88,7 +88,7 @@
     loaders: string[];
     datePublished?: string | null;
     versionType?: string;
-    changelog?: string | null;
+    changelogHtml?: string | null;
     compatible?: boolean;
   };
 
@@ -127,7 +127,7 @@
   const loaders = $derived((detail.loaders ?? []).map((l) => l.charAt(0).toUpperCase() + l.slice(1)));
   // Changelog entries: versions that carry a non-empty changelog, newest first.
   const changelogEntries = $derived(
-    versions.filter((v) => (v.changelog ?? "").trim().length > 0),
+    versions.filter((v) => (v.changelogHtml ?? "").trim().length > 0),
   );
 
   function formatCount(n: number | null | undefined): string {
@@ -390,7 +390,7 @@
                   <strong>{v.versionNumber || v.name || v.id}</strong>
                   <small>{formatDate(v.datePublished)}</small>
                 </header>
-                <div class="html-body">{@html sanitizeHtml(v.changelog ?? "")}</div>
+                <div class="html-body">{@html sanitizeHtml(v.changelogHtml ?? "")}</div>
               </article>
             {/each}
           {/if}
