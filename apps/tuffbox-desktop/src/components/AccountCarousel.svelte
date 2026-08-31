@@ -278,40 +278,127 @@
     overflow: visible;
   }
 
-  /* Signed-in head: theme-colored glow rising from the nick up through the
-     head (bottom → top), no ring/frame. */
+  /* Signed-in head: layered theme-colored aura — a bright inner bloom rising
+     from the nick + a wide soft outer halo — plus a delicate gradient ring
+     that traces the head silhouette. Gentle float on the whole slot. */
   .carousel-slot.active .slot-head::before {
     content: "";
     position: absolute;
-    inset: -14px -20px -26px;
-    border-radius: var(--border-radius-md);
+    inset: -16px -22px -28px;
+    border-radius: 50%;
     pointer-events: none;
     background:
       radial-gradient(
-        ellipse 62% 88% at 50% 108%,
-        color-mix(in srgb, var(--accent-primary) 55%, transparent) 0%,
-        color-mix(in srgb, var(--accent-primary) 22%, transparent) 46%,
-        transparent 78%
+        ellipse 52% 62% at 50% 104%,
+        color-mix(in srgb, var(--accent-primary) 62%, transparent) 0%,
+        color-mix(in srgb, var(--accent-primary) 26%, transparent) 44%,
+        transparent 74%
+      ),
+      radial-gradient(
+        ellipse 80% 80% at 50% 55%,
+        color-mix(in srgb, var(--accent-secondary) 14%, transparent) 0%,
+        transparent 68%
       );
     z-index: -1;
-    filter: blur(2px);
+    filter: blur(3px);
+    animation: carousel-aura-breathe 3.4s ease-in-out infinite;
   }
 
-  /* Pending pick: softer version of the same bottom-up glow. */
+  /* Delicate 1px gradient ring hugging the head silhouette (accent → violet). */
+  .carousel-slot.active .slot-head::after {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    border-radius: var(--border-radius-sm);
+    pointer-events: none;
+    padding: 1.5px;
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--accent-primary) 85%, transparent),
+      color-mix(in srgb, var(--accent-secondary) 55%, transparent) 55%,
+      color-mix(in srgb, var(--accent-primary) 25%, transparent)
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0.9;
+  }
+
+  /* Pending pick: same aura, softer, plus a slow ring "breathing" pulse that
+     reads as "waiting for Enter / second click". */
   .carousel-slot.selected:not(.active) .slot-head::before {
     content: "";
     position: absolute;
-    inset: -10px -16px -22px;
-    border-radius: var(--border-radius-md);
+    inset: -12px -18px -24px;
+    border-radius: 50%;
     pointer-events: none;
     background:
       radial-gradient(
-        ellipse 58% 84% at 50% 108%,
-        color-mix(in srgb, var(--accent-primary) 30%, transparent) 0%,
-        transparent 72%
+        ellipse 54% 64% at 50% 104%,
+        color-mix(in srgb, var(--accent-primary) 34%, transparent) 0%,
+        transparent 74%
       );
     z-index: -1;
-    filter: blur(2px);
+    filter: blur(3px);
+  }
+
+  .carousel-slot.selected:not(.active) .slot-head::after {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    border-radius: var(--border-radius-sm);
+    pointer-events: none;
+    padding: 1.5px;
+    background: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: carousel-ring-pulse 2s ease-in-out infinite;
+  }
+
+  /* Active slot lifts slightly — the aura follows, reads as "raised". */
+  .carousel-slot.active {
+    transform: scale(var(--scale)) translateY(-2px);
+  }
+
+  /* Neighbor heads: gentle "come here" lift + brighten on hover. */
+  .carousel-slot:not(.active):not(.selected):hover:not(:disabled) .slot-head {
+    filter: brightness(1.12);
+  }
+  .carousel-slot:not(.active):not(.selected):hover:not(:disabled) .slot-name {
+    color: var(--text-primary);
+  }
+
+  @keyframes carousel-aura-breathe {
+    0%,
+    100% {
+      opacity: 0.85;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.04);
+    }
+  }
+
+  @keyframes carousel-ring-pulse {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 0.8;
+    }
   }
 
   .slot-name {
@@ -329,8 +416,23 @@
   }
 
   .carousel-slot.active .slot-name {
-    color: var(--text-primary);
-    text-shadow: var(--mc-nick-shadow-soft);
+    /* Gradient text: theme accent → violet, with a soft matching glow. */
+    background: linear-gradient(
+      100deg,
+      var(--accent-primary) 20%,
+      color-mix(in srgb, var(--accent-secondary) 70%, var(--accent-primary)) 80%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent-primary) 45%, transparent));
+  }
+
+  /* Selected-but-not-confirmed nick: solid accent, no gradient drama yet. */
+  .carousel-slot.selected:not(.active) .slot-name {
+    color: var(--accent-primary);
+    text-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
 
   /* Neutralize the global button hover/active chrome on carousel slots —
@@ -384,10 +486,15 @@
     cursor: default;
   }
 
-  /* Weak GPUs / reduced motion: snap instead of sliding. */
+  /* Weak GPUs / reduced motion: snap instead of sliding, no aura animations. */
   :global(html.potato-pc) .carousel-track,
   :global(html.potato-pc) .carousel-slot {
     transition: none;
+  }
+  :global(html.potato-pc) .slot-head::before,
+  :global(html.potato-pc) .slot-head::after,
+  :global(html.potato-pc) .carousel-slot.active .slot-name {
+    animation: none;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -395,6 +502,10 @@
     .carousel-slot,
     .carousel-arrow {
       transition: none;
+    }
+    .slot-head::before,
+    .slot-head::after {
+      animation: none;
     }
   }
 </style>
