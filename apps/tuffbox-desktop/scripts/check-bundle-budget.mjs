@@ -43,7 +43,9 @@ const BUDGETS_GZIP_BYTES = {
   // 2026-08 second bump (36 -> 40): layout-lib is now actually used by
   // Library (Grid/Stack) and more screens migrate onto it; keep headroom
   // so each migration doesn't require a gate edit.
-  ".css": 40 * 1024,
+  // 2026-08 third bump (40 -> 44): Snapshots/Quests/TestRuns Tailwind
+  // migrations add per-screen utility sets.
+  ".css": 44 * 1024,
 };
 
 if (!existsSync(indexHtmlPath)) {

@@ -254,6 +254,10 @@
       aiLoading = false;
       loading = false;
       cascadeLiveStage = null;
+      // The backend cascade may still be running (no client-side cancel).
+      // Forget the source stamp so a refresh re-runs analysis instead of
+      // trusting state from a run whose results will land out of order.
+      lastAnalyzedSource = null;
       clearInterval(diagnoseWatch);
       diagnoseWatch = undefined;
       diagnoseBusySince = 0;
@@ -858,7 +862,9 @@
       crashFindings = result.findings ?? [];
       crashMcreator = result.mcreatorMods ?? [];
       crashClassFinder = result.classFinderResults ?? [];
-      enrichCrashFindingsWithAi();
+      // No enrich here: aiAnalysis still belongs to the PREVIOUS source (or is
+      // null) at this point — runUnifiedAnalysis re-enriches after the fresh
+      // runAiExplain completes, matching hints to the actual source.
     } catch (e) {
       error = String(e);
     } finally {
@@ -873,6 +879,13 @@
   async function runUnifiedAnalysis(opts: { force?: boolean } = {}) {
     if (!$projectPath || analysisBusy) return;
     const source = activeReportId();
+    // Task #66 + retry-loop guard: with force=false reuse previous results
+    // when the source is unchanged AND the previous run produced anything
+    // (findings or an AI plan). Re-running the full AI cascade on every tab
+    // visit made the tab appear stuck in "Analyzing…"; but also don't retry
+    // an already-failed source forever (soft-fail left both empty).
+    const previousFailed = lastAnalyzedSource === source && !crashFindings.length && !aiAnalysis && !!aiSoftError;
+    if (previousFailed) return;
     if (!opts.force && lastAnalyzedSource === source && (crashFindings.length > 0 || aiAnalysis)) {
       return;
     }
@@ -887,6 +900,8 @@
         aiSoftError = String(aiErr);
         console.warn("[Diagnose] AI explain soft-fail:", aiErr);
       }
+      // Single enrichment point, AFTER fresh AI results (fix #5).
+      enrichCrashFindingsWithAi();
     } finally {
       analysisBusy = false;
     }

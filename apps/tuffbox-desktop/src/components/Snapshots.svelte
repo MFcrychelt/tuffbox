@@ -480,15 +480,20 @@
   });
 </script>
 
-<div class="snapshots">
-  <div class="toolbar">
-    <div class="title-block">
-      <div class="title"><History size={18} /> <span>Snapshots</span></div>
-      <p class="subtitle">Checkpoints of your pack — roll back to any saved state</p>
+<div class="flex flex-col gap-3.5 h-full min-h-0 w-full max-w-none box-border p-0.5">
+  <!-- ── Toolbar ─────────────────────────────────────────────── -->
+  <div class="flex justify-between items-center gap-4 flex-wrap shrink-0">
+    <div class="grid gap-1">
+      <div class="flex items-center gap-2.5 text-[var(--text-primary)] font-extrabold text-[16px]">
+        <History size={19} class="text-[var(--accent-primary)]" />
+        <span>Snapshots</span>
+      </div>
+      <p class="m-0 text-[var(--text-muted)] text-[13px]">Checkpoints of your pack — roll back to any saved state</p>
     </div>
-    <div class="actions">
-      <div class="create-group">
+    <div class="flex items-center gap-2.5 flex-wrap">
+      <div class="flex items-center gap-2">
         <input
+          class="min-w-[200px]"
           bind:value={newName}
           placeholder="Snapshot name"
           onkeydown={(e) => e.key === "Enter" && !loading && ($projectPath ? create() : null)}
@@ -498,82 +503,124 @@
           Snapshot
         </button>
       </div>
-      <button class="ghost icon-btn" onclick={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
+      <button class="ghost w-[38px] h-[38px] p-0 shrink-0 justify-center" onclick={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
       </button>
     </div>
   </div>
 
-  {#if error}<div class="notice error">{error}</div>{/if}
-  {#if message}<div class="notice success">{message}</div>{/if}
+  {#if error}<div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] border text-[13px] leading-snug text-[#fecaca] bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.28)]">{error}</div>{/if}
+  {#if message}<div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] border text-[13px] leading-snug text-[var(--accent-primary)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)] border-[color-mix(in_srgb,var(--accent-primary)_25%,transparent)]">{message}</div>{/if}
 
   {#if loading && snapshots.length === 0}
-    <div class="loading">Loading snapshots…</div>
+    <div class="text-[var(--text-muted)] py-20 text-center text-[14px] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">Loading snapshots…</div>
   {:else if !$projectPath}
     <EmptyState icon={History} title="No project selected" description="Open a project to manage snapshots." />
   {:else if snapshots.length === 0}
     <EmptyState icon={History} title="No snapshots yet" description="Create a snapshot to save the current state of your project." />
   {:else}
-    <div class="kind-bar" role="group" aria-label="Filter snapshots">
-      <button class="kind-btn" class:active={filterKind === "all"} onclick={() => (filterKind = "all")}>
-        <Database size={14} />
-        <span class="k-count">{stats.all}</span>
-        <span class="k-label">All</span>
+    <!-- ── Kind filter cards ───────────────────────────────────── -->
+    <div class="grid grid-cols-4 max-[900px]:grid-cols-2 gap-2.5 shrink-0" role="group" aria-label="Filter snapshots">
+      <button
+        type="button"
+        class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 {
+          filterKind === "all"
+            ? "bg-[var(--accent-primary)] border-[var(--accent-primary)] text-white"
+            : "bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+        }"
+        onclick={() => (filterKind = "all")}
+      >
+        <Database size={16} />
+        <span class="text-[19px] font-extrabold leading-none">{ stats.all }</span>
+        <span>All</span>
       </button>
-      <button class="kind-btn auto" class:active={filterKind === "auto"} onclick={() => (filterKind = "auto")}>
-        <Zap size={14} />
-        <span class="k-count">{stats.auto}</span>
-        <span class="k-label">Auto</span>
+      <button
+        type="button"
+        class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 {
+          filterKind === "auto"
+            ? "bg-[var(--accent-primary)] border-[var(--accent-primary)] text-white"
+            : "bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+        }"
+        onclick={() => (filterKind = "auto")}
+      >
+        <Zap size={16} />
+        <span class="text-[19px] font-extrabold leading-none">{ stats.auto }</span>
+        <span>Auto</span>
       </button>
-      <button class="kind-btn manual" class:active={filterKind === "manual"} onclick={() => (filterKind = "manual")}>
-        <Hand size={14} />
-        <span class="k-count">{stats.manual}</span>
-        <span class="k-label">Manual</span>
+      <button
+        type="button"
+        class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 {
+          filterKind === "manual"
+            ? "bg-[var(--accent-primary)] border-[var(--accent-primary)] text-white"
+            : "bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+        }"
+        onclick={() => (filterKind = "manual")}
+      >
+        <Hand size={16} />
+        <span class="text-[19px] font-extrabold leading-none">{ stats.manual }</span>
+        <span>Manual</span>
       </button>
-      <button class="kind-btn crash" class:active={filterKind === "crash"} onclick={() => (filterKind = "crash")}>
-        <ShieldAlert size={14} />
-        <span class="k-count">{stats.crash}</span>
-        <span class="k-label">Crash fix</span>
+      <button
+        type="button"
+        class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 {
+          filterKind === "crash"
+            ? "bg-[var(--accent-primary)] border-[var(--accent-primary)] text-white"
+            : "bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+        }"
+        onclick={() => (filterKind = "crash")}
+      >
+        <ShieldAlert size={16} />
+        <span class="text-[19px] font-extrabold leading-none">{ stats.crash }</span>
+        <span>Crash fix</span>
       </button>
     </div>
 
-    <div class="filters">
-      <div class="search">
-        <Search size={14} />
-        <input bind:value={search} placeholder="Search name, actions, tags…" />
+    <!-- ── Search ──────────────────────────────────────────────── -->
+    <div class="flex gap-3 items-center shrink-0">
+      <div class="flex-1 min-w-[240px] flex items-center gap-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-[var(--border-radius-md)] px-2.5 text-[var(--text-muted)]">
+        <Search size={15} />
+        <input class="flex-1 border-0 bg-transparent text-[var(--text-primary)] py-2.5 outline-none min-w-0 text-[13px]" bind:value={search} placeholder="Search name, actions, tags…" />
       </div>
-      <span class="match-count">{filtered.length} of {snapshots.length}</span>
+      <span class="text-[var(--text-muted)] text-[13px] whitespace-nowrap">{ filtered.length } of { snapshots.length }</span>
     </div>
 
-    <div class="master-detail">
-      <aside class="list-pane">
+    <!-- ── Master / detail ─────────────────────────────────────── -->
+    <div class="grid grid-cols-[minmax(300px,380px)_minmax(0,1fr)] max-[900px]:grid-cols-1 gap-3.5 flex-1 min-h-0">
+      <aside class="overflow-auto min-h-0 p-2 flex flex-col gap-1.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable]">
         {#each filtered as s (s.id)}
           {@const kind = kindOf(s)}
           <button
             type="button"
-            class="row {kind}"
-            class:selected={selectedId === s.id}
+            class="w-full text-left rounded-[var(--border-radius-md)] border px-3 py-3 flex gap-2.5 cursor-pointer transition-colors duration-150 { selectedId === s.id
+              ? kind === "crash"
+                ? "bg-[rgba(245,158,11,0.08)] border-[rgba(245,158,11,0.35)] text-[var(--text-primary)] border-l-[3px] border-l-[#f59e0b]"
+                : kind === "auto"
+                  ? "bg-[rgba(147,197,253,0.07)] border-[rgba(147,197,253,0.35)] text-[var(--text-primary)] border-l-[3px] border-l-[#93c5fd]"
+                  : "bg-[color-mix(in_srgb,var(--accent-primary)_8%,var(--bg-tertiary))] border-[color-mix(in_srgb,var(--accent-primary)_32%,var(--border-color))] text-[var(--text-primary)] border-l-[3px] border-l-[var(--accent-primary)]"
+              : "border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" }"
             onclick={() => selectSnapshot(s.id)}
           >
-            <span class="kind-dot {kind}" aria-hidden="true"></span>
-            <div class="row-body">
-              <div class="row-top">
-                <strong class="tb-truncate">{s.name}</strong>
-                <span class="op-badge tb-truncate">{operationLabel(s)}</span>
+            <span class="w-2 h-2 rounded-full shrink-0 mt-[7px] {
+              kind === "auto" ? "bg-[#93c5fd] shadow-[0_0_0_3px_rgba(147,197,253,0.16)]"
+              : kind === "crash" ? "bg-[#f59e0b] shadow-[0_0_0_3px_rgba(245,158,11,0.16)]"
+              : "bg-[var(--accent-primary)] shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent-primary)_16%,transparent)]"
+            }" aria-hidden="true"></span>
+            <div class="min-w-0 flex-1 grid gap-1.5">
+              <div class="flex justify-between gap-2 items-start min-w-0">
+                <strong class="text-[13.5px] text-[var(--text-primary)] max-w-full tb-truncate">{ s.name }</strong>
+                <span class="text-[10.5px] px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-muted)] font-mono max-w-[130px] shrink-0 tb-truncate">{ operationLabel(s) }</span>
               </div>
-              <p class="preview">{previewLine(s)}</p>
-              <div class="row-meta">
-                <span class="kind-tag {kind}">{kindLabel(kind)}</span>
-                <span><Clock size={12} /> {formatDate(s.createdAt)}</span>
-                {#if changedCount(s) > 0 || s.tags?.length}
-                  <span class="row-files">
-                    {#if changedCount(s)}<FileText size={12} /> {changedCount(s)}{/if}
-                  </span>
+              <p class="m-0 text-[12.5px] text-[var(--text-muted)] leading-snug line-clamp-2">{ previewLine(s) }</p>
+              <div class="flex items-center gap-2 text-[11.5px] text-[var(--text-muted)] flex-wrap">
+                <span class="kind-tag { kind }">{ kindLabel(kind) }</span>
+                <span class="inline-flex items-center gap-1"><Clock size={12} /> { formatDate(s.createdAt) }</span>
+                {#if changedCount(s) > 0}
+                  <span class="inline-flex items-center gap-1"><FileText size={12} /> { changedCount(s) }</span>
                 {/if}
                 {#if s.tags?.length}
-                  <span class="tags">
+                  <span class="flex gap-1 flex-wrap">
                     {#each s.tags as t}
-                      <span class="tag" class:crash-fix={t === "crash_fix"}>{t}</span>
+                      <span class="tag" class:crash-fix={ t === "crash_fix" }>{ t }</span>
                     {/each}
                   </span>
                 {/if}
@@ -581,34 +628,34 @@
             </div>
           </button>
         {:else}
-          <div class="muted pad">No snapshots match filters.</div>
+          <div class="text-[var(--text-muted)] text-[13px] p-6">No snapshots match filters.</div>
         {/each}
       </aside>
 
-      <section class="detail-pane">
+      <section class="p-[18px] overflow-auto min-h-0 flex flex-col gap-3.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable]">
         {#if detailLoading}
-          <div class="detail-skeleton">
-            <span class="skeleton skeleton-round" style="width: 44%; height: 26px"></span>
-            <span class="skeleton skeleton-line" style="width: 70%"></span>
-            <span class="skeleton skeleton-line" style="width: 90%"></span>
-            <span class="skeleton skeleton-block" style="height: 120px"></span>
+          <div class="flex flex-col gap-3">
+            <span class="skeleton" style="width: 44%; height: 26px"></span>
+            <span class="skeleton" style="width: 70%"></span>
+            <span class="skeleton" style="width: 90%"></span>
+            <span class="skeleton" style="height: 120px"></span>
           </div>
         {:else if detail}
           {@const s = detail.snapshot}
-          <div class="detail-header">
-            <div class="detail-heading">
-              <div class="title-line">
-                <h2>{s.name}</h2>
-                <span class="kind-pill {detailKind}">{kindLabel(detailKind)}</span>
+          <div class="flex justify-between gap-3.5 flex-wrap items-start">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2.5 flex-wrap">
+                <h2 class="m-0 text-[20px] leading-tight [overflow-wrap:anywhere] text-[var(--text-primary)]">{ s.name }</h2>
+                <span class="kind-pill { detailKind }">{ kindLabel(detailKind) }</span>
               </div>
-              <div class="detail-sub">
-                <span class="badge mono" title={s.id}>{shortId(s.id)}</span>
-                <span class="muted"><Clock size={12} /> {formatRelative(s.createdAt)}</span>
-                {#if s.actor}<span class="actor-pill">{s.actor}</span>{/if}
-                {#if s.planSource}<span class="actor-pill plan">{s.planSource}</span>{/if}
+              <div class="flex items-center gap-2 flex-wrap mt-1.5">
+                <span class="text-[12px] text-[var(--text-muted)] bg-[var(--bg-elevated)] px-2 py-1 rounded font-mono" title={ s.id }>{ shortId(s.id) }</span>
+                <span class="text-[13px] text-[var(--text-secondary)] inline-flex items-center gap-1.5"><Clock size={13} /> { formatRelative(s.createdAt) }</span>
+                {#if s.actor}<span class="actor-pill">{ s.actor }</span>{/if}
+                {#if s.planSource}<span class="actor-pill plan">{ s.planSource }</span>{/if}
               </div>
             </div>
-            <div class="detail-actions">
+            <div class="flex items-center gap-2 flex-wrap">
               <button class="secondary" onclick={() => compareWithPrevious(s.id)} title="Compare with previous">
                 <GitCompare size={14} /> Compare prev
               </button>
@@ -625,72 +672,74 @@
           </div>
 
           {#if s.tags?.length || s.crashFingerprintKey || s.matchedCaseIds?.length}
-            <div class="tag-row">
+            <div class="flex flex-wrap gap-1.5">
               {#each s.tags ?? [] as t}
-                <span class="tag" class:crash-fix={t === "crash_fix"}>{t}</span>
+                <span class="tag" class:crash-fix={ t === "crash_fix" }>{ t }</span>
               {/each}
               {#if s.crashFingerprintKey}
-                <span class="tag mono" title={s.crashFingerprintKey}>{s.crashFingerprintKey.slice(0, 28)}…</span>
+                <span class="tag font-mono max-w-[200px] overflow-hidden text-ellipsis whitespace-nowrap" title={ s.crashFingerprintKey }>{ s.crashFingerprintKey.slice(0, 28) }…</span>
               {/if}
               {#each s.matchedCaseIds ?? [] as cid}
-                <span class="tag mono">{cid}</span>
+                <span class="tag font-mono">{ cid }</span>
               {/each}
             </div>
           {/if}
 
-          <p class="reason">{s.reason}</p>
+          <p class="text-[14px] text-[var(--text-secondary)] m-0 leading-relaxed">{ s.reason }</p>
 
           {#if detail.manifestOnly}
-            <div class="notice warn">
-              <AlertTriangle size={14} />
-              Manifest/lockfile checkpoint — no tracked file copies. Rollback will not restore mod jars from this snapshot.
+            <div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] border text-[13px] leading-snug inline-flex items-center gap-2 text-[#fcd34d] bg-[rgba(245,158,11,0.08)] border-[rgba(245,158,11,0.28)]">
+              <AlertTriangle size={15} />
+              <span><strong>Checkpoint without file copies.</strong> Rollback restores the manifest but not mod jars from this snapshot.</span>
             </div>
           {/if}
 
           {#if detail.humanExplanation}
-            <div class="block">
-              <h3><Sparkles size={13} /> Explanation</h3>
-              <p class="block-text">{detail.humanExplanation}</p>
+            <div class="grid gap-2.5">
+              <h3 class="flex items-center gap-1.5 m-0 text-[12.5px] uppercase tracking-wider text-[var(--text-muted)] font-bold"><Sparkles size={14} class="text-[var(--accent-primary)]" /> Explanation</h3>
+              <p class="m-0 text-[14px] text-[var(--text-secondary)] leading-relaxed">{ detail.humanExplanation }</p>
             </div>
           {/if}
 
-          <div class="block">
-            <h3><Zap size={13} /> Actions ({(detail.actionsSummary ?? []).length})</h3>
+          <div class="grid gap-2.5">
+            <h3 class="flex items-center gap-1.5 m-0 text-[12.5px] uppercase tracking-wider text-[var(--text-muted)] font-bold"><Zap size={14} class="text-[var(--accent-primary)]" /> Actions ({ (detail.actionsSummary ?? []).length })</h3>
             {#if (detail.actionsSummary ?? []).length > 0}
-              <ul class="action-list">
+              <ul class="m-0 p-0 list-none grid gap-1.5">
                 {#each detail.actionsSummary ?? [] as line}
-                  <li><span class="bullet" aria-hidden="true"></span>{line}</li>
-                {/each}
-              </ul>
-            {:else}
-              <p class="muted">No action details recorded.</p>
-            {/if}
-          </div>
-
-          <div class="block">
-            <h3><FolderOpen size={13} /> Changed files ({(detail.changedFiles ?? []).length})</h3>
-            {#if (detail.changedFiles ?? []).length > 0}
-              <ul class="file-list">
-                {#each detail.changedFiles ?? [] as f}
-                  <li>
-                    <span class="cat">{f.category}</span>
-                    <span class="file-path tb-truncate">{f.path}</span>
+                  <li class="flex items-start gap-2.5 text-[13.5px] leading-snug text-[var(--text-secondary)] px-2.5 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-sm)]">
+                    <span class="w-1.5 h-1.5 rounded-full bg-[var(--accent-primary)] shrink-0 mt-[7px]" aria-hidden="true"></span>{ line }
                   </li>
                 {/each}
               </ul>
             {:else}
-              <p class="muted">No tracked files copied into this snapshot.</p>
+              <p class="text-[13px] text-[var(--text-muted)] m-0">No action details recorded.</p>
+            {/if}
+          </div>
+
+          <div class="grid gap-2">
+            <h3 class="flex items-center gap-1.5 m-0 text-[12.5px] uppercase tracking-wider text-[var(--text-muted)] font-bold"><FolderOpen size={14} class="text-[var(--accent-primary)]" /> Changed files ({ (detail.changedFiles ?? []).length })</h3>
+            {#if (detail.changedFiles ?? []).length > 0}
+              <ul class="m-0 p-0 list-none grid gap-1">
+                {#each detail.changedFiles ?? [] as f}
+                  <li class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-[var(--border-radius-sm)] bg-[var(--bg-tertiary)] border border-transparent hover:border-[var(--border-color)] min-w-0">
+                    <span class="shrink-0 text-[10.5px] font-extrabold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-muted)]">{ f.category }</span>
+                    <span class="text-[var(--text-secondary)] font-mono text-[12.5px] flex-1 min-w-0 tb-truncate">{ f.path }</span>
+                  </li>
+                {/each}
+              </ul>
+            {:else}
+              <p class="text-[13px] text-[var(--text-muted)] m-0">No tracked files copied into this snapshot.</p>
             {/if}
           </div>
 
           {#if detail.relatedEvents.length}
-            <div class="block">
-              <h3><History size={13} /> Related activity ({detail.relatedEvents.length})</h3>
-              <ul class="event-list">
+            <div class="grid gap-2.5">
+              <h3 class="flex items-center gap-1.5 m-0 text-[12.5px] uppercase tracking-wider text-[var(--text-muted)] font-bold"><History size={14} class="text-[var(--accent-primary)]" /> Related activity ({ detail.relatedEvents.length })</h3>
+              <ul class="m-0 p-0 list-none grid gap-1.5">
                 {#each detail.relatedEvents as ev}
-                  <li>
-                    <span class="actor-pill">{ev.actor}</span>
-                    <span class="event-summary">{ev.summary}</span>
+                  <li class="flex items-center gap-2.5 px-2.5 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-sm)] min-w-0">
+                    <span class="actor-pill">{ ev.actor }</span>
+                    <span class="text-[13.5px] text-[var(--text-secondary)] min-w-0 [overflow-wrap:anywhere]">{ ev.summary }</span>
                   </li>
                 {/each}
               </ul>
@@ -702,100 +751,124 @@
       </section>
     </div>
 
-    <div class="collapsible">
-      <button type="button" class="collapse-toggle" onclick={() => (compareOpen = !compareOpen)}>
-        <span class="chev">{#if compareOpen}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}</span>
-        <GitCompare size={16} /> Compare snapshots
-        <span class="toggle-spacer"></span>
-        <span class="n">{diff ? `${allDiffFiles.length} file${allDiffFiles.length === 1 ? "" : "s"}` : ""}</span>
+    <!-- ── Compare snapshots ───────────────────────────────────── -->
+    <div class="overflow-hidden flex flex-col shrink-0 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+      <button type="button" class="w-full flex items-center gap-2.5 bg-transparent border-0 text-[var(--text-secondary)] font-bold px-3.5 py-3 text-[13.5px] cursor-pointer rounded-none transition-colors duration-150 hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" onclick={() => (compareOpen = !compareOpen)}>
+        <span class="inline-flex text-[var(--text-muted)]">{#if compareOpen}<ChevronDown size={17} />{:else}<ChevronRight size={17} />{/if}</span>
+        <GitCompare size={17} /> Compare snapshots
+        <span class="flex-1"></span>
+        {#if diff}
+          <span class="text-[12px] font-bold text-[var(--text-muted)] bg-[var(--bg-elevated)] px-2 py-0.5 rounded-full">{ allDiffFiles.length } file{ allDiffFiles.length === 1 ? "" : "s" }</span>
+        {/if}
       </button>
       {#if compareOpen}
-        <div class="compare-panel">
-          <div class="compare-pick">
-            <div class="pick-field">
-              <label for="snap-from">From</label>
-              <select id="snap-from" bind:value={fromId}>
-                {#each snapshots as s}<option value={s.id}>{snapshotSelectLabel(s)}</option>{/each}
+        <div class="grid gap-3.5 px-3.5 pb-3.5">
+          <div class="flex items-center gap-2.5 flex-wrap">
+            <div class="grid gap-1 flex-1 min-w-[200px]">
+              <label for="snap-from" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">From</label>
+              <select id="snap-from" class="w-full min-w-0" bind:value={fromId}>
+                {#each snapshots as s}<option value={s.id}>{ snapshotSelectLabel(s) }</option>{/each}
               </select>
             </div>
-            <button class="ghost icon-btn swap" onclick={swapCompare} title="Swap direction" disabled={!fromId || !toId}>
+            <button class="ghost w-[38px] h-[38px] p-0 justify-center shrink-0 border border-[var(--border-color)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-[var(--accent-primary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)]" onclick={swapCompare} title="Swap direction" disabled={!fromId || !toId}>
               <ArrowRightLeft size={16} />
             </button>
-            <div class="pick-field">
-              <label for="snap-to">To</label>
-              <select id="snap-to" bind:value={toId}>
-                {#each snapshots as s}<option value={s.id}>{snapshotSelectLabel(s)}</option>{/each}
+            <div class="grid gap-1 flex-1 min-w-[200px]">
+              <label for="snap-to" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">To</label>
+              <select id="snap-to" class="w-full min-w-0" bind:value={toId}>
+                {#each snapshots as s}<option value={s.id}>{ snapshotSelectLabel(s) }</option>{/each}
               </select>
             </div>
-            <div class="pick-actions">
+            <div class="flex gap-2">
               <button class="secondary" onclick={compare} disabled={fromId === toId || !fromId || !toId}>
                 Diff files
               </button>
               <button class="secondary" onclick={loadManifestDiff} disabled={fromId === toId || !fromId || !toId || manifestDiffLoading}>
-                {manifestDiffLoading ? "Loading…" : "Diff manifest"}
+                { manifestDiffLoading ? "Loading…" : "Diff manifest" }
               </button>
             </div>
           </div>
           {#if manifestDiff}
-            <div class="manifest-diff-panel">
-              <div class="section-head"><h3>Manifest changes</h3></div>
-              <div class="manifest-diff-stats">
+            <div class="p-3.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] grid gap-2.5">
+              <h3 class="m-0 text-[14px] text-[var(--text-secondary)] font-bold">Manifest changes</h3>
+              <div class="grid gap-1.5 mb-1.5">
                 {#if manifestDiff.mcVersionChanged}
-                  <div class="diff-stat changed"><strong>MC version</strong><span>{manifestDiff.fromMcVersion} → {manifestDiff.toMcVersion}</span></div>
+                  <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(245,158,11,0.3)]">
+                    <strong class="text-[var(--text-primary)]">MC version</strong><span class="text-[var(--text-muted)] tb-truncate">{ manifestDiff.fromMcVersion } → { manifestDiff.toMcVersion }</span>
+                  </div>
                 {/if}
                 {#if manifestDiff.loaderVersionChanged}
-                  <div class="diff-stat changed"><strong>Loader</strong><span>{manifestDiff.fromLoaderVersion} → {manifestDiff.toLoaderVersion}</span></div>
+                  <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(245,158,11,0.3)]">
+                    <strong class="text-[var(--text-primary)]">Loader</strong><span class="text-[var(--text-muted)] tb-truncate">{ manifestDiff.fromLoaderVersion } → { manifestDiff.toLoaderVersion }</span>
+                  </div>
                 {/if}
                 {#if manifestDiff.addedMods?.length}
-                  <div class="diff-stat added"><strong>+{manifestDiff.addedMods.length} mods</strong><span>{manifestDiff.addedMods.join(", ")}</span></div>
+                  <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)]">
+                    <strong class="text-[var(--accent-primary)]">+{ manifestDiff.addedMods.length } mods</strong><span class="text-[var(--text-muted)] tb-truncate">{ manifestDiff.addedMods.join(", ") }</span>
+                  </div>
                 {/if}
                 {#if manifestDiff.removedMods?.length}
-                  <div class="diff-stat removed"><strong>-{manifestDiff.removedMods.length} mods</strong><span>{manifestDiff.removedMods.join(", ")}</span></div>
+                  <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(239,68,68,0.3)]">
+                    <strong class="text-[#fca5a5]">-{ manifestDiff.removedMods.length } mods</strong><span class="text-[var(--text-muted)] tb-truncate">{ manifestDiff.removedMods.join(", ") }</span>
+                  </div>
                 {/if}
               </div>
-              <pre class="manifest-diff-text">{manifestDiff.diffText || "No differences."}</pre>
+              <pre class="m-0 p-3 rounded-[var(--border-radius-sm)] bg-[#0d0d10] text-[#b4b4bc] font-mono text-[12.5px] leading-relaxed max-h-[360px] overflow-auto whitespace-pre-wrap">{ manifestDiff.diffText || "No differences." }</pre>
             </div>
           {/if}
           {#if diff}
-            <div class="diff-panel">
-              <div class="diff-stat-card added"><strong>{diff.addedFiles.length}</strong><span>Added</span></div>
-              <div class="diff-stat-card removed"><strong>{diff.removedFiles.length}</strong><span>Removed</span></div>
-              <div class="diff-stat-card modified"><strong>{diff.modifiedFiles.length}</strong><span>Modified</span></div>
+            <div class="grid grid-cols-3 gap-2.5">
+              <div class="bg-[var(--bg-tertiary)] border border-[color-mix(in_srgb,var(--accent-primary)_35%,transparent)] rounded-[var(--border-radius-md)] px-3.5 py-3 flex flex-col gap-0.5">
+                <strong class="text-[26px] leading-tight text-[var(--accent-primary)]">{ diff.addedFiles.length }</strong>
+                <span class="text-[var(--text-muted)] text-[13px]">Added</span>
+              </div>
+              <div class="bg-[var(--bg-tertiary)] border border-[rgba(239,68,68,0.35)] rounded-[var(--border-radius-md)] px-3.5 py-3 flex flex-col gap-0.5">
+                <strong class="text-[26px] leading-tight text-[#fca5a5]">{ diff.removedFiles.length }</strong>
+                <span class="text-[var(--text-muted)] text-[13px]">Removed</span>
+              </div>
+              <div class="bg-[var(--bg-tertiary)] border border-[rgba(147,197,253,0.35)] rounded-[var(--border-radius-md)] px-3.5 py-3 flex flex-col gap-0.5">
+                <strong class="text-[26px] leading-tight text-[#93c5fd]">{ diff.modifiedFiles.length }</strong>
+                <span class="text-[var(--text-muted)] text-[13px]">Modified</span>
+              </div>
             </div>
             {#if allDiffFiles.length > 0}
-              <div class="inline-diff-shell">
-                <aside class="diff-files">
-                  <h3><FileText size={14} /> Changed files</h3>
+              <div class="grid grid-cols-[320px_minmax(0,1fr)] max-[900px]:grid-cols-1 gap-3.5 p-3.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+                <aside class="min-w-0">
+                  <h3 class="text-[var(--text-muted)] text-[12.5px] uppercase tracking-wider mb-2.5 flex items-center gap-2 font-bold"><FileText size={14} /> Changed files</h3>
                   {#each allDiffFiles as path}
-                    <button class:selected={selectedDiffPath === path} onclick={() => openFileDiff(path)}>
-                      <span class="tb-truncate">{path}</span>
-                      <span class="labels">
-                        {#if diff.addedFiles.includes(path)}<small class="added-label">added</small>{/if}
-                        {#if diff.removedFiles.includes(path)}<small class="removed-label">removed</small>{/if}
-                        {#if diff.modifiedFiles.includes(path)}<small class="modified-label">modified</small>{/if}
+                    <button class="w-full flex items-center justify-between gap-2 text-left bg-transparent text-[var(--text-secondary)] border rounded-[var(--border-radius-sm)] px-2.5 py-2 mb-1.5 text-[12.5px] cursor-pointer transition-colors duration-150 {
+                      selectedDiffPath === path
+                        ? "bg-[var(--bg-elevated)] border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] text-[var(--text-primary)]"
+                        : "border-transparent hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+                    }" onclick={() => openFileDiff(path)}>
+                      <span class="tb-truncate">{ path }</span>
+                      <span class="inline-flex gap-1 shrink-0">
+                        {#if diff.addedFiles.includes(path)}<small class="diff-label added">added</small>{/if}
+                        {#if diff.removedFiles.includes(path)}<small class="diff-label removed">removed</small>{/if}
+                        {#if diff.modifiedFiles.includes(path)}<small class="diff-label modified">modified</small>{/if}
                       </span>
                     </button>
                   {/each}
                 </aside>
-                <section class="inline-diff">
+                <section class="min-w-0 flex flex-col gap-2">
                   {#if diffLoading}
-                    <div class="muted">Loading file diff…</div>
+                    <div class="text-[var(--text-muted)] text-[13px]">Loading file diff…</div>
                   {:else if fileDiff}
-                    <div class="inline-diff-header">
-                      <strong class="tb-truncate">{fileDiff.path}</strong>
-                      <span>{fileDiff.fromExists ? "from exists" : "from missing"} → {fileDiff.toExists ? "to exists" : "to missing"}</span>
+                    <div class="flex justify-between items-center gap-3 text-[var(--text-secondary)]">
+                      <strong class="text-[14px] tb-truncate">{ fileDiff.path }</strong>
+                      <span class="text-[var(--text-muted)] text-[12.5px] shrink-0">{ fileDiff.fromExists ? "from exists" : "from missing" } → { fileDiff.toExists ? "to exists" : "to missing" }</span>
                     </div>
                     {#if fileDiff.text}
-                      <pre class="code-diff">
+                      <pre class="overflow-auto max-h-[420px] bg-[#0d0d10] rounded-[var(--border-radius-md)] p-3 m-0 text-[12.5px] leading-relaxed">
 {#each fileDiff.text.split("\n") as line}
-<span class={lineClass(line)}>{line}</span>
+<span class="block whitespace-pre-wrap font-mono { lineClass(line) }">{ line }</span>
 {/each}
                       </pre>
                     {:else}
-                      <div class="muted pad">File looks identical — content unchanged.</div>
+                      <div class="text-[var(--text-muted)] text-[13px] p-6">File looks identical — content unchanged.</div>
                     {/if}
                   {:else}
-                    <div class="muted">Select a file to view inline diff.</div>
+                    <div class="text-[var(--text-muted)] text-[13px]">Select a file to view inline diff.</div>
                   {/if}
                 </section>
               </div>
@@ -805,46 +878,47 @@
       {/if}
     </div>
 
-    <div class="collapsible">
-      <button type="button" class="collapse-toggle" onclick={() => (backupsOpen = !backupsOpen)}>
-        <span class="chev">{#if backupsOpen}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}</span>
-        <Archive size={16} /> Project backups
-        <span class="toggle-spacer"></span>
-        <span class="n">{backups.length} saved</span>
+    <!-- ── Project backups ─────────────────────────────────────── -->
+    <div class="overflow-hidden flex flex-col shrink-0 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+      <button type="button" class="w-full flex items-center gap-2.5 bg-transparent border-0 text-[var(--text-secondary)] font-bold px-3.5 py-3 text-[13.5px] cursor-pointer transition-colors duration-150 hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" onclick={() => (backupsOpen = !backupsOpen)}>
+        <span class="inline-flex text-[var(--text-muted)]">{#if backupsOpen}<ChevronDown size={17} />{:else}<ChevronRight size={17} />{/if}</span>
+        <Archive size={17} /> Project backups
+        <span class="flex-1"></span>
+        <span class="text-[12px] font-bold text-[var(--text-muted)] bg-[var(--bg-elevated)] px-2 py-0.5 rounded-full">{ backups.length } saved</span>
       </button>
       {#if backupsOpen}
-        <div class="backup-section">
-          <div class="backup-create">
-            <input bind:value={backupName} placeholder="Backup name" onkeydown={(e) => e.key === "Enter" && !loading && ($projectPath ? createBackup() : null)} />
+        <div class="px-3.5 pb-3.5 grid gap-3">
+          <div class="flex items-center gap-2 flex-wrap">
+            <input class="flex-1 min-w-[200px]" bind:value={backupName} placeholder="Backup name" onkeydown={(e) => e.key === "Enter" && !loading && ($projectPath ? createBackup() : null)} />
             <button class="secondary" onclick={createBackup} disabled={!$projectPath || loading}>
               <Archive size={16} /> Create zip
             </button>
-            <button class="ghost icon-btn" onclick={loadBackups} disabled={backupLoading} title="Refresh backups">
-              <RefreshCw size={14} class={backupLoading ? "spin" : ""} />
+            <button class="ghost w-[38px] h-[38px] p-0 justify-center shrink-0" onclick={loadBackups} disabled={backupLoading} title="Refresh backups">
+              <RefreshCw size={15} class={backupLoading ? "spin" : ""} />
             </button>
-            <p class="backup-hint">Full zip of tracked files — restore to bring back an older pack state.</p>
+            <p class="m-0 w-full text-[13px] text-[var(--text-muted)]">Full zip of tracked files — restore to bring back an older pack state.</p>
           </div>
           {#if backups.length > 0}
-            <div class="backup-list">
+            <div class="grid gap-1.5">
               {#each backups.slice(0, 12) as b}
-                <div class="backup-row">
-                  <div class="backup-icon"><Archive size={15} /></div>
-                  <div class="backup-info">
-                    <strong class="tb-truncate">{b.name}</strong>
-                    <span>{formatDate(b.createdAt)}{#if b.fileCount} · {b.fileCount} files{/if}</span>
+                <div class="flex items-center gap-3 px-3 py-2.5 rounded-[var(--border-radius-md)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] min-w-0 hover:border-[color-mix(in_srgb,var(--accent-primary)_25%,var(--border-color))]">
+                  <div class="inline-flex items-center justify-center w-8 h-8 rounded-[var(--border-radius-sm)] bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-muted)] shrink-0"><Archive size={16} /></div>
+                  <div class="grid gap-0.5 flex-1 min-w-0">
+                    <strong class="text-[var(--text-primary)] text-[13.5px] tb-truncate">{ b.name }</strong>
+                    <span class="text-[var(--text-muted)] text-[12.5px]">{ formatDate(b.createdAt) }{#if b.fileCount} · { b.fileCount } files{/if}</span>
                   </div>
-                  <span class="backup-size">{formatBytes(b.sizeBytes)}</span>
+                  <span class="text-[var(--text-muted)] text-[12.5px] font-mono shrink-0">{ formatBytes(b.sizeBytes) }</span>
                   <button class="ghost mini" onclick={() => restoreBackup(b.id)} title="Restore">
-                    <RotateCcw size={14} />
+                    <RotateCcw size={15} />
                   </button>
                   <button class="ghost mini danger" onclick={() => deleteBackup(b.id)} title="Delete">
-                    <Trash2 size={14} />
+                    <Trash2 size={15} />
                   </button>
                 </div>
               {/each}
             </div>
           {:else}
-            <p class="muted">No zip backups yet.</p>
+            <p class="text-[13px] text-[var(--text-muted)] m-0">No zip backups yet.</p>
           {/if}
         </div>
       {/if}
@@ -863,287 +937,36 @@
 </div>
 
 <style>
-  .snapshots {
-    max-width: none;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    min-height: 0;
-    height: 100%;
-    box-sizing: border-box;
-    padding: 2px;
-  }
+  /* Layout comes from Tailwind utilities. Scoped styles only for
+     pieces Tailwind can't express: shared app button skins used here
+     (ghost/secondary/danger/mini are defined app-wide), the Ore-style
+     kind tags, and skeletons. */
 
-  /* ── Toolbar ─────────────────────────────────────────────── */
-  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; flex-shrink: 0; }
-  .title-block { display: grid; gap: 3px; }
-  .title { display: flex; align-items: center; gap: 10px; color: var(--text-primary); font-weight: 800; font-size: 15px; }
-  .title :global(svg) { color: var(--accent-primary); }
-  .subtitle { margin: 0; color: var(--text-muted); font-size: 12px; }
-
-  .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .create-group { display: flex; align-items: center; gap: 8px; }
-  .create-group input { min-width: 180px; }
-  .icon-btn { width: 38px; height: 38px; padding: 0; flex-shrink: 0; justify-content: center; }
-
-  .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); border: 1px solid var(--border-color); display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.4; }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
-  .notice.warn { color: #fcd34d; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); font-size: 13px; }
-
-  /* ── Kind filter bar ─────────────────────────────────────── */
-  .kind-bar {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
-    flex-shrink: 0;
-  }
-  .kind-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 1;
-    min-width: 0;
-    padding: 10px 14px;
-    /* Task #67: buttons had no rounding/borders — flat slabs. Ore UI keys,
-       theme-aware via tokens so light themes stay readable. */
-    border-radius: var(--border-radius-md);
-    background: var(--bg-tertiary);
+  .kind-tag {
+    font-size: 10.5px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 1px 8px;
+    border-radius: 999px;
     border: 1px solid var(--border-color);
-    border-bottom-color: color-mix(in srgb, var(--text-primary) 14%, var(--border-color));
     color: var(--text-muted);
-    font-weight: 600;
-    font-size: 12px;
-    cursor: pointer;
-    transition: background var(--motion-fast) var(--motion-ease),
-      border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
   }
-  .kind-btn:hover {
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-  }
-  .kind-btn:active {
-    background: color-mix(in srgb, var(--text-primary) 6%, var(--bg-tertiary));
-  }
-  .kind-btn :global(svg) { color: var(--text-muted); flex-shrink: 0; }
-  .k-count { font-size: 18px; font-weight: 800; color: var(--text-primary); line-height: 1; }
-  .k-label { color: var(--text-muted); }
-  .kind-btn.active {
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
-    border-bottom-color: color-mix(in srgb, var(--accent-primary) 70%, #000);
-  }
-  .kind-btn.active .k-label { color: #ffffff; }
-  .kind-btn.active .k-count { color: #ffffff; }
-  .kind-btn.active :global(svg) { color: #ffffff; }
-  /* Active kind buttons inherit the shared accent styling above; per-kind
-     variants only need white text on the filled accent background. */
-  .kind-btn.active :global(svg),
-  .kind-btn.active .k-count { color: #ffffff; }
-
-  /* ── Filters ─────────────────────────────────────────────── */
-  .filters { display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
-  .search { flex: 1; min-width: 220px; display: flex; align-items: center; gap: 8px; background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 0 10px; color: var(--text-muted); }
-  .search input { flex: 1; border: 0; background: transparent; color: var(--text-primary); padding: 10px 0; outline: none; min-width: 0; }
-  .match-count { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
-
-  /* ── Master / detail ─────────────────────────────────────── */
-  .master-detail {
-    display: grid;
-    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-    gap: 14px;
-    flex: 1;
-    min-height: 0;
-  }
-  .list-pane, .detail-pane, .collapsible, .manifest-diff-panel {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-  }
-  .list-pane { overflow: auto; min-height: 0; padding: 8px; display: flex; flex-direction: column; gap: 6px; scrollbar-gutter: stable; }
-
-  .row {
-    width: 100%;
-    text-align: left;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: var(--border-radius-md);
-    padding: 12px 12px 12px 10px;
-    color: var(--text-secondary);
-    display: flex;
-    gap: 10px;
-    transform: none;
-    position: relative;
-  }
-  .row:hover { background: var(--bg-tertiary); color: var(--text-primary); }
-  .row.selected {
-    background: color-mix(in srgb, var(--accent-primary) 7%, var(--bg-tertiary));
-    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
-    color: var(--text-primary);
-    box-shadow: inset 3px 0 0 var(--accent-primary), var(--shadow-sm);
-  }
-  .row.selected.crash { background: rgba(245,158,11,.07); border-color: rgba(245,158,11,.32); box-shadow: inset 3px 0 0 #f59e0b, var(--shadow-sm); }
-  .row.selected.auto { box-shadow: inset 3px 0 0 #93c5fd, var(--shadow-sm); border-color: rgba(147,197,253,.32); background: rgba(147,197,253,.06); }
-
-  .kind-dot { width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0; align-self: flex-start; margin-top: 5px; background: var(--bg-active); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bg-active) 30%, transparent); }
-  .kind-dot.auto { background: #93c5fd; box-shadow: 0 0 0 3px rgba(147,197,253,.16); }
-  .kind-dot.manual { background: var(--accent-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
-  .kind-dot.crash { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.16); }
-
-  .row-body { min-width: 0; flex: 1; display: grid; gap: 6px; }
-  .row-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; min-width: 0; }
-  .row-top strong { font-size: 13px; color: var(--text-primary); max-width: 100%; }
-  .op-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); font-family: ui-monospace, monospace; max-width: 130px; flex-shrink: 0; margin-top: 1px; }
-  .preview { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .row-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
-  .row-meta :global(svg) { color: var(--text-muted); }
-  .row-files { display: inline-flex; align-items: center; gap: 4px; }
-  .tags { display: flex; gap: 4px; flex-wrap: wrap; }
-
-  .kind-tag { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border-color); color: var(--text-muted); }
-  .kind-tag.auto { color: #93c5fd; border-color: rgba(147,197,253,.4); }
+  .kind-tag.auto { color: #93c5fd; border-color: rgba(147, 197, 253, 0.4); }
   .kind-tag.manual { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
-  .kind-tag.crash { color: #fbbf24; border-color: rgba(251,191,36,.4); }
+  .kind-tag.crash { color: #fbbf24; border-color: rgba(251, 191, 36, 0.4); }
 
-  /* ── Detail pane ─────────────────────────────────────────── */
-  .detail-pane { padding: 18px; overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 14px; scrollbar-gutter: stable; }
-  .detail-header { display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
-  .detail-heading { min-width: 0; }
-  .title-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .detail-header h2 { margin: 0; font-size: 19px; line-height: 1.25; overflow-wrap: anywhere; }
-  .detail-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
-  .detail-sub .muted { display: inline-flex; align-items: center; gap: 5px; }
-  .detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .detail-actions .secondary, .detail-actions .ghost { padding: 7px 12px; font-size: 12px; font-weight: 700; }
+  .actor-pill { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 9px; border-radius: 999px; border: 1px solid rgba(147, 197, 253, 0.4); color: #93c5fd; background: rgba(147, 197, 253, 0.07); }
+  .actor-pill.plan { color: #c4b5fd; border-color: rgba(196, 181, 253, 0.35); background: rgba(196, 181, 253, 0.07); }
 
-  .kind-pill { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-color); color: var(--text-muted); flex-shrink: 0; }
-  .kind-pill.auto { color: #93c5fd; border-color: rgba(147,197,253,.4); background: rgba(147,197,253,.08); }
-  .kind-pill.manual { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
-  .kind-pill.crash { color: #fbbf24; border-color: rgba(251,191,36,.4); background: rgba(251,191,36,.08); }
-
-  .badge { font-size: 11px; color: var(--text-muted); background: var(--bg-elevated); padding: 3px 8px; border-radius: 4px; }
-  .badge.mono { font-family: ui-monospace, monospace; }
-  .actor-pill { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-color); color: #93c5fd; background: rgba(147,197,253,.07); }
-  .actor-pill.plan { color: #c4b5fd; border-color: rgba(196,181,253,.35); background: rgba(196,181,253,.07); }
-
-  .tag-row { display: flex; flex-wrap: wrap; gap: 6px; }
-  .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg-elevated); color: var(--text-muted); }
+  .tag { font-size: 11.5px; padding: 2px 9px; border-radius: 999px; background: var(--bg-elevated); color: var(--text-secondary); }
   .tag.crash-fix { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
-  .tag.mono { font-family: ui-monospace, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 
-  .reason { color: var(--text-secondary); font-size: 13px; margin: 0; line-height: 1.5; }
-
-  .block { display: grid; gap: 10px; }
-  .block h3 { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-muted); }
-  .block h3 :global(svg) { color: color-mix(in srgb, var(--accent-primary) 70%, var(--text-muted)); }
-  .block-text { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
-
-  .action-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-  .action-list li { display: flex; align-items: flex-start; gap: 10px; color: var(--text-secondary); font-size: 13px; line-height: 1.45; padding: 8px 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); }
-  .bullet { width: 6px; height: 6px; border-radius: 999px; background: var(--accent-primary); flex-shrink: 0; margin-top: 6px; }
-
-  .file-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
-  .file-list li { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); border: 1px solid transparent; min-width: 0; }
-  .file-list li:hover { border-color: var(--border-color); }
-  .cat { flex-shrink: 0; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); }
-  .file-path { color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; flex: 1; min-width: 0; }
-
-  .event-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-  .event-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); min-width: 0; }
-  .event-summary { color: var(--text-secondary); font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
-
-  .detail-skeleton { display: flex; flex-direction: column; gap: 12px; }
-
-  /* ── Collapsibles ────────────────────────────────────────── */
-  .collapsible { overflow: hidden; display: flex; flex-direction: column; flex-shrink: 0; }
-  .collapse-toggle { width: 100%; justify-content: flex-start; align-items: center; gap: 10px; background: transparent; border: 0; color: var(--text-secondary); font-weight: 700; padding: 13px 14px; transform: none; border-radius: 0; font-size: 13px; }
-  .collapse-toggle:hover { background: var(--bg-tertiary); color: var(--text-primary); }
-  .collapse-toggle :global(svg) { flex-shrink: 0; }
-  .chev { display: inline-flex; color: var(--text-muted); }
-  .toggle-spacer { flex: 1; }
-  .collapse-toggle .n { font-size: 11px; font-weight: 700; color: var(--text-muted); background: var(--bg-elevated); padding: 2px 8px; border-radius: 999px; }
-
-  /* ── Compare ─────────────────────────────────────────────── */
-  .compare-panel { display: grid; gap: 14px; padding: 0 14px 14px; }
-  .compare-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .pick-field { display: grid; gap: 4px; flex: 1; min-width: 180px; }
-  .pick-field label { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); font-weight: 800; }
-  .pick-field select { width: 100%; min-width: 0; }
-  .swap { border: 1px solid var(--border-color); background: var(--bg-elevated); color: var(--text-muted); }
-  .swap:hover { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
-  .pick-actions { display: flex; gap: 8px; }
-
-  .diff-panel { display: grid; grid-template-columns: repeat(3, minmax(110px, 1fr)); gap: 10px; }
-  .diff-stat-card { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
-  .diff-stat-card strong { font-size: 26px; line-height: 1.1; color: var(--text-primary); }
-  .diff-stat-card span { color: var(--text-muted); font-size: 12px; }
-  .diff-stat-card.added { border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: color-mix(in srgb, var(--accent-primary) 6%, var(--bg-tertiary)); }
-  .diff-stat-card.added strong { color: var(--accent-primary); }
-  .diff-stat-card.removed { border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.06); }
-  .diff-stat-card.removed strong { color: #fca5a5; }
-  .diff-stat-card.modified { border-color: rgba(147,197,253,.35); background: rgba(147,197,253,.06); }
-  .diff-stat-card.modified strong { color: #93c5fd; }
-
-  .inline-diff-shell { display: grid; grid-template-columns: 310px minmax(0, 1fr); gap: 14px; padding: 14px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
-  .diff-files { min-width: 0; }
-  .diff-files h3 { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
-  .diff-files button { width: 100%; justify-content: space-between; text-align: left; background: transparent; color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--border-radius-sm); padding: 9px 10px; margin-bottom: 5px; transform: none; gap: 8px; font-size: 12px; align-items: center; }
-  .diff-files button:hover, .diff-files button.selected { background: var(--bg-elevated); border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); color: var(--text-primary); }
-  .diff-files .labels { display: inline-flex; gap: 4px; flex-shrink: 0; }
-  .diff-files small { color: var(--text-muted); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; padding: 1px 5px; border-radius: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
-  .added-label { color: var(--accent-primary) !important; border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent) !important; }
-  .removed-label { color: #fca5a5 !important; border-color: rgba(239,68,68,.35) !important; }
-  .modified-label { color: #93c5fd !important; border-color: rgba(147,197,253,.35) !important; }
-
-  .inline-diff { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-  .inline-diff-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--text-secondary); }
-  .inline-diff-header strong { font-size: 13px; }
-  .inline-diff-header span { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
-
-  .manifest-diff-panel { padding: 14px; }
-  .section-head h3 { margin: 0 0 10px; font-size: 13px; color: var(--text-secondary); }
-  .manifest-diff-stats { display: grid; gap: 6px; margin-bottom: 12px; }
-  .diff-stat { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); font-size: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-  .diff-stat strong { color: var(--text-primary); }
-  .diff-stat span { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .diff-stat.changed { border-color: rgba(245,158,11,.30); }
-  .diff-stat.added { border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
-  .diff-stat.removed { border-color: rgba(239,68,68,.30); }
-  .manifest-diff-text { margin: 0; padding: 12px; border-radius: var(--border-radius-sm); background: #0d0d10; color: #a1a1aa; font-family: ui-monospace,monospace; font-size: 11px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; }
-
-  .code-diff { overflow: auto; max-height: 420px; background: #0d0d10; border-radius: var(--border-radius-md); padding: 12px; margin: 0; font-size: 12px; line-height: 1.5; }
-  .code-diff span { display: block; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-  .code-diff span.added { color: #86efac; background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
-  .code-diff span.removed { color: #fca5a5; background: rgba(239, 68, 68, 0.08); }
-  .code-diff span.context { color: #a1a1aa; }
-
-  /* ── Backups ─────────────────────────────────────────────── */
-  .backup-section { padding: 0 14px 14px; display: grid; gap: 12px; }
-  .backup-create { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .backup-create input { flex: 1; min-width: 180px; }
-  .backup-hint { margin: 0; width: 100%; color: var(--text-muted); font-size: 11px; }
-  .backup-list { display: grid; gap: 6px; }
-  .backup-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); min-width: 0; }
-  .backup-row:hover { border-color: color-mix(in srgb, var(--accent-primary) 25%, var(--border-color)); }
-  .backup-icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: var(--border-radius-sm); background: var(--bg-elevated); border: 1px solid var(--border-color); color: var(--text-muted); flex-shrink: 0; }
-  .backup-info { display: grid; gap: 2px; flex: 1; min-width: 0; }
-  .backup-info strong { color: var(--text-primary); font-size: 13px; }
-  .backup-info span { color: var(--text-muted); font-size: 11px; }
-  .backup-size { color: var(--text-muted); font-size: 11px; font-family: ui-monospace, monospace; flex-shrink: 0; }
-
-  .rollback { padding: 6px 10px; font-size: 12px; font-weight: 700; }
-  .danger { color: #fca5a5; }
-  .mini { width: 30px; height: 30px; padding: 0; justify-content: center; flex-shrink: 0; }
-  .pad { padding: 24px; }
-  .muted { color: var(--text-muted); font-size: 12px; }
-  .loading { color: var(--text-muted); padding: 80px; text-align: center; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
+  .diff-label { color: var(--text-muted); font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 6px; border-radius: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
+  .diff-label.added { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
+  .diff-label.removed { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
+  .diff-label.modified { color: #93c5fd; border-color: rgba(147, 197, 253, 0.35); }
 
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @media (max-width: 900px) {
-    .master-detail, .inline-diff-shell { grid-template-columns: 1fr; }
-    .kind-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .pick-field { min-width: 140px; }
-  }
 </style>

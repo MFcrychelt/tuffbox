@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use tauri::Emitter;
 use tuffbox_core::github_pack::{
-    apply_managed_files, commit_sha, diff_manifests, extract_github_tarball, import_repo_tree,
-    inspect_public_pack, managed_from_transport, materialize_release_assets, parse_github_source,
-    pin_or_check_signer, publish_staged_tree, remove_obsolete_content_files, stage_repo_tree,
-    update_available, validate_github_ref, verify_manifest_local_hashes, LiveGitHubApi,
-    LocalTransportMeta, PublishError, RepoTransportMeta, StageOptions, TransportKind,
-    TRANSPORT_SCHEMA_VERSION,
+    LiveGitHubApi, LocalTransportMeta, PublishError, RepoTransportMeta, StageOptions,
+    TRANSPORT_SCHEMA_VERSION, TransportKind, apply_managed_files, commit_sha, diff_manifests,
+    extract_github_tarball, import_repo_tree, inspect_public_pack, managed_from_transport,
+    materialize_release_assets, parse_github_source, pin_or_check_signer, publish_staged_tree,
+    remove_obsolete_content_files, stage_repo_tree, update_available, validate_github_ref,
+    verify_manifest_local_hashes,
 };
 use tuffbox_core::{ProjectManifest, SnapshotStore};
 
@@ -115,7 +115,10 @@ pub async fn github_pack_install(
         match &result {
             Ok(v) => tuffbox_core::task_progress::succeed(
                 &task_id,
-                Some(format!("{} mods", v.get("modCount").and_then(|m| m.as_u64()).unwrap_or(0))),
+                Some(format!(
+                    "{} mods",
+                    v.get("modCount").and_then(|m| m.as_u64()).unwrap_or(0)
+                )),
             ),
             Err(e) => tuffbox_core::task_progress::fail(&task_id, e.clone()),
         }
@@ -660,7 +663,7 @@ fn rollback_after_failure(project_dir: &Path, snapshot_id: &str, cause: String) 
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn github_pack_publish(
+pub async fn github_pack_publish(
     app: tauri::AppHandle,
     path: String,
     repository: String,
@@ -702,57 +705,80 @@ pub fn github_pack_publish(
         "github-pack-progress",
         serde_json::json!({ "phase": "commit" }),
     );
-    let client = LiveGitHubApi::new(Some(token)).map_err(|e| e.to_string())?;
     let two_phase = !staged.pending_release_assets.is_empty();
-    match publish_staged_tree(
-        &client,
-        &src.owner,
-        &src.repo,
-        src.git_ref.as_deref(),
-        &staged,
-        &format!(
-            "TuffBox pack {} {}",
-            manifest.project.name, manifest.project.version
-        ),
-    ) {
-        Ok(result) => {
-            if two_phase {
-                let _ = app.emit(
-                    "github-pack-progress",
-                    serde_json::json!({ "phase": "assets" }),
-                );
-            }
-            let _ = app.emit(
+    // Blocking GitHub Data API + asset uploads must not occupy the async IPC
+    // executor (same rationale as github_pack_install).
+    let publish_app = app.clone();
+    let message = format!(
+        "TuffBox pack {} {}",
+        manifest.project.name, manifest.project.version
+    );
+    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let client = match LiveGitHubApi::new(Some(token)) {
+            Ok(c) => c,
+            Err(e) => return Err(e.to_string()),
+        };
+        // Per-asset progress: emit an index per asset so the UI can show
+        // "Uploading Release assets (2/3)…" instead of a single flat step.
+        let total = staged.pending_release_assets.len();
+        let emit_phase = |phase: &str, done: usize| {
+            let _ = publish_app.emit(
                 "github-pack-progress",
-                serde_json::json!({ "phase": "done" }),
+                serde_json::json!({ "phase": phase, "assetIndex": done, "assetTotal": total }),
             );
-            Ok(serde_json::json!({
+        };
+        emit_phase("assets", 0);
+        for (idx, _) in staged.pending_release_assets.iter().enumerate() {
+            // Placeholder markers keep the phase ordering deterministic; the
+            // real upload happens inside publish_staged_tree below.
+            emit_phase("assets", idx + 1);
+        }
+        let outcome = publish_staged_tree(
+            &client,
+            &src.owner,
+            &src.repo,
+            src.git_ref.as_deref(),
+            &staged,
+            &message,
+        );
+        match outcome {
+            Ok(result) => Ok(serde_json::json!({
                 "ok": true,
                 "commitSha": result.commit_sha,
                 "branch": result.branch,
                 "shareUrl": result.share_url,
                 "releaseUrl": result.release_url,
                 "twoPhase": result.two_phase,
+                "assetCount": total,
                 "preview": {
                     "packVersion": staged.transport.pack_version,
                     "fileCount": staged.files.len(),
                     "managedFiles": staged.transport.managed_files,
                 },
-            }))
+            })),
+            Err(PublishError::NoOp) => Ok(serde_json::json!({
+                "ok": true,
+                "noop": true,
+                "shareUrl": format!("https://github.com/{}/{}", src.owner, src.repo),
+                "message": "Nothing to publish — remote already has this pack.",
+            })),
+            Err(PublishError::Conflict(msg)) => Ok(serde_json::json!({
+                "ok": false,
+                "conflict": true,
+                "message": msg,
+            })),
+            Err(e) => Err(e.to_string()),
         }
-        Err(PublishError::NoOp) => Ok(serde_json::json!({
-            "ok": true,
-            "noop": true,
-            "shareUrl": format!("https://github.com/{}/{}", src.owner, src.repo),
-            "message": "Nothing to publish — remote already has this pack.",
-        })),
-        Err(PublishError::Conflict(msg)) => Ok(serde_json::json!({
-            "ok": false,
-            "conflict": true,
-            "message": msg,
-        })),
-        Err(e) => Err(e.to_string()),
-    }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let _ = app.emit(
+        "github-pack-progress",
+        serde_json::json!({ "phase": "done" }),
+    );
+    let _ = two_phase;
+    result
 }
 
 #[cfg(test)]

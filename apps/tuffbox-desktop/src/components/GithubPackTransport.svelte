@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Github, KeyRound, UploadCloud, Link2, Copy, Check } from "@lucide/svelte";
+  import { Github, KeyRound, UploadCloud, Link2, Copy, Check, CircleCheck, CircleAlert } from "@lucide/svelte";
   import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { api } from "../lib/api";
@@ -24,6 +24,7 @@
   type PublishPhase = "" | "staging" | "commit" | "assets" | "done";
 
   let phase = $state<PublishPhase>("");
+  let assetProgress = $state<{ index: number; total: number } | null>(null);
   let conflict = $state("");
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pollGeneration = 0;
@@ -39,11 +40,16 @@
   let scopedRepository = repository.trim();
 
   onMount(() => {
-    void listen<{ phase?: string }>("github-pack-progress", (event) => {
+    void listen<{ phase?: string; assetIndex?: number; assetTotal?: number }>("github-pack-progress", (event) => {
       if (!activePublishAttempt) return;
       const nextPhase = event.payload?.phase;
       if (nextPhase === "staging" || nextPhase === "commit" || nextPhase === "assets" || nextPhase === "done") {
         phase = nextPhase;
+      }
+      if (nextPhase === "assets" && typeof event.payload?.assetTotal === "number" && event.payload.assetTotal > 0) {
+        assetProgress = { index: event.payload?.assetIndex ?? 0, total: event.payload.assetTotal };
+      } else if (nextPhase !== "assets") {
+        assetProgress = null;
       }
     }).then((unlisten) => {
       if (destroyed) {
@@ -85,6 +91,7 @@
     preview = null;
     shareUrl = "";
     phase = "";
+    assetProgress = null;
     twoPhase = null;
     conflict = "";
     message = "";
@@ -205,6 +212,7 @@
     preview = null;
     shareUrl = "";
     phase = "";
+    assetProgress = null;
     twoPhase = null;
     conflict = "";
     message = "";
@@ -239,6 +247,7 @@
     error = "";
     message = "";
     conflict = "";
+    assetProgress = null;
     phase = "staging";
     twoPhase = hasExternalAssets;
     try {
@@ -304,7 +313,11 @@
   function phaseLabel(value: string): string {
     if (value === "staging") return "Staging…";
     if (value === "commit") return "Publishing staged Git tree…";
-    if (value === "assets") return "Uploading Release assets…";
+    if (value === "assets") {
+      return assetProgress
+        ? `Uploading Release assets (${assetProgress.index}/${assetProgress.total})…`
+        : "Uploading Release assets…";
+    }
     if (value === "done") return "Publish complete";
     return "Publishing…";
   }
@@ -316,127 +329,148 @@
   let publishSteps = $derived(
     twoPhase === false ? ["staging", "commit", "done"] : ["staging", "commit", "assets", "done"],
   );
+  let repoInvalid = $derived(repository.trim().length > 0 && repository.trim().split("/").filter(Boolean).length !== 2);
 </script>
 
-<section class="pack-transport">
-  <h3><Github size={16} /> GitHub Pack Transport</h3>
-  <p class="hint">
+<section class="rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] p-4 grid gap-3">
+  <h3 class="flex items-center gap-2 m-0 text-sm font-bold text-[var(--text-secondary)]">
+    <Github size={16} /> GitHub Pack Transport
+  </h3>
+  <p class="m-0 text-xs leading-relaxed text-[var(--text-muted)]">
     Publishes the canonical TuffBox manifest plus a packwiz tree as one Git commit.
     Friends install anonymously from the public repo URL — no Microsoft or Modrinth account.
   </p>
-  <div class="auth-row">
-    <span class:ok={authed}>{authed ? "Author signed in" : "Author login required"}</span>
-    <button class="secondary mini" onclick={startLogin} disabled={busy || loginStarting || polling}>
+
+  <div class="flex items-center gap-2 flex-wrap">
+    <span
+      class="inline-flex items-center gap-1.5 text-xs font-semibold"
+      class:text-[var(--accent-primary)]={authed}
+      class:text-[var(--text-muted)]={!authed}
+    >
+      {#if authed}<CircleCheck size={13} />{:else}<CircleAlert size={13} />{/if}
+      {authed ? "Author signed in" : "Author login required"}
+    </span>
+    <button
+      class="ml-auto inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs font-bold text-[var(--text-secondary)] cursor-pointer transition-colors duration-[160ms] hover:border-[var(--accent-primary)] hover:text-[var(--text-primary)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
+      onclick={startLogin}
+      disabled={busy || loginStarting || polling}
+    >
       <KeyRound size={12} /> {loginStarting ? "Starting GitHub login…" : polling ? "Waiting for GitHub…" : authed ? "Re-login" : "GitHub device login"}
     </button>
   </div>
+
   {#if oauthClientMissing}
-    <p class="config-error">
+    <p class="m-0 p-2 rounded-lg border border-[rgba(239,68,68,0.35)] text-xs text-[#fecaca]">
       Device OAuth is unavailable: this build has no GitHub OAuth client ID. Set
-      <code>TUFFBOX_GITHUB_CLIENT_ID</code> when building, or add a GitHub PAT in Settings.
+      <code class="font-mono text-[11px] text-[var(--text-secondary)]">TUFFBOX_GITHUB_CLIENT_ID</code> when building, or add a GitHub PAT in Settings.
     </p>
   {/if}
+
   {#if userCode}
-    <p class="code-line">
-      Open <button class="linkish" onclick={() => open(verificationUri)}>{verificationUri}</button>
-      and enter <code>{userCode}</code>
+    <p class="m-0 text-xs text-[var(--text-muted)] flex items-center gap-1 flex-wrap">
+      Open
+      <button
+        class="bg-transparent border-0 p-0 text-[var(--accent-primary)] text-xs font-semibold cursor-pointer underline underline-offset-2"
+        onclick={() => open(verificationUri)}
+      >{verificationUri}</button>
+      and enter
+      <code class="px-1.5 py-0.5 rounded bg-[var(--bg-secondary)] border border-[var(--border-color)] font-mono text-xs tracking-widest text-[var(--text-primary)]">{userCode}</code>
     </p>
   {/if}
-  <label>
+
+  <label class="grid gap-1.5 text-[13px] font-bold text-[var(--text-secondary)]">
     Public repository
-    <input bind:value={repository} placeholder="owner/repository" />
+    <input
+      bind:value={repository}
+      placeholder="owner/repository"
+      aria-invalid={repoInvalid}
+      class="h-8 px-2.5 rounded-lg border bg-[var(--bg-secondary)] text-[13px] text-[var(--text-primary)] outline-none transition-colors duration-[160ms] placeholder:text-[var(--text-muted)] focus:border-[var(--accent-primary)]"
+      class:border-[var(--border-color)]={!repoInvalid}
+      class:border-[rgba(239,68,68,0.55)]={repoInvalid}
+    />
+    {#if repoInvalid}
+      <span class="text-[11px] font-normal text-[#fecaca]">Use the owner/repository format, e.g. acme/cool-pack.</span>
+    {/if}
   </label>
-  <div class="actions">
-    <button class="secondary mini" onclick={runPreview} disabled={busy || !$projectPath}>Preview tree</button>
-    <button class="mini" onclick={publishPack} disabled={busy || !authed || !repository.trim()}>
+
+  <div class="flex items-center gap-2 flex-wrap">
+    <button
+      class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs font-bold text-[var(--text-secondary)] cursor-pointer transition-colors duration-[160ms] hover:border-[var(--accent-primary)] hover:text-[var(--text-primary)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
+      onclick={runPreview}
+      disabled={busy || !$projectPath}
+    >Preview tree</button>
+    <button
+      class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border-0 bg-[var(--accent-primary)] text-xs font-bold text-[#06251a] cursor-pointer transition-colors duration-[160ms] hover:bg-[var(--accent-hover)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
+      onclick={publishPack}
+      disabled={busy || !authed || !repository.trim() || repoInvalid}
+    >
       <UploadCloud size={12} /> {busy ? phaseLabel(phase) : "Publish pack"}
     </button>
     {#if shareUrl}
-      <button class="ghost mini" onclick={copyShare} title="Copy share message (link + one-click install)">
+      <button
+        class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs text-[var(--text-muted)] cursor-pointer transition-colors duration-[160ms] hover:text-[var(--text-primary)]"
+        onclick={copyShare}
+        title="Copy share message (link + one-click install)"
+      >
         {#if copied}
-          <Check size={12} /> Copied!
+          <Check size={12} class="text-[var(--accent-primary)]" /> Copied!
         {:else}
           <Copy size={12} /> Copy share message
         {/if}
       </button>
-      <button class="ghost mini" onclick={openShare}><Link2 size={12} /> Open share link</button>
+      <button
+        class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs text-[var(--text-muted)] cursor-pointer transition-colors duration-[160ms] hover:text-[var(--text-primary)]"
+        onclick={openShare}
+      ><Link2 size={12} /> Open share link</button>
     {/if}
   </div>
+
   {#if phase}
-    <div class="publish-progress" aria-live="polite">
-      <div class="phase-summary">
-        <strong>{phaseLabel(phase)}</strong>
+    <div class="grid gap-1.5" aria-live="polite">
+      <div class="flex items-baseline gap-2 flex-wrap text-xs">
+        <strong class="text-[var(--text-primary)]">{phaseLabel(phase)}</strong>
         {#if twoPhase === true}
-          <span>Two-phase publish: Git commit first, then Release assets, then ready.</span>
+          <span class="text-[var(--text-muted)]">Two-phase publish: Git commit first, then Release assets, then ready.</span>
         {:else if twoPhase === false}
-          <span>Single-phase Git commit publish.</span>
+          <span class="text-[var(--text-muted)]">Single-phase Git commit publish.</span>
         {/if}
       </div>
-      <ol aria-label="Publish progress" class:two-phase={twoPhase === true} class:single-phase={twoPhase === false}>
+      <ol
+        class="grid gap-1 m-0 p-0 list-none"
+        style={`grid-template-columns: repeat(${publishSteps.length}, minmax(0, 1fr));`}
+        aria-label="Publish progress"
+      >
         {#each publishSteps as step (step)}
-          <li class:active={phase === step} class:complete={phaseRank(phase) > phaseRank(step as PublishPhase)}>
+          {@const active = phase === step}
+          {@const complete = phaseRank(phase) > phaseRank(step as PublishPhase)}
+          <li
+            class="px-1.5 py-1 rounded border text-[11px] text-center transition-colors duration-[160ms]"
+            class:border-[var(--accent-primary)]={active || complete}
+            class:text-[var(--text-primary)]={active}
+            class:text-[var(--accent-primary)]={complete && !active}
+            class:text-[var(--text-muted)]={!active && !complete}
+            class:bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)]={active || complete}
+            class:border-[var(--border-color)]={!active && !complete}
+          >
             {phaseLabel(step)}
           </li>
         {/each}
       </ol>
+      {#if phase === "assets" && assetProgress}
+        <div class="h-1 rounded-full bg-[var(--bg-secondary)] overflow-hidden">
+          <div
+            class="h-full bg-[var(--accent-primary)] rounded-full transition-[width] duration-[240ms]"
+            style={`width: ${Math.round((assetProgress.index / Math.max(1, assetProgress.total)) * 100)}%;`}
+          ></div>
+        </div>
+      {/if}
     </div>
   {/if}
-  {#if preview}
-    <small>{preview.fileCount} files · v{preview.packVersion}{preview.hasExternalAssets ? " · large jars via Release assets" : ""}</small>
-  {/if}
-  {#if message}<p class="ok-msg">{message}</p>{/if}
-  {#if conflict}<p class="err-msg">Conflict: {conflict}</p>{/if}
-  {#if error}<p class="err-msg">{error}</p>{/if}
-</section>
 
-<style>
-  .pack-transport {
-    display: grid;
-    gap: 8px;
-    padding: 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    background: var(--bg-tertiary);
-  }
-  h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; color: var(--text-secondary); }
-  .hint, .code-line { margin: 0; color: var(--text-muted); font-size: 12px; }
-  .auth-row, .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .auth-row span { font-size: 12px; color: var(--text-muted); }
-  .auth-row span.ok { color: var(--accent-primary); }
-  label { display: grid; gap: 6px; color: var(--text-secondary); font-weight: 700; font-size: 13px; }
-  .ok-msg { margin: 0; color: var(--accent-primary); font-size: 12px; }
-  .err-msg { margin: 0; color: #fecaca; font-size: 12px; }
-  .config-error {
-    margin: 0;
-    padding: 8px;
-    border: 1px solid color-mix(in srgb, #fecaca 35%, var(--border-color));
-    border-radius: var(--border-radius-sm);
-    color: #fecaca;
-    font-size: 12px;
-  }
-  .publish-progress { display: grid; gap: 6px; }
-  .phase-summary { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 12px; }
-  .phase-summary span { color: var(--text-muted); }
-  .publish-progress ol {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 4px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .publish-progress ol.single-phase {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .publish-progress li {
-    padding: 4px 6px;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    color: var(--text-muted);
-    font-size: 11px;
-    text-align: center;
-  }
-  .publish-progress li.active { border-color: var(--accent-primary); color: var(--text-primary); }
-  .publish-progress li.complete { color: var(--accent-primary); }
-  .linkish { background: none; border: 0; color: var(--accent-primary); cursor: pointer; padding: 0; }
-</style>
+  {#if preview}
+    <small class="text-[11px] text-[var(--text-muted)]">{preview.fileCount} files · v{preview.packVersion}{preview.hasExternalAssets ? " · large jars via Release assets" : ""}</small>
+  {/if}
+  {#if message}<p class="m-0 text-xs text-[var(--accent-primary)]">{message}</p>{/if}
+  {#if conflict}<p class="m-0 text-xs text-[#fecaca]">Conflict: {conflict}</p>{/if}
+  {#if error}<p class="m-0 text-xs text-[#fecaca] break-words">{error}</p>{/if}
+</section>
