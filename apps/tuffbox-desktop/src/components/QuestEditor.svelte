@@ -1948,9 +1948,9 @@
 
 <svelte:window onkeydown={handleKeydown} onpointerdowncapture={onWindowPointerDown} />
 
-<div class="qe ftbq">
-  <div class="qe-tb">
-    <div class="qe-title">
+<div class="qe ftbq flex w-full min-h-0 flex-col">
+<div class="qe-tb flex items-center gap-2 flex-wrap shrink-0 justify-between mb-1 px-3 py-[7px] min-h-11 max-h-[52px]">
+    <div class="qe-title flex items-center gap-2 flex-wrap min-w-0">
       <ScrollText size={18} />
       {#if bookTitle}<span class="book-name">{stripMc(bookTitle)}</span>{:else}Quest editor{/if}
       {#if $projectPath}
@@ -2003,7 +2003,7 @@
         {/if}
       {/if}
     </div>
-    <div class="qe-actions">
+    <div class="qe-actions flex items-center gap-2 flex-wrap">
       <div class="tb-btn-group">
         <button
           type="button"
@@ -2307,7 +2307,7 @@
       <p class="empty-hint">No files are written until you save.</p>
     </div>
   {:else}
-    <div class="qe-body-row">
+    <div class="qe-body-row flex flex-1 min-h-0 items-stretch overflow-hidden">
     <div
       class="qe-lay"
       class:with-insp={!!selectedChapterObj}
@@ -2333,7 +2333,7 @@
         aria-label="Resize chapters panel"
         onpointerdown={(e) => startColResize("rail", e)}
       ></div>
-      <div class="canvas-wrap">
+      <div class="canvas-wrap flex flex-col min-w-0 min-h-0 overflow-hidden">
         <SvelteFlowProvider>
           <QuestCanvas
             quests={filteredChapterQuests}
@@ -2801,12 +2801,7 @@
 
 <style>
   .qe {
-    max-width: none;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
+    /* layout moved to Tailwind utilities on the root element */
     background: var(--ftbq-bg);
     color: var(--ftbq-text);
   }
@@ -2895,10 +2890,7 @@
   .qe-tb,
   .qe-title,
   .qe-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
+    /* flex/align/gap moved to Tailwind utilities on elements */
     position: relative;
   }
   .tb-pop {
@@ -3113,12 +3105,7 @@
     margin: 0;
   }
   .qe-tb {
-    justify-content: space-between;
-    margin-bottom: 4px;
-    flex-shrink: 0;
-    padding: 7px 12px;
-    min-height: 44px;
-    max-height: 52px;
+    /* layout (justify/shrink/padding/sizes) moved to Tailwind utilities */
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     border: 1px solid var(--ftbq-frame);
     border-radius: var(--ftbq-radius-panel);
@@ -3142,11 +3129,7 @@
     font-size: 11px;
   }
   .qe-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    flex-wrap: wrap;
+    /* layout moved to Tailwind utilities */
     color: var(--text-muted, var(--ftbq-text-muted));
     font-weight: 500;
     font-size: 13px;
@@ -3399,24 +3382,9 @@
   .col-resizer:active {
     background: var(--ftbq-accent-teal);
   }
-  .qe-body-row {
-    display: flex;
-    flex: 1;
-    min-height: 0;
-    gap: 0;
-    align-items: stretch;
-    overflow: hidden;
-  }
   .qe-body-row .qe-lay {
     flex: 1;
     min-height: 0;
-  }
-  .canvas-wrap {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
-    overflow: hidden;
   }
   .filt-count {
     flex: 1;

@@ -351,8 +351,8 @@
   }
 </script>
 
-<aside class="insp ftbq-view">
-  <div class="insp-h">
+<aside class="insp ftbq-view flex flex-col min-w-0 min-h-0 max-h-full overflow-y-auto overflow-x-hidden">
+  <div class="insp-h flex items-center justify-between gap-2 px-3.5 py-3">
     <QuestItemIcon itemId={typeof quest.icon === "string" ? quest.icon : null} fallback={quest.title?.charAt(0) ?? "?"} size={26} />
     <h3 title={quest.id}>{quest.title || "Untitled quest"}</h3>
     <button
@@ -724,15 +724,9 @@
   /* Inspector typography follows the app font stack (--font-sans) so the panel
      doesn't drift from the rest of the launcher. */
   .insp {
+    /* layout moved to Tailwind utilities */
     background: var(--ftbq-bg-panel);
     border-left: 1px solid var(--ftbq-frame);
-    min-width: 0;
-    min-height: 0;
-    max-height: 100%;
-    overflow: auto;
-    overflow-x: hidden;
-    display: flex;
-    flex-direction: column;
     font-family: var(--font-sans, inherit);
     font-size: 13px;
     line-height: 1.5;
@@ -741,11 +735,7 @@
   }
 
   .insp-h {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 14px;
+    /* layout moved to Tailwind utilities */
     border-bottom: 1px solid var(--ftbq-frame);
     background: var(--ftbq-bg-panel);
     position: sticky;

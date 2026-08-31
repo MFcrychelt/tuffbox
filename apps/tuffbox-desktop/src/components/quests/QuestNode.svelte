@@ -48,13 +48,13 @@
 </script>
 
 <div
-  class="node-root"
+  class="node-root relative flex flex-col items-center"
   class:sel={data.isSelected}
   class:issue={data.isIssue}
   class:external
 >
   <div
-    class="node-wrap"
+    class="node-wrap flex flex-col items-center gap-1 select-none"
     class:sel={data.isSelected}
     class:issue={data.isIssue}
     class:external
@@ -103,12 +103,6 @@
 </div>
 
 <style>
-  .node-root {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
   .node-root :global(.conn-handle) {
     width: 8px !important;
     height: 8px !important;
@@ -140,12 +134,8 @@
     opacity: 0 !important;
   }
   .node-wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
+    /* layout moved to Tailwind utilities */
     cursor: grab;
-    user-select: none;
     transition: transform 0.12s ease;
   }
   .node-wrap.external {

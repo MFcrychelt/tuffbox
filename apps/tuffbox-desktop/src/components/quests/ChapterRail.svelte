@@ -146,18 +146,18 @@
   }
 </script>
 
-<aside class="rail ftbq-rail">
-  <div class="rail-h">
+<aside class="rail ftbq-rail flex flex-col h-full min-h-0">
+  <div class="rail-h flex items-center justify-between px-2 py-[7px]">
     <h3>Chapters</h3>
     <button type="button" class="ico" title="Add chapter" onclick={onCreate}>
       <Plus size={14} class="flex-shrink-0" />
     </button>
   </div>
 
-  <div class="rail-list">
+  <div class="rail-list flex-1 overflow-y-auto min-h-0 flex flex-col py-1">
     {#each groups as g (g.key)}
       {#if groups.length > 1 || g.key}
-        <button type="button" class="group-h" onclick={() => toggleGroup(g.key)}>
+        <button type="button" class="group-h flex items-center gap-1 w-full pt-2 px-2.5 pb-1" onclick={() => toggleGroup(g.key)}>
           {#if collapsed.has(g.key)}<ChevronRight size={12} class="flex-shrink-0" />{:else}<ChevronDown size={12} class="flex-shrink-0" />{/if}
           <span>{g.label}</span>
           <span class="group-count">{g.chapters.length}</span>
@@ -273,21 +273,13 @@
 
 <style>
   .rail {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
+    /* layout moved to Tailwind utilities */
     background: var(--ftbq-bg-panel);
     border-right: 1px solid var(--ftbq-frame);
     box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.05);
-    padding: 0;
-    min-height: 0;
-    height: 100%;
   }
   .rail-h {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 7px 8px;
+    /* layout moved to Tailwind utilities */
     border-bottom: 1px solid var(--ftbq-frame);
     background: var(--ftbq-bg-panel);
   }
@@ -323,20 +315,12 @@
     box-shadow: none;
   }
   .rail-list {
-    flex: 1;
-    overflow: auto;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    padding: 4px 0;
+    /* layout moved to Tailwind utilities */
+    padding-top: 4px;
+    padding-bottom: 4px;
   }
   .group-h {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    width: 100%;
-    padding: 8px 10px 4px;
+    /* layout moved to Tailwind utilities */
     border: none;
     background: transparent;
     color: var(--ftbq-text-muted);
