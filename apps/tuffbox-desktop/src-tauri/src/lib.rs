@@ -304,7 +304,7 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                     continue;
                 }
 
-                let Ok(sha1) = tuffbox_core::sha1_file(&entry.path()) else {
+                let Some(sha1) = cached_sha1_file(&entry.path()) else {
                     continue;
                 };
 
@@ -451,7 +451,7 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
             if !file_path.is_file() {
                 continue;
             }
-            let Ok(sha1) = tuffbox_core::sha1_file(&file_path) else {
+            let Some(sha1) = cached_sha1_file(&file_path) else {
                 continue;
             };
             if let Some(spec) = resolve_mod_from_hash_or_modrinth(
@@ -4098,9 +4098,29 @@ fn run_project_validation_impl(path: String) -> Result<serde_json::Value, String
 /// Resolves the installed sha1 from disk, falling back to manifest metadata
 /// only when the file is unavailable. The jar is the source of truth: an
 /// interrupted older update may have already changed manifest metadata.
+/// SHA1 of a jar, cached by (path, mtime nanos, size). Hashing every jar on
+/// every update check re-read gigabytes on big packs; the file identity key
+/// makes re-hashes happen only when the jar actually changes.
+fn cached_sha1_file(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let key = format!("sha1:{}:{}:{}", path.display(), mtime, meta.len());
+    if let Some(cached) = tuffbox_core::api_cache::get::<String>(&key) {
+        return Some(cached);
+    }
+    let hash = tuffbox_core::sha1_file(path).ok()?;
+    tuffbox_core::api_cache::put(&key, hash.clone());
+    Some(hash)
+}
+
 fn resolve_mod_sha1(manifest_path: &Path, module: &ModSpec) -> Option<String> {
     if let Some(path) = existing_mod_file_path(manifest_path, module) {
-        if let Ok(hash) = tuffbox_core::sha1_file(&path) {
+        if let Some(hash) = cached_sha1_file(&path) {
             return Some(hash);
         }
     }
@@ -5779,6 +5799,10 @@ fn load_scoped_crash_report(project_dir: &Path, report_id: Option<&str>) -> Opti
     load_scoped_crash_report_with_path(project_dir, report_id).map(|(_, text)| text)
 }
 
+/// Frontend source-picker sentinel for the launcher log (must mirror
+/// `LAUNCHER_LOG_SOURCE` in Diagnostics.svelte).
+const LAUNCHER_LOG_SOURCE_MARKER: &str = "__launcher_log__";
+
 /// True when the caller selected a real crash-report file (not latest.log).
 fn is_explicit_crash_report_id(report_id: Option<&str>) -> bool {
     matches!(report_id, Some(id) if !id.is_empty() && id != "__latest_log__")
@@ -6115,14 +6139,34 @@ fn prepare_ai_crash_context(
     // When explaining latest.log (no crash report selected), pull a larger tail
     // so the model sees the live session instead of an empty crash excerpt.
     let using_crash_file = is_explicit_crash_report_id(report_id);
+    // `__launcher_log__` source: feed the launcher log as the primary excerpt so
+    // the cascade (fingerprint / KB / AI prompt) actually sees log content
+    // instead of analyzing an empty haystack.
+    let using_launcher_log = report_id == Some(crate::LAUNCHER_LOG_SOURCE_MARKER);
+    let launcher_tail = if using_launcher_log {
+        let la = project_dir.join("logs").join("launcher.log");
+        if la.is_file() {
+            tuffbox_core::process::read_log_tail(&la, 2500).unwrap_or_default()
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
     let latest_line_budget = if using_crash_file { 900 } else { 2500 };
     let latest_log = if latest.is_file() {
         tuffbox_core::process::read_log_tail(&latest, latest_line_budget).unwrap_or_default()
     } else {
         String::new()
     };
-    let crash_excerpt_budget = if using_crash_file { 6000 } else { 800 };
-    let latest_excerpt_budget = if using_crash_file { 4000 } else { 7000 };
+    // Primary excerpt source: explicit crash file > launcher log > latest.log.
+    let (crash_excerpt_budget, latest_excerpt_budget) = if using_crash_file {
+        (6000usize, 4000usize)
+    } else if using_launcher_log {
+        (0usize, 0usize) // sentinel: launcher log carries the content below
+    } else {
+        (800usize, 7000usize)
+    };
 
     let jv = manifest
         .java
@@ -6138,10 +6182,19 @@ fn prepare_ai_crash_context(
     };
 
     let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
+    // Primary analysis text for the fingerprint/haystack: crash file, then
+    // launcher log tail, else latest.log only.
+    let primary_log = if !crash_content.is_empty() {
+        crash_content.clone()
+    } else if using_launcher_log && !launcher_tail.is_empty() {
+        launcher_tail.clone()
+    } else {
+        latest_log.clone()
+    };
     let ctx = tuffbox_core::crash_assistant::AnalysisCtx {
         crash_content: vec![crash_content.clone()],
         latest_log: latest_log.clone(),
-        launcher_log: String::new(),
+        launcher_log: launcher_tail.clone(),
         installed_mods: manifest.mods.iter().map(|m| m.id.clone()).collect(),
         previous_mods: Vec::new(),
         java_version: java_version.clone(),
@@ -6180,9 +6233,9 @@ fn prepare_ai_crash_context(
         .map(|s| s.id.clone())
         .collect();
 
-    let haystack = format!("{crash_content}\n{latest_log}");
+    let haystack = format!("{crash_content}\n{latest_log}\n{launcher_tail}");
     let fingerprint = tuffbox_core::crash_kb::fingerprint_from_text_with_blame(
-        &haystack,
+        &primary_log,
         &manifest.minecraft.version,
         &loader,
         &blame_ids,
@@ -6273,10 +6326,11 @@ fn prepare_ai_crash_context(
         os: std::env::consts::OS.to_string(),
         installed_mods: installed_sample,
         installed_mod_count: inventory.mods.len() as u32,
-        crash_report_excerpt: tuffbox_core::crash_kb::smart_excerpt(
-            &crash_content,
-            crash_excerpt_budget,
-        ),
+        crash_report_excerpt: if using_launcher_log {
+            tuffbox_core::crash_kb::smart_excerpt(&launcher_tail, 6000)
+        } else {
+            tuffbox_core::crash_kb::smart_excerpt(&crash_content, crash_excerpt_budget)
+        },
         latest_log_excerpt: tuffbox_core::crash_kb::smart_excerpt(
             &latest_log,
             latest_excerpt_budget,
@@ -6319,12 +6373,18 @@ fn recent_crash_history_lines(project_dir: &Path, limit: usize) -> Vec<String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn build_ai_crash_context(
+async fn build_ai_crash_context(
     path: String,
     report_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // Task #66 pattern: heavy log/jar/inventory work must not occupy the
+    // async IPC executor — run the preparation on the blocking pool.
     let (ai_ctx, _fingerprint, _haystack, findings_count) =
-        prepare_ai_crash_context(&path, report_id.as_deref())?;
+        tokio::task::spawn_blocking(move || {
+            prepare_ai_crash_context(&path, report_id.as_deref())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ai_ctx);
     let triage = tuffbox_core::ai_explanation::build_triage_prompt(&ai_ctx);
     let settings = integrations::get_integration_status().settings;
@@ -6374,11 +6434,15 @@ async fn analyze_crash_with_ai(
 ) -> Result<serde_json::Value, String> {
     // Build structured context directly — avoid JSON round-trip panics / lossy deserialize.
     // Fingerprint MUST match prepare (with_blame) for the whole cascade.
+    let project_dir = manifest_parent(&path)?;
     let (mut ai_ctx, fingerprint, haystack, _findings_count) =
-        prepare_ai_crash_context(&path, report_id.as_deref())?;
+        tokio::task::spawn_blocking(move || {
+            prepare_ai_crash_context(&path, report_id.as_deref())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     let settings = integrations::get_integration_status().settings;
     let mode = tuffbox_core::action_plan::DiagnoseMode::parse(&settings.ai.diagnose_mode);
-    let project_dir = manifest_parent(&path)?;
 
     let swarm_on = integrations::swarm_enabled();
     let transport_bases = if swarm_on {
@@ -6443,7 +6507,10 @@ async fn analyze_crash_with_ai(
     let mut plan = if let Some(plan) = l1_plan {
         cascade_stage = "l1_hit".into();
         kb_short_circuit = true;
-        network_used = swarm_on || network_used;
+        // Only count the network when the L1 hit actually came from the remote
+        // (global capsule) library — a purely local hit must not flip
+        // network_used, or the plan gets persisted as network-derived.
+        network_used = online_kb || network_used;
         plan
     } else if matches!(mode, tuffbox_core::action_plan::DiagnoseMode::KbOnly) {
         // KbOnly: L1 enrichment via remote lookup only — no L2/L3 LLM.
@@ -6595,7 +6662,9 @@ async fn analyze_crash_with_ai(
                     p
                 }
                 tuffbox_core::action_plan::DiagnoseMode::KbOnly => {
-                    unreachable!("KbOnly handled above")
+                    // Defensive: KbOnly is fully handled before the L2/L3 block.
+                    // Never panic the IPC thread from a cascade refactor.
+                    return Err("internal: KbOnly mode reached L2/L3 cascade".into());
                 }
             }
             }
@@ -7102,18 +7171,29 @@ fn record_crash_ai_feedback(
     let project_dir = manifest_parent(&path)?;
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
+    // Mirror prepare_ai_crash_context: the analyze path fingerprints
+    // crash-report + latest.log WITH blame ids, so feedback recorded under a
+    // different key would never match in KB search. When the client did not
+    // send the exact analyze-time key, rebuild it the same way.
     let crash = load_scoped_crash_report(&project_dir, feedback.report_id.as_deref())
         .unwrap_or_default();
-    let mut fp = tuffbox_core::crash_kb::fingerprint_from_text(
-        &crash,
+    let latest = project_dir.join("logs").join("latest.log");
+    let latest_log = if latest.is_file() {
+        tuffbox_core::process::read_log_tail(&latest, 2500).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let mut fp = tuffbox_core::crash_kb::fingerprint_from_text_with_blame(
+        &format!("{crash}\n{latest_log}"),
         &manifest.minecraft.version,
         &loader,
+        &feedback.suspected_mods.as_deref().unwrap_or(&[]),
     );
     if let Some(key) = feedback.fingerprint_key.filter(|k| !k.is_empty()) {
         fp.key = key;
     }
     let actions = feedback.recommended_actions.unwrap_or_default();
-    let mods = feedback.suspected_mods.unwrap_or_default();
+    let mods = feedback.suspected_mods.clone().unwrap_or_default();
     let path = tuffbox_core::crash_kb::record_feedback(
         &project_dir,
         &fp,

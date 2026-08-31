@@ -113,6 +113,20 @@ impl ModrinthProvider {
         if hashes.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
+        // Content tab checks updates on every open; a short TTL keyed by the
+        // exact request keeps repeated opens instant while staying fresh
+        // enough for advisory update dots.
+        let cache_key = format!(
+            "modrinth:latest:{}|{}|{}",
+            hashes.join(","),
+            loaders.join(","),
+            game_versions.join(",")
+        );
+        if let Some(cached) =
+            crate::api_cache::get::<std::collections::HashMap<String, VersionInfo>>(&cache_key)
+        {
+            return Ok(cached);
+        }
         // Chunk large packs — Modrinth App / Prism keep batch bodies bounded.
         const CHUNK: usize = 256;
         let url = format!("{BASE_URL}/version_files/update");
@@ -128,6 +142,11 @@ impl ModrinthProvider {
                 crate::http::post_json(&url, &body)?;
             merged.extend(raw.into_iter().map(|(k, v)| (k, v.into())));
         }
+        crate::api_cache::put_with_ttl(
+            cache_key,
+            merged.clone(),
+            std::time::Duration::from_secs(10 * 60),
+        );
         Ok(merged)
     }
 
