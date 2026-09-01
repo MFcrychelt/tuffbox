@@ -7760,6 +7760,7 @@ async fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> 
 #[cfg(test)]
 mod pack_format_sniff_tests {
     use super::zip_has_entry;
+    use std::io::Write;
 
     /// A Modrinth .mrpack downloaded over HTTP lands in a temp `*.zip` file;
     /// the install path must sniff `modrinth.index.json` from the archive
@@ -13350,6 +13351,29 @@ fn build_and_spawn(
         &mut launch_jvm_args,
         launch_settings.potato_pc,
     );
+    // Auto-tune (Millida tuning.rs-inspired): when neither the profile nor
+    // settings pin an explicit heap, size memory + GC flags from total RAM
+    // and the installed mod count. User/profile JVM args always win.
+    let auto_mod_count = manifest
+        .mods
+        .iter()
+        .filter(|m| {
+            matches!(
+                m.content_type,
+                tuffbox_core::manifest::ContentType::Mod
+            )
+        })
+        .count();
+    let auto_total_ram_mb = {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        sys.total_memory() / 1024 / 1024
+    };
+    let (auto_memory_mb, auto_gc_args) =
+        launcher_settings::auto_tune_launch(auto_total_ram_mb, auto_mod_count);
+    for arg in &auto_gc_args {
+        launcher_settings::append_unique_jvm_arg(&mut launch_jvm_args, arg.clone());
+    }
     if launch_settings.potato_pc {
         progress.log("# Potato PC: using lighter JVM GC / thread defaults.");
     }
@@ -17534,6 +17558,8 @@ pub fn run() {
             task_progress_api::list_background_tasks,
             task_progress_api::dismiss_background_task,
             task_progress_api::start_background_task,
+            task_progress_api::try_start_background_task,
+            task_progress_api::cancel_background_task,
             recommend_mods,
             get_mod_info,
             restore_backup,
@@ -17808,6 +17834,7 @@ pub fn run() {
             get_presence_settings,
             save_presence_settings,
             launcher_settings::get_launcher_settings,
+            launcher_settings::get_auto_tune,
             launcher_settings::save_launcher_settings_cmd,
             launcher_settings::get_runtime_path_info,
             launcher_settings::get_instances_path_info,

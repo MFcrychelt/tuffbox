@@ -324,6 +324,23 @@ fn jvm_args_contain(args: &[String], needle: &str) -> bool {
     args.iter().any(|a| a.contains(needle))
 }
 
+/// Push `arg` unless an equivalent flag is already present (same `-XX:Name=`
+/// or `-XX:±Name` prefix). Keeps user/profile overrides authoritative when
+/// auto-tune appends its GC recommendations.
+pub fn append_unique_jvm_arg(args: &mut Vec<String>, arg: String) {
+    let key = arg
+        .trim_start_matches(['-', 'X', 'P'])
+        .split('=')
+        .next()
+        .unwrap_or(&arg)
+        .trim_start_matches(['+', '-'])
+        .to_string();
+    if !key.is_empty() && jvm_args_contain(args, &key) {
+        return;
+    }
+    args.push(arg);
+}
+
 /// Append launch-stability / low-end JVM flags without overriding user or
 /// profile args that already set the same option.
 pub fn append_stability_jvm_args(args: &mut Vec<String>, potato_pc: bool) {
@@ -373,9 +390,65 @@ pub fn resolve_launch_memory_mb(
     }
 }
 
+// ── Auto-tune (Millida tuning.rs-inspired): heap + GC profile from hardware
+//    and mod count. Used when the user leaves memory on "Auto". ──────────
+
+/// Recommended `-Xmx` for a machine with `total_ram_mb` and `mod_count`
+/// loaded mods. Never exceeds 60% of physical RAM (leaves room for OS,
+/// WebView, and off-heap JVM overhead) and clamps to [2048, 12288].
+pub fn recommend_memory_mb(total_ram_mb: u64, mod_count: usize) -> u32 {
+    if total_ram_mb == 0 {
+        return 4096;
+    }
+    // Mod-heavy packs need more heap: 2 GB base + ~64 MB per mod, capped.
+    let mod_demand: u64 = (mod_count as u64).saturating_mul(64);
+    let wanted = 2048 + mod_demand;
+    let ceiling = (total_ram_mb * 60 / 100).max(2048);
+    let mb = wanted.min(ceiling).clamp(2048, 12288);
+    // Round down to a clean 512 MB step.
+    ((mb / 512) * 512) as u32
+}
+
+/// JVM GC flags for the auto-tuned profile. Returns flags the caller appends
+/// after custom user args (user flags win — caller filters duplicates via
+/// `jvm_args_contain` semantics, same as `append_stability_jvm_args`).
+/// Heavier packs get a low-pause G1 tuning; small ones get the defaults.
+pub fn recommend_gc_args(memory_mb: u32, mod_count: usize) -> Vec<String> {
+    let mut args = vec![
+        "-XX:+UseG1GC".into(),
+        "-XX:MaxGCPauseMillis=40".into(),
+        // 32–48% of heap as young gen target: smooths chunk/mod churn.
+        format!(
+            "-XX:G1NewSizePercent={}",
+            if mod_count > 150 { 32 } else { 40 }
+        ),
+    ];
+    if memory_mb >= 4096 {
+        // Big heaps: region sizing avoids humongous allocations with
+        // mod-heavy class loading.
+        args.push("-XX:G1HeapRegionSize=16M".into());
+    }
+    args
+}
+
+/// Full auto recommendation: heap + GC args for a launch.
+pub fn auto_tune_launch(total_ram_mb: u64, mod_count: usize) -> (u32, Vec<String>) {
+    let memory = recommend_memory_mb(total_ram_mb, mod_count);
+    let gc = recommend_gc_args(memory, mod_count);
+    (memory, gc)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_launcher_settings() -> LauncherSettings {
     load_launcher_settings()
+}
+
+/// Auto-tuned heap + GC flags for the current machine and mod count.
+/// Feeds the "Auto" memory option in launcher settings.
+#[tauri::command(rename_all = "camelCase")]
+pub fn get_auto_tune(total_ram_mb: u64, mod_count: usize) -> serde_json::Value {
+    let (memory_mb, gc_args) = auto_tune_launch(total_ram_mb, mod_count);
+    serde_json::json!({ "memoryMb": memory_mb, "gcArgs": gc_args })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -436,5 +509,38 @@ mod tests {
         );
         assert!(args.iter().any(|a| a.contains("UseG1GC")));
         assert!(args.iter().any(|a| a.contains("ParallelGCThreads")));
+    }
+
+    #[test]
+    fn recommend_memory_scales_with_mods_and_respects_ceiling() {
+        // 8 GB machine, no mods: 60% ceiling = 4.8 GB → wanted 2048 → 2048.
+        assert_eq!(recommend_memory_mb(8192, 0), 2048);
+        // 8 GB machine, 100 mods: wanted 8448 → ceiling 4915 → 4608 (512 step).
+        assert_eq!(recommend_memory_mb(8192, 100), 4608);
+        // 32 GB machine, 300 mods: wanted 21248 → clamp 12288.
+        assert_eq!(recommend_memory_mb(32768, 300), 12288);
+        // Tiny 2 GB machine: ceiling max(2048) → 2048.
+        assert_eq!(recommend_memory_mb(2048, 50), 2048);
+        // Unknown RAM: safe default.
+        assert_eq!(recommend_memory_mb(0, 0), 4096);
+    }
+
+    #[test]
+    fn recommend_gc_args_match_heap_and_mods() {
+        let small = recommend_gc_args(2048, 10);
+        assert!(small.iter().any(|a| a.contains("UseG1GC")));
+        assert!(small.iter().any(|a| a.contains("G1NewSizePercent=40")));
+        assert!(!small.iter().any(|a| a.contains("G1HeapRegionSize")));
+
+        let big = recommend_gc_args(8192, 200);
+        assert!(big.iter().any(|a| a.contains("G1NewSizePercent=32")));
+        assert!(big.iter().any(|a| a.contains("G1HeapRegionSize=16M")));
+    }
+
+    #[test]
+    fn auto_tune_pairs_memory_with_gc() {
+        let (memory, gc) = auto_tune_launch(16384, 60);
+        assert_eq!(memory, recommend_memory_mb(16384, 60));
+        assert_eq!(gc, recommend_gc_args(memory, 60));
     }
 }

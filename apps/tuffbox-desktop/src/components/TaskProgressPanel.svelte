@@ -8,7 +8,14 @@
   type BackgroundTask = {
     id: string;
     title: string;
-    status: "running" | "paused" | "succeeded" | "failed" | "dismissed";
+    status:
+      | "running"
+      | "paused"
+      | "cancelRequested"
+      | "cancelled"
+      | "succeeded"
+      | "failed"
+      | "dismissed";
     progress?: number | null;
     detail?: string | null;
     error?: string | null;
@@ -32,6 +39,16 @@
       await refresh();
     } catch {
       /* ignore */
+    }
+  }
+
+  async function cancelTask(id: string) {
+    try {
+      await invoke("cancel_background_task", { id });
+      toasts.info("Cancelling…", 2500);
+      await refresh();
+    } catch (e) {
+      toasts.error(String(e));
     }
   }
 
@@ -100,7 +117,13 @@
   });
 
   const visible = $derived(
-    tasks.filter((t) => t.status === "running" || t.status === "failed" || t.status === "paused"),
+    tasks.filter(
+      (t) =>
+        t.status === "running" ||
+        t.status === "failed" ||
+        t.status === "paused" ||
+        t.status === "cancelRequested",
+    ),
   );
 </script>
 
@@ -131,6 +154,10 @@
           {:else if t.status === "paused" && isOllamaPull(t.id)}
             <button type="button" class="ghost" title="Resume download" onclick={() => resumeOllamaPull(t.id)}>
               <Play size={14} />
+            </button>
+          {:else if t.status === "running" && !isOllamaPull(t.id)}
+            <button type="button" class="ghost" title="Cancel task" onclick={() => cancelTask(t.id)}>
+              <X size={14} />
             </button>
           {/if}
           <button type="button" class="ghost" title="Dismiss" onclick={() => dismiss(t.id)}>
