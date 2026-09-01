@@ -199,6 +199,31 @@
   });
   let launcherSaving = $state(false);
   let launcherMsg = $state("");
+
+  // Auto memory tuning (Millida tuning.rs-inspired): measures total RAM in
+  // Rust and recommends heap + GC flags. Mod count comes from the active
+  // instance when available, otherwise a small-pack default.
+  let autoTuneBusy = $state(false);
+  let autoTuneMsg = $state("");
+
+  async function applyAutoTune() {
+    if (autoTuneBusy) return;
+    autoTuneBusy = true;
+    autoTuneMsg = "";
+    try {
+      const modCount = await invoke<number>("count_instance_mods_cmd").catch(() => 0);
+      const tune = await invoke<{ memoryMb: number; totalRamMb: number }>("get_auto_tune", {
+        modCount: Number.isFinite(modCount) ? modCount : 0,
+      });
+      launcher.defaultMemoryMb = tune.memoryMb;
+      await persistLauncher({ defaultMemoryMb: tune.memoryMb });
+      autoTuneMsg = `Recommended ${tune.memoryMb} MB for ${(tune.totalRamMb / 1024).toFixed(1)} GB RAM`;
+    } catch (e) {
+      autoTuneMsg = `Auto-tune failed: ${String(e)}`;
+    } finally {
+      autoTuneBusy = false;
+    }
+  }
   let launcherMsgTimer: ReturnType<typeof setTimeout> | null = null;
   let discordMsgTimer: ReturnType<typeof setTimeout> | null = null;
   let launcherErr = $state("");
@@ -1480,16 +1505,30 @@
         </label>
         <label>
           Default memory (MB)
-          <input
-            type="number"
-            min="512"
-            step="256"
-            bind:value={launcher.defaultMemoryMb}
-            onchange={() =>
-              persistLauncher({
-                defaultMemoryMb: Math.max(512, Number(launcher.defaultMemoryMb) || 4096),
-              })}
-          />
+          <div class="path-row">
+            <input
+              type="number"
+              min="512"
+              step="256"
+              bind:value={launcher.defaultMemoryMb}
+              onchange={() =>
+                persistLauncher({
+                  defaultMemoryMb: Math.max(512, Number(launcher.defaultMemoryMb) || 4096),
+                })}
+            />
+            <button
+              type="button"
+              class="secondary"
+              disabled={autoTuneBusy}
+              title="Pick heap size from total RAM and mod count"
+              onclick={() => applyAutoTune()}
+            >
+              {autoTuneBusy ? "Measuring…" : "Auto"}
+            </button>
+          </div>
+          {#if autoTuneMsg}
+            <small class="auto-tune-msg">{autoTuneMsg}</small>
+          {/if}
         </label>
         <div class="row-actions save-row">
           <button
@@ -2240,6 +2279,12 @@
   .path-row input {
     flex: 1;
     min-width: 0;
+  }
+
+  .auto-tune-msg {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-muted);
   }
 
   .chip-row {

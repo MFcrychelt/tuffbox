@@ -444,11 +444,57 @@ pub fn get_launcher_settings() -> LauncherSettings {
 }
 
 /// Auto-tuned heap + GC flags for the current machine and mod count.
-/// Feeds the "Auto" memory option in launcher settings.
+/// Reads total RAM itself; mod_count is provided by the caller (0 = small
+/// default). Feeds the "Auto" memory option in launcher settings.
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_auto_tune(total_ram_mb: u64, mod_count: usize) -> serde_json::Value {
+pub fn get_auto_tune(mod_count: usize) -> serde_json::Value {
+    let total_ram_mb = {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        sys.total_memory() / 1024 / 1024
+    };
     let (memory_mb, gc_args) = auto_tune_launch(total_ram_mb, mod_count);
-    serde_json::json!({ "memoryMb": memory_mb, "gcArgs": gc_args })
+    serde_json::json!({
+        "memoryMb": memory_mb,
+        "gcArgs": gc_args,
+        "totalRamMb": total_ram_mb,
+    })
+}
+
+/// Count .jar files in all `mods/` folders under the instances directory —
+/// input for the auto-tune heap recommendation. Folders deeper than two
+/// levels (e.g. `.disabled` backups) are skipped; errors count as 0.
+#[tauri::command(rename_all = "camelCase")]
+pub fn count_instance_mods_cmd() -> usize {
+    fn count_jars(dir: &std::path::Path, depth: u8, acc: &mut usize) {
+        if depth > 2 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                count_jars(&path, depth + 1, acc);
+            } else if depth >= 2
+                && path.extension().and_then(|e| e.to_str()) == Some("jar")
+            {
+                *acc += 1;
+            }
+        }
+    }
+    let root = resolve_instances_path();
+    let mut total = 0usize;
+    let Ok(instances) = std::fs::read_dir(&root) else {
+        return 0;
+    };
+    for inst in instances.flatten() {
+        if inst.path().is_dir() {
+            count_jars(&inst.path().join("mods"), 1, &mut total);
+        }
+    }
+    total
 }
 
 #[tauri::command(rename_all = "camelCase")]
