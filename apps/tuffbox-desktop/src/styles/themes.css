@@ -781,12 +781,57 @@
     var(--bg-primary);
 }
 
+/* ── Glassy: maximally transparent glass on a cool blue-slate base ── */
+[data-theme="glassy"] {
+  --bg-primary: #0b1016;
+  --bg-secondary: #101823;
+  --bg-tertiary: #16202e;
+  --bg-elevated: #1d2a3a;
+  --bg-hover: #243446;
+  --bg-active: #2d4156;
+  --text-primary: #f0f6fb;
+  --text-secondary: #bcd0e0;
+  --text-muted: #7d94a8;
+  --accent-primary: #6fd3ff;
+  --accent-hover: #93e0ff;
+  --accent-secondary: #4a9de0;
+  --accent-danger: #fb7185;
+  --accent-warning: #fcd34d;
+  --border-color: rgba(111, 211, 255, 0.10);
+  --shadow-sm: 0 1px 2px rgba(2, 6, 10, 0.45);
+  --shadow-md: 0 6px 18px rgba(2, 6, 10, 0.45);
+  --shadow-lg: 0 16px 40px rgba(2, 6, 10, 0.5);
+  --on-accent: #06202e;
+  --ambient-a: rgba(111, 211, 255, 0.07);
+  --ambient-b: rgba(74, 157, 224, 0.05);
+  /* subtle ice speckle, quieter than biome themes */
+  --tex-speck-a: rgba(160, 220, 255, 0.07);
+  --tex-speck-b: rgba(0, 0, 0, 0.20);
+  --tex-speck-c: rgba(70, 130, 170, 0.08);
+  /* most transparent glass of all themes */
+  --glass-bg: rgba(16, 24, 35, 0.38);
+  --glass-highlight: color-mix(in srgb, #fff 16%, transparent);
+  --hero-scrim:
+    linear-gradient(90deg, rgba(11, 16, 22, 0.60) 0%, transparent 55%),
+    linear-gradient(0deg, rgba(11, 16, 22, 0.55) 0%, transparent 52%);
+  --app-shell-bg:
+    radial-gradient(circle at 22% 30%, var(--tex-speck-a) 0 10%, transparent 11%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 68% 12%, var(--tex-speck-b) 0 12%, transparent 13%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 82% 64%, var(--tex-speck-a) 0 9%, transparent 10%) 0 0 / var(--tex-size) var(--tex-size),
+    radial-gradient(circle at 38% 78%, var(--tex-speck-b) 0 13%, transparent 14%) 0 0 / var(--tex-size) var(--tex-size),
+    repeating-conic-gradient(var(--tex-speck-c) 0% 25%, transparent 0% 50%) 0 0 / calc(var(--tex-size) / 2) calc(var(--tex-size) / 2),
+    radial-gradient(ellipse 85% 55% at 8% -8%, var(--ambient-a), transparent 58%),
+    radial-gradient(ellipse 70% 45% at 96% 4%, var(--ambient-b), transparent 52%),
+    var(--bg-primary);
+}
+
 /* ── Glasscraft biome themes: glass cards, ambient rail/header, glowing CTAs ── */
 :is(
   [data-theme="overworld"],
   [data-theme="nether"],
   [data-theme="deepdark"],
-  [data-theme="amethyst"]
+  [data-theme="amethyst"],
+  [data-theme="glassy"]
 ) {
   --accent-gradient: linear-gradient(145deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
   --brand-mark-gradient: var(--accent-gradient);
@@ -810,7 +855,8 @@
   [data-theme="overworld"],
   [data-theme="nether"],
   [data-theme="deepdark"],
-  [data-theme="amethyst"]
+  [data-theme="amethyst"],
+  [data-theme="glassy"]
 )
   :where(.card, .panel, .tb-card, .projects-section, .settings-grid > .card) {
   background: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
@@ -825,7 +871,8 @@
   [data-theme="overworld"],
   [data-theme="nether"],
   [data-theme="deepdark"],
-  [data-theme="amethyst"]
+  [data-theme="amethyst"],
+  [data-theme="glassy"]
 )
   :is(button.primary, button.accent, .play-btn:not(.stop), .primary-action, .tb-btn.primary):not(:disabled) {
   background: var(--accent-gradient);
@@ -838,11 +885,28 @@
   [data-theme="overworld"],
   [data-theme="nether"],
   [data-theme="deepdark"],
-  [data-theme="amethyst"]
+  [data-theme="amethyst"],
+  [data-theme="glassy"]
 )
   :is(button.primary, button.accent, .play-btn:not(.stop), .primary-action, .tb-btn.primary):not(:disabled):hover {
   filter: brightness(1.08);
   box-shadow: 0 8px 28px color-mix(in srgb, var(--accent-primary) 42%, transparent);
+}
+
+/* Glassy: stronger blur + frost top-edge highlight on cards (liquid-glass look). */
+[data-theme="glassy"]
+  :where(.card, .panel, .tb-card, .projects-section, .settings-grid > .card) {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+[data-theme="glassy"]
+  :where(.rail, .header) {
+  background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
 }
 
 /* Shared Minimal material system (quiet chrome + soft radii; CTAs only).

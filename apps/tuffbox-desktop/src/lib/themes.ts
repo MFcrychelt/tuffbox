@@ -18,7 +18,8 @@ export type ThemeId =
   | "overworld"
   | "nether"
   | "deepdark"
-  | "amethyst";
+  | "amethyst"
+  | "glassy";
 
 export interface ThemeMeta {
   id: ThemeId;
@@ -48,6 +49,7 @@ export const THEMES: ThemeMeta[] = [
   { id: "nether", label: "Nether", shades: ["#140608", "#241012", "#ff6a2b"] },
   { id: "deepdark", label: "Deep Dark", shades: ["#05090e", "#0a141c", "#2fd6c8"] },
   { id: "amethyst", label: "Amethyst", shades: ["#0f0a18", "#1c1230", "#b07cff"] },
+  { id: "glassy", label: "Glassy", shades: ["#0b1016", "#16202e", "#6fd3ff"] },
 ];
 
 const STORAGE_KEY = "tuffbox-theme";
