@@ -18,8 +18,7 @@ export type ThemeId =
   | "overworld"
   | "nether"
   | "deepdark"
-  | "amethyst"
-  | "glassy";
+  | "amethyst";
 
 export interface ThemeMeta {
   id: ThemeId;
@@ -49,10 +48,31 @@ export const THEMES: ThemeMeta[] = [
   { id: "nether", label: "Nether", shades: ["#140608", "#241012", "#ff6a2b"] },
   { id: "deepdark", label: "Deep Dark", shades: ["#05090e", "#0a141c", "#2fd6c8"] },
   { id: "amethyst", label: "Amethyst", shades: ["#0f0a18", "#1c1230", "#b07cff"] },
-  { id: "glassy", label: "Glassy", shades: ["#0b1016", "#16202e", "#6fd3ff"] },
 ];
 
 const STORAGE_KEY = "tuffbox-theme";
+
+/** Glass/transparency appearance mode: `data-glass="on|off"` on <html>. */
+export function applyGlassEffects(enabled: unknown) {
+  const on = enabled === true;
+  if (typeof document === "undefined") return on;
+  document.documentElement.setAttribute("data-glass", on ? "on" : "off");
+  try {
+    localStorage.setItem("tuffbox-glass", on ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+  return on;
+}
+
+/** Read the stored glass preference (default: off). */
+export function readStoredGlass(): boolean {
+  try {
+    return localStorage.getItem("tuffbox-glass") === "1";
+  } catch {
+    return false;
+  }
+}
 
 export function readStoredTheme(): ThemeId {
   const raw = localStorage.getItem(STORAGE_KEY) || "tuffbox";

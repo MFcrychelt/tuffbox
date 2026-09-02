@@ -30,7 +30,7 @@
   } from "../lib/store";
   import ConfettiBurst from "./ConfettiBurst.svelte";
   import {
-    readStoredTheme, type ThemeId,
+    readStoredTheme, readStoredGlass, applyGlassEffects, type ThemeId,
   } from "../lib/themes";
   import AiSettingsPanel from "./AiSettingsPanel.svelte";
   import ThemePicker from "./ThemePicker.svelte";
@@ -104,6 +104,7 @@
   }
 
   let reducedMotion = $state(localStorage.getItem("tuffbox-reduced-motion") === "1");
+  let glassEffects = $state(readStoredGlass());
   let shortcuts = $state<any[]>([]);
   let shortcutsOpen = $state(false);
   let appVersion = $state("");
@@ -1150,6 +1151,21 @@
           Potato PC mode (reduce motion / animations)
         </label>
         <p class="hint">Disables CSS animations and transitions for weaker machines.</p>
+
+        <label class="check-row" style="margin-top: 14px;">
+          <input
+            type="checkbox"
+            checked={glassEffects}
+            onchange={(e) => {
+              glassEffects = e.currentTarget.checked;
+              applyGlassEffects(glassEffects);
+            }}
+          />
+          Glass transparency
+        </label>
+        <p class="hint">
+          See-through cards, sidebar and header with backdrop blur over the theme background — works with every theme. Off by default.
+        </p>
 
         <label class="check-row" style="margin-top: 14px;">
           <input

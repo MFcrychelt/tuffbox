@@ -28,6 +28,7 @@
   import { launchWithFeedback, registerLaunchCrashListener, registerProcessListeners, refreshRunningInstances, startRunningInstancesWatch } from "./lib/launch";
   import { registerSoftVerifyListeners } from "./lib/softVerify";
   import type { ThemeId } from "./lib/themes";
+  import { applyGlassEffects, readStoredGlass } from "./lib/themes";
 
   const SWARM_ONBOARD_KEY = "tuffbox.swarm.onboarding.done";
 
@@ -319,6 +320,7 @@
           .catch(() => {});
       }
       applyRoundedCorners(s.roundedCorners !== false);
+      applyGlassEffects(readStoredGlass());
       launcherSettingsLive.set(launcherSnapshot);
       void applyPerfAutoDetect(s);
     }).catch(() => {});
