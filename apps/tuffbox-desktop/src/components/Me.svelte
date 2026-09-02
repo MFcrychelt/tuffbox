@@ -323,18 +323,20 @@
           height={380}
         />
         <div class="player-name mc-font">{$authState.profile.name}</div>
-        <span
-          class="type-badge"
-          class:microsoft={$authState.loginType === "microsoft"}
-          class:offline={$authState.loginType === "offline"}
-          class:ygg={$authState.loginType === "yggdrasil"}
-        >
-          {loginTypeLabel($authState.loginType, activeAuthority)}
-        </span>
-        <label class="layer-toggle" title="Show the skin overlay (hat, jacket, sleeves, pants)">
-          <input type="checkbox" bind:checked={showSecondLayer} />
-          <span>Second layer</span>
-        </label>
+        <div class="skin-meta-row">
+          <span
+            class="type-badge"
+            class:microsoft={$authState.loginType === "microsoft"}
+            class:offline={$authState.loginType === "offline"}
+            class:ygg={$authState.loginType === "yggdrasil"}
+          >
+            {loginTypeLabel($authState.loginType, activeAuthority)}
+          </span>
+          <label class="layer-toggle" title="Show the skin overlay (hat, jacket, sleeves, pants)">
+            <input type="checkbox" bind:checked={showSecondLayer} />
+            <span>2nd layer</span>
+          </label>
+        </div>
       {:else}
         <div class="skin-empty">
           <User size={48} />
@@ -718,6 +720,28 @@
     letter-spacing: 0.5px;
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
+  }
+
+  /* Badge + layer toggle share one compact pill row under the player name. */
+  .skin-meta-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px;
+    background: color-mix(in srgb, var(--bg-tertiary) 72%, transparent);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+  }
+
+  .skin-meta-row .type-badge {
+    padding: 2px 7px;
+  }
+
+  .skin-meta-row .layer-toggle {
+    margin-top: 0;
+    padding: 2px 8px;
+    border: none;
+    background: transparent;
   }
 
   .skin-empty {
