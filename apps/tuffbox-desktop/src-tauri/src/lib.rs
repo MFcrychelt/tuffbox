@@ -3791,7 +3791,10 @@ fn write_config_file(
         &[format!("Edited config {relative_path}")],
     )
     .map_err(|e| e.to_string())?;
-    std::fs::write(target, content).map_err(|e| e.to_string())?;
+    // Atomic write + .bak-<ts> of the previous content (Reality
+    // Launcher-style): a crash mid-write can no longer truncate configs.
+    tuffbox_core::fs_util::atomic_write_with_backup(&target, content.as_bytes())
+        .map_err(|e| e.to_string())?;
     Ok(WriteConfigResult {
         snapshot_id: snap.id,
     })
@@ -7149,7 +7152,9 @@ fn apply_launcher_edit_config(
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&target, new_content).map_err(|e| e.to_string())?;
+    // Atomic write + .bak-<ts> backup (Reality Launcher-style).
+    tuffbox_core::fs_util::atomic_write_with_backup(&target, new_content.as_bytes())
+        .map_err(|e| e.to_string())?;
     let rel = relative.replace('\\', "/");
     let _ = pack_events::record_mod_change_event(
         project_dir,
@@ -16133,7 +16138,9 @@ fn apply_change_action(
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            std::fs::write(&target, new_content).map_err(|e| e.to_string())?;
+            // Atomic write + .bak-<ts> backup (Reality Launcher-style).
+            tuffbox_core::fs_util::atomic_write_with_backup(&target, new_content.as_bytes())
+                .map_err(|e| e.to_string())?;
             applied.push(format!("edited config {path}"));
         }
     }

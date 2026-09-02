@@ -93,10 +93,16 @@ pub async fn github_pack_install(
     );
     let bytes = download_github_bytes(&url).await?;
 
-    let task_id = tuffbox_core::task_progress::start_task(
-        format!("gh-pack-{}", tuffbox_core::time_util::compact_now()),
+    let task_id = format!("gh-pack-{}", parsed.repo);
+    if !tuffbox_core::task_progress::try_start_task(
+        task_id.clone(),
         format!("Install GitHub pack {}/{}", parsed.owner, parsed.repo),
-    );
+    ) {
+        return Err(format!(
+            "Install of {}/{} is already running — wait for it to finish",
+            parsed.owner, parsed.repo
+        ));
+    }
     tuffbox_core::task_progress::set_progress(&task_id, 0.15, Some("Downloading tarball…".into()));
 
     tokio::task::spawn_blocking(move || {
