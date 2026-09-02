@@ -52,13 +52,52 @@ export const THEMES: ThemeMeta[] = [
 
 const STORAGE_KEY = "tuffbox-theme";
 
-/** Glass/transparency appearance mode: `data-glass="on|off"` on <html>. */
-export function applyGlassEffects(enabled: unknown) {
+/** Glass/transparency appearance mode: `data-glass="on|off"` on <html>.
+ *  When enabled, also asks the Rust core for a real OS window effect
+ *  (Acrylic/Mica/Tabbed on Windows, vibrancy on macOS). If the OS refuses
+ *  (unsupported platform/DE), we keep CSS-only translucency: surfaces stay
+ *  see-through over the textured shell background. */
+export async function applyGlassEffects(enabled: unknown) {
   const on = enabled === true;
   if (typeof document === "undefined") return on;
   document.documentElement.setAttribute("data-glass", on ? "on" : "off");
   try {
     localStorage.setItem("tuffbox-glass", on ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+  // OS-level window glass (better than backdrop-filter alone).
+  const w = window as unknown as {
+    __TAURI__?: { invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
+  };
+  const invoke = w.__TAURI__?.invoke;
+  if (on && invoke) {
+    try {
+      const effect = ((await invoke("set_window_glass", { on: true })) as string) || "";
+      // OS effect active → let the desktop blur show through the shell.
+      if (effect && effect !== "off") {
+        document.documentElement.classList.add("glass-os");
+        try {
+          localStorage.setItem("tuffbox-glass-os", effect);
+        } catch {
+          /* ignore */
+        }
+        return on;
+      }
+    } catch {
+      /* fall through to CSS-only glass */
+    }
+  } else if (!on && invoke) {
+    try {
+      await invoke("set_window_glass", { on: false });
+    } catch {
+      /* ignore */
+    }
+  }
+  // No OS effect (or glass off): make sure the shell background is opaque.
+  document.documentElement.classList.remove("glass-os");
+  try {
+    localStorage.removeItem("tuffbox-glass-os");
   } catch {
     /* ignore */
   }

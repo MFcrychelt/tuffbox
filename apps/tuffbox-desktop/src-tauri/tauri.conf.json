@@ -11,6 +11,7 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "TuffBox IDE",
@@ -22,7 +23,7 @@
         "dragDropEnabled": false,
         "fullscreen": false,
         "center": true,
-        "transparent": false,
+        "transparent": true,
         "decorations": true
       }
     ],

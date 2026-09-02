@@ -1,0 +1,70 @@
+//! OS-level window glass (window-vibrancy): Acrylic on Windows 10,
+//! Mica on Windows 11, sidebar vibrancy on macOS. Driven by the user's
+//! "Glass transparency" appearance toggle — the frontend invokes
+//! `set_window_glass(true|false)` after `applyGlassEffects`.
+//!
+//! Real translucency needs the WebView body itself to be see-through, so the
+//! frontend also sets `html.glass-os` when the OS effect is active: the CSS
+//! then drops the opaque shell background and lets the blurred desktop show
+//! through. Better than Shard, which only fakes glass with backdrop-filter
+//! over an opaque window.
+
+use tauri::Manager;
+
+/// Apply or remove the OS window effect. Returns a short label of what was
+/// applied (for the settings hint), or Err when the platform/window refuses.
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_window_glass(app: tauri::AppHandle, on: bool) -> Result<String, String> {
+    let Some(win) = app.get_webview_window("main") else {
+        return Err("main window not found".into());
+    };
+    if !on {
+        // Clear any effect; the window returns to an opaque surface.
+        window_vibrancy::clear_acrylic(&win)
+            .map_err(|e| format!("clear acrylic failed: {e}"))?;
+        window_vibrancy::clear_mica(&win).map_err(|e| format!("clear mica failed: {e}"))?;
+        return Ok("off".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows 11 22H2+ has Tabbed/Mica; older Win11 has Mica; Win10 has
+        // Acrylic. Try the most modern first, fall back down the chain.
+        if window_vibrancy::apply_tabbed(&win, None).is_ok() {
+            return Ok("tabbed".into());
+        }
+        if window_vibrancy::apply_mica(&win, None).is_ok() {
+            return Ok("mica".into());
+        }
+        // Acrylic: RGBWA tint (RGBA). A dark slate matches the default
+        // TuffBox palette; light themes still read fine because the WebView
+        // paints its own tinted surfaces on top.
+        if window_vibrancy::apply_acrylic(
+            &win,
+            Some((16, 20, 27, 125)), // dark slate, ~50% opacity
+        )
+        .is_ok()
+        {
+            return Ok("acrylic".into());
+        }
+        Err("no windows glass effect available (Acrylic/Mica/Tabbed all failed)".into())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        window_vibrancy::apply_vibrancy(
+            &win,
+            window_vibrancy::NSVisualEffectMaterial::HudWindow,
+            Some(window_vibrancy::NSVisualEffectState::Active),
+            Some(12.0), // window corner radius, matches default Tauri macOS chrome
+        )
+        .map(|_| "vibrancy".into())
+        .map_err(|e| format!("vibrancy failed: {e}"))
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = win;
+        Err("window glass is not supported on this platform".into())
+    }
+}

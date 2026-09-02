@@ -352,8 +352,20 @@ pub fn append_stability_jvm_args(args: &mut Vec<String>, potato_pc: bool) {
         args.push("-XX:MaxGCPauseMillis=50".into());
     }
     if potato_pc {
+        // G1HeapRegionSize is an experimental VM option on HotSpot — the JVM
+        // only accepts it after -XX:+UnlockExperimentalVMOptions, which must
+        // come earlier in the arg list. Push the unlock flag when any
+        // experimental option is about to be added.
+        let mut needs_unlock = false;
         if !jvm_args_contain(args, "G1HeapRegionSize") {
             args.push("-XX:G1HeapRegionSize=16M".into());
+            needs_unlock = true;
+        }
+        if needs_unlock && !jvm_args_contain(args, "UnlockExperimentalVMOptions") {
+            // Insert after any leading -X flags; safest is right after the
+            // first arg or at position 0 — the JVM accepts it anywhere before
+            // the options it unlocks, but first keeps ordering obvious.
+            args.insert(0, "-XX:+UnlockExperimentalVMOptions".into());
         }
         if !jvm_args_contain(args, "ParallelGCThreads") {
             args.push("-XX:ParallelGCThreads=2".into());
@@ -415,6 +427,10 @@ pub fn recommend_memory_mb(total_ram_mb: u64, mod_count: usize) -> u32 {
 /// Heavier packs get a low-pause G1 tuning; small ones get the defaults.
 pub fn recommend_gc_args(memory_mb: u32, mod_count: usize) -> Vec<String> {
     let mut args = vec![
+        // Required before the experimental G1 tuning flags below — the JVM
+        // otherwise refuses to start ("VM option 'G1NewSizePercent' is
+        // experimental and must be enabled via -XX:+UnlockExperimentalVMOptions").
+        "-XX:+UnlockExperimentalVMOptions".into(),
         "-XX:+UseG1GC".into(),
         "-XX:MaxGCPauseMillis=40".into(),
         // 32–48% of heap as young gen target: smooths chunk/mod churn.
@@ -577,10 +593,55 @@ mod tests {
         assert!(small.iter().any(|a| a.contains("UseG1GC")));
         assert!(small.iter().any(|a| a.contains("G1NewSizePercent=40")));
         assert!(!small.iter().any(|a| a.contains("G1HeapRegionSize")));
+        // Experimental G1 flags need the unlock flag, and it must precede them.
+        assert!(small
+            .iter()
+            .any(|a| a.contains("UnlockExperimentalVMOptions")));
+        let unlock_pos = small
+            .iter()
+            .position(|a| a.contains("UnlockExperimentalVMOptions"))
+            .unwrap();
+        let newsize_pos = small
+            .iter()
+            .position(|a| a.contains("G1NewSizePercent"))
+            .unwrap();
+        assert!(unlock_pos < newsize_pos);
 
         let big = recommend_gc_args(8192, 200);
         assert!(big.iter().any(|a| a.contains("G1NewSizePercent=32")));
         assert!(big.iter().any(|a| a.contains("G1HeapRegionSize=16M")));
+    }
+
+    #[test]
+    fn stability_args_unlock_experimental_flags() {
+        let mut args: Vec<String> = vec!["-Xmx1024m".into()];
+        append_stability_jvm_args(&mut args, true);
+        assert!(args.iter().any(|a| a.contains("G1HeapRegionSize")));
+        let unlock_pos = args
+            .iter()
+            .position(|a| a.contains("UnlockExperimentalVMOptions"))
+            .expect("unlock flag must be present");
+        let region_pos = args
+            .iter()
+            .position(|a| a.contains("G1HeapRegionSize"))
+            .unwrap();
+        assert!(unlock_pos < region_pos);
+
+        // No duplicate unlock flag on a second pass.
+        append_stability_jvm_args(&mut args, true);
+        assert_eq!(
+            args.iter()
+                .filter(|a| a.contains("UnlockExperimentalVMOptions"))
+                .count(),
+            1
+        );
+
+        // Non-potato path adds no G1HeapRegionSize → no unlock flag.
+        let mut plain: Vec<String> = vec!["-Xmx1024m".into()];
+        append_stability_jvm_args(&mut plain, false);
+        assert!(!plain
+            .iter()
+            .any(|a| a.contains("UnlockExperimentalVMOptions")));
     }
 
     #[test]

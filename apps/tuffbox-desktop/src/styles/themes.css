@@ -898,6 +898,34 @@ html[data-glass="on"].potato-pc :where(.card, .panel, .tb-card, .rail, .header) 
   backdrop-filter: none;
 }
 
+/* ── OS-level window glass (html.glass-os) ──────────────────────────────
+   The Rust core applied Acrylic/Mica/Tabbed to the actual window. The
+   WebView must now let that blurred desktop show through: shell background
+   goes heavily translucent (it keeps a tint so text stays readable), page
+   surfaces get lighter fills since the glass sits behind everything. */
+html.glass-os {
+  --app-shell-bg: color-mix(in srgb, var(--bg-primary) 62%, transparent);
+}
+
+html.glass-os .app-shell {
+  background: var(--app-shell-bg);
+}
+
+html.glass-os:not([data-theme="win95"], [data-theme="pixelato"])
+  :where(.card, .panel, .tb-card, .projects-section, .settings-grid > .card) {
+  background: color-mix(in srgb, var(--bg-secondary) 68%, transparent);
+}
+
+html.glass-os :where(.rail, .header) {
+  background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+}
+
+/* When glass is OFF, always restore the fully opaque shell — the toggle
+   must be a hard reset even if an OS effect somehow lingered. */
+html:not(.glass-os) .app-shell {
+  background: var(--app-shell-bg, var(--bg-primary));
+}
+
 /* Shared Minimal material system (quiet chrome + soft radii; CTAs only).
    Do NOT paint every bare <button> — that flooded video cards / action rows
    with accent glow (Solar yellow noise). */

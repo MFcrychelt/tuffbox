@@ -298,14 +298,14 @@
           {/key}
         {/if}
         <div class="poster-title-row">
-        {#if coverKind === "icon" && coverUrl}
-          <img
-            class="poster-pack-icon"
-            src={coverUrl}
-            alt=""
-            draggable="false"
-          />
-        {/if}
+          {#if coverKind === "icon" && coverUrl}
+            <img
+              class="poster-pack-icon"
+              src={coverUrl}
+              alt=""
+              draggable="false"
+            />
+          {/if}
                 {#if title}
           {#key title}
             <h1 class="poster-title" in:fade={{ duration: artFadeMs }}>{title}</h1>

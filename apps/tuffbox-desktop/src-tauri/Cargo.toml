@@ -17,7 +17,10 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
+# Real OS-level window glass: Acrylic (Windows 10), Mica/Tabbed (Windows 11),
+# sidebar vibrancy (macOS). Applied when the user enables Glass transparency.
+window-vibrancy = "0.5"
 dirs.workspace = true
 tokio.workspace = true
 tauri-plugin-dialog = "2"

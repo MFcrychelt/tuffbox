@@ -13,6 +13,7 @@ mod launcher_settings;
 mod listing_api;
 mod mca_selector;
 mod overlay_hook;
+mod window_glass;
 mod pack_events;
 mod presence;
 mod quest_chat_api;
@@ -17862,6 +17863,7 @@ pub fn run() {
             launcher_settings::get_launcher_settings,
             launcher_settings::get_auto_tune,
             launcher_settings::count_instance_mods_cmd,
+            window_glass::set_window_glass,
             launcher_settings::save_launcher_settings_cmd,
             launcher_settings::get_runtime_path_info,
             launcher_settings::get_instances_path_info,
