@@ -480,7 +480,7 @@
   });
 </script>
 
-<div class="flex flex-col gap-3.5 h-full min-h-0 w-full max-w-none box-border p-0.5">
+<div class="flex flex-col gap-3.5 h-full min-h-0 w-full max-w-[1440px] mx-auto box-border p-0.5">
   <!-- ── Toolbar ─────────────────────────────────────────────── -->
   <div class="flex justify-between items-center gap-4 flex-wrap shrink-0">
     <div class="grid gap-1">
@@ -523,11 +523,7 @@
     <div class="grid grid-cols-4 max-[900px]:grid-cols-2 gap-2.5 shrink-0" role="group" aria-label="Filter snapshots">
       <button
         type="button"
-        class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 {
-          filterKind === "all"
-            ? "bg-[var(--accent-primary)] border-[var(--accent-primary)] text-white"
-            : "bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-        }"
+        class="filter-card {filterKind === "all" ? "active" : ""}"
         onclick={() => (filterKind = "all")}
       >
         <Database size={16} />
@@ -536,11 +532,7 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 {
-          filterKind === "auto"
-            ? "bg-[var(--accent-primary)] border-[var(--accent-primary)] text-white"
-            : "bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-        }"
+        class="filter-card {filterKind === "auto" ? "active" : ""}"
         onclick={() => (filterKind = "auto")}
       >
         <Zap size={16} />
@@ -549,11 +541,7 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 {
-          filterKind === "manual"
-            ? "bg-[var(--accent-primary)] border-[var(--accent-primary)] text-white"
-            : "bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-        }"
+        class="filter-card {filterKind === "manual" ? "active" : ""}"
         onclick={() => (filterKind = "manual")}
       >
         <Hand size={16} />
@@ -562,11 +550,7 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 {
-          filterKind === "crash"
-            ? "bg-[var(--accent-primary)] border-[var(--accent-primary)] text-white"
-            : "bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
-        }"
+        class="filter-card {filterKind === "crash" ? "active" : ""}"
         onclick={() => (filterKind = "crash")}
       >
         <ShieldAlert size={16} />
@@ -941,6 +925,50 @@
      pieces Tailwind can't express: shared app button skins used here
      (ghost/secondary/danger/mini are defined app-wide), the Ore-style
      kind tags, and skeletons. */
+
+  /* Kind filter cards: flat quiet tiles, accent fill when active — the bare
+     button here otherwise inherits the gray Ore skin (3px bottom edge). */
+  .filter-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease;
+  }
+  .filter-card:hover:not(.active) {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, var(--border-color));
+  }
+  .filter-card.active {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: var(--on-accent, #fff);
+  }
+
+  /* Rollback / Delete detail actions: soft tinted pills, not gray blocks. */
+  .rollback {
+    color: var(--accent-primary);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+  .rollback:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  }
+  .ghost.danger {
+    color: #fca5a5;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+  }
+  .ghost.danger:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.12);
+    color: #fecaca;
+  }
 
   .kind-tag {
     font-size: 10.5px;

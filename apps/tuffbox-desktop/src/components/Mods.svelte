@@ -3733,33 +3733,47 @@ import { trapFocus } from "../lib/focusTrap";
       </div>
 
       <div class="modal-tabs-row">
-        <div class="modal-tabs">
-          <button class:active={contentFilter === "mod"} onclick={() => switchContentFilter("mod")}>Mods</button>
-          <button class:active={contentFilter === "resourcepack"} onclick={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
-          <button class:active={contentFilter === "datapack"} onclick={() => switchContentFilter("datapack")}>Datapacks</button>
-          <button class:active={contentFilter === "shader"} onclick={() => switchContentFilter("shader")}>Shaders</button>
-          <button class:active={contentFilter === "favorites"} onclick={() => switchContentFilter("favorites")}>Favorites</button>
+        <div class="flex flex-wrap gap-1.5 min-w-0">
+          {#each [
+            { id: "mod", label: "Mods" },
+            { id: "resourcepack", label: "Resourcepacks" },
+            { id: "datapack", label: "Datapacks" },
+            { id: "shader", label: "Shaders" },
+            { id: "favorites", label: "Favorites" },
+          ] as tab (tab.id)}
+            <button
+              type="button"
+              class="px-3.5 py-2 rounded-[10px] border text-[13px] font-bold cursor-pointer transition-colors duration-150 {contentFilter === tab.id
+                ? "border-[color-mix(in_srgb,var(--accent-primary)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] text-[var(--text-primary)]"
+                : "border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"}"
+              onclick={() => switchContentFilter(tab.id)}
+            >{tab.label}</button>
+          {/each}
           {#each listTabNames as listName (listName)}
-            <button class:active={contentFilter === `list:${listName}`} onclick={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
+            <button
+              type="button"
+              class="px-3.5 py-2 rounded-[10px] border text-[13px] font-bold cursor-pointer transition-colors duration-150 {contentFilter === `list:${listName}`
+                ? "border-[color-mix(in_srgb,var(--accent-primary)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] text-[var(--text-primary)]"
+                : "border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"}"
+              onclick={() => switchContentFilter(`list:${listName}`)}
+            >{listName}</button>
           {/each}
         </div>
-        <div class="provider-toggle" role="group" aria-label="Catalog provider">
-          <button
-            type="button"
-            class:active={catalogProvider === "modrinth"}
-            onclick={() => setCatalogProvider("modrinth")}
-          >Modrinth</button>
-          <button
-            type="button"
-            class:active={catalogProvider === "curseforge"}
-            onclick={() => setCatalogProvider("curseforge")}
-          >CurseForge</button>
-          <button
-            type="button"
-            class:active={catalogProvider === "both"}
-            onclick={() => setCatalogProvider("both")}
-            title="Search both catalogs at once"
-          >Both</button>
+        <div class="flex items-center gap-1 p-[3px] rounded-[10px] border border-[var(--border-color)] bg-[var(--bg-tertiary)] shrink-0" role="group" aria-label="Catalog provider">
+          {#each [
+            { id: "modrinth", label: "Modrinth" },
+            { id: "curseforge", label: "CurseForge" },
+            { id: "both", label: "Both" },
+          ] as prov (prov.id)}
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-[var(--border-radius-sm)] border-0 text-[12px] font-bold cursor-pointer transition-colors duration-150 {catalogProvider === prov.id
+                ? "bg-[color-mix(in_srgb,var(--accent-primary)_14%,transparent)] text-[var(--text-primary)]"
+                : "bg-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}"
+              onclick={() => setCatalogProvider(prov.id as "modrinth" | "curseforge" | "both")}
+              title={prov.id === "both" ? "Search both catalogs at once" : undefined}
+            >{prov.label}</button>
+          {/each}
         </div>
       </div>
       <div class="browser-topbar modal-topbar">
@@ -3789,15 +3803,37 @@ import { trapFocus } from "../lib/focusTrap";
               <option value={60}>60</option>
             </select>
           </label>
-          <span class="size-select" role="group" aria-label="Card size">
+          <span class="inline-flex items-center gap-1 text-[var(--text-muted)] text-[12px] whitespace-nowrap" role="group" aria-label="Card size">
             Size:
-            <button type="button" class="size-toggle" class:active={cardSize === "S"} onclick={() => setCardSize("S")} title="Compact cards">S</button>
-            <button type="button" class="size-toggle" class:active={cardSize === "M"} onclick={() => setCardSize("M")} title="Default cards">M</button>
-            <button type="button" class="size-toggle" class:active={cardSize === "L"} onclick={() => setCardSize("L")} title="Large cards">L</button>
+            {#each ["S", "M", "L"] as s (s)}
+              <button
+                type="button"
+                class="min-w-[28px] h-[28px] px-1.5 inline-flex items-center justify-center rounded-[var(--border-radius-sm)] border text-[11px] font-bold cursor-pointer transition-colors duration-150 {cardSize === s
+                  ? "border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)] text-[var(--accent-primary)]"
+                  : "border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"}"
+                onclick={() => setCardSize(s as CardSize)}
+                title={s === "S" ? "Compact cards" : s === "M" ? "Default cards" : "Large cards"}
+              >{s}</button>
+            {/each}
           </span>
-          <button class="view-toggle" class:active={viewMode === "grid"} onclick={() => setViewMode("grid")} title="Grid view"><LayoutGrid size={16} /></button>
-          <button class="view-toggle" class:active={viewMode === "list"} onclick={() => setViewMode("list")} title="List view"><List size={16} /></button>
-          <button class="view-toggle" class:active={viewMode === "infinite"} onclick={() => setViewMode("infinite")} title="Infinite scroll"><InfinityIcon size={16} /></button>
+          {#each [
+            { id: "grid", title: "Grid view" },
+            { id: "list", title: "List view" },
+            { id: "infinite", title: "Infinite scroll" },
+          ] as mode (mode.id)}
+            <button
+              type="button"
+              class="w-9 h-9 p-0 inline-flex items-center justify-center rounded-[10px] border cursor-pointer transition-colors duration-150 {viewMode === mode.id
+                ? "border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)] text-[var(--accent-primary)]"
+                : "border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"}"
+              onclick={() => setViewMode(mode.id as "grid" | "list" | "infinite")}
+              title={mode.title}
+            >
+              {#if mode.id === "grid"}<LayoutGrid size={16} />
+              {:else if mode.id === "list"}<List size={16} />
+              {:else}<InfinityIcon size={16} />{/if}
+            </button>
+          {/each}
         </div>
       </div>
 
@@ -4109,25 +4145,47 @@ import { trapFocus } from "../lib/focusTrap";
 
         <section class="browser-results" bind:this={browserResultsEl}>
           {#if viewMode !== "infinite"}
-          <div class="pagination">
-            <button class="page-btn" disabled={page <= 1} onclick={() => goToPage(page - 1)}>‹</button>
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              class="pagination-btn"
+              disabled={page <= 1}
+              onclick={() => goToPage(page - 1)}
+            >‹</button>
             {#each Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1) as p (p)}
-              <button class="page-btn" class:active={p === page} onclick={() => goToPage(p)}>{p}</button>
+              <button
+                type="button"
+                class="pagination-btn {p === page
+                  ? "border-transparent bg-[var(--accent-primary)] text-white font-extrabold"
+                  : "border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}"
+                onclick={() => goToPage(p)}
+              >{p}</button>
             {/each}
-            {#if totalPages > 5}<span class="page-ellipsis">…</span><button class="page-btn" onclick={() => goToPage(totalPages)}>{totalPages}</button>{/if}
-            <button class="page-btn" disabled={page >= totalPages} onclick={() => goToPage(page + 1)}><ArrowRight size={14} /></button>
+            {#if totalPages > 5}<span class="text-[var(--text-muted)] px-0.5">…</span><button type="button" class="pagination-btn border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]" onclick={() => goToPage(totalPages)}>{totalPages}</button>{/if}
+            <button
+              type="button"
+              class="pagination-btn"
+              disabled={page >= totalPages}
+              onclick={() => goToPage(page + 1)}
+            ><ArrowRight size={14} /></button>
           </div>
           {/if}
 
-          <div class="bulk-bar">
-            <div>
-              <strong>{selectedResults.length}</strong>
-              <span>selected for bulk install</span>
+          <div class="flex items-center justify-between gap-2 px-2.5 py-2 border border-[var(--border-color)] rounded-[var(--border-radius-sm)] bg-[color-mix(in_srgb,var(--bg-elevated)_35%,transparent)]">
+            <div class="min-w-0">
+              <strong class="text-[var(--accent-primary)] text-[16px]">{selectedResults.length}</strong>
+              <span class="text-[var(--text-muted)] ml-1.5 text-[12px]">selected for bulk install</span>
             </div>
-            <div class="bulk-actions">
-              <button class="ghost" onclick={selectVisibleResults} disabled={displayedResults.length === 0}>Select visible</button>
-              <button class="ghost" onclick={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
-              <button onclick={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating} title="Install selected projects with required dependencies (one provider at a time)">Install selected + dependencies</button>
+            <div class="flex gap-1.5 flex-wrap justify-end">
+              <button type="button" class="ghost" onclick={selectVisibleResults} disabled={displayedResults.length === 0}>Select visible</button>
+              <button type="button" class="ghost" onclick={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
+              <button
+                type="button"
+                class="inline-flex items-center gap-2 px-3.5 py-2 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 bg-[var(--accent-primary)] border-[color-mix(in_srgb,var(--accent-primary)_60%,#000)] text-[var(--on-accent,#fff)] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed"
+                onclick={bulkInstallSelected}
+                disabled={selectedResults.length === 0 || mutating}
+                title="Install selected projects with required dependencies (one provider at a time)"
+              >Install selected + dependencies</button>
             </div>
           </div>
 
@@ -4357,14 +4415,30 @@ import { trapFocus } from "../lib/focusTrap";
             {/if}
           {/if}
           {#if viewMode !== "infinite" && totalPages > 1 && !isSavedViewFilter(contentFilter)}
-            <div class="pagination bottom">
-              <button class="page-btn" disabled={page <= 1} onclick={() => goToPage(page - 1)}>‹ Prev</button>
+            <div class="mt-2 mb-1 mx-auto flex items-center justify-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                class="pagination-btn"
+                disabled={page <= 1}
+                onclick={() => goToPage(page - 1)}
+              >‹ Prev</button>
               {#each Array.from({ length: Math.min(totalPages, 7) }, (_, i) => i + 1) as p (p)}
-                <button class="page-btn" class:active={p === page} onclick={() => goToPage(p)}>{p}</button>
+                <button
+                  type="button"
+                  class="pagination-btn {p === page
+                    ? "border-transparent bg-[var(--accent-primary)] text-white font-extrabold"
+                    : "border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}"
+                  onclick={() => goToPage(p)}
+                >{p}</button>
               {/each}
-              {#if totalPages > 7}<span class="page-ellipsis">…</span><button class="page-btn" onclick={() => goToPage(totalPages)}>{totalPages}</button>{/if}
-              <span class="page-info">{page} / {totalPages}</span>
-              <button class="page-btn" disabled={page >= totalPages} onclick={() => goToPage(page + 1)}>Next ›</button>
+              {#if totalPages > 7}<span class="text-[var(--text-muted)] px-0.5">…</span><button type="button" class="pagination-btn border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]" onclick={() => goToPage(totalPages)}>{totalPages}</button>{/if}
+              <span class="text-[var(--text-muted)] text-[13px] px-2 self-center">{page} / {totalPages}</span>
+              <button
+                type="button"
+                class="pagination-btn"
+                disabled={page >= totalPages}
+                onclick={() => goToPage(page + 1)}
+              >Next ›</button>
             </div>
           {/if}
         </section>
@@ -4919,8 +4993,11 @@ import { trapFocus } from "../lib/focusTrap";
     height: 100%;
     min-height: 0;
     overflow: hidden;
-    max-width: none;
+    /* Responsive: on 1440p+ cap the working area and center it — cards keep
+       a readable line length instead of stretching edge-to-edge. */
+    max-width: min(1680px, 100%);
     width: 100%;
+    margin: 0 auto;
     position: relative;
   }
 
@@ -5331,6 +5408,15 @@ import { trapFocus } from "../lib/focusTrap";
   @media (max-width: 980px) {
     .installed-dual {
       grid-template-columns: 1fr;
+    }
+  }
+
+  /* Very wide viewports: cap each split pane so mod cards stay readable
+     (1440p: two ~700px columns instead of two edge-to-edge sheets). */
+  @media (min-width: 1500px) {
+    .installed-dual {
+      grid-template-columns: repeat(2, minmax(0, 700px));
+      justify-content: center;
     }
   }
 
@@ -6402,11 +6488,6 @@ import { trapFocus } from "../lib/focusTrap";
     margin-bottom: 12px;
   }
 
-  .modal.add-mods-modal .modal-tabs {
-    flex-shrink: 0;
-    padding: 0;
-  }
-
   .modal.add-mods-modal .modal-tabs-row {
     flex-shrink: 0;
     display: flex;
@@ -6417,18 +6498,6 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 0 0 10px;
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 0;
-  }
-
-  .modal.add-mods-modal .modal-tabs-row .modal-tabs {
-    flex: 1 1 auto;
-    min-width: 0;
-    padding: 0;
-  }
-
-  .modal.add-mods-modal .modal-tabs-row .provider-toggle {
-    margin-top: 0;
-    margin-left: auto;
-    flex-shrink: 0;
   }
 
   .modal.add-mods-modal .browser-topbar.modal-topbar {
@@ -6637,29 +6706,6 @@ import { trapFocus } from "../lib/focusTrap";
     min-height: min(720px, calc(100vh - 80px));
   }
 
-  .modal-tabs {
-    display: flex;
-    gap: 6px;
-    padding: 12px 24px 0;
-    flex-wrap: wrap;
-  }
-
-  .modal-tabs button {
-    padding: 8px 14px;
-    border-radius: 10px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
-    color: var(--text-secondary);
-    font-size: 13px;
-    font-weight: 700;
-  }
-
-  .modal-tabs button.active {
-    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
-    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-    color: var(--text-primary);
-  }
-
   .modal-header {
     display: flex;
     justify-content: space-between;
@@ -6676,32 +6722,6 @@ import { trapFocus } from "../lib/focusTrap";
     color: var(--text-muted);
     font-size: 13px;
     line-height: 1.45;
-  }
-
-  .provider-toggle {
-    display: inline-flex;
-    gap: 4px;
-    margin-top: 10px;
-    padding: 3px;
-    border-radius: 10px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
-  }
-
-  .provider-toggle button {
-    padding: 6px 12px;
-    border-radius: var(--border-radius-sm);
-    border: none;
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-  }
-
-  .provider-toggle button.active {
-    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-    color: var(--text-primary);
   }
 
   .provider-badge {
@@ -6926,54 +6946,6 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 10px;
   }
 
-  .view-toggle {
-    width: 36px; height: 36px;
-    padding: 0;
-    display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 10px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    color: var(--text-muted);
-    transform: none;
-    flex-shrink: 0;
-  }
-  .view-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); }
-  .view-toggle.active { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
-  .view-toggle :global(svg) { width: 16px; height: 16px; flex-shrink: 0; }
-
-  .size-select {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    color: var(--text-muted);
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .size-toggle {
-    min-width: 28px;
-    height: 28px;
-    padding: 0 6px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--border-radius-sm);
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 700;
-    transform: none;
-    flex-shrink: 0;
-  }
-
-  .size-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); }
-  .size-toggle.active {
-    color: var(--accent-primary);
-    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
-    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-  }
-
   .pagination {
     display: flex;
     align-items: center;
@@ -6981,37 +6953,22 @@ import { trapFocus } from "../lib/focusTrap";
     margin-left: auto;
   }
 
-  .page-btn {
-    min-width: 32px; height: 32px;
+  /* Pagination pill (shape only; color state comes from Tailwind utilities). */
+  .pagination-btn {
+    min-width: 32px;
+    height: 32px;
     padding: 0 8px;
-    display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 999px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    transform: none;
-    font-size: 13px;
-  }
-  .page-btn:hover:not(:disabled) { color: var(--text-primary); }
-  .page-btn.active {
-    background: var(--accent-primary);
-    color: #fff;
-    border-color: transparent;
-    font-weight: 800;
-  }
-  .page-ellipsis { color: var(--text-muted); padding: 0 2px; }
-
-  .pagination.bottom {
-    margin: 8px auto 4px;
+    display: inline-flex;
+    align-items: center;
     justify-content: center;
-    flex-wrap: wrap;
-  }
-  .pagination .page-info {
-    color: var(--text-muted);
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
     font-size: 13px;
-    padding: 0 8px;
-    align-self: center;
+    cursor: pointer;
+    transition: color var(--motion-fast) ease, background var(--motion-fast) ease, border-color var(--motion-fast) ease;
   }
+  .pagination-btn:disabled { opacity: 0.4; cursor: default; }
+  .pagination-btn:not(:disabled):hover { border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
 
   .version-switch-footer {
     position: sticky;
@@ -7025,21 +6982,6 @@ import { trapFocus } from "../lib/focusTrap";
     width: 100%;
     justify-content: center;
   }
-
-  .bulk-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-sm);
-    background: rgba(255,255,255,.018);
-  }
-
-  .bulk-bar strong { color: var(--accent-primary); font-size: 16px; }
-  .bulk-bar span { color: var(--text-muted); margin-left: 6px; font-size: 12px; }
-  .bulk-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
   .results {
     display: grid;

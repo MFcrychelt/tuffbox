@@ -384,6 +384,10 @@
     flex: 1;
     display: flex;
     overflow: hidden;
+    /* Responsive: centered cap on 1440p+. */
+    max-width: min(1720px, 100%);
+    margin: 0 auto;
+    width: 100%;
   }
 
   .worlds-rail {

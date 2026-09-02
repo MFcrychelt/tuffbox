@@ -970,9 +970,9 @@
     overflow: hidden;
     padding: 12px 16px 16px;
     box-sizing: border-box;
-    /* Task #62: on wide screens the panels stretched edge to edge. Cap the
-       column and center it like other editors. */
-    max-width: 1180px;
+    /* Task #62 + responsive pass: cap the column and center it; grows a bit
+       on 1440p so two-column layouts keep room without full-bleed stretch. */
+    max-width: 1280px;
     margin: 0 auto;
     width: 100%;
   }

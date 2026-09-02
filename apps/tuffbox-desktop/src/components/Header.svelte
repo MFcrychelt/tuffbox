@@ -199,6 +199,11 @@
     flex: 1;
     min-width: 0;
     gap: 16px;
+    /* Match the home backdrop panel (Dashboard .home): on wide windows the
+       chips sit flush with the panel's edge instead of drifting to the
+       window border. Keep both max-widths in sync. */
+    max-width: 1520px;
+    margin: 0 auto;
   }
 
   .mc-tabs {

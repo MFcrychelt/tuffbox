@@ -3456,7 +3456,9 @@
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
-    max-width: none;
+    /* Responsive: centered cap on 1440p+ so node canvas keeps aspect. */
+    max-width: min(1840px, 100%);
+    margin: 0 auto;
     width: 100%;
     scrollbar-gutter: stable;
     overscroll-behavior: contain;

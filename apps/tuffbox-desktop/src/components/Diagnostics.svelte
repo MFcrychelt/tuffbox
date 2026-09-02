@@ -3202,7 +3202,8 @@
     height: 100%;
     min-height: 0;
     overflow: hidden;
-    max-width: min(1280px, 100%);
+    /* Responsive: centered column, grows on 1440p without edge-to-edge. */
+    max-width: min(1440px, 100%);
     width: 100%;
     margin: 0 auto;
   }

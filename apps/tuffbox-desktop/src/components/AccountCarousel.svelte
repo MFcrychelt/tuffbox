@@ -284,7 +284,7 @@
   .carousel-slot.active .slot-head::before {
     content: "";
     position: absolute;
-    inset: -16px -22px -28px;
+    inset: -16px -22px -12px;
     border-radius: 50%;
     pointer-events: none;
     background:
@@ -405,7 +405,10 @@
     font-family: var(--font-minecraft);
     font-size: 11px;
     letter-spacing: 0.3px;
-    max-width: 120px;
+    /* Fit the full nick: no clipping, overflow allowed to spill over the
+       narrow 76px slot, centered so it stays balanced. */
+    max-width: none;
+    width: max-content;
     white-space: nowrap;
     text-align: center;
     line-height: 1.2;
@@ -416,17 +419,10 @@
   }
 
   .carousel-slot.active .slot-name {
-    /* Gradient text: theme accent → violet, with a soft matching glow. */
-    background: linear-gradient(
-      100deg,
-      var(--accent-primary) 20%,
-      color-mix(in srgb, var(--accent-secondary) 70%, var(--accent-primary)) 80%
-    );
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent-primary) 45%, transparent));
+    /* Solid accent with a faint glow — gradient text fought with the head
+       aura and read poorly over it. */
+    color: var(--accent-primary);
+    text-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
 
   /* Selected-but-not-confirmed nick: solid accent, no gradient drama yet. */

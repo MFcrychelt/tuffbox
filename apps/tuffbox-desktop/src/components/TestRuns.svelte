@@ -884,14 +884,12 @@
   {:else}
     <div class="flex-1 min-h-0 flex flex-col overflow-x-hidden overflow-y-auto gap-2">
       <div class="flex items-center gap-2.5 shrink-0 flex-wrap">
-        <div class="flex items-center gap-2 font-semibold rounded-[var(--border-radius-md)] px-3.5 py-2 transition-colors duration-150 {
+        <div class="flex items-center gap-2 font-semibold rounded-[var(--border-radius-md)] px-3.5 py-2 transition-colors duration-150 status-chip {
           livePhase === "pass"
-            ? "text-[var(--accent-primary)] bg-[color-mix(in_srgb,var(--accent-primary)_14%,transparent)] border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)]"
+            ? "pass"
             : (livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut")
-              ? "text-[#fca5a5] bg-[rgba(239,68,68,0.14)] border-[rgba(239,68,68,0.4)]"
-              : (!!live?.instance || running)
-                ? "text-[var(--accent-primary)] bg-[#39393b] border-[#39393b] border-b-[#232425]"
-                : "text-[var(--text-muted)] bg-[#39393b] border-[#39393b] border-b-[#232425]"
+              ? "fail"
+              : "idle"
         }">
           <TimerReset size={16} />
           {statusLabel}
@@ -1219,35 +1217,68 @@
 
   .preset { display: inline-flex; align-items: center; gap: 8px; }
   /* Task #65: preset buttons get the Ore UI key treatment — flat fill,
-     darker bottom edge, amethyst primary. */
+     darker bottom edge, theme-accent primary. Token-driven so light themes
+     don't inherit hardcoded dark-gray fills. */
   .preset {
-    background: #39393b;
-    border-color: #39393b;
-    border-bottom-color: #232425;
+    background: var(--bg-tertiary);
+    border-color: var(--border-color);
+    border-bottom-color: color-mix(in srgb, var(--border-color) 70%, #000);
+    color: var(--text-primary);
+    border-bottom-width: 3px;
   }
-  .preset:hover:not(:disabled) { background: #47484a; color: var(--text-primary); }
+  .preset:hover:not(:disabled) {
+    background: var(--bg-elevated);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
+    color: var(--text-primary);
+  }
   .preset:active:not(:disabled) {
-    background: #2a2b2c;
+    background: var(--bg-secondary);
     border-bottom-width: 1px;
     transform: translateY(1px);
     filter: none;
   }
   .preset.primary {
-    background: #491ac0;
-    border-color: #491ac0;
-    border-bottom-color: #32127f;
-    color: #ffffff;
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 60%, #000);
+    color: var(--on-accent, #fff);
     font-weight: 700;
   }
   .preset.primary:hover:not(:disabled) {
-    background: #5c2dd5;
-    border-color: #5c2dd5;
-    border-bottom-color: #3f1a96;
-    color: #ffffff;
+    background: color-mix(in srgb, var(--accent-primary) 82%, #fff);
+    border-color: color-mix(in srgb, var(--accent-primary) 82%, #fff);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 50%, #000);
+    color: var(--on-accent, #fff);
   }
   .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
   .danger { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
   .danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
+
+  /* Status chip: quiet themed pill, no gray Ore button skin. */
+  .status-chip { border: 1px solid var(--border-color); border-bottom-width: 1px; }
+  .status-chip.idle {
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-secondary));
+    border-color: color-mix(in srgb, var(--accent-primary) 22%, var(--border-color));
+  }
+  .status-chip.pass {
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+  }
+  .status-chip.fail {
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.14);
+    border-color: rgba(239, 68, 68, 0.4);
+  }
+
+  /* History filter chips: accent when active, quiet otherwise. */
+  .ghost.mini { border-radius: 999px; border: 1px solid transparent; }
+  .ghost.mini.active {
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
 
   .vbadge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border-color); }
   .vbadge.pass, .vbadge.finished { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }

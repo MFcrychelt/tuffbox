@@ -216,6 +216,9 @@
             <MoreHorizontal size={15} />
           </button>
         </div>
+        {#if playerName}
+          <span class="poster-player" title={`Signed in as ${playerName}`}>{playerName}</span>
+        {/if}
       </div>
       {#if overflowOpen}
         <div class="poster-overflow-menu" role="menu">
@@ -288,7 +291,13 @@
     {/if}
 
     {#if hasSelection}
-      <div class="poster-title-row">
+      <div class="poster-title-block">
+        {#if meta}
+          {#key meta}
+            <p class="poster-meta" in:fade={{ duration: artFadeMs }}>{meta}</p>
+          {/key}
+        {/if}
+        <div class="poster-title-row">
         {#if coverKind === "icon" && coverUrl}
           <img
             class="poster-pack-icon"
@@ -330,22 +339,14 @@
           {/if}
         </button>
         </div>
+        </div>
       </div>
     {/if}
   </div>
 </section>
-
 {#if !showStorefront}
   <div class="poster-action-bar">
     <div class="poster-play-row">
-      <div class="play-side play-side-start">
-        {#if meta}
-          <p class="poster-meta">
-            {meta}
-          </p>
-        {/if}
-      </div>
-
       {#if accounts.length > 1}
         <AccountCarousel
           accounts={accounts}
@@ -356,9 +357,6 @@
         />
       {/if}
       <div class="play-side play-side-end">
-        {#if playerName}
-          <span class="poster-player">{playerName}</span>
-        {/if}
         {#if !signedIn && onSignIn && !launching}
           <button type="button" class="poster-signin" onclick={onSignIn}>
             Sign in
@@ -741,16 +739,18 @@
 
   .poster-play-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
     align-items: center;
     gap: 12px;
     min-width: 0;
     width: 100%;
-    padding: 12px 16px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
+    padding: 10px 16px 6px;
+    /* Nearly invisible block: a whisper of tint over the page background,
+       no border, no shadow — the carousel floats on the page itself. */
+    background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+    border: none;
     border-radius: var(--border-radius-lg);
-    box-shadow: var(--shadow-sm);
+    box-shadow: none;
   }
 
   .play-side {
@@ -758,10 +758,6 @@
     align-items: center;
     gap: 12px;
     min-width: 0;
-  }
-
-  .play-side-start {
-    justify-self: start;
   }
 
   .play-side-end {
@@ -840,26 +836,32 @@
     flex-shrink: 0;
   }
 
+  /* Version / loader line — sits above the build name, small and unobtrusive. */
   .poster-meta {
-    margin: 0;
+    margin: 0 0 2px;
     min-width: 0;
-    max-width: min(420px, 100%);
-    font-size: 13px;
+    max-width: 100%;
+    font-size: 12px;
     font-weight: 600;
+    letter-spacing: 0.02em;
     color: var(--hero-fg-muted);
     text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     animation: poster-in var(--motion-enter, 320ms) var(--ease-spring, ease) both;
-    animation-delay: var(--stagger-step, 48ms);
+    animation-delay: calc(var(--stagger-step, 48ms) * 1);
   }
 
+  /* Signed-in nick — in the poster toolbar, next to the instance actions. */
   .poster-player {
     display: inline-flex;
     align-items: center;
     min-width: 0;
-    max-width: 100%;
+    max-width: 180px;
+    margin-left: 6px;
+    padding-left: 12px;
+    border-left: 1px solid color-mix(in srgb, #fff 16%, transparent);
     font-size: 12px;
     font-weight: 600;
     color: var(--hero-fg-muted);
@@ -1084,13 +1086,8 @@
       text-align: center;
     }
 
-    .play-side-start,
     .play-side-end {
       justify-self: center;
-    }
-
-    .play-side-start {
-      justify-content: center;
     }
   }
 

@@ -2062,6 +2062,9 @@
     /* Fill the fill-view pane — avoid 100vh (fights header / UI scale). */
     height: 100%;
     min-height: 0;
+    /* Responsive: centered cap on very wide screens (1440p+). */
+    max-width: min(1720px, 100%);
+    margin: 0 auto;
     background: var(--bg-secondary);
     overflow: hidden;
   }

@@ -2804,6 +2804,10 @@
     /* layout moved to Tailwind utilities on the root element */
     background: var(--ftbq-bg);
     color: var(--ftbq-text);
+    /* Responsive: centered cap on 1440p+ (editor keeps readable width). */
+    max-width: min(1680px, 100%);
+    margin: 0 auto;
+    width: 100%;
   }
   /* Isolate from global TuffBox green primary buttons — flat chrome */
   .qe.ftbq :global(button) {

@@ -624,9 +624,12 @@
 
 <style>
   .me-page {
-    max-width: 1120px;
+    /* Responsive content cap: full width on laptops, centered column on
+       1080p/1440p instead of stretching edge-to-edge. */
+    max-width: 1320px;
     margin: 0 auto;
     padding: 4px 8px 32px;
+    width: 100%;
   }
 
   .me-top {

@@ -898,8 +898,9 @@
 
 <style>
   .library {
-    max-width: none;
-    margin: 0;
+    /* Responsive: center + cap on 1440p, full width on laptops. */
+    max-width: min(1680px, 100%);
+    margin: 0 auto;
     display: flex;
     flex-direction: column;
     flex: 1;

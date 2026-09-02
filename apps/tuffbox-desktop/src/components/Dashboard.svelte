@@ -763,7 +763,8 @@
 
 <style>
   .home {
-    max-width: 1400px;
+    /* Full-bleed on laptops, centered capped column on 1440p+. */
+    max-width: 1520px;
     margin: 0 auto;
   }
 

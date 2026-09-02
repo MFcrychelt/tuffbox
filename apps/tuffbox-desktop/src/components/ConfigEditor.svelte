@@ -881,15 +881,17 @@
 
 <style>
   .config-editor {
-    max-width: none;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    padding: 8px 10px 10px;
-  }
+      /* Responsive: centered cap on 1440p+ (code panes keep readable width). */
+      max-width: min(1680px, 100%);
+      margin: 0 auto;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+      padding: 8px 10px 10px;
+    }
   .toolbar, .toolbar-actions, .title, .editor-header, .editor-stats, .notice, .trail-actions, .root-chips { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 10px; margin-bottom: 6px; flex-shrink: 0; min-height: 36px; }
   .title { gap: 8px; color: var(--text-secondary); font-weight: 700; font-size: 14px; }

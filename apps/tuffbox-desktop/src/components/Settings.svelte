@@ -2138,7 +2138,10 @@
 
 <style>
   .settings {
-    max-width: 980px;
+    /* Responsive cap: centered column on 1080p+/1440p, full width below. */
+    max-width: min(1120px, 100%);
+    margin: 0 auto;
+    width: 100%;
   }
 
   .tabs {
