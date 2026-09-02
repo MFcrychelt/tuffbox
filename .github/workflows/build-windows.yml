@@ -103,6 +103,10 @@ jobs:
       working-directory: apps/tuffbox-desktop
       run: npm run lint:perf
 
+    - name: Bridge parity check (TS invoke ↔ Rust generate_handler)
+      working-directory: apps/tuffbox-desktop
+      run: npm run check:bridge
+
     - name: Build JEI runtime bridges
       working-directory: bridges/jei-runtime
       run: .\gradlew.bat syncDesktopResources --no-daemon
