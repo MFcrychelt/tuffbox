@@ -147,6 +147,15 @@ pub fn materialize_mod_file_with_progress(
     std::fs::create_dir_all(&target_dir)?;
     let expected_sha1 = module.hashes.as_ref().and_then(|h| h.sha1.as_deref());
 
+    // Dedup store (Shard-inspired): if the jar's exact bytes are already in
+    // the shared object store, hard-link them into this instance — no
+    // download, no extra disk usage. Requires a known sha1.
+    if let Some(sha1) = expected_sha1 {
+        if crate::mod_store::try_hardlink(&target, sha1) {
+            return Ok(MaterializeOutcome::AlreadyPresent);
+        }
+    }
+
     let download_result = if crate::provider::curseforge::url_needs_curseforge_key(url) {
         download_with_curseforge_key(url, &target, expected_sha1, &module.id, progress)
     } else {
@@ -154,7 +163,13 @@ pub fn materialize_mod_file_with_progress(
     };
 
     match download_result {
-        Ok(()) => return Ok(MaterializeOutcome::Downloaded),
+        Ok(()) => {
+            // Feed the dedup store so other instances get this jar for free.
+            if let Some(sha1) = expected_sha1 {
+                crate::mod_store::record(&target, sha1);
+            }
+            return Ok(MaterializeOutcome::Downloaded);
+        }
         Err(primary_error) => {
             let Some(sha1) = expected_sha1 else {
                 return Err(ModFileError::Install(primary_error));
@@ -297,6 +312,23 @@ pub fn ensure_project_mods_downloaded(
     )
 }
 
+/// Like `ensure_project_mods_downloaded`, but polls `task_progress` for a
+/// cancel request on the given task id between files (cooperative cancel).
+pub fn ensure_project_mods_downloaded_cancellable(
+    manifest: &ProjectManifest,
+    instance_dir: &Path,
+    progress: &crate::mc_install::ProgressCallback,
+    cancel_task_id: Option<&str>,
+) -> ModSyncReport {
+    ensure_project_mods_downloaded_with_progress_filtered_impl(
+        manifest,
+        instance_dir,
+        progress,
+        None,
+        cancel_task_id.map(|s| s.to_string()),
+    )
+}
+
 /// Same as `ensure_project_mods_downloaded`, but with a progress callback
 /// that fires per-chunk during each download.
 pub fn ensure_project_mods_downloaded_with_progress(
@@ -314,6 +346,22 @@ pub fn ensure_project_mods_downloaded_with_progress_filtered(
     instance_dir: &Path,
     progress: &crate::mc_install::ProgressCallback,
     only_mod_ids: Option<&std::collections::HashSet<String>>,
+) -> ModSyncReport {
+    ensure_project_mods_downloaded_with_progress_filtered_impl(
+        manifest,
+        instance_dir,
+        progress,
+        only_mod_ids,
+        None,
+    )
+}
+
+fn ensure_project_mods_downloaded_with_progress_filtered_impl(
+    manifest: &ProjectManifest,
+    instance_dir: &Path,
+    progress: &crate::mc_install::ProgressCallback,
+    only_mod_ids: Option<&std::collections::HashSet<String>>,
+    cancel_task_id: Option<String>,
 ) -> ModSyncReport {
     use rayon::prelude::*;
     use std::sync::atomic::Ordering;
@@ -344,6 +392,18 @@ pub fn ensure_project_mods_downloaded_with_progress_filtered(
         .mods
         .par_iter()
         .filter(|module| {
+            // Cooperative cancellation (Millida jobs.rs-style): the task id
+            // is the instance's sync key; long sweeps bail between files.
+            if cancel_task_id
+                .as_deref()
+                .is_some_and(|id| crate::task_progress::is_cancel_requested(id))
+            {
+                report.lock().unwrap().skipped.push(format!(
+                    "__cancelled__{}",
+                    module.id
+                ));
+                return false;
+            }
             if module
                 .status
                 .iter()

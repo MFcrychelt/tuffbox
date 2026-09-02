@@ -14777,14 +14777,33 @@ async fn repair_project(path: String) -> Result<tuffbox_core::ModSyncReport, Str
         let instance_dir = tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path))
             .ok_or_else(|| "manifest has no parent directory".to_string())?;
         // Surface the (possibly slow) re-download sweep in TaskProgress so the
-        // user sees why the UI is busy instead of a silent hang.
-        let task_id = tuffbox_core::task_progress::start_task(
-            format!("repair-{}", tuffbox_core::time_util::compact_now()),
+        // user sees why the UI is busy instead of a silent hang. Task id is
+        // stable (repair-<project id>) so the panel's cancel button works.
+        let task_id = format!("repair-{}", manifest.project.id);
+        if !tuffbox_core::task_progress::try_start_task(
+            task_id.clone(),
             format!("Repair {}", manifest.project.name),
-        );
+        ) {
+            return Err(format!(
+                "Repair of {} is already running",
+                manifest.project.name
+            ));
+        }
         tuffbox_core::task_progress::set_progress(&task_id, 0.1, Some("Checking mod files…".into()));
-        let report =
-            tuffbox_core::ensure_project_mods_downloaded(&manifest, &instance_dir);
+        let report = tuffbox_core::ensure_project_mods_downloaded_cancellable(
+            &manifest,
+            &instance_dir,
+            &tuffbox_core::ProgressCallback::new(),
+            Some(&task_id),
+        );
+        if report
+            .skipped
+            .iter()
+            .any(|s| s.starts_with("__cancelled__"))
+        {
+            tuffbox_core::task_progress::mark_cancelled(&task_id, Some("cancelled by user".into()));
+            return Err("Repair cancelled".to_string());
+        }
         let detail = if !report.downloaded.is_empty() {
             format!("{} file(s) re-downloaded", report.downloaded.len())
         } else {

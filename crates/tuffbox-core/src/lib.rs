@@ -11,6 +11,7 @@ pub mod create_mode;
 pub mod create_mode_curation;
 pub mod diagnostics;
 pub mod download_cache;
+pub mod mod_store;
 pub mod download_engine;
 pub mod exporter;
 pub mod forge_install;
