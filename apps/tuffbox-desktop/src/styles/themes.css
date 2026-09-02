@@ -83,6 +83,9 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.55);
+  /* Glass tint: slate blue, tracks the steel palette. */
+  --glass-bg: rgba(16, 20, 27, 0.58);
+  --glass-highlight: color-mix(in srgb, #fff 12%, transparent);
 }
 
 /* Light themes: pale polished-quartz backdrop behind the home dashboard. */
@@ -176,6 +179,9 @@
   --shadow-sm: 0 1px 2px rgba(40, 0, 0, 0.5);
   --shadow-md: 0 4px 14px rgba(40, 0, 0, 0.55);
   --shadow-lg: 0 14px 36px rgba(40, 0, 0, 0.6);
+  /* Glass tint: ember dark red, matches the inferno surface. */
+  --glass-bg: rgba(22, 8, 8, 0.58);
+  --glass-highlight: color-mix(in srgb, #ff5722 14%, transparent);
 }
 
 [data-theme="aether"] {
@@ -198,6 +204,9 @@
   --shadow-sm: 0 1px 2px rgba(20, 0, 40, 0.5);
   --shadow-md: 0 4px 16px rgba(20, 0, 40, 0.55);
   --shadow-lg: 0 14px 40px rgba(20, 0, 40, 0.65);
+  /* Glass tint: deep violet, subtle — sharp theme keeps crisp borders. */
+  --glass-bg: rgba(24, 10, 47, 0.6);
+  --glass-highlight: color-mix(in srgb, #c084fc 12%, transparent);
 }
 
 [data-theme="frost"] {
@@ -219,6 +228,9 @@
   --shadow-sm: 0 1px 2px rgba(0, 30, 60, 0.35);
   --shadow-md: 0 4px 14px rgba(0, 30, 60, 0.4);
   --shadow-lg: 0 14px 36px rgba(0, 30, 60, 0.45);
+  /* Glass tint: deep ocean blue, subtle — sharp theme keeps crisp borders. */
+  --glass-bg: rgba(4, 42, 70, 0.6);
+  --glass-highlight: color-mix(in srgb, #7dd3fc 14%, transparent);
 }
 
 [data-theme="pixelato"] {
@@ -1142,6 +1154,18 @@ html[data-glass="on"].potato-pc :where(.card, .panel, .tb-card, .rail, .header) 
   .video-card:focus-visible .thumb {
   border-color: var(--border-color);
   box-shadow: 0 0 24px color-mix(in srgb, var(--accent-primary) 32%, transparent);
+}
+
+/* Minimal theme glass — translucent surfaces pick up each accent's hue. */
+:is(
+  [data-theme="solar"],
+  [data-theme="fern"],
+  [data-theme="blaze"],
+  [data-theme="dusk"],
+  [data-theme="glacier"]
+) {
+  --glass-bg: color-mix(in srgb, var(--bg-secondary) 78%, transparent);
+  --glass-highlight: color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }
 
 /* Quiet secondary surfaces — light frost, neutral borders (not accent neon). */
