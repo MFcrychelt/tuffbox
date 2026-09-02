@@ -5269,8 +5269,11 @@ import { trapFocus } from "../lib/focusTrap";
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 14px;
+    /* Stretch both panes to the available height instead of hugging content:
+       lists start at the top and the panes themselves scroll. On tall
+       vertical screens the panes grow with the viewport (no hard 70vh cap). */
+    align-items: stretch;
     min-height: 0;
-    align-items: start;
   }
   .installed-pane {
     min-width: 0;
@@ -5281,7 +5284,11 @@ import { trapFocus } from "../lib/focusTrap";
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     background: color-mix(in srgb, var(--bg-tertiary) 55%, transparent);
-    max-height: min(70vh, 820px);
+    /* Fill the scrollable mods-list column: grow to at least the available
+       height, keep a generous cap for very wide/short windows. min() makes
+       tall screens use more vertical space than the old fixed 70vh. */
+    min-height: 100%;
+    max-height: none;
     overflow: auto;
     scrollbar-gutter: stable;
     scrollbar-width: thin;
