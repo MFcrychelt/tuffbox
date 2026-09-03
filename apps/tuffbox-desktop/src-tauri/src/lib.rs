@@ -17336,7 +17336,34 @@ async fn read_quest_chapter_text(file_path: String) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let mut builder = tauri::Builder::default();
+
+    // Unified structured logging (tauri-plugin-tracing): Rust tracing spans
+    // AND JS console output land in one rotating file under the app data dir
+    // (logs/tuffbox.YYYY-MM-DD.log, 7 kept). Webview target also forwards
+    // Rust logs to the devtools console in dev builds. Game process output
+    // stays in per-instance tuffbox-console.log — this is launcher-only.
+    {
+        let log_dir = dirs::data_local_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("TuffBox")
+            .join("logs");
+        let _ = std::fs::create_dir_all(&log_dir);
+        builder = builder.plugin(
+            tauri_plugin_tracing::Builder::new()
+                .with_max_level(tauri_plugin_tracing::LevelFilter::INFO)
+                .targets([
+                    tauri_plugin_tracing::Target::Webview,
+                    tauri_plugin_tracing::Target::Folder {
+                        path: log_dir,
+                        file_name: Some("tuffbox".into()),
+                    },
+                ])
+                .with_rotation(tauri_plugin_tracing::Rotation::Daily)
+                .with_rotation_strategy(tauri_plugin_tracing::RotationStrategy::KeepSome(7))
+                .build::<tauri::Wry>(),
+        );
+    }
 
     // Must be the very first plugin: a second launch hands its argv (the
     // clicked `tuffbox://install?…` link) to the instance already running.

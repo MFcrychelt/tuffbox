@@ -27,9 +27,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-deep-link = "2"
 # `tuffbox://install?repo=owner/repo` share links open the app directly.
-# A second launch hands its argv (the clicked link) to the running instance.
+# A second launch hands its argv (the clicked link) to the instance already running.
 # Its `deep-link` feature replays those args through tauri-plugin-deep-link.
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+# Unified structured logging: Rust tracing + JS console bridged into one
+# rotating file (logs/tuffbox.log), replacing scattered eprintln/println.
+tauri-plugin-tracing = "0.3"
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
