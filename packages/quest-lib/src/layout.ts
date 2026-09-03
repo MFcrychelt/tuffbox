@@ -185,5 +185,89 @@ export function positionsForMode(
   }
 }
 
+/** Snap a coordinate to the half-unit quest grid (same rounding as applyLayout). */
+function snap(v: number): number {
+  return Math.round(v * 2) / 2;
+}
+
+export type AlignMode = "left" | "right" | "top" | "bottom" | "centerX" | "centerY";
+export type DistributeMode = "horizontally" | "vertically";
+
+/** Minimum spacing between quest centers so 1-size quests never overlap. */
+const MIN_SPACING = 1;
+
+/** Align selected quests to the extreme/center line of their current bounding box. */
+export function alignQuests(
+  quests: { id: string; x: number; y: number }[],
+  mode: AlignMode,
+): Map<string, { x?: number; y?: number }> {
+  const result = new Map<string, { x?: number; y?: number }>();
+  if (quests.length < 2) return result;
+  const xs = quests.map((q) => q.x);
+  const ys = quests.map((q) => q.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  for (const q of quests) {
+    switch (mode) {
+      case "left":
+        result.set(q.id, { x: snap(minX) });
+        break;
+      case "right":
+        result.set(q.id, { x: snap(maxX) });
+        break;
+      case "top":
+        result.set(q.id, { y: snap(minY) });
+        break;
+      case "bottom":
+        result.set(q.id, { y: snap(maxY) });
+        break;
+      case "centerX":
+        result.set(q.id, { x: snap(centerX) });
+        break;
+      case "centerY":
+        result.set(q.id, { y: snap(centerY) });
+        break;
+    }
+  }
+  return result;
+}
+
+/** Distribute selected quests evenly between the first and the last one
+ *  (in current positional order) along one axis. */
+export function distributeQuests(
+  quests: { id: string; x: number; y: number }[],
+  mode: DistributeMode,
+): Map<string, { x?: number; y?: number }> {
+  const result = new Map<string, { x?: number; y?: number }>();
+  if (quests.length < 3) return result;
+  const sorted = [...quests].sort((a, b) =>
+    mode === "horizontally" ? a.x - b.x : a.y - b.y,
+  );
+  const first = sorted[0]!;
+  const last = sorted[sorted.length - 1]!;
+  if (mode === "horizontally") {
+    const span = last.x - first.x;
+    if (span < MIN_SPACING * (sorted.length - 1)) return result;
+    const step = span / (sorted.length - 1);
+    sorted.forEach((q, i) => {
+      if (i === 0 || i === sorted.length - 1) return;
+      result.set(q.id, { x: snap(first.x + step * i) });
+    });
+  } else {
+    const span = last.y - first.y;
+    if (span < MIN_SPACING * (sorted.length - 1)) return result;
+    const step = span / (sorted.length - 1);
+    sorted.forEach((q, i) => {
+      if (i === 0 || i === sorted.length - 1) return;
+      result.set(q.id, { y: snap(first.y + step * i) });
+    });
+  }
+  return result;
+}
+
 /** Exported for unit tests */
 export { topologicalLayers as _topologicalLayersForTest };

@@ -12,7 +12,7 @@
   } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
   import { tick } from "svelte";
-  import { Maximize2, Plus, LayoutGrid, ChevronDown } from "@lucide/svelte";
+  import { Maximize2, Plus, LayoutGrid, ChevronDown, AlignLeft } from "@lucide/svelte";
   import {
     iconDisplayId,
     type QuestChapter,
@@ -24,6 +24,7 @@
   import { preloadItemIcons } from "./iconCache";
   import QuestNode from "./QuestNode.svelte";
   import { getWorldCoordinates, rectsIntersect } from "./coords";
+  import { alignQuests, distributeQuests } from "@tuffbox/quest-lib";
 
   let {
     quests,
@@ -49,6 +50,8 @@
     filterTotal = 0,
     onQuestFilterChange = undefined,
     onApplyLayout = undefined,
+    onAlign = undefined,
+    onDistribute = undefined,
   }: {
     quests: QuestData[];
     chapters?: QuestChapter[];
@@ -76,6 +79,9 @@
     filterTotal?: number;
     onQuestFilterChange?: (value: string) => void;
     onApplyLayout?: (kind: "tree" | "grid" | "circle") => void;
+    /** Multi-select align/distribute (P1): quests are the selected subset. */
+    onAlign?: (mode: "left" | "right" | "top" | "bottom" | "centerX" | "centerY") => void;
+    onDistribute?: (mode: "horizontally" | "vertically") => void;
   } = $props();
 
   const BASE = 24;
@@ -86,6 +92,47 @@
   let selectedEdgeId = $state<string | null>(null);
   let layoutMenuOpen = $state(false);
   let lastLayout = $state<"tree" | "grid" | "circle" | null>(null);
+  let alignMenuOpen = $state(false);
+
+  /** Apply align/distribute to the selected subset (P1). Moves each quest
+   *  through onMove so the editor records a single history snapshot per
+   *  action and marks the chapter dirty. */
+  function doAlign(mode: "left" | "right" | "top" | "bottom" | "centerX" | "centerY") {
+    alignMenuOpen = false;
+    if (!onAlign) return;
+    const selected = quests.filter((q) => selectedIds.has(q.id));
+    if (selected.length < 2) return;
+    // Positions come from quest-lib; forward each move to the editor.
+    const moves = alignQuests(
+      selected.map((q) => ({ id: q.id, x: q.x, y: q.y })),
+      mode,
+    );
+    for (const q of selected) {
+      const m = moves.get(q.id);
+      if (!m) continue;
+      if (m.x !== undefined || m.y !== undefined) {
+        onMove(q, m.x ?? q.x, m.y ?? q.y);
+      }
+    }
+  }
+
+  function doDistribute(mode: "horizontally" | "vertically") {
+    alignMenuOpen = false;
+    if (!onDistribute) return;
+    const selected = quests.filter((q) => selectedIds.has(q.id));
+    if (selected.length < 3) return;
+    const moves = distributeQuests(
+      selected.map((q) => ({ id: q.id, x: q.x, y: q.y })),
+      mode,
+    );
+    for (const q of selected) {
+      const m = moves.get(q.id);
+      if (!m) continue;
+      if (m.x !== undefined || m.y !== undefined) {
+        onMove(q, m.x ?? q.x, m.y ?? q.y);
+      }
+    }
+  }
 
   /** Live zoom for the toolbar readout — SvelteFlow moves the viewport via translate/scale. */
   let zoomPercent = $state(100);
@@ -689,6 +736,36 @@
             <button role="menuitemradio" aria-checked={lastLayout === "circle"} onclick={() => pickLayout("circle")}>
               Circle
             </button>
+          </div>
+        {/if}
+      </div>
+    {/if}
+    {#if onAlign && onDistribute && selectedIds.size >= 2}
+      <div class="layout-pop">
+        <button
+          type="button"
+          class="tb"
+          class:active={alignMenuOpen}
+          title="Align / distribute selected quests"
+          aria-haspopup="menu"
+          aria-expanded={alignMenuOpen}
+          onclick={() => (alignMenuOpen = !alignMenuOpen)}
+        >
+          <AlignLeft size={14} class="flex-shrink-0" /> Align
+          <ChevronDown size={12} class="flex-shrink-0" />
+        </button>
+        {#if alignMenuOpen}
+          <div class="layout-menu" role="menu">
+            <div class="align-group-label">Align</div>
+            <button role="menuitem" onclick={() => doAlign("left")}>Left</button>
+            <button role="menuitem" onclick={() => doAlign("right")}>Right</button>
+            <button role="menuitem" onclick={() => doAlign("top")}>Top</button>
+            <button role="menuitem" onclick={() => doAlign("bottom")}>Bottom</button>
+            <button role="menuitem" onclick={() => doAlign("centerX")}>Center horizontally</button>
+            <button role="menuitem" onclick={() => doAlign("centerY")}>Center vertically</button>
+            <div class="align-group-label">Distribute</div>
+            <button role="menuitem" onclick={() => doDistribute("horizontally")}>Evenly horizontal</button>
+            <button role="menuitem" onclick={() => doDistribute("vertically")}>Evenly vertical</button>
           </div>
         {/if}
       </div>

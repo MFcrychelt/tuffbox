@@ -71,6 +71,7 @@
   import { stripCodes } from "../lib/mcformat";
   import { validateQuestBook } from "../lib/questValidate";
   import { applyLayout, positionsForMode, type LayoutMode } from "../lib/questLayout";
+  import { alignQuests, distributeQuests } from "@tuffbox/quest-lib";
 
   function asLocaleMaps(
     raw: Record<string, Record<string, string | string[] | unknown>> | undefined,
@@ -1108,6 +1109,47 @@
     ch.quests = applyLayout(ch.quests, positions);
     markDirty(selectedChapter);
     fitToken += 1;
+  }
+
+  /** P1 align/distribute: one history snapshot, then move each selected quest. */
+  function alignSelected(mode: "left" | "right" | "top" | "bottom" | "centerX" | "centerY") {
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+    const selected = ch.quests.filter((q) => selection.selectedIds.has(q.id));
+    if (selected.length < 2) return;
+    pushHistory();
+    const moves = alignQuests(
+      selected.map((q) => ({ id: q.id, x: q.x, y: q.y })),
+      mode,
+    );
+    for (const q of ch.quests) {
+      const m = moves.get(q.id);
+      if (m && (m.x !== undefined || m.y !== undefined)) {
+        q.x = m.x ?? q.x;
+        q.y = m.y ?? q.y;
+      }
+    }
+    markDirty(selectedChapter);
+  }
+
+  function distributeSelected(mode: "horizontally" | "vertically") {
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+    const selected = ch.quests.filter((q) => selection.selectedIds.has(q.id));
+    if (selected.length < 3) return;
+    pushHistory();
+    const moves = distributeQuests(
+      selected.map((q) => ({ id: q.id, x: q.x, y: q.y })),
+      mode,
+    );
+    for (const q of ch.quests) {
+      const m = moves.get(q.id);
+      if (m && (m.x !== undefined || m.y !== undefined)) {
+        q.x = m.x ?? q.x;
+        q.y = m.y ?? q.y;
+      }
+    }
+    markDirty(selectedChapter);
   }
 
   function createChapter() {
@@ -2349,6 +2391,8 @@
             filterTotal={chapterQuests.length}
             onQuestFilterChange={(v) => (questSearch = v)}
             onApplyLayout={applyChapterLayout}
+            onAlign={alignSelected}
+            onDistribute={distributeSelected}
             emptyHint={questSearch.trim()
               ? `No quests match "${questSearch.trim()}"`
               : "Add a quest to get started"}
