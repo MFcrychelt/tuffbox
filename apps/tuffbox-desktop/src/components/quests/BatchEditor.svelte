@@ -11,6 +11,10 @@
     onQuestUpdate: (chapterId: string, quest: QuestData) => void;
     onBatchApply?: (questIds: Set<string>, mutator: (q: QuestData) => QuestData) => void;
     onSaveChapter: (chapterId: string) => void;
+    /** P1 mass generation: append quests built from a source list. */
+    onAddQuests?: (quests: QuestData[]) => void;
+    /** Item catalog for "get item" task generation (resolved by the editor). */
+    itemCatalogProvider?: () => Promise<string[]>;
   }
 
   let {
@@ -20,6 +24,8 @@
     onQuestUpdate,
     onBatchApply,
     onSaveChapter,
+    onAddQuests = undefined,
+    itemCatalogProvider = undefined,
   }: Props = $props();
 
   // Search state
@@ -44,6 +50,72 @@
   let massHideDependent = $state<"keep" | "true" | "false" | "unset">("keep");
   let massStatus = $state<string | null>(null);
   let massConfirmOpen = $state(false);
+
+  // P1 mass generation: build "get item" quests from a source list
+  let genOpen = $state(false);
+  let genSource = $state<"tag" | "mod" | "raw">("tag");
+  let genTag = $state("");
+  let genMod = $state("");
+  let genRaw = $state("");
+  let genCount = $state("");
+  let genStatus = $state<string | null>(null);
+
+  async function parseGenSource(): Promise<string[]> {
+    const countCap = Math.max(1, Math.min(200, Number(genCount) || 200));
+    const items: string[] = [];
+    if (genSource === "tag") {
+      // Tag tasks reference `#tag` ids in FTB item tasks.
+      const tag = genTag.trim().replace(/^#/, "");
+      if (tag) items.push(`#${tag}`);
+    } else if (genSource === "mod") {
+      const modNs = genMod.trim().toLowerCase();
+      if (!modNs || !itemCatalogProvider) return items;
+      const catalog = await itemCatalogProvider();
+      return catalog.filter((id) => id.toLowerCase().startsWith(`${modNs}:`)).slice(0, countCap);
+    } else {
+      // Raw list: one id per line, comments (#) and blanks ignored.
+      for (const line of genRaw.split("\n")) {
+        const t = line.trim();
+        if (t && !t.startsWith("#")) items.push(t);
+        if (items.length >= countCap) break;
+      }
+    }
+    return items.slice(0, countCap);
+  }
+
+  async function runGenerate() {
+    genStatus = null;
+    const source = await parseGenSource();
+    if (source.length === 0) {
+      genStatus = "Source resolved to zero items — check the tag/mod/list.";
+      return;
+    }
+    if (!onAddQuests) return;
+    const quests: QuestData[] = source.map((itemId, i) => ({
+      id: crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase(),
+      title: itemId.startsWith("#") ? `Get any ${itemId.slice(1).split(":").pop()}` : `Get ${itemId.split(":").pop() ?? itemId}`,
+      titleFromSnbt: true,
+      description: [],
+      // Laid out below/right of existing content so nothing overlaps.
+      x: 2 + (i % 8),
+      y: 2 + Math.floor(i / 8),
+      dependencies: [],
+      tasks: [
+        {
+          id: crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase(),
+          type: "item",
+          value: itemId,
+          properties: { count: 1, item: itemId },
+        },
+      ],
+      rewards: [],
+      optional: false,
+      size: 1,
+      extras: {},
+    }));
+    onAddQuests(quests);
+    genStatus = `Added ${quests.length} quest(s) — position them on the canvas, Ctrl+Z to undo.`;
+  }
 
   // Turn on when selection appears; clear when selection empties
   $effect(() => {
@@ -268,6 +340,57 @@
 </script>
 
 <div class="batch-editor">
+  {#if onAddQuests}
+    <div class="gen-panel">
+      <button
+        type="button"
+        class="gen-toggle"
+        aria-expanded={genOpen}
+        onclick={() => (genOpen = !genOpen)}
+      >
+        Generate quests from…
+      </button>
+      {#if genOpen}
+        <div class="gen-body">
+          <label class="gen-field">
+            Source
+            <select bind:value={genSource}>
+              <option value="tag">Item tag (any item of tag)</option>
+              <option value="mod">Mod namespace (all items of mod)</option>
+              <option value="raw">Raw list (one item id per line)</option>
+            </select>
+          </label>
+          {#if genSource === "tag"}
+            <label class="gen-field">
+              Tag
+              <input bind:value={genTag} placeholder="c:ingots or minecraft:logs" />
+            </label>
+          {:else if genSource === "mod"}
+            <label class="gen-field">
+              Mod namespace
+              <input bind:value={genMod} placeholder="botania" />
+            </label>
+          {:else}
+            <label class="gen-field">
+              Item ids (one per line)
+              <textarea bind:value={genRaw} rows="5" placeholder="minecraft:diamond&#10;botania:mana_pearl"></textarea>
+            </label>
+          {/if}
+          <label class="gen-field">
+            Max quests
+            <input type="number" min="1" max="200" bind:value={genCount} placeholder="200" />
+          </label>
+          <button type="button" class="gen-run" onclick={() => void runGenerate()}>
+            Generate & add to chapter
+          </button>
+          {#if genStatus}
+            <p class="gen-status">{genStatus}</p>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <div class="batch-header">
     <h3 class="batch-title">Batch Editor</h3>
     <span class="batch-count">
@@ -511,6 +634,74 @@
     padding: 10px 12px;
     border-bottom: 1px solid var(--ftbq-frame);
     flex-shrink: 0;
+  }
+  .gen-panel {
+    margin: 10px 12px 0;
+    border: 1px dashed var(--ftbq-frame);
+    border-radius: var(--ftbq-radius-control);
+    padding: 8px;
+    flex-shrink: 0;
+  }
+  .gen-toggle {
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary, var(--ftbq-text-muted));
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 2px 0;
+  }
+  .gen-toggle:hover {
+    color: var(--text-primary, var(--ftbq-text));
+  }
+  .gen-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .gen-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 11px;
+    color: var(--text-muted, var(--ftbq-text-muted));
+  }
+  .gen-field input,
+  .gen-field select,
+  .gen-field textarea {
+    font-size: 12px;
+    padding: 5px 7px;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
+    color: var(--text-primary, var(--ftbq-text));
+    border-radius: var(--ftbq-radius-control);
+    outline: none;
+  }
+  .gen-field textarea {
+    font-family: monospace;
+    resize: vertical;
+  }
+  .gen-run {
+    align-self: flex-start;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: var(--ftbq-radius-control);
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--text-primary, var(--ftbq-text));
+  }
+  .gen-run:hover {
+    background: color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  }
+  .gen-status {
+    margin: 0;
+    font-size: 11px;
+    color: var(--text-muted, var(--ftbq-text-muted));
   }
   .batch-title {
     margin: 0;

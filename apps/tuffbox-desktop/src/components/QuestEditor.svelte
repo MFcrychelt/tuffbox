@@ -1243,6 +1243,21 @@
     }
   }
 
+  /** P1 mass generation: append quests built from a source list (BatchEditor
+   *  "Generate quests from…"). One history snapshot covers the whole batch. */
+  function addGeneratedQuests(quests: QuestData[]) {
+    if (quests.length === 0 || !selectedChapter) return;
+    pushHistory();
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+    // Start below the lowest existing quest in the chapter to avoid overlap.
+    const maxY = ch.quests.reduce((m, q) => Math.max(m, q.y), 0);
+    const positioned = quests.map((q) => ({ ...q, y: q.y + maxY + 2 }));
+    ch.quests = [...ch.quests, ...positioned];
+    markDirty(selectedChapter);
+    flashNotice("success", `Added ${positioned.length} generated quest(s) below existing content`);
+  }
+
   async function removeQuest(q: QuestData) {
     const ok = await askConfirm({
       title: "Delete quest?",
@@ -2586,7 +2601,9 @@
                 onQuestUpdate={handleQuestUpdate}
                 onBatchApply={handleBatchApply}
                 onSaveChapter={(id) => void saveChapter(id)}
-              />
+                onAddQuests={addGeneratedQuests}
+                itemCatalogProvider={async () => (await api.quests.itemCatalog($projectPath ?? undefined)) ?? []}
+                />
             {:else if panelTab === "colors"}
               <ColorManager {chapters} onQuestUpdate={handleQuestUpdate} />
             {:else if panelTab === "raw"}
