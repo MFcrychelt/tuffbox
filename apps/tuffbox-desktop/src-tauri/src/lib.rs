@@ -17342,7 +17342,19 @@ pub fn run() {
     // TauRPC pilot (typed IPC for TuffSwarm): runs ALONGSIDE the legacy
     // generate_handler! — create_ipc_handler is additive, existing commands
     // keep working. Debug builds also export src/bindings.ts.
-    builder = builder.invoke_handler(taurpc_api::swarm_api_router().into_handler());
+    // NOTE: the taurpc macro expands code that touches the tokio reactor
+    // (channel/event plumbing), so building the router eagerly on the main
+    // thread panics: "there is no reactor running". Enter Tauri's async
+    // runtime context first (it lazily initializes the runtime) — the
+    // handler itself only *registers* the router; actual invocations run
+    // later inside Tauri's runtime.
+    {
+        // taurpc's macro-expanded router construction touches the tokio
+        // reactor, so it must run inside a runtime context. block_on lazily
+        // initializes Tauri's global runtime and enters its context.
+        let router = tauri::async_runtime::block_on(async { taurpc_api::swarm_api_router() });
+        builder = builder.invoke_handler(router.into_handler());
+    }
 
     // Unified structured logging (tauri-plugin-tracing): Rust tracing spans
     // AND JS console output land in one rotating file under the app data dir
