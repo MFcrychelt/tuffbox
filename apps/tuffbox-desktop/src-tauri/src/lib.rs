@@ -17289,7 +17289,8 @@ async fn load_quest_chapter(file_path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let content = std::fs::read_to_string(&file_path)
             .map_err(|e| format!("Failed to read file: {}", e))?;
-        let json_value = snbt_parser::parse_snbt_to_json(&content)?;
+        // Content-based format detection: SNBT (<26.1.2.1) or JSON5 (26.1.2.1+).
+        let json_value = snbt_parser::parse_quest_file_to_json(&content)?;
         Ok(json_value.to_string())
     })
     .await
@@ -17304,9 +17305,20 @@ async fn save_quest_chapter_raw(file_path: String, json_payload: String) -> Resu
             .map_err(|_| "quest I/O lock poisoned".to_string())?;
         let value: serde_json::Value = serde_json::from_str(&json_payload)
             .map_err(|e| format!("Invalid JSON payload: {}", e))?;
-        let snbt_content = snbt_parser::json_to_snbt(&value);
-        tuffbox_core::fs_util::atomic_write(std::path::Path::new(&file_path), snbt_content)
-            .map_err(|e| format!("Failed to write SNBT file: {}", e))?;
+        // Preserve the on-disk format: existing SNBT chapters stay SNBT,
+        // JSON5 chapters (26.1.2.1+) stay JSON5. New files follow the
+        // extension (.json5 → JSON5, otherwise SNBT).
+        let format = if std::path::Path::new(&file_path).is_file() {
+            let existing = std::fs::read_to_string(&file_path).unwrap_or_default();
+            snbt_parser::detect_format(&existing)
+        } else if file_path.ends_with(".json5") {
+            snbt_parser::QuestFileFormat::Json5
+        } else {
+            snbt_parser::QuestFileFormat::Snbt
+        };
+        let content = snbt_parser::json_to_quest_file(&value, format)?;
+        tuffbox_core::fs_util::atomic_write_with_backup(std::path::Path::new(&file_path), content.as_bytes())
+            .map_err(|e| format!("Failed to write quest file: {}", e))?;
         Ok(())
     })
     .await

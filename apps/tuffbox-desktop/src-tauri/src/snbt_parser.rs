@@ -31,6 +31,58 @@ pub fn parse_snbt_to_json(input: &str) -> Result<Value, String> {
     Ok(Value::Object(root_map))
 }
 
+/// Which on-disk quest file format a chunk of text is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestFileFormat {
+    /// Legacy FTB Quests SNBT (< 26.1.2.1).
+    Snbt,
+    /// FTB Quests JSON5 (26.1.2.1+): "Goodbye SNBT and hello JSON5!".
+    Json5,
+}
+
+/// Detect the quest file format from its content (not the extension —
+/// the extension is authoritative in practice, but this is a robust
+/// fallback and also powers tests).
+///
+/// SNBT emits `d`-suffixed doubles (`x: 0.0d`), typed arrays (`[I;…]`) and
+/// unquoted keys — none of which are valid JSON5. JSON5 files start with
+/// `{` and parse cleanly as JSON5. We try JSON5 first: a strict JSON5
+/// parse of an SNBT document fails on the `d` suffixes, while a real JSON5
+/// chapter parses fine.
+pub fn detect_format(input: &str) -> QuestFileFormat {
+    let trimmed = input.trim_start();
+    if !trimmed.starts_with('{') {
+        // SNBT from FTB always starts with the root object.
+        return QuestFileFormat::Snbt;
+    }
+    if json5::from_str::<Value>(input).is_ok() {
+        QuestFileFormat::Json5
+    } else {
+        QuestFileFormat::Snbt
+    }
+}
+
+/// Parse a quest chapter file in either format into the unified JSON model
+/// the editor uses. Format detection is content-based.
+pub fn parse_quest_file_to_json(input: &str) -> Result<Value, String> {
+    match detect_format(input) {
+        QuestFileFormat::Json5 => {
+            json5::from_str::<Value>(input).map_err(|e| format!("JSON5 parse error: {}", e))
+        }
+        QuestFileFormat::Snbt => parse_snbt_to_json(input),
+    }
+}
+
+/// Serialize the unified JSON model back to the given format. SNBT keeps
+/// the existing writer; JSON5 uses trailing commas-friendly pretty output.
+pub fn json_to_quest_file(value: &Value, format: QuestFileFormat) -> Result<String, String> {
+    match format {
+        QuestFileFormat::Snbt => Ok(json_to_snbt(value)),
+        QuestFileFormat::Json5 => serde_json::to_string_pretty(value)
+            .map_err(|e| format!("JSON serialize error: {}", e)),
+    }
+}
+
 fn parse_pair(pair: pest::iterators::Pair<Rule>) -> (String, Value) {
     let mut inner = pair.into_inner();
     let key_pair = inner.next().unwrap();
@@ -196,5 +248,32 @@ mod tests {
         assert!(out.starts_with("[I;"), "{out}");
         assert!(out.contains('1'), "{out}");
         assert!(out.contains("-2"), "{out}");
+    }
+
+    #[test]
+    fn detect_format_distinguishes_snbt_from_json5() {
+        let snbt = "{\n  id: \"7942A6A571A4C5EB\"\n  x: 0.0d\n  dependencies: [\"6EE7245CA60F0B1C\"]\n}";
+        assert_eq!(detect_format(snbt), QuestFileFormat::Snbt);
+
+        let json5 = "{\n  // FTB 26.1.2 comment\n  id: \"7942A6A571A4C5EB\",\n  x: 0.0,\n  dependencies: [\"6EE7245CA60F0B1C\"],\n}";
+        assert_eq!(detect_format(json5), QuestFileFormat::Json5);
+    }
+
+    #[test]
+    fn parse_quest_file_roundtrips_json5() {
+        let json5 = "{ id: \"A\", quests: [ { id: \"B\", x: 1.5, tasks: [], rewards: [] } ], }";
+        let value = parse_quest_file_to_json(json5).unwrap();
+        let out = json_to_quest_file(&value, QuestFileFormat::Json5).unwrap();
+        let reparsed = parse_quest_file_to_json(&out).unwrap();
+        assert_eq!(value, reparsed);
+    }
+
+    #[test]
+    fn parse_quest_file_handles_snbt() {
+        let snbt = "{\n  id: \"A\"\n  x: 0.0d\n}";
+        let value = parse_quest_file_to_json(snbt).unwrap();
+        assert_eq!(value["x"].as_f64(), Some(0.0));
+        let out = json_to_quest_file(&value, QuestFileFormat::Snbt).unwrap();
+        assert!(out.contains("0.0d"), "{out}");
     }
 }
