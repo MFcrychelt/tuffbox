@@ -13,6 +13,7 @@ mod launcher_settings;
 mod listing_api;
 mod mca_selector;
 mod overlay_hook;
+mod taurpc_api;
 mod window_glass;
 mod pack_events;
 mod presence;
@@ -17337,6 +17338,11 @@ async fn read_quest_chapter_text(file_path: String) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
+
+    // TauRPC pilot (typed IPC for TuffSwarm): runs ALONGSIDE the legacy
+    // generate_handler! — create_ipc_handler is additive, existing commands
+    // keep working. Debug builds also export src/bindings.ts.
+    builder = builder.invoke_handler(taurpc_api::swarm_api_router().into_handler());
 
     // Unified structured logging (tauri-plugin-tracing): Rust tracing spans
     // AND JS console output land in one rotating file under the app data dir

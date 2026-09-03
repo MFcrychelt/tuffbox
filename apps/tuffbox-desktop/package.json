@@ -41,7 +41,8 @@
     "isomorphic-dompurify": "^3.21.0",
     "marked": "^15.0.12",
     "skinview3d": "^3.4.2",
-    "svelte-codemirror-editor": "^1.4.2"
+    "svelte-codemirror-editor": "^1.4.2",
+    "taurpc": "^2.0.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^4",

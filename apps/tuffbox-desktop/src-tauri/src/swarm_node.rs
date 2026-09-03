@@ -20,6 +20,12 @@ static VOLUNTEER_POLLER: Lazy<std::sync::atomic::AtomicBool> =
 static VOLUNTEER_GEN: Lazy<std::sync::atomic::AtomicU64> =
     Lazy::new(|| std::sync::atomic::AtomicU64::new(0));
 
+/// Test/IPC hook: does a control token exist? (taurpc_api pilot uses this
+/// instead of the private `control_token`.)
+pub fn control_token_is_some() -> bool {
+    control_token().is_some()
+}
+
 fn control_token() -> Option<String> {
     CONTROL_TOKEN.lock().ok().and_then(|g| g.clone())
 }
