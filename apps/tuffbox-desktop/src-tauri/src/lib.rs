@@ -17703,6 +17703,10 @@ pub fn run() {
     // Registered before `setup`, which reaches for `app.deep_link()`.
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_deep_link::init());
+    // Native open/save/message dialogs — required by every
+    // `@tauri-apps/plugin-dialog` call from the frontend (skin browse on the
+    // Me tab, instance folder pickers, server folder staging, …).
+    let builder = builder.plugin(tauri_plugin_dialog::init());
 
     builder
         .setup(|app| {
