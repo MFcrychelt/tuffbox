@@ -942,6 +942,9 @@
   // AI context state
   let aiLoading = $state(false);
   let cascadeLiveStage = $state<string | null>(null);
+  // Live backend stage label from the diagnose-progress event stream (task bus
+  // mirror). Shown instead of the static "Loading crash diagnosis…" text.
+  let liveDiagnoseStage = $state<string | null>(null);
   let aiContext = $state<any>(null);
   let aiPrompt = $state("");
   let aiShowPrompt = $state(false);
@@ -2607,11 +2610,20 @@
     let unlistenCascade: UnlistenFn | undefined;
     let unlistenSoftVerify: UnlistenFn | undefined;
     let unlistenCrash: UnlistenFn | undefined;
+    let unlistenProgress: UnlistenFn | undefined;
     void listen<{ stage?: string }>("diagnose-cascade", (ev) => {
       const stage = ev.payload?.stage;
       if (stage) cascadeLiveStage = stage;
     }).then((u) => {
       unlistenCascade = u;
+    });
+    // Live backend stage for the whole Diagnose pipeline (log reading, jar
+    // scanning, AI stages) — replaces the static "Loading crash diagnosis…".
+    void listen<{ stage?: string }>("diagnose-progress", (ev) => {
+      const stage = ev.payload?.stage;
+      if (stage) liveDiagnoseStage = stage;
+    }).then((u) => {
+      unlistenProgress = u;
     });
     void listen<SoftVerifyOutcome>("tuffbox:soft-verify-outcome", (ev) => {
       const payload = ev.payload ?? {};
@@ -2642,6 +2654,7 @@
       unlistenCascade?.();
       unlistenSoftVerify?.();
       unlistenCrash?.();
+      unlistenProgress?.();
     };
   });
 </script>
@@ -2812,7 +2825,12 @@
   {/if}
 
   {#if loading && !diagnosis}
-    <div class="loading">Loading crash diagnosis…</div>
+    <div class="loading">
+      <div class="loading-title">Loading crash diagnosis…</div>
+      {#if liveDiagnoseStage}
+        <div class="loading-stage">{liveDiagnoseStage}</div>
+      {/if}
+    </div>
   {:else if !$projectPath}
     <EmptyState icon={Stethoscope} title="Pick a pack first" description="Open a project — we'll read the crash log and tell you what to click next." />
   {:else if diagnosis}
@@ -2821,6 +2839,7 @@
       sessionOk={sessionOk}
       loading={loading}
       analyzing={analysisBusy || crashLoading || aiLoading}
+      liveStage={liveDiagnoseStage}
       cascadeStage={aiLoading
         ? (cascadeLiveStage ?? "l1_searching")
         : (aiAnalysis?.cascadeStage ?? null)}
@@ -3526,6 +3545,18 @@
     color: var(--text-secondary);
   }
   .loading, .empty { padding: 24px; text-align: center; color: var(--text-muted); }
+  .loading-title { font-weight: 700; color: var(--text-primary); }
+  .loading-stage {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--accent-primary);
+    /* Backend stage labels stream in; a soft pulse shows liveness. */
+    animation: dx-stage-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes dx-stage-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
   .log-pre {
     margin: 0;
     max-height: 320px;

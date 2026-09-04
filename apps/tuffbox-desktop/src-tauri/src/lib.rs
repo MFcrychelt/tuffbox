@@ -5893,11 +5893,12 @@ fn find_dependents_on_class(
 /// newest crash report is used — never the entire crash-reports folder.
 #[tauri::command(rename_all = "camelCase")]
 async fn run_crash_assistant_full(
+    app: tauri::AppHandle,
     path: String,
     report_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // Task #66: same blocking-pool treatment as get_crash_diagnosis.
-    tokio::task::spawn_blocking(move || run_crash_assistant_full_impl(path, report_id))
+    tokio::task::spawn_blocking(move || run_crash_assistant_full_impl(&app, path, report_id))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -5948,12 +5949,14 @@ fn find_class_in_mods_cached(
 }
 
 fn run_crash_assistant_full_impl(
+    app: &tauri::AppHandle,
     path: String,
     report_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
+    diagnose_stage(app, "Running crash checks…");
     let report = run_crash_assistant_analysis(&path, &manifest, &project_dir, report_id.as_deref())?;
 
     let mut class_finder = Vec::new();
@@ -5971,6 +5974,35 @@ fn run_crash_assistant_full_impl(
     if latest.is_file() {
         combined.push_str(
             &tuffbox_core::process::read_log_tail(&latest, 2000).unwrap_or_default(),
+        );
+    }
+    // Pre-compute the unique class list so the stage label can say how many
+    // jar-scan rounds are coming (each round opens every mod jar once).
+    let mut unique_classes: Vec<String> = Vec::new();
+    for line in combined.lines() {
+        if line.contains("NoClassDefFoundError") || line.contains("ClassNotFoundException") {
+            if let Some(cls) = line
+                .split(": ")
+                .nth(1)
+                .and_then(|s| s.split_whitespace().next())
+            {
+                if cls.len() > 5
+                    && cls.len() < 200
+                    && cls.contains('.')
+                    && !unique_classes.iter().any(|c| c == cls)
+                {
+                    unique_classes.push(cls.to_string());
+                }
+            }
+        }
+    }
+    if !unique_classes.is_empty() {
+        diagnose_stage(
+            app,
+            &format!(
+                "Searching {} missing class (candidates) in mod jars…",
+                unique_classes.len()
+            ),
         );
     }
     for line in combined.lines() {
@@ -7015,10 +7047,30 @@ async fn analyze_crash_with_ai(
 
 fn emit_diagnose_cascade(app: &tauri::AppHandle, stage: &str) {
     use tauri::Emitter;
+    // Mirror into the diagnose task bus so the progress panel shows the AI
+    // stage (searching KB / asking model / writing plan) instead of a bar.
+    tuffbox_core::task_progress::set_running_stage(
+        DIAGNOSE_TASK_ID,
+        &format!("AI: {}", diagnose_cascade_label(stage)),
+    );
     let _ = app.emit(
         "diagnose-cascade",
         serde_json::json!({ "stage": stage }),
     );
+}
+
+/// Human label for a cascade stage (mirrors DiagnoseStatusBar.cascadeHint).
+fn diagnose_cascade_label(stage: &str) -> &str {
+    match stage {
+        "l1_searching" => "searching known fixes…",
+        "l1_hit" => "known fix from network/KB",
+        "l2_asking" => "asking a community volunteer…",
+        "l2_hit" => "plan from community volunteer",
+        "l3_asking" => "generating with AI…",
+        "l3_hit" => "AI-generated plan",
+        "heuristic" => "local heuristic plan",
+        _ => "analyzing…",
+    }
 }
 
 fn truncate_cascade_miss(msg: &str) -> String {
@@ -7167,6 +7219,17 @@ async fn ai_plan_with_fallback(
     String,
 > {
     let (prompt, compact) = integrations::crash_explain_prompt_for(settings, ctx);
+    // Tell the user what the model is doing right now (it can take minutes
+    // on local Ollama): building the request → waiting for the answer.
+    let stage_msg = if settings.provider == "ollama" {
+        format!(
+            "AI: waiting for local model '{}' (may take minutes)…",
+            settings.model
+        )
+    } else {
+        format!("AI: model '{}' is writing the fix plan…", settings.model)
+    };
+    tuffbox_core::task_progress::set_running_stage(DIAGNOSE_TASK_ID, &stage_msg);
     // Hard overall deadline so a stuck local/remote AI (or its HTTP client)
     // can never leave the Diagnose IPC pending forever.
     let ai_call = tokio::time::timeout(
@@ -10553,20 +10616,65 @@ async fn download_missing_files(
 
 #[tauri::command(rename_all = "camelCase")]
 async fn get_crash_diagnosis(
+    app: tauri::AppHandle,
     path: String,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::crash::CrashDiagnosis, String> {
     // Task #66: heavy log/jar analysis must not block the IPC thread — run on
     // the blocking pool so the UI stays responsive and other commands queue up.
-    tokio::task::spawn_blocking(move || get_crash_diagnosis_impl(path, report_id))
+    let result = tokio::task::spawn_blocking(move || get_crash_diagnosis_impl(Some(&app), path, report_id))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    // Task lifecycle is closed by the impl on both paths; nothing here.
+    result
+}
+
+/// TaskProgress id for the shared Diagnose pipeline. Both the diagnosis sweep
+/// and the follow-up assistant/AI stages publish stage labels under it, so the
+/// TaskProgressPanel (and the Diagnose status bar, which also polls it) shows
+/// what the backend is actually doing instead of a bare spinner.
+pub const DIAGNOSE_TASK_ID: &str = "diagnose";
+
+/// Publish a diagnose stage label (indeterminate progress) to the task bus and
+/// mirror it as a webview event for instant UI feedback. Errors are swallowed:
+/// progress reporting must never break the diagnosis itself.
+fn diagnose_stage(app: &tauri::AppHandle, stage: &str) {
+    use tauri::Emitter;
+    tuffbox_core::task_progress::set_running_stage(DIAGNOSE_TASK_ID, stage);
+    let _ = app.emit("diagnose-progress", serde_json::json!({ "stage": stage }));
+}
+
+/// Same as [`diagnose_stage`] but works without an AppHandle (task-bus only).
+fn diagnose_stage_or_task(app: Option<&tauri::AppHandle>, stage: &str) {
+    tuffbox_core::task_progress::set_running_stage(DIAGNOSE_TASK_ID, stage);
+    if let Some(app) = app {
+        use tauri::Emitter;
+        let _ = app.emit("diagnose-progress", serde_json::json!({ "stage": stage }));
+    }
+}
+
+fn diagnose_finish(app: &tauri::AppHandle, ok: bool, detail: &str) {
+    if ok {
+        tuffbox_core::task_progress::succeed(DIAGNOSE_TASK_ID, Some(detail.to_string()));
+    } else {
+        tuffbox_core::task_progress::fail(DIAGNOSE_TASK_ID, detail.to_string());
+    }
 }
 
 fn get_crash_diagnosis_impl(
+    app: Option<&tauri::AppHandle>,
     path: String,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::crash::CrashDiagnosis, String> {
+    tuffbox_core::task_progress::start_task(DIAGNOSE_TASK_ID, "Crash diagnosis");
+    if let Some(app) = app {
+        diagnose_stage(app, "Reading logs and pack graph…");
+    } else {
+        tuffbox_core::task_progress::set_running_stage(
+            DIAGNOSE_TASK_ID,
+            "Reading logs and pack graph…",
+        );
+    }
     // Reopening the Diagnose tab re-ran the full log/jar analysis every time.
     // Cache keyed by the input files' mtimes: any change to latest.log /
     // crash-reports / mods folder produces a new key (correctness), while
@@ -10575,11 +10683,29 @@ fn get_crash_diagnosis_impl(
     if let Some(cached) =
         tuffbox_core::api_cache::get::<tuffbox_core::crash::CrashDiagnosis>(&cache_key)
     {
+        if let Some(app) = app {
+            diagnose_finish(app, true, "Loaded from cache");
+        } else {
+            tuffbox_core::task_progress::succeed(DIAGNOSE_TASK_ID, Some("Loaded from cache".into()));
+        }
         return Ok(cached);
     }
-    let diagnosis = get_crash_diagnosis_uncached(&path, report_id.clone())?;
-    tuffbox_core::api_cache::put(&cache_key, diagnosis.clone());
-    Ok(diagnosis)
+    let result = get_crash_diagnosis_uncached(app, &path, report_id.clone());
+    let finish_detail = match &result {
+        Ok(d) => format!("{} hint(s), {} suspect(s)", d.hints.len(), d.suspected_mods.len()),
+        Err(e) => e.clone(),
+    };
+    match app {
+        Some(app) => diagnose_finish(app, result.is_ok(), &finish_detail),
+        None => {
+            if result.is_ok() {
+                tuffbox_core::task_progress::succeed(DIAGNOSE_TASK_ID, Some(finish_detail));
+            } else {
+                tuffbox_core::task_progress::fail(DIAGNOSE_TASK_ID, finish_detail);
+            }
+        }
+    }
+    result
 }
 
 /// Cache key: project + selected source + mtimes of everything the analysis
@@ -10640,6 +10766,7 @@ fn newest_crash_report_mtime(project_dir: &Path) -> Option<u128> {
 }
 
 fn get_crash_diagnosis_uncached(
+    app: Option<&tauri::AppHandle>,
     path: &str,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::crash::CrashDiagnosis, String> {
@@ -10650,6 +10777,7 @@ fn get_crash_diagnosis_uncached(
     let mut snapshots = SnapshotStore::new(&project_dir).list().unwrap_or_default();
     snapshots.reverse();
     snapshots.truncate(6);
+    diagnose_stage_or_task(app, "Analyzing crash report and logs…");
     let mut diagnosis = tuffbox_core::crash::build_crash_diagnosis(
         &project_dir,
         &manifest,
@@ -10663,6 +10791,7 @@ fn get_crash_diagnosis_uncached(
     // Skip when the live session is healthy — those detectors often match
     // leftover ERROR lines from a previously fixed crash.
     if !diagnosis.session_healthy {
+        diagnose_stage_or_task(app, "Scanning mod jars for suspects…");
         if let Ok(assistant) =
             run_crash_assistant_analysis(&path_str, &manifest, &project_dir, report_id.as_deref())
         {
@@ -10825,7 +10954,7 @@ fn create_crash_fix_plan(
     path: String,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::ChangePlan, String> {
-    Ok(get_crash_diagnosis_impl(path, report_id)?.fix_plan)
+    Ok(get_crash_diagnosis_impl(None, path, report_id)?.fix_plan)
 }
 
 /// Actually applies the crash-diagnosis fix plan (update/disable suspected
@@ -10849,7 +10978,7 @@ async fn apply_crash_fix_plan(
         let manifest_path = resolve_manifest_path(&path)?;
         let path_str = manifest_path.to_string_lossy().to_string();
         let project_dir = manifest_parent(&path_str)?;
-        let diagnosis = get_crash_diagnosis_impl(path_str.clone(), report_id.clone())?;
+        let diagnosis = get_crash_diagnosis_impl(None, path_str.clone(), report_id.clone())?;
         let plan = diagnosis.fix_plan;
 
         // When the user picked a radio option, apply exactly that option's

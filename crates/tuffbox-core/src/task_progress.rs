@@ -69,6 +69,28 @@ pub fn set_progress(id: &str, progress: f64, detail: Option<String>) {
     }
 }
 
+/// Publish a human-readable "what is it doing right now" stage label without
+/// touching the numeric progress. Long-running pipelines (crash diagnosis,
+/// AI analysis) call this between steps so a polling UI can show what the
+/// backend is actually doing instead of a bare spinner. Creates the task if
+/// it does not exist yet (indeterminate, Running).
+pub fn set_running_stage(id: &str, stage: &str) {
+    if let Ok(mut g) = TASKS.lock() {
+        let task = g.entry(id.to_string()).or_insert_with(|| BackgroundTask {
+            id: id.to_string(),
+            title: stage.to_string(),
+            status: TaskStatus::Running,
+            progress: None,
+            detail: None,
+            error: None,
+            updated_at_ms: now_ms(),
+        });
+        task.status = TaskStatus::Running;
+        task.detail = Some(stage.to_string());
+        task.updated_at_ms = now_ms();
+    }
+}
+
 pub fn succeed(id: &str, detail: Option<String>) {
     if let Ok(mut g) = TASKS.lock() {
         if let Some(t) = g.get_mut(id) {

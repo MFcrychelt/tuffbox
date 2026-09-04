@@ -12,6 +12,7 @@
     sessionOk = false,
     loading = false,
     analyzing = false,
+    liveStage = null,
     cascadeStage = null,
     cascadeLabel = null,
     cascadeDetail = null,
@@ -25,6 +26,8 @@
     sessionOk?: boolean;
     loading?: boolean;
     analyzing?: boolean;
+    /** Live backend stage label (task bus); shown while loading/analyzing. */
+    liveStage?: string | null;
     cascadeStage?: string | null;
     cascadeLabel?: string | null;
     cascadeDetail?: string | null;
@@ -82,10 +85,10 @@
   <div class="dx-status-body">
     {#if loading && problems.length === 0}
       <strong>Loading…</strong>
-      <span>Reading logs and pack graph</span>
+      <span>{liveStage ?? "Reading logs and pack graph"}</span>
     {:else if analyzing}
       <strong>Analyzing…</strong>
-      <span>{cascadeHint ?? "Rules and AI are scanning this source"}</span>
+      <span>{cascadeHint ?? liveStage ?? "Rules and AI are scanning this source"}</span>
     {:else if sessionOk && !blocking}
       <strong>Healthy</strong>
       <span>
