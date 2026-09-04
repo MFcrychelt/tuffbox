@@ -319,8 +319,8 @@
           playerName={$authState.profile.name}
           showName={false}
           {showSecondLayer}
-          width={280}
-          height={380}
+          width={240}
+          height={330}
         />
         <div class="player-name mc-font">{$authState.profile.name}</div>
         <div class="skin-meta-row">
@@ -628,7 +628,7 @@
        1080p/1440p instead of stretching edge-to-edge. */
     max-width: 1320px;
     margin: 0 auto;
-    padding: 4px 8px 32px;
+    padding: 4px 8px 24px;
     width: 100%;
   }
 
@@ -636,19 +636,19 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 18px;
+    margin-bottom: 12px;
   }
 
   .back-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-secondary);
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
   }
@@ -661,7 +661,7 @@
   .me-title {
     flex: 1;
     margin: 0;
-    font-size: 20px;
+    font-size: 17px;
     font-weight: 800;
     color: var(--text-primary);
   }
@@ -676,7 +676,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: transparent;
@@ -699,8 +699,8 @@
 
   .me-hero {
     display: grid;
-    grid-template-columns: 300px 1fr;
-    gap: 28px;
+    grid-template-columns: 260px 1fr;
+    gap: 18px;
     align-items: start;
   }
 
@@ -714,7 +714,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
   }
 
   .player-name {
@@ -748,8 +748,8 @@
   }
 
   .skin-empty {
-    width: 280px;
-    height: 380px;
+    width: 240px;
+    height: 330px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -764,34 +764,34 @@
   .info-col {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 12px;
   }
 
   .card {
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
-    padding: 16px 18px;
+    padding: 12px 14px;
   }
 
   .card-head {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 12px;
+    gap: 7px;
+    margin-bottom: 10px;
     color: var(--text-secondary);
   }
 
   .card-head h3 {
     flex: 1;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 700;
     color: var(--text-primary);
     margin: 0;
   }
 
   .playtime-value {
-    font-size: 28px;
+    font-size: 22px;
     font-weight: 800;
     color: var(--accent-primary);
     letter-spacing: -0.5px;
@@ -800,24 +800,24 @@
   .hint {
     font-size: 12px;
     color: var(--text-muted);
-    margin: 6px 0 0;
+    margin: 5px 0 0;
   }
 
   .cape-hint {
-    margin: 0 0 12px;
+    margin: 0 0 10px;
   }
 
   .cape-tabs {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 12px;
+    gap: 5px;
+    margin-bottom: 10px;
   }
 
   .tab-count {
     display: inline-flex;
-    min-width: 16px;
-    height: 16px;
+    min-width: 15px;
+    height: 15px;
     padding: 0 5px;
     margin-left: 4px;
     border-radius: 999px;
@@ -831,8 +831,8 @@
 
   .cape-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+    gap: 8px;
   }
 
   .cape-tile {
@@ -840,15 +840,17 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
-    padding: 10px 8px 12px;
+    gap: 5px;
+    padding: 8px 6px 10px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
     color: var(--text-secondary);
     cursor: pointer;
-    min-height: 192px;
-    box-shadow: none;
+    min-height: 150px;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out);
   }
 
   .cape-tile:hover:not(:disabled) {
@@ -868,15 +870,15 @@
   }
 
   .cape-tile.skel {
-    min-height: 192px;
+    min-height: 150px;
     background: var(--bg-primary);
     opacity: 0.55;
     pointer-events: none;
   }
 
   .cape-tile-art {
-    width: 100px;
-    height: 124px;
+    width: 76px;
+    height: 94px;
     border-radius: var(--border-radius-sm);
     background: var(--bg-elevated);
     border: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
@@ -895,14 +897,14 @@
   }
 
   .cape-none-mark {
-    font-size: 36px;
+    font-size: 28px;
     font-weight: 300;
     line-height: 1;
     color: var(--text-muted);
   }
 
   .cape-tile-label {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 700;
     text-align: center;
     line-height: 1.2;
@@ -934,8 +936,8 @@
   }
 
   .skin-lib-card {
-    margin-top: 16px;
-    padding-bottom: 20px;
+    margin-top: 12px;
+    padding-bottom: 16px;
   }
 
   .lib-add-btn {
@@ -946,7 +948,7 @@
   .skin-form {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
   }
 
   .variant-row {
@@ -962,12 +964,12 @@
   .skin-input {
     flex: 1;
     min-width: 0;
-    padding: 8px 10px;
+    padding: 7px 9px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .accent-btn.wide {
@@ -978,7 +980,7 @@
   .chip {
     display: inline-flex;
     align-items: center;
-    padding: 6px 10px;
+    padding: 4px 9px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
@@ -1021,7 +1023,7 @@
   .account-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
   }
 
   .account-item {
@@ -1224,7 +1226,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 10px 14px;
+    padding: 8px 12px;
     border-radius: var(--border-radius-md);
     background: var(--accent-primary);
     color: var(--on-accent, #000);
