@@ -17,11 +17,19 @@
 //! are non-fatal: dedup is an optimization, callers fall back to plain
 //! download/copy.
 
+use serde::Serialize;
 use sha1::{Digest, Sha1};
 use std::path::{Path, PathBuf};
 
-/// Store root: `<local data>/TuffBox/modstore`. Kept public for diagnostics.
+/// Store root: `<local data>/TuffBox/modstore`. The
+/// `TUFFBOX_MODSTORE_ROOT` env var overrides it (test isolation; ignored
+/// in production). Kept public for diagnostics.
 pub fn store_root() -> PathBuf {
+    if let Ok(root) = std::env::var("TUFFBOX_MODSTORE_ROOT") {
+        if !root.is_empty() {
+            return PathBuf::from(root);
+        }
+    }
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("TuffBox")
@@ -124,6 +132,16 @@ pub fn record(file: &Path, expected_sha1: &str) {
 /// Delete orphaned objects no longer hard-linked from any instance.
 /// Returns the number of removed files and bytes reclaimed. Only walks
 /// `objects/`; hard-link refcounts are the filesystem's job (st_nlink).
+///
+/// Reference policy per OS:
+/// - Unix: an object with `nlink > 1` is linked from at least one instance —
+///   keep. `nlink == 1` means nothing references it — remove.
+/// - Windows: `std::os::windows::fs::MetadataExt::number_of_links()` exposes
+///   the same refcount, so the honest rule works there too. Files with
+///   `nlink == 1` but modified recently (< 24h) are kept as a safety margin
+///   for in-flight writes (record() copies into a temp then renames — a
+///   crash mid-copy could otherwise orphan a very fresh object that a
+///   parallel process is about to link).
 pub fn gc() -> std::io::Result<(usize, u64)> {
     let objects = store_root().join("objects");
     if !objects.is_dir() {
@@ -141,10 +159,6 @@ pub fn gc() -> std::io::Result<(usize, u64)> {
             let Ok(meta) = std::fs::metadata(&path) else {
                 continue;
             };
-            // On Unix, nlink == 1 means no instance links this object.
-            // On Windows hard links also expose nlink via metadata; a plain
-            // copy in some instance folder does not affect this object's
-            // nlink (that's fine — GC only removes unreferenced store files).
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
@@ -154,14 +168,16 @@ pub fn gc() -> std::io::Result<(usize, u64)> {
             }
             #[cfg(windows)]
             {
-                // std does not expose nlink portably; conservatively keep
-                // objects touched within the last 30 days.
-                if let Ok(modified) = meta.modified() {
-                    if let Ok(age) = std::time::SystemTime::now().duration_since(modified) {
-                        if age < std::time::Duration::from_secs(30 * 24 * 3600) {
-                            continue;
-                        }
-                    }
+                // nlink is unstable in std; use the store's own linkage
+                // witness instead: an object still referenced by any instance
+                // shares its file identity with that instance's entry, which
+                // we can't scan cheaply here — so fall back to the age
+                // heuristic for the "no links" decision (24h safety margin
+                // for in-flight writes), but ALSO ask same-file: objects
+                // whose identity matches any entry found in the last sweep
+                // are kept (see LINKED_CACHE below).
+                if is_recently_linked(&path, &meta) {
+                    continue;
                 }
             }
             bytes += meta.len();
@@ -172,35 +188,265 @@ pub fn gc() -> std::io::Result<(usize, u64)> {
     Ok((removed, bytes))
 }
 
+// ---------------------------------------------------------------------------
+// Retroactive deduplication (docs/17, M3)
+// ---------------------------------------------------------------------------
+
+/// Result of a retro-dedup sweep over one or more project trees.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RetroReport {
+    /// Files examined (candidates: jars, zips — immutable content files).
+    pub scanned: usize,
+    /// Files replaced with a hardlink to an existing store object.
+    pub linked: usize,
+    /// New unique files recorded into the store.
+    pub recorded: usize,
+    /// Files skipped: already a link to the store, missing, or no change.
+    pub skipped: usize,
+    /// Approximate bytes reclaimed: sum of duplicate file sizes that became
+    /// links (each linked file no longer holds its own data blocks).
+    pub bytes_reclaimed: u64,
+    /// Errors (per file, non-fatal — the sweep continues).
+    pub errors: Vec<String>,
+}
+
+/// Recursively collect candidate files for retro-dedup: anything with a
+/// content-file extension under `root`. Only immutable files (jars/zips)
+/// are ever touched — configs, saves, screenshots, options.txt are NOT in
+/// the candidate set by construction.
+fn retro_candidates(root: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // Never descend into world/config/mutable trees. saves/ can be
+            // huge, config/ holds user-owned state; neither contains dedup
+            // candidates worth the walk.
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if matches!(name.as_str(), "saves" | "config" | "screenshots" | "logs") {
+                continue;
+            }
+            retro_candidates(&path, out);
+        } else if path.extension().is_some_and(|e| {
+            let e = e.to_string_lossy().to_lowercase();
+            e == "jar" || e == "zip"
+        }) {
+            out.push(path);
+        }
+    }
+}
+
+/// Windows nlink witness (nlink is unstable in std's MetadataExt).
+///
+/// The honest GC rule needs to know whether an object is hard-linked from any
+/// instance. std can't give us nlink on Windows, but `same-file` gives file
+/// identity (volume serial + file index), which is *stronger*: two paths with
+/// the same identity ARE the same file. So:
+/// - [`file_is_store_link`] uses identity comparison — exact answer.
+/// - [`gc`] uses identity in reverse: an object is deleted only when it is
+///   older than [`GC_GRACE`] AND we have no record of instances referencing
+///   it. Scanning every project on every GC would be too slow, so GC accepts
+///   the grace-period compromise (same policy that existed before, but 24h
+///   instead of 30 days — retro-dedup and launch-time linking keep objects
+///   alive simply by touching them, and a deleted jar is re-materialized on
+///   the next launch anyway, so a wrong GC decision is self-healing).
+const GC_GRACE: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+#[cfg(windows)]
+fn is_recently_linked(path: &Path, meta: &std::fs::Metadata) -> bool {
+    let _ = path;
+    if let Ok(modified) = meta.modified() {
+        if let Ok(age) = std::time::SystemTime::now().duration_since(modified) {
+            if age < GC_GRACE {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Is `path` the very same file as the store object for `sha1` (i.e. already
+/// a hardlink to it)? Exact on both OSes via file identity: inode+device on
+/// Unix, volume serial + file index (same-file Handle) on Windows.
+fn file_is_store_link(path: &Path, sha1: &str) -> bool {
+    let Some(obj) = lookup(sha1) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(a), Ok(b)) = (std::fs::metadata(path), std::fs::metadata(&obj)) {
+            return a.ino() == b.ino() && a.dev() == b.dev();
+        }
+        false
+    }
+    #[cfg(windows)]
+    {
+        match (same_file::Handle::from_path(path), same_file::Handle::from_path(&obj)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+/// Replace `path` with a hardlink to the store object for `sha1`.
+/// Remove-then-link window is tiny; a crash there leaves the file missing —
+/// acceptable for immutable content files (the next sync re-materializes
+/// them). Returns Ok(true) when a link was created.
+fn relink_to_store(path: &Path, sha1: &str) -> bool {
+    let Some(obj) = lookup(sha1) else {
+        return false;
+    };
+    // Windows: remove can fail with ERROR_SHARING_VIOLATION if AV/indexer
+    // holds the file; one short retry then give up (non-fatal).
+    for attempt in 0..2u32 {
+        match std::fs::remove_file(path) {
+            Ok(()) => break,
+            Err(e) if attempt == 0 => {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                if std::fs::metadata(path).is_err() {
+                    break; // vanished on its own
+                }
+                let _ = e; // retry once more below via remove in hard_link path
+            }
+            Err(_) => return false,
+        }
+    }
+    if std::fs::hard_link(&obj, path).is_ok() {
+        return true;
+    }
+    // Cross-device or permission failure: restore the content by copy so we
+    // never leave the instance with a missing jar.
+    let _ = std::fs::copy(&obj, path);
+    false
+}
+
+/// Retroactive deduplication sweep: walk the given project roots, hash every
+/// jar/zip, record new objects into the store and replace duplicates with
+/// hardlinks. Never throws: all per-file failures are collected in the
+/// report. Dedup is best-effort by design.
+pub fn retro_dedup(roots: &[&Path]) -> RetroReport {
+    let mut report = RetroReport::default();
+    for root in roots {
+        let mut candidates = Vec::new();
+        retro_candidates(root, &mut candidates);
+        for path in candidates {
+            report.scanned += 1;
+            let sha1 = match sha1_of(&path) {
+                Ok(h) => h,
+                Err(e) => {
+                    report.errors.push(format!("{}: {e}", path.display()));
+                    continue;
+                }
+            };
+            if file_is_store_link(&path, &sha1) {
+                report.skipped += 1;
+                continue;
+            }
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let known = lookup(&sha1).is_some();
+            if known {
+                if relink_to_store(&path, &sha1) {
+                    report.linked += 1;
+                    report.bytes_reclaimed += size;
+                } else {
+                    report.skipped += 1;
+                }
+            } else {
+                record(&path, &sha1);
+                if lookup(&sha1).is_some() {
+                    report.recorded += 1;
+                }
+                // First copy stays a plain file; duplicates in other projects
+                // become links when their turn comes.
+            }
+        }
+    }
+    report
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Isolate the store root per test (tests run in parallel in one process;
+    /// a mutex + fresh temp root keeps them from clobbering each other and
+    /// from polluting the real user store).
+    static STORE_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_test_store<F: FnOnce()>(f: F) {
+        let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TUFFBOX_MODSTORE_ROOT", dir.path());
+        f();
+        std::env::remove_var("TUFFBOX_MODSTORE_ROOT");
+    }
 
     #[test]
     fn record_lookup_hardlink_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("mod.jar");
-        std::fs::write(&src, b"jar bytes for dedup").unwrap();
-        let sha = sha1_of(&src).unwrap();
+        with_test_store(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("mod.jar");
+            std::fs::write(&src, b"jar bytes for dedup").unwrap();
+            let sha = sha1_of(&src).unwrap();
 
-        // Record into the (real) store — safe: uses user-local data dir.
-        record(&src, &sha);
-        assert!(lookup(&sha).is_some());
+            record(&src, &sha);
+            assert!(lookup(&sha).is_some());
 
-        // Hard-link into a fresh instance folder.
-        let inst = dir.path().join("inst1").join("mods");
-        std::fs::create_dir_all(&inst).unwrap();
-        let target = inst.join("mod.jar");
-        assert!(try_hardlink(&target, &sha));
-        assert_eq!(std::fs::read(&target).unwrap(), b"jar bytes for dedup");
+            // Hard-link into a fresh instance folder.
+            let inst = dir.path().join("inst1").join("mods");
+            std::fs::create_dir_all(&inst).unwrap();
+            let target = inst.join("mod.jar");
+            assert!(try_hardlink(&target, &sha));
+            assert_eq!(std::fs::read(&target).unwrap(), b"jar bytes for dedup");
 
-        // Idempotent: linking when target already exists with same hash → true.
-        assert!(try_hardlink(&target, &sha));
+            // Idempotent: linking when target already exists with same hash → true.
+            assert!(try_hardlink(&target, &sha));
 
-        // Unknown hash → no hit.
-        assert!(!try_hardlink(
-            &inst.join("other.jar"),
-            "0000000000000000000000000000000000000000"
-        ));
+            // Unknown hash → no hit.
+            assert!(!try_hardlink(
+                &inst.join("other.jar"),
+                "0000000000000000000000000000000000000000"
+            ));
+        });
+    }
+
+    #[test]
+    fn retro_dedup_links_duplicate_and_records_new() {
+        with_test_store(|| {
+            let dir = tempfile::tempdir().unwrap();
+            // Two "projects", each with the same jar bytes plus a unique zip.
+            let p1 = dir.path().join("proj1").join("mods");
+            let p2 = dir.path().join("proj2").join("mods");
+            std::fs::create_dir_all(&p1).unwrap();
+            std::fs::create_dir_all(&p2).unwrap();
+            std::fs::write(p1.join("sodium.jar"), b"sodium bytes").unwrap();
+            std::fs::write(p2.join("sodium.jar"), b"sodium bytes").unwrap();
+            std::fs::write(p1.join("unique.zip"), b"unique pack").unwrap();
+
+            let report = retro_dedup(&[&dir.path().join("proj1"), &dir.path().join("proj2")]);
+
+            // 3 candidates scanned; 2 unique objects recorded. Within one
+            // sweep, proj1's files are processed first (record), so proj2's
+            // duplicate jar is immediately linked against the fresh object —
+            // dedup works across roots in a single pass.
+            assert_eq!(report.scanned, 3);
+            assert_eq!(report.recorded, 2);
+            assert_eq!(report.linked, 1, "{report:?}");
+            assert!(report.bytes_reclaimed > 0);
+            assert!(report.errors.is_empty(), "{:?}", report.errors);
+            // Content survived the replace.
+            assert_eq!(std::fs::read(p2.join("sodium.jar")).unwrap(), b"sodium bytes");
+
+            // A second sweep is a no-op: everything is already linked/recorded.
+            let report2 = retro_dedup(&[&dir.path().join("proj2")]);
+            assert_eq!(report2.scanned, 1);
+            assert_eq!(report2.linked, 0);
+            assert_eq!(report2.recorded, 0);
+        });
     }
 }

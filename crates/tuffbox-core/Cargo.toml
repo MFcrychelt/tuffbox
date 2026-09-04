@@ -35,5 +35,6 @@ lz4 = ["dep:lz4"]
 
 [target.'cfg(windows)'.dependencies]
 winreg.workspace = true
+same-file = "1.0"
 
 [dev-dependencies]
