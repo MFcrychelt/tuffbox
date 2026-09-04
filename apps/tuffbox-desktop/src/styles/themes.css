@@ -904,11 +904,16 @@ html[data-glass="on"].potato-pc :where(.card, .panel, .tb-card, .rail, .header) 
    goes heavily translucent (it keeps a tint so text stays readable), page
    surfaces get lighter fills since the glass sits behind everything. */
 html.glass-os {
-  --app-shell-bg: color-mix(in srgb, var(--bg-primary) 62%, transparent);
+  /* Flat translucent tint — must NOT inherit the textured --app-shell-bg:
+     texture layers end in an opaque var(--bg-primary) that would cover the
+     OS acrylic/blur behind the window. */
+  --app-shell-bg: color-mix(in srgb, var(--bg-primary) 42%, transparent);
 }
 
 /* The body itself paints --bg-primary (styles.css); an opaque body would sit
-   on top of the Acrylic/Mica backdrop and hide the OS glass completely. */
+   on top of the Acrylic/Mica backdrop and hide the OS glass completely.
+   html background stays a faint tint so text remains readable over the
+   desktop blur. */
 html.glass-os,
 html.glass-os body {
   background: transparent;
@@ -916,6 +921,13 @@ html.glass-os body {
 
 html.glass-os .app-shell {
   background: var(--app-shell-bg);
+}
+
+/* Kill the procedural speckle texture while OS glass is on — its opaque
+   base layer would hide the acrylic/blur backdrop. */
+html.glass-os .app-shell,
+html.glass-os body {
+  background-image: none;
 }
 
 html.glass-os:not([data-theme="win95"], [data-theme="pixelato"])

@@ -932,6 +932,14 @@
     pointer-events: auto;
     /* UI scale: zoom on <html> via applyUiScale — not on this shell. */
   }
+  /* OS window glass: scoped background above has higher specificity than
+     themes.css `html.glass-os .app-shell` (Svelte adds a class hash), so the
+     translucent shell tint must be restated here or it is silently ignored
+     and the window stays opaque. */
+  :global(html.glass-os) .app-shell {
+    background: var(--app-shell-bg, color-mix(in srgb, var(--bg-primary) 42%, transparent));
+    background-image: none;
+  }
 
   .main {
     flex: 1;

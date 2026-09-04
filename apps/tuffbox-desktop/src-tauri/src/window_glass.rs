@@ -19,10 +19,11 @@ pub fn set_window_glass(app: tauri::AppHandle, on: bool) -> Result<String, Strin
         return Err("main window not found".into());
     };
     if !on {
-        // Clear any effect; the window returns to an opaque surface.
-        window_vibrancy::clear_acrylic(&win)
-            .map_err(|e| format!("clear acrylic failed: {e}"))?;
-        window_vibrancy::clear_mica(&win).map_err(|e| format!("clear mica failed: {e}"))?;
+        // Best-effort clear of every effect; a clear failing on one path must
+        // not abort the others (e.g. Win10 blur window + acrylic clear Err).
+        let _ = window_vibrancy::clear_acrylic(&win);
+        let _ = window_vibrancy::clear_blur(&win);
+        let _ = window_vibrancy::clear_mica(&win);
         return Ok("off".into());
     }
 
@@ -42,13 +43,21 @@ pub fn set_window_glass(app: tauri::AppHandle, on: bool) -> Result<String, Strin
         {
             return Ok("acrylic".into());
         }
+        // Windows 10 (build < 22000): Tabbed/Mica are unavailable, and SWCA
+        // Acrylic visibly glitches behind WebView2 (loses blur on blur-
+        // behind, flickers on focus loss). ACCENT_ENABLE_BLURBEHIND is the
+        // stable Aero-style glass on Win10 — less frosted than Acrylic but
+        // reliably transparent.
+        if window_vibrancy::apply_blur(&win, Some((16, 20, 27, 90))).is_ok() {
+            return Ok("blur".into());
+        }
         if window_vibrancy::apply_tabbed(&win, None).is_ok() {
             return Ok("tabbed".into());
         }
         if window_vibrancy::apply_mica(&win, None).is_ok() {
             return Ok("mica".into());
         }
-        Err("no windows glass effect available (Acrylic/Mica/Tabbed all failed)".into())
+        Err("no windows glass effect available (Acrylic/Blur/Mica/Tabbed all failed)".into())
     }
 
     #[cfg(target_os = "macos")]
