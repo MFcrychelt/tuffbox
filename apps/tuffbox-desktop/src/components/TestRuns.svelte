@@ -108,7 +108,14 @@
   let historyFilter = $state<"all" | "pass" | "fail" | "crashed">("all");
   let worlds = $state<{ name: string }[]>([]);
   let quickPlayWorld = $state("");
-  let matrixDetailsOpen = $state(false);
+  // Right-side panel tabs (replaced the three collapsed <details> accordions).
+  type SideTabId = "options" | "matrix" | "history";
+  const sideTabs: Array<{ id: SideTabId; label: string }> = [
+    { id: "options", label: "Options" },
+    { id: "matrix", label: "Profile matrix" },
+    { id: "history", label: "Profiles & history" },
+  ];
+  let sideTab = $state<SideTabId>("options");
   let matrixIds = $state<Record<string, boolean>>({});
   let matrixRunning = $state(false);
   let matrixStopOnFail = $state(true);
@@ -731,8 +738,8 @@
       return;
     }
     matrixRunning = true;
-    matrixDetailsOpen = true;
     matrixAbort = false;
+    sideTab = "matrix";
     matrixSummary = queue.map((p) => ({
       profile: p.id,
       verdict: "running",
@@ -811,8 +818,8 @@
   }
 
   function onSecondaryToggle(e: Event) {
-    const el = e.currentTarget as HTMLDetailsElement;
-    if (!el?.open) return;
+    const el = e.currentTarget as HTMLElement;
+    if (!el) return;
     // Expand downward into scroll space instead of compressing the log above.
     requestAnimationFrame(() => {
       el.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -877,7 +884,7 @@
 </script>
 
 <div class="flex flex-col h-full min-h-0 overflow-hidden w-full">
-  <div class="flex items-center justify-between gap-4 mb-2 shrink-0">
+  <div class="flex items-center justify-between gap-4 px-1 pt-1 pb-3 shrink-0">
     <div class="flex items-center gap-2.5 font-bold text-[var(--text-secondary)]">
       <PlayCircle size={18} /> <span>Test · launch lab</span>
     </div>
@@ -896,8 +903,10 @@
   {#if !$projectPath}
     <EmptyState icon={PlayCircle} title="No project selected" description="Open a project to run test profiles." />
   {:else}
-    <div class="flex-1 min-h-0 flex flex-col overflow-x-hidden overflow-y-auto gap-2">
-      <div class="flex items-center gap-2.5 shrink-0 flex-wrap">
+    <div class="flex-1 min-h-0 flex flex-col overflow-hidden gap-4">
+
+      <!-- ── Launch bar: status + profile + actions ─────────────── -->
+      <div class="shrink-0 flex flex-wrap items-center gap-3 px-4 py-3 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
         <div class="flex items-center gap-2 font-semibold rounded-[var(--border-radius-md)] px-3.5 py-2 transition-colors duration-150 status-chip {
           livePhase === "pass"
             ? "pass"
@@ -908,23 +917,15 @@
           <TimerReset size={16} />
           {statusLabel}
         </div>
-        {#if live?.instance}
-          <button class="danger" onclick={killInstance} disabled={killing} title="Kill game/server process">
-            <Square size={16} />
-            {killing ? "Stopping…" : "Kill"}
-          </button>
-        {/if}
-      </div>
-      <div class="shrink-0 flex flex-wrap items-center gap-3 px-3 py-2.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
-        <label class="flex flex-col gap-1 text-[11px] text-[var(--text-muted)]">
-          Profile
+        <label class="field">
+          <span class="field-label">Profile</span>
           <select bind:value={selectedProfile} disabled={running || matrixRunning} class="min-w-[180px]">
             {#each profiles as p (p.id)}
               <option value={p.id}>{p.name} ({p.id})</option>
             {/each}
           </select>
         </label>
-        <div class="flex flex-wrap gap-2 flex-1">
+        <div class="flex flex-wrap gap-2 ml-auto">
           <button class="preset primary" onclick={smokeClient} disabled={running || matrixRunning || !selectedProfile}>
             <PlayCircle size={16} /> Smoke client
           </button>
@@ -935,305 +936,339 @@
             <Zap size={16} /> Run client 4 RAM
           </button>
         </div>
+        {#if live?.instance}
+          <button class="danger" onclick={killInstance} disabled={killing} title="Kill game/server process">
+            <Square size={16} />
+            {killing ? "Stopping…" : "Kill"}
+          </button>
+        {/if}
       </div>
 
-      <div class="flex-[1_1_auto] min-h-0 min-w-0 grid grid-cols-[minmax(280px,0.9fr)_minmax(0,1.1fr)] max-[1099px]:grid-cols-1 max-[1099px]:grid-rows-[minmax(160px,32vh)_minmax(0,1fr)] gap-2">
-        <div class="min-w-0 min-h-0 flex flex-col overflow-hidden bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] px-3 py-2.5 gap-2">
-          <h3 class="m-0 text-[12px] font-bold text-[var(--text-secondary)] shrink-0">Load</h3>
-          <TestLoadChart samples={loadSamples} xmxMb={activeXmxMb} potato={potatoPc} />
-          <TestHardwareCard samples={loadSamples} xmxMb={activeXmxMb} />
-        </div>
-        <div class="min-w-0 min-h-0 flex flex-col overflow-hidden bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
-          <div class="flex items-center justify-between gap-2.5 px-4 py-2 border-b border-[var(--border-color)] shrink-0">
-            <label class="flex items-center gap-1.5 text-[var(--text-muted)] text-[12px] cursor-pointer">
-              <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={autoScroll} /> Auto-scroll
-            </label>
-            <div class="flex items-center gap-1.5 flex-wrap">
-              {#if activeLogRoot && activeLogRoot !== $projectPath}
-                <span class="text-[11px] text-[var(--text-muted)]">Server console</span>
-                <button class="ghost mini" onclick={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}>
-                  <Terminal size={12} /> Open server console
-                </button>
-              {/if}
-              {#if logTruncated}
-                <span class="text-[11px] text-[var(--text-muted)]">Showing last {LOG_TAIL_LINES} of {logLineCount} lines</span>
-              {/if}
-              {#if !documentVisible && watching}
-                <span class="text-[11px] text-[#fbbf24]">Poll paused (tab hidden)</span>
-              {/if}
-              <button class="ghost mini" onclick={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
-              {#if watching}
-                <button class="ghost mini" onclick={stopWatching}>Stop watching</button>
-              {:else if running || live?.instance}
-                <button class="ghost mini" onclick={startPolling}>Watch log</button>
-              {/if}
-            </div>
-          </div>
-          <pre class="flex-1 min-h-0 overflow-auto m-0 p-4.5 bg-[#09090b] text-[#d4d4d8] font-mono text-[12px] leading-[1.55] whitespace-pre-wrap" bind:this={logEl}>{displayLog || "latest.log will appear here after the first run."}</pre>
-        </div>
-      </div>
+      <!-- ── Main area: log column + right settings column ──────── -->
+      <div class="flex-[1_1_auto] min-h-0 min-w-0 grid grid-cols-[minmax(0,1fr)_minmax(300px,0.85fr)] gap-4 max-[1199px]:grid-cols-1 max-[1199px]:grid-rows-[minmax(220px,38vh)_minmax(0,1fr)]">
 
-      <details class="shrink-0 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] overflow-hidden" ontoggle={onSecondaryToggle}>
-        <summary class="cursor-pointer px-3.5 py-2.5 text-[12px] font-bold text-[var(--text-secondary)] select-none [list-style:none] transition-colors duration-150 hover:text-[var(--text-primary)] hover:bg-[rgba(255,255,255,0.03)] open:border-b open:border-[var(--border-color)] [&::-webkit-details-marker]:hidden">Options</summary>
-        <div class="px-3.5 py-3">
-          <div class="flex flex-wrap items-center gap-3.5 mb-2.5 text-[var(--text-muted)] text-[12px]">
-            <button class="ghost" onclick={() => loadProfiles(true)} disabled={!$projectPath || loading}>
-              <RefreshCw size={16} class={loading ? "spin" : ""} />
-              Refresh
-            </button>
-            <button class="secondary" onclick={runValidation} disabled={!$projectPath || validationLoading}>
-              <Shield size={16} />
-              {validationLoading ? "Checking…" : "Validate"}
-            </button>
-            {#if validationBadge}
-              <span class="text-[11px] font-bold px-2 py-1 rounded-full border {
-                validationBadge.ok
-                  ? "text-[var(--accent-primary)] border-[color-mix(in_srgb,var(--accent-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)]"
-                  : "text-[#fca5a5] border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.08)]"
-              }">
-                {validationBadge.label}
-              </span>
-            {/if}
-            <label class="inline-flex items-center gap-1.5 cursor-pointer" title="Allow launch even when validation has errors">
-              <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={forceRun} /> Force run
-            </label>
-            <label class="inline-flex items-center gap-1.5 cursor-pointer" title="Create a snapshot before smoke / dry run">
-              <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={autoSnapshot} />
-              <Camera size={12} /> Auto-snapshot
-            </label>
-            <label class="inline-flex items-center gap-1.5">
-              Timeout
-              <input type="number" min="30" max="900" class="w-[72px]" bind:value={timeoutSeconds} /> s
-            </label>
-            {#if selected}
-              <span class="text-[var(--text-secondary)]">
-                {selected.name} · {selected.side} · {selected.memoryMb ?? 4096} MB
-              </span>
-            {/if}
-            {#if startupSeconds != null && livePhase === "pass"}
-              <span class="text-[var(--accent-primary)] font-bold">Startup {startupSeconds}s</span>
-            {/if}
+        <!-- Left: load + log (vertical stack) -->
+        <div class="min-w-0 min-h-0 flex flex-col gap-4">
+          <div class="shrink-0 flex flex-col overflow-hidden bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] px-4 py-3 gap-2.5">
+            <h3 class="m-0 text-[12px] font-bold text-[var(--text-secondary)] shrink-0">Load</h3>
+            <TestLoadChart samples={loadSamples} xmxMb={activeXmxMb} potato={potatoPc} />
+            <TestHardwareCard samples={loadSamples} xmxMb={activeXmxMb} />
           </div>
-          <div class="flex flex-wrap items-center gap-3 mb-2.5 px-3 py-2.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
-            <label class="flex flex-col gap-1 text-[11px] text-[var(--text-muted)]">
-              Quick Play world
-              <select class="min-w-[180px]" bind:value={quickPlayWorld}>
-                {#if worlds.length === 0}
-                  <option value="">No worlds in saves/</option>
-                {:else}
-                  {#each worlds as w (w.name)}
-                    <option value={w.name}>{w.name}</option>
-                  {/each}
+          <div class="flex-1 min-h-0 flex flex-col overflow-hidden bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+            <div class="flex items-center justify-between gap-2.5 px-4 py-2.5 border-b border-[var(--border-color)] shrink-0">
+              <label class="flex items-center gap-1.5 text-[var(--text-muted)] text-[12px] cursor-pointer">
+                <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={autoScroll} /> Auto-scroll
+              </label>
+              <div class="flex items-center gap-1.5 flex-wrap">
+                {#if activeLogRoot && activeLogRoot !== $projectPath}
+                  <span class="text-[11px] text-[var(--text-muted)]">Server console</span>
+                  <button class="ghost mini" onclick={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}>
+                    <Terminal size={12} /> Open server console
+                  </button>
                 {/if}
-              </select>
-            </label>
-            <button class="secondary" onclick={quickPlay} disabled={running || matrixRunning || !quickPlayWorld}>
-              Launch Quick Play
-            </button>
-          </div>
-          <div class="flex flex-wrap items-center gap-3 mb-2.5 px-3 py-2.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
-            <label class="flex flex-col gap-1 text-[11px] text-[var(--text-muted)]">
-              Server folder
-              <input type="text" class="min-w-[180px]" placeholder="Where the server instance will be staged" bind:value={serverDir} />
-            </label>
-            <button class="secondary" onclick={async () => { await ensureServerDir(); }} disabled={!$projectPath}>
-              <FolderOpen size={14} /> Browse…
-            </button>
-            <button class="ghost" onclick={() => (serverDir = defaultServerDir())} disabled={!$projectPath}>
-              Default
-            </button>
-          </div>
-          <div class="flex flex-wrap items-center gap-3 mb-2.5 px-3 py-2.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
-            <label class="flex flex-col gap-1 text-[11px] text-[var(--text-muted)]">
-              level-seed
-              <input type="text" class="min-w-[180px]" placeholder="optional" bind:value={levelSeed} />
-            </label>
-            <label class="inline-flex items-center gap-1.5 cursor-pointer">
-              <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={onlineModeOff} /> online-mode=false
-            </label>
-            <button class="ghost" onclick={async () => {
-              try {
-                const dir = serverDir.trim() || defaultServerDir();
-                await invoke("generate_server_properties", {
-                  path: $projectPath,
-                  levelSeed: levelSeed.trim() || null,
-                  onlineMode: onlineModeOff ? false : true,
-                  targetDir: dir,
-                });
-                message = `server.properties written to ${dir}`;
-              } catch (e) { error = String(e); }
-            }}>Write server.properties</button>
-          </div>
-          {#if validationReport && !validationReport.passed}
-            <div class="bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] px-3 py-3">
-              <div class="flex items-center justify-between mb-2.5 gap-2">
-                <h3 class="flex items-center gap-2 text-[14px] text-[var(--text-primary)] m-0"><Shield size={16} /> Validation</h3>
-                <span class="flex items-center gap-1.5 text-[#fca5a5] font-bold text-[12px]"><XCircle size={14} /> Issues — use Force run to launch</span>
+                {#if logTruncated}
+                  <span class="text-[11px] text-[var(--text-muted)]">Showing last {LOG_TAIL_LINES} of {logLineCount} lines</span>
+                {/if}
+                {#if !documentVisible && watching}
+                  <span class="text-[11px] text-[#fbbf24]">Poll paused (tab hidden)</span>
+                {/if}
+                <button class="ghost mini" onclick={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
+                {#if watching}
+                  <button class="ghost mini" onclick={stopWatching}>Stop watching</button>
+                {:else if running || live?.instance}
+                  <button class="ghost mini" onclick={startPolling}>Watch log</button>
+                {/if}
               </div>
-              <div class="grid grid-cols-3 gap-2 mb-2">
-                <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
-                  validationReport.graphErrors > 0
-                    ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
-                    : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
-                }">
-                  <strong class="text-[18px] { validationReport.graphErrors > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.graphErrors }</strong>
-                  <span class="text-[11px] text-[var(--text-muted)]">graph</span>
-                </div>
-                <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
-                  (validationReport.jsonErrors?.length ?? 0) > 0
-                    ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
-                    : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
-                }">
-                  <strong class="text-[18px] { (validationReport.jsonErrors?.length ?? 0) > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.jsonErrors?.length ?? 0 }</strong>
-                  <span class="text-[11px] text-[var(--text-muted)]">JSON</span>
-                </div>
-                <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
-                  (validationReport.circularDeps?.length ?? 0) > 0
-                    ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
-                    : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
-                }">
-                  <strong class="text-[18px] { (validationReport.circularDeps?.length ?? 0) > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.circularDeps?.length ?? 0 }</strong>
-                  <span class="text-[11px] text-[var(--text-muted)]">cycles</span>
-                </div>
-              </div>
-              <button class="ghost" onclick={() => (validationReport = null)}>Hide</button>
             </div>
-          {/if}
+            <pre class="flex-1 min-h-0 overflow-auto m-0 p-4 bg-[#09090b] text-[#d4d4d8] font-mono text-[12px] leading-[1.55] whitespace-pre-wrap" bind:this={logEl}>{displayLog || "latest.log will appear here after the first run."}</pre>
+          </div>
         </div>
-      </details>
 
-      <details class="shrink-0 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] overflow-hidden" bind:open={matrixDetailsOpen} ontoggle={onSecondaryToggle}>
-        <summary class="cursor-pointer px-3.5 py-2.5 text-[12px] font-bold text-[var(--text-secondary)] select-none [list-style:none] transition-colors duration-150 hover:text-[var(--text-primary)] hover:bg-[rgba(255,255,255,0.03)] open:border-b open:border-[var(--border-color)] [&::-webkit-details-marker]:hidden">Profile matrix</summary>
-        <div class="px-3.5 py-3">
-          <div class="grid gap-2.5">
-            <div class="flex items-center gap-3 flex-wrap">
-              <label class="inline-flex items-center gap-1.5 cursor-pointer"><input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={matrixStopOnFail} /> Stop on fail</label>
-              <button class="secondary" onclick={runMatrix} disabled={running || matrixRunning}>Run matrix</button>
-              {#if matrixRunning}
-                <button class="danger" onclick={stopMatrix}>Stop queue</button>
-              {/if}
-            </div>
-            <div class="flex flex-wrap gap-2.5 gap-x-4">
-              {#each profiles as p (p.id)}
-                <label class="inline-flex items-center gap-1.5 cursor-pointer text-[var(--text-muted)] text-[12px]">
-                  <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={matrixIds[p.id]} />
-                  {p.name} <small>({p.id})</small>
-                </label>
-              {/each}
-            </div>
-            {#if matrixSummary.length > 0}
-              <table class="w-full border-collapse text-[12px]">
-                <thead><tr><th class="text-left px-2 py-1.5 border-b border-[var(--border-color)]">Profile</th><th class="text-left px-2 py-1.5 border-b border-[var(--border-color)]">Verdict</th><th class="text-left px-2 py-1.5 border-b border-[var(--border-color)]">Time</th><th class="text-left px-2 py-1.5 border-b border-[var(--border-color)]">Reason</th></tr></thead>
-                <tbody>
-                  {#each matrixSummary as row, i (row.profile + '-' + i)}
-                    <tr>
-                      <td class="px-2 py-1.5 border-b border-[var(--border-color)]">{row.profile}</td>
-                      <td class="px-2 py-1.5 border-b border-[var(--border-color)]"><span class="vbadge {row.verdict}">{row.verdict}</span></td>
-                      <td class="px-2 py-1.5 border-b border-[var(--border-color)]">{row.durationSeconds != null ? `${row.durationSeconds}s` : "—"}</td>
-                      <td class="px-2 py-1.5 border-b border-[var(--border-color)] text-[var(--text-muted)]">{row.reason ?? ""}</td>
-                    </tr>
+        <!-- Right: tabbed panel (Options / Matrix / History) -->
+        <div class="min-w-0 min-h-0 flex flex-col overflow-hidden bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+          <div class="flex items-center gap-1 px-2.5 pt-2.5 border-b border-[var(--border-color)] shrink-0 flex-wrap" role="tablist">
+            {#each sideTabs as tab (tab.id)}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sideTab === tab.id}
+                class="side-tab"
+                class:active={sideTab === tab.id}
+                onclick={() => (sideTab = tab.id)}
+              >
+                {tab.label}
+                {#if tab.id === "options" && validationBadge}
+                  <span class="side-tab-dot {validationBadge.ok ? "ok" : "bad"}"></span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+
+          <div class="flex-1 min-h-0 overflow-auto px-4 py-3.5">
+            {#if sideTab === "options"}
+              <div class="grid gap-3">
+                <div class="flex flex-wrap items-center gap-3.5 text-[var(--text-muted)] text-[12px]">
+                  <button class="ghost" onclick={() => loadProfiles(true)} disabled={!$projectPath || loading}>
+                    <RefreshCw size={16} class={loading ? "spin" : ""} />
+                    Refresh
+                  </button>
+                  <button class="secondary" onclick={runValidation} disabled={!$projectPath || validationLoading}>
+                    <Shield size={16} />
+                    {validationLoading ? "Checking…" : "Validate"}
+                  </button>
+                  {#if validationBadge}
+                    <span class="text-[11px] font-bold px-2 py-1 rounded-full border {
+                      validationBadge.ok
+                        ? "text-[var(--accent-primary)] border-[color-mix(in_srgb,var(--accent-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)]"
+                        : "text-[#fca5a5] border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.08)]"
+                    }">
+                      {validationBadge.label}
+                    </span>
+                  {/if}
+                  <label class="inline-flex items-center gap-1.5 cursor-pointer" title="Allow launch even when validation has errors">
+                    <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={forceRun} /> Force run
+                  </label>
+                  <label class="inline-flex items-center gap-1.5 cursor-pointer" title="Create a snapshot before smoke / dry run">
+                    <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={autoSnapshot} />
+                    <Camera size={12} /> Auto-snapshot
+                  </label>
+                  <label class="inline-flex items-center gap-1.5">
+                    Timeout
+                    <input type="number" min="30" max="900" class="w-[72px]" bind:value={timeoutSeconds} /> s
+                  </label>
+                  {#if selected}
+                    <span class="text-[var(--text-secondary)]">
+                      {selected.name} · {selected.side} · {selected.memoryMb ?? 4096} MB
+                    </span>
+                  {/if}
+                  {#if startupSeconds != null && livePhase === "pass"}
+                    <span class="text-[var(--accent-primary)] font-bold">Startup {startupSeconds}s</span>
+                  {/if}
+                </div>
+
+                <div class="grid gap-2 px-3.5 py-3 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+                  <span class="panel-section-title">Quick Play</span>
+                  <div class="flex flex-wrap items-end gap-3">
+                    <label class="field">
+                      <span class="field-label">World</span>
+                      <select class="min-w-[200px]" bind:value={quickPlayWorld}>
+                        {#if worlds.length === 0}
+                          <option value="">No worlds in saves/</option>
+                        {:else}
+                          {#each worlds as w (w.name)}
+                            <option value={w.name}>{w.name}</option>
+                          {/each}
+                        {/if}
+                      </select>
+                    </label>
+                    <button class="secondary" onclick={quickPlay} disabled={running || matrixRunning || !quickPlayWorld}>
+                      Launch Quick Play
+                    </button>
+                  </div>
+                </div>
+
+                <div class="grid gap-2 px-3.5 py-3 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+                  <span class="panel-section-title">Server staging</span>
+                  <div class="flex flex-wrap items-end gap-3">
+                    <label class="field flex-1 min-w-[220px]">
+                      <span class="field-label">Server folder</span>
+                      <input type="text" placeholder="Where the server instance will be staged" bind:value={serverDir} />
+                    </label>
+                    <button class="secondary" onclick={async () => { await ensureServerDir(); }} disabled={!$projectPath}>
+                      <FolderOpen size={14} /> Browse…
+                    </button>
+                    <button class="ghost" onclick={() => (serverDir = defaultServerDir())} disabled={!$projectPath}>
+                      Default
+                    </button>
+                  </div>
+                  <div class="flex flex-wrap items-end gap-3">
+                    <label class="field">
+                      <span class="field-label">level-seed</span>
+                      <input type="text" class="min-w-[160px]" placeholder="optional" bind:value={levelSeed} />
+                    </label>
+                    <label class="inline-flex items-center gap-1.5 cursor-pointer pb-2">
+                      <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={onlineModeOff} /> online-mode=false
+                    </label>
+                    <button class="ghost" onclick={async () => {
+                      try {
+                        const dir = serverDir.trim() || defaultServerDir();
+                        await invoke("generate_server_properties", {
+                          path: $projectPath,
+                          levelSeed: levelSeed.trim() || null,
+                          onlineMode: onlineModeOff ? false : true,
+                          targetDir: dir,
+                        });
+                        message = `server.properties written to ${dir}`;
+                      } catch (e) { error = String(e); }
+                    }}>Write server.properties</button>
+                  </div>
+                </div>
+
+                {#if validationReport && !validationReport.passed}
+                  <div class="bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] px-3 py-3">
+                    <div class="flex items-center justify-between mb-2.5 gap-2">
+                      <h3 class="flex items-center gap-2 text-[14px] text-[var(--text-primary)] m-0"><Shield size={16} /> Validation</h3>
+                      <span class="flex items-center gap-1.5 text-[#fca5a5] font-bold text-[12px]"><XCircle size={14} /> Issues — use Force run to launch</span>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 mb-2">
+                      <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
+                        validationReport.graphErrors > 0
+                          ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
+                          : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
+                      }">
+                        <strong class="text-[18px] { validationReport.graphErrors > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.graphErrors }</strong>
+                        <span class="text-[11px] text-[var(--text-muted)]">graph</span>
+                      </div>
+                      <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
+                        (validationReport.jsonErrors?.length ?? 0) > 0
+                          ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
+                          : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
+                      }">
+                        <strong class="text-[18px] { (validationReport.jsonErrors?.length ?? 0) > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.jsonErrors?.length ?? 0 }</strong>
+                        <span class="text-[11px] text-[var(--text-muted)]">JSON</span>
+                      </div>
+                      <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
+                        (validationReport.circularDeps?.length ?? 0) > 0
+                          ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
+                          : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
+                      }">
+                        <strong class="text-[18px] { (validationReport.circularDeps?.length ?? 0) > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.circularDeps?.length ?? 0 }</strong>
+                        <span class="text-[11px] text-[var(--text-muted)]">cycles</span>
+                      </div>
+                    </div>
+                    <button class="ghost" onclick={() => (validationReport = null)}>Hide</button>
+                  </div>
+                {/if}
+              </div>
+            {:else if sideTab === "matrix"}
+              <div class="grid gap-3.5">
+                <div class="flex items-center gap-3 flex-wrap">
+                  <label class="inline-flex items-center gap-1.5 cursor-pointer"><input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={matrixStopOnFail} /> Stop on fail</label>
+                  <button class="secondary" onclick={runMatrix} disabled={running || matrixRunning}>Run matrix</button>
+                  {#if matrixRunning}
+                    <button class="danger" onclick={stopMatrix}>Stop queue</button>
+                  {/if}
+                </div>
+                <div class="flex flex-wrap gap-2.5 gap-x-4">
+                  {#each profiles as p (p.id)}
+                    <label class="inline-flex items-center gap-1.5 cursor-pointer text-[var(--text-muted)] text-[12px]">
+                      <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={matrixIds[p.id]} />
+                      {p.name} <small>({p.id})</small>
+                    </label>
                   {/each}
-                </tbody>
-              </table>
+                </div>
+                {#if matrixSummary.length > 0}
+                  <table class="w-full border-collapse text-[12px]">
+                    <thead><tr><th class="text-left px-2 py-1.5 border-b border-[var(--border-color)]">Profile</th><th class="text-left px-2 py-1.5 border-b border-[var(--border-color)]">Verdict</th><th class="text-left px-2 py-1.5 border-b border-[var(--border-color)]">Time</th><th class="text-left px-2 py-1.5 border-b border-[var(--border-color)]">Reason</th></tr></thead>
+                    <tbody>
+                      {#each matrixSummary as row, i (row.profile + '-' + i)}
+                        <tr>
+                          <td class="px-2 py-1.5 border-b border-[var(--border-color)]">{row.profile}</td>
+                          <td class="px-2 py-1.5 border-b border-[var(--border-color)]"><span class="vbadge {row.verdict}">{row.verdict}</span></td>
+                          <td class="px-2 py-1.5 border-b border-[var(--border-color)]">{row.durationSeconds != null ? `${row.durationSeconds}s` : "—"}</td>
+                          <td class="px-2 py-1.5 border-b border-[var(--border-color)] text-[var(--text-muted)]">{row.reason ?? ""}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                {/if}
+              </div>
+            {:else if sideTab === "history"}
+              <div class="grid gap-3">
+                {#if profiles.length > 0}
+                  <div class="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
+                    {#each profiles as profile (profile.id)}
+                      <button
+                        class="w-full flex flex-col items-start gap-1 border p-3 text-left transition-colors duration-150 cursor-pointer { selectedProfile === profile.id
+                          ? "border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)]"
+                          : "border-[var(--border-color)] bg-[var(--bg-tertiary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)]" }"
+                        onclick={() => (selectedProfile = profile.id)}
+                      >
+                        <strong class="text-[var(--text-primary)]">{profile.name}</strong>
+                        <span class="text-[var(--text-muted)]">{profile.id} · {profile.side}</span>
+                        <small class="text-[var(--text-muted)]">{profile.memoryMb ?? 4096} MB · {profile.jvmArgs.length} JVM args</small>
+                      </button>
+                    {/each}
+                  </div>
+                {:else}
+                  <div class="text-[var(--text-muted)]">No profiles found.</div>
+                {/if}
+
+                {#if launchStats}
+                  <div class="p-3 border border-[var(--border-color)] rounded-[var(--border-radius-md)] bg-[var(--bg-tertiary)] grid gap-1.5">
+                    <h3 class="text-[var(--text-secondary)] text-[12px] m-0 uppercase tracking-[0.04em]">Launch stats</h3>
+                    <div class="grid grid-cols-3 gap-2 mb-1">
+                      <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                        <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Launches</span>
+                        <strong class="text-[15px] text-[var(--text-primary)] tabular-nums">{ launchStats.totalLaunches }</strong>
+                      </div>
+                      <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                        <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Crashes</span>
+                        <strong class="text-[15px] tabular-nums { launchStats.totalCrashes > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ launchStats.totalCrashes }</strong>
+                      </div>
+                      <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                        <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Pass rate</span>
+                        <strong class="text-[15px] tabular-nums { passRate < 80 && runs.length > 0 ? "text-[#fbbf24]" : "text-[var(--text-primary)]" }">{ passRate }%</strong>
+                      </div>
+                    </div>
+                    {#if avgRunSeconds != null}
+                      <div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Avg run duration</span><span class="text-[var(--text-secondary)] tabular-nums">{ avgRunSeconds }s</span></div>
+                    {/if}
+                    {#if launchStats.lastLaunch}<div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Last launch</span><span class="text-[10px] text-[var(--text-muted)]">{launchStats.lastLaunch}</span></div>{/if}
+                  </div>
+                {/if}
+
+                <div class="flex items-center justify-between gap-2 flex-wrap">
+                  <h2 class="m-0 text-[15px] text-[var(--text-primary)]">Run history</h2>
+                  <div class="flex gap-1 flex-wrap">
+                    <button class="ghost mini" class:active={historyFilter === "all"} onclick={() => (historyFilter = "all")}>All</button>
+                    <button class="ghost mini" class:active={historyFilter === "pass"} onclick={() => (historyFilter = "pass")}>Pass</button>
+                    <button class="ghost mini" class:active={historyFilter === "fail"} onclick={() => (historyFilter = "fail")}>Fail</button>
+                    <button class="ghost mini" class:active={historyFilter === "crashed"} onclick={() => (historyFilter = "crashed")}>Crashed</button>
+                  </div>
+                </div>
+                {#if filteredRuns.length === 0}
+                  <div class="text-[var(--text-muted)]">No test runs recorded yet.</div>
+                {:else}
+                  <div class="grid gap-2">
+                    {#each filteredRuns.slice(0, 12) as run (run.id)}
+                      <div class="grid gap-[3px] p-2.5 rounded-[var(--border-radius-md)] bg-[var(--bg-tertiary)] border {runBorderClass(verdictClass(run.status))}">
+                        <div class="flex justify-between items-center gap-2">
+                          <strong class="text-[var(--text-primary)]">{run.profile}</strong>
+                          <span class="vbadge {verdictClass(run.status)}">{verdictLabel(run.status)}</span>
+                        </div>
+                        <span class="text-[var(--text-muted)] text-[12px]">{formatRunTime(run.startedAt)}</span>
+                        <small class="text-[var(--text-muted)] text-[12px]">
+                          {run.durationSeconds != null ? `${run.durationSeconds}s` : "—"}
+                          {#if run.peakProcMb}
+                            · <span
+                              class="text-[var(--text-secondary)] tabular-nums"
+                              title={run.recommendedRamGb
+                                ? `Players need ${run.recommendedRamGb} GB RAM`
+                                : undefined}
+                            >{gb1(run.peakProcMb)} GB peak</span>
+                          {/if}
+                          {#if run.verdictReason} · {run.verdictReason}{/if}
+                        </small>
+                        <div class="flex gap-1 flex-wrap mt-1">
+                          <button class="ghost mini" onclick={() => openRunLogs(run)}>Open logs</button>
+                          {#if !capturedRunIds[run.id]}
+                            <button class="ghost mini" onclick={() => captureRunLogs(run)}>Capture</button>
+                          {/if}
+                          <button class="ghost mini" onclick={openDiagnose} title="Open Diagnose stage">
+                            <Stethoscope size={12} /> Diagnose
+                          </button>
+                          <button class="ghost mini" onclick={() => reRun(run)} disabled={running || matrixRunning}>Re-run</button>
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
             {/if}
           </div>
         </div>
-      </details>
-
-      <details class="shrink-0 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] overflow-hidden" ontoggle={onSecondaryToggle}>
-        <summary class="cursor-pointer px-3.5 py-2.5 text-[12px] font-bold text-[var(--text-secondary)] select-none [list-style:none] transition-colors duration-150 hover:text-[var(--text-primary)] hover:bg-[rgba(255,255,255,0.03)] open:border-b open:border-[var(--border-color)] [&::-webkit-details-marker]:hidden">Profiles &amp; run history</summary>
-        <div class="px-3.5 py-3 max-h-[360px] overflow-auto">
-          {#if profiles.length === 0}
-            <div class="text-[var(--text-muted)]">No profiles found.</div>
-          {:else}
-            <div class="grid gap-2 mb-3 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
-              {#each profiles as profile (profile.id)}
-                <button
-                  class="w-full flex flex-col items-start gap-1 border p-3 text-left transition-colors duration-150 cursor-pointer { selectedProfile === profile.id
-                    ? "border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)]"
-                    : "border-[var(--border-color)] bg-[var(--bg-tertiary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)]" }"
-                  onclick={() => (selectedProfile = profile.id)}
-                >
-                  <strong class="text-[var(--text-primary)]">{profile.name}</strong>
-                  <span class="text-[var(--text-muted)]">{profile.id} · {profile.side}</span>
-                  <small class="text-[var(--text-muted)]">{profile.memoryMb ?? 4096} MB · {profile.jvmArgs.length} JVM args</small>
-                </button>
-              {/each}
-            </div>
-          {/if}
-
-          {#if launchStats}
-            <div class="p-3 border border-[var(--border-color)] rounded-[var(--border-radius-md)] bg-[var(--bg-tertiary)] mb-3.5 grid gap-1.5">
-              <h3 class="text-[var(--text-secondary)] text-[12px] m-0 mb-1 uppercase tracking-[0.04em]">Launch stats</h3>
-              <div class="grid grid-cols-3 gap-2 mb-1">
-                <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
-                  <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Launches</span>
-                  <strong class="text-[15px] text-[var(--text-primary)] tabular-nums">{ launchStats.totalLaunches }</strong>
-                </div>
-                <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
-                  <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Crashes</span>
-                  <strong class="text-[15px] tabular-nums { launchStats.totalCrashes > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ launchStats.totalCrashes }</strong>
-                </div>
-                <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
-                  <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Pass rate</span>
-                  <strong class="text-[15px] tabular-nums { passRate < 80 && runs.length > 0 ? "text-[#fbbf24]" : "text-[var(--text-primary)]" }">{ passRate }%</strong>
-                </div>
-              </div>
-              {#if avgRunSeconds != null}
-                <div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Avg run duration</span><span class="text-[var(--text-secondary)] tabular-nums">{ avgRunSeconds }s</span></div>
-              {/if}
-              {#if launchStats.lastLaunch}<div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Last launch</span><span class="text-[10px] text-[var(--text-muted)]">{launchStats.lastLaunch}</span></div>{/if}
-            </div>
-          {/if}
-
-          <div class="mt-3 flex items-center justify-between gap-2 flex-wrap">
-            <h2 class="m-0 text-[15px] text-[var(--text-primary)]">Run history</h2>
-            <div class="flex gap-1 flex-wrap">
-              <button class="ghost mini" class:active={historyFilter === "all"} onclick={() => (historyFilter = "all")}>All</button>
-              <button class="ghost mini" class:active={historyFilter === "pass"} onclick={() => (historyFilter = "pass")}>Pass</button>
-              <button class="ghost mini" class:active={historyFilter === "fail"} onclick={() => (historyFilter = "fail")}>Fail</button>
-              <button class="ghost mini" class:active={historyFilter === "crashed"} onclick={() => (historyFilter = "crashed")}>Crashed</button>
-            </div>
-          </div>
-          {#if filteredRuns.length === 0}
-            <div class="text-[var(--text-muted)] mt-2">No test runs recorded yet.</div>
-          {:else}
-            <div class="grid gap-2 mt-2.5">
-              {#each filteredRuns.slice(0, 12) as run (run.id)}
-                <div class="grid gap-[3px] p-2.5 rounded-[var(--border-radius-md)] bg-[var(--bg-tertiary)] border {runBorderClass(verdictClass(run.status))}">
-                  <div class="flex justify-between items-center gap-2">
-                    <strong class="text-[var(--text-primary)]">{run.profile}</strong>
-                    <span class="vbadge {verdictClass(run.status)}">{verdictLabel(run.status)}</span>
-                  </div>
-                  <span class="text-[var(--text-muted)] text-[12px]">{formatRunTime(run.startedAt)}</span>
-                  <small class="text-[var(--text-muted)] text-[12px]">
-                    {run.durationSeconds != null ? `${run.durationSeconds}s` : "—"}
-                    {#if run.peakProcMb}
-                      · <span
-                        class="text-[var(--text-secondary)] tabular-nums"
-                        title={run.recommendedRamGb
-                          ? `Players need ${run.recommendedRamGb} GB RAM`
-                          : undefined}
-                      >{gb1(run.peakProcMb)} GB peak</span>
-                    {/if}
-                    {#if run.verdictReason} · {run.verdictReason}{/if}
-                  </small>
-                  <div class="flex gap-1 flex-wrap mt-1">
-                    <button class="ghost mini" onclick={() => openRunLogs(run)}>Open logs</button>
-                    {#if !capturedRunIds[run.id]}
-                      <button class="ghost mini" onclick={() => captureRunLogs(run)}>Capture</button>
-                    {/if}
-                    <button class="ghost mini" onclick={openDiagnose} title="Open Diagnose stage">
-                      <Stethoscope size={12} /> Diagnose
-                    </button>
-                    <button class="ghost mini" onclick={() => reRun(run)} disabled={running || matrixRunning}>Re-run</button>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      </details>
+      </div>
     </div>
   {/if}
 </div>
@@ -1282,6 +1317,88 @@
   .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
   .danger { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
   .danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
+
+  /* Form fields: labeled column so selects align with buttons and don't
+     jump in height next to Ore-style buttons. */
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+  }
+  .field-label,
+  .panel-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+  .panel-section-title {
+    font-size: 11px;
+  }
+  .field select,
+  .field input[type="text"] {
+    width: 100%;
+    min-height: 36px;
+    padding: 7px 30px 7px 12px; /* right padding leaves room for the native arrow */
+    font-size: 13px;
+    line-height: 1.2;
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+      linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+    background-position: calc(100% - 16px) 55%, calc(100% - 10px) 55%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+  }
+  /* Timeout number input: compact, keeps native spinners. */
+  input[type="number"].w-\[72px\] {
+    min-height: 36px;
+    padding: 7px 10px;
+    font-size: 13px;
+    line-height: 1.2;
+  }
+  .field select:focus,
+  .field input:focus {
+    border-color: var(--accent-primary);
+  }
+
+  /* Side panel tabs: underline-style, no accordion look. */
+  .side-tab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    font-weight: 600;
+    margin-bottom: -1px;
+  }
+  .side-tab:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: transparent;
+    filter: none;
+  }
+  .side-tab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--accent-primary);
+  }
+  .side-tab-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+  }
+  .side-tab-dot.ok {
+    background: var(--accent-primary);
+  }
+  .side-tab-dot.bad {
+    background: rgba(239, 68, 68, 0.9);
+  }
 
   /* Status chip: quiet themed pill, no gray Ore button skin. */
   .status-chip { border: 1px solid var(--border-color); border-bottom-width: 1px; }
