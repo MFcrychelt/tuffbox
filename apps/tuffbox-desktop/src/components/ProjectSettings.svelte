@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft, Save, Cpu, Container, Coffee, Terminal, Search, Database, RefreshCw, AlertTriangle } from "@lucide/svelte";
+  import { ArrowLeft, Save, Cpu, Container, Coffee, Terminal, Search, Database, RefreshCw, AlertTriangle, FileCog } from "@lucide/svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { projectInfo, projectPath, recentProjects } from "../lib/store";
@@ -61,6 +61,69 @@
     }
   }
 
+  // ── Shared options.txt sync (docs/17) ─────────────────────────────────
+  let optionsManaged = $state(false);
+  let optionsGroup = $state("");
+  let optionsHasTemplate = $state(false);
+  let optionsBusy = $state(false);
+
+  async function loadOptionsStatus() {
+    if (!$projectPath) return;
+    try {
+      const s: any = await invoke("options_sync_status", { path: $projectPath });
+      optionsManaged = s.managed ?? false;
+      optionsGroup = s.groupId ?? "";
+      optionsHasTemplate = s.hasGroupTemplate ?? false;
+    } catch {
+      /* status stays at defaults */
+    }
+  }
+
+  async function enableOptionsSync() {
+    if (!$projectPath) return;
+    optionsBusy = true;
+    error = "";
+    try {
+      const imported: boolean = await invoke("options_sync_enable", { path: $projectPath });
+      if (!imported && !optionsHasTemplate) {
+        error = "Enabled, but this version group has no template yet — current options.txt will be adopted on first launch.";
+      }
+      await loadOptionsStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      optionsBusy = false;
+    }
+  }
+
+  async function disableOptionsSync() {
+    if (!$projectPath) return;
+    optionsBusy = true;
+    error = "";
+    try {
+      await invoke("options_sync_disable", { path: $projectPath });
+      await loadOptionsStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      optionsBusy = false;
+    }
+  }
+
+  async function pushOptionsToGroup() {
+    if (!$projectPath) return;
+    optionsBusy = true;
+    error = "";
+    try {
+      await invoke("options_sync_push", { path: $projectPath });
+      await loadOptionsStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      optionsBusy = false;
+    }
+  }
+
   async function migrateSchema() {
     if (!$projectPath) return;
     saving = true;
@@ -92,6 +155,7 @@
     })();
     void detectJavaPreview();
     void loadSchemaStatus();
+    void loadOptionsStatus();
     void (async () => {
       try {
         const versions = (await invoke("get_minecraft_versions")) as {
@@ -381,6 +445,38 @@
           {:else if schemaVersion}
             <div class="schema-ok">✓ Schema is up to date</div>
           {/if}
+        </div>
+      </section>
+
+      <section class="card wide col-span-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
+          <FileCog size={18} />
+          <h3 class="text-base text-[color:var(--text-primary)]">Shared options.txt</h3>
+        </div>
+        <div class="schema-info">
+          <div class="schema-row">
+            <span>Status</span>
+            <code>{optionsManaged ? `Shared (${optionsGroup})` : "Independent"}</code>
+          </div>
+          <p class="field-hint">
+            Shared projects of the same Minecraft version keep one options.txt:
+            your in-game settings sync between them. Edits you make in-game always
+            win; backups are created before any automatic change.
+          </p>
+          <div class="flex flex-wrap gap-3 mt-3">
+            {#if optionsManaged}
+              <button class="secondary" onclick={disableOptionsSync} disabled={optionsBusy}>
+                {optionsBusy ? "Working..." : "Use independent options"}
+              </button>
+              <button class="secondary" onclick={pushOptionsToGroup} disabled={optionsBusy}>
+                Push current to group
+              </button>
+            {:else}
+              <button class="secondary" onclick={enableOptionsSync} disabled={optionsBusy}>
+                {optionsBusy ? "Working..." : "Share options across projects"}
+              </button>
+            {/if}
+          </div>
         </div>
       </section>
         </div>

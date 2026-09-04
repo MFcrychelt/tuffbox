@@ -40,6 +40,7 @@ pub mod mod_index_cache;
 pub mod mod_scan;
 pub mod mod_suggest;
 pub mod modpack_index;
+pub mod options_sync;
 pub mod murmur2;
 pub mod process;
 pub mod provider;
