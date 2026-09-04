@@ -812,6 +812,17 @@ pub fn download_with_sha1(
         }
     }
 
+    // Dedup store (docs/17, Part 1): Mojang-manifest downloads (client jar,
+    // libraries, natives, assets) all carry a known sha1 — if the exact bytes
+    // already live in the shared object store, hard-link them instead of
+    // downloading again. Requires a known sha1; any store miss/failure falls
+    // through to the network path (dedup is an optimization, never a gate).
+    if let Some(sha1) = expected_sha1 {
+        if crate::mod_store::try_hardlink(path, sha1) {
+            return Ok(());
+        }
+    }
+
     crate::http::download_streaming(
         url,
         path,
@@ -819,6 +830,12 @@ pub fn download_with_sha1(
         None::<Box<dyn FnMut(u64, u64) + Send>>,
     )
     .map_err(|e| InstallError::MissingDownload(format!("{} (url: {})", e, url)))?;
+
+    // Feed the store so other instances (same file, another version group)
+    // get these bytes for free.
+    if let Some(sha1) = expected_sha1 {
+        crate::mod_store::record(path, sha1);
+    }
 
     Ok(())
 }
