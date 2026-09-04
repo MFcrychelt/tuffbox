@@ -127,6 +127,7 @@ pub fn lookup(expected_sha1: &str) -> Option<PathBuf> {
     if is_valid {
         Some(path)
     } else {
+        make_writable(&path);
         let _ = std::fs::remove_file(&path);
         None
     }
@@ -169,9 +170,57 @@ pub fn record(file: &Path, expected_sha1: &str) {
     // Another process may have recorded it in the meantime — either way the
     // rename lands a valid object.
     let _ = std::fs::rename(&tmp, &obj);
+    // Read-only protection (docs/17, "Права на запись"): a store object is
+    // shared by N instances; a player who opens the jar in an archive tool
+    // and edits a texture inside one instance would otherwise corrupt every
+    // other instance through the shared inode. Best-effort: failure to set
+    // the attribute is non-fatal (dedup still works, corruption risk only).
+    let _ = make_readonly(&obj);
     // Prune sibling instances of the same file: if the target is a copy
     // (not a link), leave it as-is; callers that want links use try_hardlink
     // before downloading.
+}
+
+/// Set the read-only attribute (Windows) / user-read-only permission bits
+/// (Unix). Best-effort: errors are swallowed by the caller.
+fn make_readonly(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(path)?;
+        let mut perms = meta.permissions();
+        perms.set_mode((perms.mode() & 0o555) | 0o444);
+        std::fs::set_permissions(path, perms)
+    }
+    #[cfg(windows)]
+    {
+        let mut perms = std::fs::metadata(path)?.permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(path, perms)
+    }
+}
+
+/// Clear the read-only attribute before deleting/replacing a store object.
+/// No-op when the file is writable already; failure is non-fatal (GC/relink
+/// callers treat errors as "skip this object").
+fn make_writable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode((perms.mode() & !0o222) | 0o644 & perms.mode() | 0o200);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
 }
 
 /// Delete orphaned objects no longer hard-linked from any instance.
@@ -226,6 +275,7 @@ pub fn gc() -> std::io::Result<(usize, u64)> {
                 }
             }
             bytes += meta.len();
+            make_writable(&path);
             std::fs::remove_file(&path)?;
             removed += 1;
         }
@@ -348,6 +398,7 @@ fn relink_to_store(path: &Path, sha1: &str) -> bool {
     // Windows: remove can fail with ERROR_SHARING_VIOLATION if AV/indexer
     // holds the file; one short retry then give up (non-fatal).
     for attempt in 0..2u32 {
+        make_writable(path); // target copy may be read-only from an earlier store
         match std::fs::remove_file(path) {
             Ok(()) => break,
             Err(e) if attempt == 0 => {
@@ -492,6 +543,44 @@ mod tests {
             assert_eq!(report2.scanned, 1);
             assert_eq!(report2.linked, 0);
             assert_eq!(report2.recorded, 0);
+        });
+    }
+
+    #[test]
+    fn recorded_object_is_readonly_and_gcs_cleanly() {
+        with_test_store(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("m.jar");
+            std::fs::write(&src, b"shared jar bytes").unwrap();
+            let sha = sha1_of(&src).unwrap();
+
+            record(&src, &sha);
+            let obj = object_path(&sha);
+            // Read-only attribute set (protects against in-instance edits
+            // through the shared inode).
+            #[cfg(windows)]
+            assert!(std::fs::metadata(&obj).unwrap().permissions().readonly());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(&obj).unwrap().permissions().mode();
+                assert_eq!(mode & 0o222, 0, "object must not be user-writable");
+            }
+
+            // GC removes it despite read-only (make_writable clears first).
+            // Fresh objects fall inside the 24h grace window on Windows, so
+            // backdate the mtime past the grace period first — requires
+            // clearing read-only before set_file_mtime will succeed.
+            make_writable(&obj);
+            filetime::set_file_times(
+                &obj,
+                filetime::FileTime::from_unix_time(0, 0),
+                filetime::FileTime::from_unix_time(0, 0),
+            )
+            .unwrap();
+            let (removed, _) = gc().unwrap();
+            assert!(removed >= 1);
+            assert!(!obj.exists());
         });
     }
 }
