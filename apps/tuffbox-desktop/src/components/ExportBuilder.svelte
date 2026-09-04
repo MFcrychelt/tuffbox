@@ -351,29 +351,27 @@
 
 <div class="export-builder w-full">
   <div class="eb-cap">
-  <div class="flex items-start justify-between gap-3 mb-3 flex-wrap">
-    <div class="min-w-0">
-      <div class="flex items-center gap-2 text-[color:var(--text-secondary)] font-bold text-[13px]"><UploadCloud size={16} /> Export</div>
-      {#if packSummary}
-        <div class="mt-0.5 text-[11px] text-[color:var(--text-muted)] whitespace-nowrap overflow-hidden text-ellipsis max-w-[min(560px,55vw)]" title={packSummary}>{packSummary}</div>
-      {/if}
-    </div>
-    <div class="flex gap-1.5 flex-wrap shrink-0">
-      <button class="ghost mini" onclick={refreshDefaultPath} disabled={!$projectPath} title="Reset output paths">
-        <RefreshCw size={14} />
+  <div class="toolbar">
+    <div class="title"><UploadCloud size={18} /> Export</div>
+    <div class="toolbar-actions">
+      <button class="ghost" onclick={refreshDefaultPath} disabled={!$projectPath} title="Reset output paths to defaults">
+        <RefreshCw size={16} />
         Defaults
       </button>
       <button
-        class="ghost mini"
+        class="ghost"
         onclick={exportAllFormats}
         disabled={!$projectPath || batching || exporting}
         title="Build all formats into ./export"
       >
-        <Layers size={14} />
+        <Layers size={16} />
         {batching ? "Exporting all…" : "Export all"}
       </button>
     </div>
   </div>
+  {#if packSummary}
+    <p class="pack-summary" title={packSummary}>{packSummary}</p>
+  {/if}
 
   {#if error}<div class="flex items-start gap-2 px-2.5 py-2 rounded-[length:var(--border-radius-md)] mb-2.5 border text-xs leading-snug text-[#fecaca] bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.28)]"><AlertTriangle size={14} class="shrink-0" /> {error}</div>{/if}
   {#if result}
@@ -512,7 +510,7 @@
         {/if}
 
         <div class="flex gap-2 flex-wrap items-center">
-          <button class="inline-flex items-center gap-1.5" onclick={runSelectedExport} disabled={exportBlocked || batching}>
+          <button class="eb-export-btn" onclick={runSelectedExport} disabled={exportBlocked || batching}>
             <UploadCloud size={15} />
             {#if exporting}
               Exporting…
@@ -578,6 +576,71 @@
     max-width: min(1240px, 100%);
     margin: 0 auto;
   }
+
+  /* Stage toolbar — same pattern as Ores / Release / History stages. */
+  .toolbar,
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+  }
+  .toolbar {
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .title {
+    gap: 10px;
+    color: var(--text-secondary);
+    font-weight: 700;
+  }
+  .toolbar-actions {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .pack-summary {
+    margin: -6px 0 14px;
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: min(720px, 100%);
+  }
+
+  /* Primary export action: theme accent, not the global Ore-gray button skin. */
+  .eb-export-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 18px;
+    border-radius: 999px;
+    border: 1px solid var(--accent-primary);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 55%, #000);
+    background: var(--accent-primary);
+    color: var(--on-accent);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition:
+      background var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease),
+      box-shadow var(--motion-fast) var(--motion-ease);
+  }
+  .eb-export-btn:hover:not(:disabled) {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-primary) 28%, transparent);
+  }
+  .eb-export-btn:active:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 85%, #000);
+  }
+  .eb-export-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
   .format-card.active {
     color: var(--text-primary);
     border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
