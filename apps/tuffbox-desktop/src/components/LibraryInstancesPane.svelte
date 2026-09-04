@@ -91,6 +91,7 @@
   let actionBusy = $state(false);
   let exportMenuOpen = $state(false);
   let addMenuOpen = $state(false);
+  let moreMenuOpen = $state(false);
   let githubImportOpen = $state(false);
   let githubConfirmOpen = $state(false);
   let githubInstallActive = $state(false);
@@ -400,6 +401,7 @@
     exportMenuOpen = false;
     addMenuOpen = false;
     foldersMenuOpen = false;
+    moreMenuOpen = false;
   }
 
   function clearLongPressTimer() {
@@ -610,6 +612,7 @@
     if (addMenuOpen && !t?.closest?.(".tb-add-wrap")) addMenuOpen = false;
     if (foldersMenuOpen && !t?.closest?.(".tb-folders-wrap")) foldersMenuOpen = false;
     if (exportMenuOpen && !t?.closest?.(".tb-export-wrap")) exportMenuOpen = false;
+    if (moreMenuOpen && !t?.closest?.(".side-more-wrap")) moreMenuOpen = false;
     if (!ctxMenu || e.button === 2) return;
     if (t?.closest?.(".pack-ctx-menu")) return;
     ctxMenu = null;
@@ -1357,18 +1360,28 @@
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                onclick={() => void runAction("change-group", selected)}
+                onclick={() => void runAction("folder", selected)}
               >
-                <Tags size={14} /> Change Group
+                <Folder size={14} /> Folder
               </button>
               <button
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                onclick={() => void runAction("folder", selected)}
+                onclick={() => void runAction("change-icon", selected)}
               >
-                <Folder size={14} /> Folder
+                <ImageIcon size={14} /> Change icon…
               </button>
+              {#if instanceIcons[selected.path]}
+                <button
+                  type="button"
+                  class="side-btn"
+                  disabled={actionBusy}
+                  onclick={() => void runAction("clear-icon", selected)}
+                >
+                  <Eraser size={14} /> Clear icon
+                </button>
+              {/if}
 
               <div class="tb-export-wrap">
                 <button
@@ -1391,30 +1404,41 @@
                 {/if}
               </div>
 
-              <button
-                type="button"
-                class="side-btn"
-                disabled={actionBusy}
-                onclick={() => void runAction("copy", selected)}
-              >
-                <Copy size={14} /> Copy
-              </button>
-              <button
-                type="button"
-                class="side-btn danger"
-                disabled={actionBusy}
-                onclick={() => void runAction("delete", selected)}
-              >
-                <Trash2 size={14} /> Delete
-              </button>
-              <button
-                type="button"
-                class="side-btn"
-                disabled={actionBusy}
-                onclick={() => void runAction("shortcut", selected)}
-              >
-                <Link2 size={14} /> Create Shortcut
-              </button>
+              <div class="side-more-wrap">
+                <button
+                  type="button"
+                  class="side-btn"
+                  onclick={(e) => { e.stopPropagation(); (moreMenuOpen = !moreMenuOpen); }}
+                >
+                  <Settings size={14} /> More <ChevronDown size={12} />
+                </button>
+                {#if moreMenuOpen}
+                  <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-group", selected); }}>
+                      <Tags size={14} /> Change Group
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy", selected); }}>
+                      <Copy size={14} /> Copy instance
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("shortcut", selected); }}>
+                      <Link2 size={14} /> Create Shortcut
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("repair", selected); }} disabled={actionBusy}>
+                      <Wrench size={14} /> Repair
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy-path", selected); }}>
+                      <Copy size={14} /> Copy path
+                    </button>
+                    <div class="menu-sep"></div>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("remove", selected); }}>
+                      <Minus size={14} /> Remove from library
+                    </button>
+                    <button type="button" role="menuitem" class="danger" onclick={() => { moreMenuOpen = false; void runAction("delete", selected); }}>
+                      <Trash2 size={14} /> Delete from disk
+                    </button>
+                  </div>
+                {/if}
+              </div>
             </div>
           </div>
         {/key}
@@ -1674,29 +1698,36 @@
 
   /* Sort selector — compact, matches toolbar buttons. */
   .tb-sort {
-    padding: 6px 6px 6px 8px;
-    border-radius: 3px;
+    padding: 7px 24px 7px 10px;
+    border-radius: 999px;
     border: 1px solid var(--border-color);
     background: var(--bg-secondary);
     color: var(--text-secondary);
     font: inherit;
     font-size: 12px;
+    font-weight: 600;
     cursor: pointer;
     outline: none;
-    transition: border-color var(--motion-fast) var(--ease-out);
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+      linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+    background-position: calc(100% - 14px) 55%, calc(100% - 9px) 55%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+    transition: border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out);
   }
-  .tb-sort:hover { border-color: var(--accent-primary); color: var(--text-primary); }
+  .tb-sort:hover { border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color)); color: var(--text-primary); }
+  .tb-sort:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
 
 
   .tb-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 7px 10px 6px;
-    border-radius: 3px;
-    border: 1px solid #39393b;
-    border-bottom: 3px solid #232425;
-    background: #39393b;
+    padding: 7px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
     color: var(--text-secondary);
     font-size: 12px;
     font-weight: 600;
@@ -1707,42 +1738,38 @@
       color var(--motion-fast) var(--motion-ease);
   }
   .tb-btn:hover {
-    background: #47484a;
-    border-color: #47484a;
-    border-bottom-color: #232425;
+    background: var(--bg-tertiary);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
     color: var(--text-primary);
   }
   .tb-btn:active:not(:disabled) {
-    background: #2a2b2c;
-    border-bottom-width: 1px;
-    margin-top: 2px;
+    background: var(--bg-active);
   }
   /* Task: Ore UI treatment for the primary toolbar key (Add Instance). */
   .tb-btn.primary {
-    background: #491ac0;
-    border-color: #491ac0;
-    border-bottom-color: #32127f;
-    color: #ffffff;
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 60%, #000);
+    color: var(--on-accent);
     font-weight: 700;
   }
   .tb-btn.primary:hover {
-    background: #5c2dd5;
-    border-color: #5c2dd5;
-    border-bottom-color: #3f1a96;
-    color: #ffffff;
-    box-shadow: none;
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 50%, #000);
+    color: var(--on-accent);
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
   .tb-btn.primary:active:not(:disabled) {
-    background: #3b158f;
-    border-bottom-width: 1px;
-    margin-top: 2px;
+    background: color-mix(in srgb, var(--accent-primary) 85%, #000);
   }
   .tb-btn:disabled { opacity: 0.5; cursor: default; }
   .tb-add-wrap,
-  .tb-folders-wrap,
-  .tb-export-wrap {
-    position: relative;
-  }
+    .tb-folders-wrap,
+    .tb-export-wrap,
+    .side-more-wrap {
+      position: relative;
+    }
   .tb-menu {
     position: absolute;
     top: calc(100% + 4px);
@@ -1759,6 +1786,11 @@
     gap: 2px;
   }
   .tb-menu.side-menu { left: auto; right: 0; }
+  .tb-menu .menu-sep {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 2px;
+  }
   .tb-menu button {
     display: inline-flex;
     align-items: center;
@@ -2184,10 +2216,6 @@
   }
   .side-btn.launch.stop:hover:not(:disabled) {
     box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-danger, #ef4444) 18%, transparent);
-  }
-  .side-btn.danger:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.12);
-    color: #f87171;
   }
   .side-empty {
     padding: 24px 8px;

@@ -996,10 +996,9 @@
     align-items: center;
     gap: 6px;
     padding: 8px 14px;
-    border-radius: var(--border-radius-md);
-    background: #39393b;
-    border: 1px solid #39393b;
-    border-bottom-color: #232425;
+    border-radius: 999px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
     color: var(--text-secondary);
     font-size: 13px;
     font-weight: 600;
@@ -1010,24 +1009,21 @@
       color var(--motion-fast) var(--motion-ease);
   }
   .tabs button:hover {
-    background: #47484a;
+    background: var(--bg-tertiary);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
     color: var(--text-primary);
   }
   .tabs button:active:not(:disabled) {
-    background: #2a2b2c;
-    border-bottom-width: 1px;
-    transform: translateY(1px);
+    background: var(--bg-active);
   }
   .tabs button.active {
-    background: #491ac0;
-    border-color: #491ac0;
-    border-bottom-color: #32127f;
-    color: #ffffff;
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: var(--on-accent);
   }
   .tabs button.active:hover {
-    background: #5c2dd5;
-    border-color: #5c2dd5;
-    border-bottom-color: #3f1a96;
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
   }
 
   .pack-card {
@@ -1330,9 +1326,8 @@
     padding: 6px 12px;
     border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
-    background: #39393b;
-    border-bottom-color: #232425;
-    color: var(--text-secondary);
+    background: transparent;
+    color: var(--text-muted);
     font-size: 12px;
     font-weight: 700;
     cursor: pointer;
@@ -1340,14 +1335,13 @@
       border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
   }
   .provider-toggle button:hover {
-    background: #47484a;
+    background: var(--bg-hover);
     color: var(--text-primary);
   }
   .provider-toggle button.active {
-    background: #491ac0;
-    border-color: #491ac0;
-    border-bottom-color: #32127f;
-    color: #ffffff;
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: var(--on-accent);
   }
   .search {
     flex: 1;
