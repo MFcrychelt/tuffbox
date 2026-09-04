@@ -51,15 +51,15 @@
     return skins.some((s) => s.filePath.replace(/\\/g, "/").toLowerCase() === norm);
   });
 
-  function refresh() {
+  function refresh(notify = true) {
     skins = listSavedSkins();
-    onlibrarychange?.();
+    if (notify) onlibrarychange?.();
   }
 
   $effect(() => {
     void $authState.activeAccountUuid;
     void revision;
-    refresh();
+    refresh(false);
   });
 
   function closeMenu() {
