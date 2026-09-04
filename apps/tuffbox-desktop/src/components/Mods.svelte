@@ -5959,6 +5959,10 @@ import { trapFocus } from "../lib/focusTrap";
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* flex-item min-width:auto would let long names push past the card
+       edge and clip hard without an ellipsis — allow shrinking. */
+    min-width: 0;
+    flex: 0 1 auto;
   }
 
   .installed-meta {
@@ -7128,6 +7132,10 @@ import { trapFocus } from "../lib/focusTrap";
     align-items: flex-start;
     gap: 4px;
     min-height: 2.75rem;
+    /* Long names must ellipsize inside the card, not push past it. */
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
   }
   .result-title-row {
     display: flex;
@@ -7170,6 +7178,8 @@ import { trapFocus } from "../lib/focusTrap";
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* Shrink inside the flex title row instead of overflowing it. */
+    flex: 0 1 auto;
   }
   button.result-name.linkish:hover,
   button.installed-name.linkish:hover {
