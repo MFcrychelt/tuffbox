@@ -6396,6 +6396,65 @@ fn prepare_ai_crash_context(
     ),
     String,
 > {
+    // Cache the heavy prep (jar scan, inventory, graph) keyed by input mtimes —
+    // analyze_crash_with_ai + build_ai_crash_context both call this per run; the
+    // second call must not rescan everything (Diagnose appeared stuck).
+    let cache_key = ai_context_cache_key(path, report_id);
+    if let Some(cached) = tuffbox_core::api_cache::get::<
+        (
+            tuffbox_core::ai_explanation::CrashAiContext,
+            tuffbox_core::crash_kb::CrashFingerprint,
+            String,
+            usize,
+        ),
+    >(&cache_key)
+    {
+        return Ok(cached);
+    }
+    let result = prepare_ai_crash_context_uncached(path, report_id)?;
+    // Short TTL: inputs are covered by the key; TTL just bounds memory.
+    tuffbox_core::api_cache::put_with_ttl(
+        cache_key,
+        result.clone(),
+        std::time::Duration::from_secs(300),
+    );
+    Ok(result)
+}
+
+/// Cache key for [`prepare_ai_crash_context`] — same inputs as the diagnosis
+/// cache (manifest, latest.log, newest crash report, mods dir) + report id.
+fn ai_context_cache_key(path: &str, report_id: Option<&str>) -> String {
+    let manifest_mtime = resolve_manifest_path(path)
+        .ok()
+        .and_then(|p| file_mtime_nanos(&p))
+        .unwrap_or(0);
+    let project_dir = resolve_manifest_path(path)
+        .ok()
+        .and_then(|p| manifest_parent(&p.to_string_lossy().to_string()).ok())
+        .unwrap_or_default();
+    let latest_mtime = file_mtime_nanos(&project_dir.join("logs").join("latest.log")).unwrap_or(0);
+    let crash_mtime = newest_crash_report_mtime(&project_dir).unwrap_or(0);
+    let mods_mtime = dir_mtime_nanos(&project_dir.join("mods")).unwrap_or(0);
+    let launcher_mtime =
+        file_mtime_nanos(&project_dir.join("logs").join("launcher.log")).unwrap_or(0);
+    format!(
+        "crashai:{}:{:?}:{}:{}:{}:{}:{}",
+        path, report_id, manifest_mtime, latest_mtime, launcher_mtime, crash_mtime, mods_mtime
+    )
+}
+
+fn prepare_ai_crash_context_uncached(
+    path: &str,
+    report_id: Option<&str>,
+) -> Result<
+    (
+        tuffbox_core::ai_explanation::CrashAiContext,
+        tuffbox_core::crash_kb::CrashFingerprint,
+        String,
+        usize,
+    ),
+    String,
+> {
     let manifest_path = resolve_manifest_path(path)?;
     let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(path)?;
@@ -6519,7 +6578,6 @@ fn prepare_ai_crash_context(
 
     let inventory =
         tuffbox_core::project_ai_inventory::collect_project_ai_inventory(&project_dir, &manifest);
-
     let culprit_details: Vec<tuffbox_core::ai_explanation::CrashAiCulprit> = diagnosis
         .suspected_mods
         .iter()
@@ -6676,8 +6734,9 @@ async fn build_ai_crash_context(
         .as_ref()
         .map(|i| i.resourcepacks.len() + i.datapacks.len() + i.shaderpacks.len())
         .unwrap_or(0);
-    let mut ui_ctx = ai_ctx.clone();
-    ui_ctx.inventory = None;
+    let similar_case_count = ai_ctx.similar_cases.len();
+    let fingerprint_key = ai_ctx.fingerprint_key.clone();
+    let mut ui_ctx = ai_ctx;
 
     Ok(serde_json::json!({
         "context": ui_ctx,
@@ -6685,8 +6744,8 @@ async fn build_ai_crash_context(
         "triagePrompt": triage,
         "promptLength": prompt.len(),
         "findingsCount": findings_count,
-        "similarCaseCount": ai_ctx.similar_cases.len(),
-        "fingerprintKey": ai_ctx.fingerprint_key,
+        "similarCaseCount": similar_case_count,
+        "fingerprintKey": fingerprint_key,
         "aiProvider": settings.ai.provider,
         "aiModel": settings.ai.model,
         "aiEndpoint": settings.ai.endpoint,
@@ -6719,8 +6778,16 @@ async fn analyze_crash_with_ai(
     let mode = tuffbox_core::action_plan::DiagnoseMode::parse(&settings.ai.diagnose_mode);
 
     let swarm_on = integrations::swarm_enabled();
+    // Hard cap on every network step of the cascade: a dead hub/P2P/supabase
+    // must cost seconds, not minutes (Diagnose appeared stuck on L1/L2/L3).
+    const NET_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
     let transport_bases = if swarm_on {
-        swarm_node::capsule_transport_bases().await
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            swarm_node::capsule_transport_bases(),
+        )
+        .await
+        .unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -6757,7 +6824,12 @@ async fn analyze_crash_with_ai(
             loader: Some(ai_ctx.loader.clone()),
             limit: 5,
         };
-        if let Some(resp) = swarm_node::lookup_across_transports(&req).await {
+        if let Ok(Some(resp)) = tokio::time::timeout(
+            NET_STEP_TIMEOUT,
+            swarm_node::lookup_across_transports(&req),
+        )
+        .await
+        {
             let mut remote = tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
             remote.extend(ai_ctx.similar_cases.drain(..));
             let mut seen = std::collections::HashSet::new();
@@ -6798,8 +6870,13 @@ async fn analyze_crash_with_ai(
                 loader: Some(ai_ctx.loader.clone()),
                 limit: 1,
             };
-            match swarm_node::lookup_across_transports(&req).await {
-                Some(resp) => {
+            match tokio::time::timeout(
+                NET_STEP_TIMEOUT,
+                swarm_node::lookup_across_transports(&req),
+            )
+            .await
+            {
+                Ok(Some(resp)) => {
                     let hit = resp.hits.first().ok_or_else(|| {
                         "no remote KB hits for this fingerprint".to_string()
                     })?;
@@ -6813,7 +6890,7 @@ async fn analyze_crash_with_ai(
                         hit.score,
                     )
                 }
-                None => {
+                Ok(None) | Err(_) => {
                     let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
                     let similar = tuffbox_core::crash_kb::search_similar(
                         &cases,
@@ -6857,12 +6934,19 @@ async fn analyze_crash_with_ai(
         cascade_tried.push("l2".into());
         emit_diagnose_cascade(&app, "l2_asking");
         let l2 = if swarm_on && settings.swarm.p2p_enabled {
-            swarm_node::diagnose_via_volunteer(
-                &fingerprint,
-                &ai_ctx,
-                &tuffbox_core::crash_kb::smart_excerpt(&haystack, 4000),
+            match tokio::time::timeout(
+                NET_STEP_TIMEOUT,
+                swarm_node::diagnose_via_volunteer(
+                    &fingerprint,
+                    &ai_ctx,
+                    &tuffbox_core::crash_kb::smart_excerpt(&haystack, 4000),
+                ),
             )
             .await
+            {
+                Ok(r) => r,
+                Err(_) => Err("fog volunteer timed out".into()),
+            }
         } else {
             Err("fog volunteer unavailable".into())
         };
@@ -6888,17 +6972,41 @@ async fn analyze_crash_with_ai(
                         excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 4000)),
                         prefer_kb_only: false,
                     };
-                    match swarm_node::diagnose_across_transports(&req).await {
-                        Ok(resp) => {
+                    match tokio::time::timeout(
+                        NET_STEP_TIMEOUT,
+                        swarm_node::diagnose_across_transports(&req),
+                    )
+                    .await
+                    {
+                        Ok(Ok(resp)) => {
                             // Explain may read the network; MUST NOT persist peer capsules here.
                             cascade_stage = "l3_hit".into();
                             resp.plan
                         }
-                        Err(remote_err) => {
+                        Ok(Err(remote_err)) => {
                             let (p, compact, note, spec) =
                                 ai_plan_with_fallback(&settings.ai, &ai_ctx).await.map_err(
                                     |e| format!("server diagnose failed ({remote_err}); {e}"),
                                 )?;
+                            compact_prompt_used = compact;
+                            speculative_used |= spec.used;
+                            if let Some(m) = spec.draft_model {
+                                speculative_draft_model = Some(m);
+                            }
+                            if let Some(n) = note {
+                                fallback_notes.push(n);
+                            }
+                            cascade_stage = if note_is_heuristic(&fallback_notes) {
+                                "heuristic".into()
+                            } else {
+                                "l3_hit".into()
+                            };
+                            p
+                        }
+                        Err(_) => {
+                            // Transport timeout — fall through to local AI/heuristics.
+                            let (p, compact, note, spec) =
+                                ai_plan_with_fallback(&settings.ai, &ai_ctx).await?;
                             compact_prompt_used = compact;
                             speculative_used |= spec.used;
                             if let Some(m) = spec.draft_model {
@@ -6956,14 +7064,18 @@ async fn analyze_crash_with_ai(
             integrations::swarm_supabase_url(),
             integrations::swarm_supabase_anon_key(),
         ) {
-            if let Ok(net) = tuffbox_core::swarm_supabase::fetch_cooccurrence_supabase(
-                &url,
-                &key,
-                &ai_ctx.mc_version,
-                &ai_ctx.loader,
-                200,
+            if let Ok(net) = tokio::time::timeout(
+                NET_STEP_TIMEOUT,
+                tuffbox_core::swarm_supabase::fetch_cooccurrence_supabase(
+                    &url,
+                    &key,
+                    &ai_ctx.mc_version,
+                    &ai_ctx.loader,
+                    200,
+                ),
             )
             .await
+            .unwrap_or(Err("cooccurrence timed out".into()))
             {
                 pairs = tuffbox_core::swarm::merge_cooccurrence_pairs(&pairs, &net, 200);
             }
