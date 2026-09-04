@@ -3,6 +3,13 @@
 Дата: 2026-09-04. Источник идеи: `deduplication-help.txt` (pnpm-подобный
 Content-Addressable Storage на hardlinks).
 
+> **СТАТУС (2026-09-04): РЕАЛИЗОВАНО.** Все четыре milestone выполнены:
+> M1 options.txt sync (1defe7a), M2 dedup Mojang-загрузок (881800f),
+> M3 ретро-дедуп + честный GC (f9c880b, 03c3f6c), M4 Storage UI (57fc512),
+> плюс hardening store (уникальные tmp, retry hardlink, кэш валидации
+> lookup). Разделы ниже описывают план как он задумывался; фактические
+> расхождения от плана помечены «Факт:».
+
 ---
 
 ## Часть 1. Дедупликация файлов сборок
@@ -227,20 +234,39 @@ TuffBox) — **записываем обратно**: copy local -> shared, ес
 
 ---
 
-## Часть 3. Порядок внедрения
+## Часть 3. Порядок внедрения (выполнено)
 
-1. **M1 — options.txt sync** (изолировано, высокий user-value, низкий риск):
-   группы, stamp, 3-way merge, write-back, Tauri-команды, UI-переключатель.
-2. **M2 — расширение dedup**: libraries → resourcepacks/shaderpacks →
-   assets. Каждая категория — отдельный коммит с замером экономии.
-3. **M3 — ретроспективная дедупликация + честный GC на Windows**
-   (`number_of_links()`) + readonly-защита объектов.
-4. **M4 — UI Maintenance-страница**: «освобождено X ГБ», статистика store,
-   кнопка ретро-дедупликации, управление группами options.
+1. **M1 — options.txt sync** ✔ (1defe7a): группы `mc-1.<minor>` (не data_epoch —
+   Факт: options.txt несовместим между минорными версиями, гранулярность —
+   minor), stamp `.tuffbox-options-managed`, 3-way merge, write-back,
+   5 Tauri-команд, секция «Shared options.txt» в Project Settings.
+2. **M2 — расширение dedup** ✔ (881800f): Факт: реализовано одной точкой —
+   `mc_install::download_with_sha1` (client jar, libraries, natives, assets
+   Mojang все идут через неё). Ресурспаки/шейдеры уже проходили через
+   `materialize_mod_file` с store.
+3. **M3 — ретро-дедупликация + GC** ✔ (f9c880b, 03c3f6c):
+   `mod_store::retro_dedup` + `store_retro_dedup` Tauri-команда (свип
+   recent projects в spawn_blocking). GC: Факт: `number_of_links()` в std
+   нестабилен — Windows использует file identity через `same-file`
+   (volume serial + file index) для точной проверки «уже линк», GC держит
+   grace 24h для свежих объектов (Unix: nlink). Readonly-защита объектов
+   store не сделана (объекты перезаписываются только идентичным контентом,
+   риск ниже, чем стоимость); отложено.
+4. **M4 — Storage UI** ✔ (57fc512): Settings → Launcher → Storage:
+   статистика store, «Deduplicate existing projects», «Clean unused store
+   files».
 
-Риски и границы:
+Hardening store (после аудита):
+- `record()`: уникальное tmp-имя (pid + counter + thread id) — раньше
+  два параллельных луча rayon могли гоняться за одним `.tmp-<pid>`.
+- `try_hardlink()`: retry через 150 мс при ERROR_SHARING_VIOLATION
+  (антивирус/индексатор на Windows).
+- `lookup()`: кэш валидации по (size, mtime) fingerprint — без него
+  каждый Play перехешировал все объекты store (стоп на больших library jar).
+
+Риски и границы (актуально):
 - cross-device → fallback copy (уже в коде), локальный store на другой том.
 - антивирусы/индексаторы Windows иногда держат файл открытым →
-  hard_link может упасть ERROR_SHARING_VIOLATION → ретрай с задержкой,
-  затем fallback copy.
-- нелинковать ничего в `saves/`, `config/`, `screenshots/`.
+  ретрай с задержкой, затем fallback copy.
+- нелинковать ничего в `saves/`, `config/`, `screenshots/` — соблюдаются
+  и в retro_candidates, и в M2-путях.

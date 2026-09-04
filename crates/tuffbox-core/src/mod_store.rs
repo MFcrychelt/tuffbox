@@ -76,22 +76,59 @@ pub fn try_hardlink(target: &Path, expected_sha1: &str) -> bool {
             .map(|h| h.eq_ignore_ascii_case(expected_sha1))
             .unwrap_or(false);
     }
+    // Windows: antivirus/indexer briefly holds freshly-created files open;
+    // a failed CreateHardLink with ERROR_SHARING_VIOLATION succeeds on a
+    // short retry. Two attempts ~150ms apart cover the common window.
+    if std::fs::hard_link(&source, target).is_ok() {
+        return true;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(150));
     std::fs::hard_link(&source, target).is_ok()
 }
 
-/// Look up a stored object by sha1; validates the bytes still hash correctly
-/// (a corrupted object is removed, same policy as `download_cache`).
+/// Look up a stored object by sha1. Full re-hash validation runs once per
+/// (size, mtime) fingerprint and is cached for the process lifetime — Play
+/// consults the store for every mod/library, and re-hashing a 100 MB library
+/// jar on each launch is a measurable stall. A corrupted object is removed
+/// (same policy as `download_cache`); any file that later changes content
+/// gets a new mtime/size and is re-validated.
 pub fn lookup(expected_sha1: &str) -> Option<PathBuf> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    type Cache = HashMap<String, bool>; // object path string -> valid
+    static VALIDATED: Mutex<Option<Cache>> = Mutex::new(None);
+
     let path = object_path(expected_sha1);
     if !path.is_file() {
         return None;
     }
-    match sha1_of(&path) {
-        Ok(h) if h.eq_ignore_ascii_case(expected_sha1) => Some(path),
-        _ => {
-            let _ = std::fs::remove_file(&path);
-            None
-        }
+    let fingerprint = match std::fs::metadata(&path) {
+        Ok(m) => format!("{}:{}", m.len(), {
+            use std::time::UNIX_EPOCH;
+            m.modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        }),
+        Err(_) => return None,
+    };
+    let cache_key = format!("{}|{}", path.display(), fingerprint);
+    let is_valid = {
+        let mut guard = VALIDATED.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .get_or_insert_with(HashMap::new)
+            .entry(cache_key)
+            .or_insert_with(|| {
+                matches!(sha1_of(&path), Ok(h) if h.eq_ignore_ascii_case(expected_sha1))
+            })
+            .clone()
+    };
+    if is_valid {
+        Some(path)
+    } else {
+        let _ = std::fs::remove_file(&path);
+        None
     }
 }
 
@@ -114,9 +151,17 @@ pub fn record(file: &Path, expected_sha1: &str) {
     if std::fs::create_dir_all(parent).is_err() {
         return;
     }
+    // Unique temp name: parallel rayon download tasks (and the retro-dedup
+    // sweep) can record different files concurrently inside this same
+    // process — a pid-only name would let two writers race for the same tmp
+    // file and rename the wrong bytes into place. Pid + monotonically
+    // increasing counter + thread id is collision-free in practice.
+    static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let tmp = parent.join(format!(
-        ".tmp-{}",
-        std::process::id()
+        ".tmp-{}-{}-{}",
+        std::process::id(),
+        TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        format!("{:?}", std::thread::current().id()),
     ));
     if std::fs::copy(file, &tmp).is_err() {
         return;
