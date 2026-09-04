@@ -1460,6 +1460,19 @@ export const api = {
     addCurseforgeManyWithDeps(modIds: string[], side: string, p?: string) {
       return cmd<string[]>("add_curseforge_mods_with_dependencies", { ...pathArg(p), modIds, side });
     },
+    // ── Mod presets (Optimize → user-built sets) ──
+    getPresets() {
+      return cmd<{ presets: Array<{ id: string; name: string; createdAt: string; mods: Array<{ provider: string; projectId: string; slug: string; name: string }> }> }>("get_mod_presets");
+    },
+    savePresets(store: { presets: Array<{ id: string; name: string; createdAt: string; mods: Array<{ provider: string; projectId: string; slug: string; name: string }> }> }) {
+      return cmd<void>("save_mod_presets_cmd", { store });
+    },
+    resolvePresetMod(entry: { provider: string; projectId: string; slug?: string; name?: string }, p?: string) {
+      return cmd<{
+        slug: string; name: string; provider: string; projectId: string;
+        versionId?: string | null; reason: string; risk: string; alreadyInstalled: boolean;
+      }>("resolve_preset_mod", { ...pathArg(p), entry: { slug: entry.slug ?? "", name: entry.name ?? "", provider: entry.provider, projectId: entry.projectId } });
+    },
     /** Install Steam Bridge jar matching this pack's MC + loader (GitHub releases). */
     installSteamBridge(p?: string) {
       return cmd<{

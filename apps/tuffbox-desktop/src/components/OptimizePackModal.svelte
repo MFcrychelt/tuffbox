@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X, Zap, Loader2, Check } from "@lucide/svelte";
+  import { X, Zap, Loader2, Check, Package } from "@lucide/svelte";
   import { api } from "../lib/api";
   import { projectPath, projectInfo } from "../lib/store";
   import { launchWithFeedback } from "../lib/launch";
@@ -7,6 +7,7 @@
   import { trapFocus } from "../lib/focusTrap";
   import { portal } from "../lib/portal";
   import { get } from "svelte/store";
+  import ModPresetsModal from "./ModPresetsModal.svelte";
 
   let {
     open = $bindable(false),
@@ -75,6 +76,7 @@
   let findings = $state<Record<string, unknown>[]>([]);
   let doneMessage = $state<string | null>(null);
   let sessionOpen = $state(false);
+  let presetsOpen = $state(false);
   /** Non-reactive generation counter — must not be $state (close path would retrigger $effect). */
   let loadGen = 0;
 
@@ -486,7 +488,17 @@
             Custom resolves missing whitelist mods (Modrinth → CurseForge).
           </p>
         </div>
-        <button class="icon-btn" type="button" onclick={close} aria-label="Close"><X size={18} /></button>
+        <div class="header-actions">
+          <button
+            class="secondary presets-btn"
+            type="button"
+            onclick={() => { presetsOpen = true; }}
+            title="Manage your own mod presets (Modrinth / CurseForge)"
+          >
+            <Package size={14} /> Presets
+          </button>
+          <button class="icon-btn" type="button" onclick={close} aria-label="Close"><X size={18} /></button>
+        </div>
       </div>
 
       <div class="mode-tabs" role="tablist">
@@ -703,6 +715,8 @@
   </div>
 {/if}
 
+<ModPresetsModal bind:open={presetsOpen} />
+
 <style>
   .modal-backdrop {
     position: fixed;
@@ -765,6 +779,20 @@
   .icon-btn:hover:not(:disabled) {
     background: var(--bg-hover);
     color: var(--text-secondary);
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .presets-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
   }
 
   .opt-body {

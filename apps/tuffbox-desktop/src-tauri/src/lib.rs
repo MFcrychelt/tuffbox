@@ -13,6 +13,7 @@ mod launcher_presence;
 mod launcher_settings;
 mod listing_api;
 mod mca_selector;
+mod mod_presets;
 mod overlay_hook;
 mod taurpc_api;
 mod window_glass;
@@ -5143,6 +5144,146 @@ async fn apply_optimize_custom_plan(
         "config": config_result,
         "ok": errors.is_empty(),
     }))
+}
+
+// ── Mod presets (Optimize → user-built mod sets) ────────────────────
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_mod_presets() -> Result<mod_presets::ModPresetsStore, String> {
+    Ok(mod_presets::load_mod_presets())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn save_mod_presets_cmd(store: mod_presets::ModPresetsStore) -> Result<(), String> {
+    mod_presets::save_mod_presets(&store)
+}
+
+/// Resolve one preset entry against the current instance's MC version + loader.
+/// Returns the OptimizeModOffer shape used by apply_optimize_custom_plan.
+#[tauri::command(rename_all = "camelCase")]
+async fn resolve_preset_mod(
+    path: String,
+    entry: mod_presets::PresetModEntry,
+) -> Result<serde_json::Value, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let loader = loader_slug_for_manifest(&manifest);
+    let mc = manifest.minecraft.version.clone();
+    let keys = installed_mod_keys(&manifest);
+    let offer = match entry.provider.as_str() {
+        "curseforge" => {
+            resolve_opt_mod_curseforge(
+                &entry.project_id,
+                &entry.name,
+                "Preset mod",
+                &mc,
+                &loader,
+            )
+            .ok_or_else(|| format!("'{}' not found on CurseForge", entry.name))?
+        }
+        _ => resolve_opt_mod_modrinth(
+            &entry.project_id,
+            &entry.name,
+            "Preset mod",
+            &mc,
+            &loader,
+        )
+        .ok_or_else(|| format!("'{}' has no version for {mc}/{loader}", entry.name))?,
+    };
+    let aliases = tuffbox_core::optimize_pack::aliases_for_candidate(&offer.slug);
+    let alias_refs: Vec<&str> = aliases.iter().map(|s| s.as_str()).collect();
+    let already = has_installed(&keys, &alias_refs);
+    Ok(serde_json::json!({
+        "slug": offer.slug,
+        "name": offer.name,
+        "provider": offer.provider,
+        "projectId": offer.project_id,
+        "versionId": offer.version_id,
+        "reason": offer.reason,
+        "risk": offer.risk,
+        "alreadyInstalled": already,
+    }))
+}
+
+/// ── Shared options.txt sync (docs/17, Part 2) ─────────────────────────
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OptionsSyncStatus {
+   managed: bool,
+   group_id: String,
+   mc_version: String,
+   has_local: bool,
+   has_group_template: bool,
+   local_path: String,
+   group_template_path: String,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn options_sync_status(
+   path: String,
+) -> Result<OptionsSyncStatus, String> {
+   let manifest_path = resolve_manifest_path(&path)?;
+   let manifest = ProjectManifest::load_from_path(&manifest_path)
+       .map_err(|e| e.to_string())?;
+   let project_dir = manifest_path
+       .parent()
+       .ok_or("manifest has no parent directory")?;
+   let mc = manifest.minecraft.version.clone();
+   let group = tuffbox_core::options_sync::version_group(&mc);
+   let local = project_dir.join("options.txt");
+   Ok(OptionsSyncStatus {
+       managed: tuffbox_core::options_sync::is_managed(project_dir),
+       group_id: group.clone(),
+       mc_version: mc,
+       has_local: local.is_file(),
+       has_group_template: tuffbox_core::options_sync::read_group_template(&group).is_some(),
+       local_path: local.to_string_lossy().into_owned(),
+       group_template_path: tuffbox_core::options_sync::group_template_path(&group)
+           .to_string_lossy()
+           .into_owned(),
+   })
+}
+
+/// Enable shared-options management for a project. `import_local` = seed the
+/// group template from this project's current options.txt when the group is
+/// empty (UI asks via dialog when the group already has one).
+#[tauri::command(rename_all = "camelCase")]
+fn options_sync_enable(path: String) -> Result<bool, String> {
+   let manifest_path = resolve_manifest_path(&path)?;
+   let manifest = ProjectManifest::load_from_path(&manifest_path)
+       .map_err(|e| e.to_string())?;
+   let project_dir = manifest_path
+       .parent()
+       .ok_or("manifest has no parent directory")?;
+   tuffbox_core::options_sync::enable_management(project_dir, &manifest.minecraft.version)
+       .map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn options_sync_disable(path: String) -> Result<(), String> {
+   let manifest_path = resolve_manifest_path(&path)?;
+   let project_dir = manifest_path
+       .parent()
+       .ok_or("manifest has no parent directory")?;
+   tuffbox_core::options_sync::disable_management(project_dir);
+   Ok(())
+}
+
+/// Push the project's current options.txt into its version group.
+#[tauri::command(rename_all = "camelCase")]
+fn options_sync_push(path: String) -> Result<(), String> {
+   let manifest_path = resolve_manifest_path(&path)?;
+   let manifest = ProjectManifest::load_from_path(&manifest_path)
+       .map_err(|e| e.to_string())?;
+   let project_dir = manifest_path
+       .parent()
+       .ok_or("manifest has no parent directory")?;
+   tuffbox_core::options_sync::push_to_group(project_dir, &manifest.minecraft.version)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn options_sync_groups() -> Result<Vec<tuffbox_core::options_sync::GroupInfo>, String> {
+   Ok(tuffbox_core::options_sync::list_groups())
 }
 
 /// Sodium config checks: (filename, fn(&content, &mut findings))
@@ -13344,6 +13485,31 @@ fn build_and_spawn(
         ));
     }
     let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &project_dir);
+
+    // Shared options.txt sync (docs/17, Part 2): pull the version-group
+    // template into this managed project before the game reads it. Runs
+    // AFTER mod downloads (so a failed download never leaves a half-synced
+    // options file behind a retry) and BEFORE Java starts. Never fails the
+    // launch: options sync is a convenience, any error just gets logged.
+    {
+        let outcome = tuffbox_core::options_sync::sync_before_launch(
+            &game_dir,
+            &manifest.minecraft.version,
+        );
+        match outcome {
+            tuffbox_core::options_sync::SyncOutcome::SeededFromGroup => {
+                progress.log("# Options: seeded from shared settings for this MC version group.");
+            }
+            tuffbox_core::options_sync::SyncOutcome::Merged => {
+                progress.log("# Options: merged shared settings (local edits kept).");
+            }
+            tuffbox_core::options_sync::SyncOutcome::Error(e) => {
+                progress.log(&format!("# WARNING: options sync failed: {e}"));
+            }
+            _ => {}
+        }
+    }
+
     if !sync_report.downloaded.is_empty() {
         progress.log(&format!(
             "# Downloaded {} missing mod file(s): {}",
@@ -13556,11 +13722,18 @@ fn build_and_spawn(
     let stats_path_for_exit = path.clone();
     let post_exit_hook = launch_settings.post_exit_hook.clone();
     let instance_label = manifest.project.name.clone();
+    // Options write-back context: push this session's local settings edits
+    // into the shared version-group template after the game closes.
+    let options_game_dir = game_dir.clone();
+    let options_mc_version = manifest.minecraft.version.clone();
     let _ = presence::set_playing_activity(&instance_label, "In Minecraft");
     let _ = record_launch(path.clone());
     launcher_presence::spawn_game_session_start(instance_label.clone());
     let on_exit: Option<OnExit> = Some(Box::new(move |exit: ProcessExit| {
         let _ = presence::clear_activity();
+        // Write back the player's in-game options.txt edits into the shared
+        // group template (no-op for unmanaged projects).
+        tuffbox_core::options_sync::write_back_after_exit(&options_game_dir, &options_mc_version);
         launcher_presence::spawn_game_session_end(exit.duration_secs, exit.code != Some(0));
         if let Some(ref hook) = post_exit_hook {
             let _ = launcher_settings::run_hook(Some(hook), "post-exit hook");
@@ -17798,6 +17971,14 @@ pub fn run() {
             install_curated_optimize_pack,
             build_optimize_plan,
             apply_optimize_custom_plan,
+            get_mod_presets,
+            save_mod_presets_cmd,
+            resolve_preset_mod,
+            options_sync_status,
+            options_sync_enable,
+            options_sync_disable,
+            options_sync_push,
+            options_sync_groups,
             scan_ore_generation,
             detect_duplicate_items,
             generate_unify_config,
