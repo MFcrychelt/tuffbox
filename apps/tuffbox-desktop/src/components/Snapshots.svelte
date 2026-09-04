@@ -529,7 +529,7 @@
   });
 </script>
 
-<div class="flex flex-col gap-3.5 h-full min-h-0 w-full max-w-[1440px] mx-auto box-border p-0.5">
+<div class="snapshots flex flex-col gap-3.5 h-full min-h-0 w-full max-w-[1440px] mx-auto box-border">
   <!-- ── Toolbar ─────────────────────────────────────────────── -->
   <div class="flex justify-between items-center gap-4 flex-wrap shrink-0">
     <div class="grid gap-1">
@@ -542,7 +542,7 @@
     <div class="flex items-center gap-2.5 flex-wrap">
       <div class="flex items-center gap-2">
         <input
-          class="min-w-[200px]"
+          class="min-w-[200px] max-w-[300px]"
           bind:value={newName}
           placeholder="Snapshot name"
           onkeydown={(e) => e.key === "Enter" && !loading && ($projectPath ? create() : null)}
@@ -1054,39 +1054,41 @@
   /* Snapshots uses theme-token button skins, not the global Ore gray skin:
      secondary = tinted theme surface, ghost = quiet bordered pill. All
      colors come from CSS vars so every theme (light/sharp/minimal) reads
-     correctly. */
-  section button.secondary {
+     correctly. Scoped to the component root class (not `section`) — the
+     toolbar, Compare block and backups block are <div>s, and those buttons
+     were falling back to the gray global skin. */
+  :global(.snapshots) button.secondary {
     background: var(--bg-elevated);
     color: var(--text-primary);
     border: 1px solid var(--border-color);
     border-bottom-width: 2px;
     border-bottom-color: color-mix(in srgb, var(--border-color) 60%, transparent);
   }
-  section button.secondary:hover:not(:disabled) {
+  :global(.snapshots) button.secondary:hover:not(:disabled) {
     background: var(--bg-hover);
     border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
   }
-  section button.secondary:active:not(:disabled) {
+  :global(.snapshots) button.secondary:active:not(:disabled) {
     filter: none;
     background: var(--bg-active);
   }
-  section button.ghost:not(.mini) {
+  :global(.snapshots) button.ghost:not(.mini) {
     background: var(--bg-secondary);
     color: var(--text-secondary);
     border: 1px solid var(--border-color);
     border-bottom-width: 2px;
     border-bottom-color: color-mix(in srgb, var(--border-color) 55%, transparent);
   }
-  section button.ghost:not(.mini):hover:not(:disabled) {
+  :global(.snapshots) button.ghost:not(.mini):hover:not(:disabled) {
     background: var(--bg-hover);
     color: var(--text-primary);
     border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
   }
-  section button.ghost:not(.mini):active:not(:disabled) {
+  :global(.snapshots) button.ghost:not(.mini):active:not(:disabled) {
     filter: none;
     background: var(--bg-active);
   }
-  section button.ghost:disabled {
+  :global(.snapshots) button.ghost:disabled {
     opacity: 0.55;
   }
 
