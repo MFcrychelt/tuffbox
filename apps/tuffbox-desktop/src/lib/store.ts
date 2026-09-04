@@ -205,6 +205,10 @@ export interface LauncherSettings {
   showYoutubeOnHome: boolean;
   /** Inject the in-game overlay bridge (YouTube player + friends/chat) on launch. */
   ingameOverlay: boolean;
+  /** CPU affinity for the game process: off | performance | manual. */
+  cpuAffinityMode: "off" | "performance" | "manual";
+  /** Hex bitmask used when mode is "manual" (e.g. "0xFF0"). */
+  cpuAffinityMask: string | null;
   /** Hide IDE bottom workflow rail until cursor hits the window bottom edge. */
   autoHideWorkflowRail: boolean;
   /** Left nav: full labels | icons (button toggle) | autoHide (left-edge hover). */

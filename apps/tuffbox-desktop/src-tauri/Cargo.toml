@@ -60,6 +60,7 @@ windows = { version = "0.58", features = [
   "Win32_System_LibraryLoader",
   "Win32_System_Memory",
   "Win32_System_Threading",
+  "Win32_System_SystemInformation",
 ] }
 taurpc = "0.7.1"
 specta = { version = "2.0.0-rc.22", features = ["derive", "export", "function"] }

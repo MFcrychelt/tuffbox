@@ -80,6 +80,14 @@ pub struct LauncherSettings {
     /// Inject the in-game overlay bridge (YouTube player + friends/chat) on launch.
     #[serde(default = "default_ingame_overlay")]
     pub ingame_overlay: bool,
+    /// CPU affinity for the game process: `off` | `performance` | `manual`.
+    /// `performance` pins to the highest-efficiency-class cores on hybrid CPUs
+    /// (no-op on uniform CPUs); `manual` uses `cpu_affinity_mask`.
+    #[serde(default = "default_cpu_affinity_mode")]
+    pub cpu_affinity_mode: String,
+    /// Hex bitmask for `manual` mode (e.g. "0xFF0" = first 4 E-cores excluded).
+    #[serde(default)]
+    pub cpu_affinity_mask: String,
 }
 
 fn default_theme() -> String {
@@ -108,6 +116,9 @@ fn default_home_backdrop() -> bool {
 }
 fn default_ingame_overlay() -> bool {
     true
+}
+fn default_cpu_affinity_mode() -> String {
+    "off".into()
 }
 
 fn normalize_ui_scale_mode(settings: &mut LauncherSettings) {
@@ -151,6 +162,8 @@ impl Default for LauncherSettings {
             hide_instance_home: false,
             home_backdrop: default_home_backdrop(),
             ingame_overlay: default_ingame_overlay(),
+            cpu_affinity_mode: default_cpu_affinity_mode(),
+            cpu_affinity_mask: String::new(),
         }
     }
 }

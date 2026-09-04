@@ -13899,6 +13899,24 @@ fn build_and_spawn(
         LaunchErrorInfo::new(kind, msg).with_log(&console_log)
     })?;
 
+    // CPU affinity (performance-core pinning) — best effort, never blocks the game.
+    let affinity_cfg = cpu_affinity::AffinityConfig {
+        mode: launch_settings.cpu_affinity_mode.clone(),
+        mask_raw: launch_settings.cpu_affinity_mask.clone(),
+    };
+    if let Some(mask) = cpu_affinity::resolve_target_mask(
+        &affinity_cfg,
+        cpu_affinity::detect_core_topology().ok().as_ref(),
+    ) {
+        match cpu_affinity::apply_mask_to_pid(running.pid, mask) {
+            Ok(()) => progress.log(&format!(
+                "# CPU affinity: pinned to 0x{mask:X} ({} logical cores)",
+                mask.count_ones()
+            )),
+            Err(e) => progress.log(&format!("# WARNING: CPU affinity: {e}")),
+        }
+    }
+
     let _ = app.emit(
         "process-started",
         serde_json::json!({
