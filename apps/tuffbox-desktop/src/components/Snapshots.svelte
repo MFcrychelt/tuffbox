@@ -926,6 +926,45 @@
      (ghost/secondary/danger/mini are defined app-wide), the Ore-style
      kind tags, and skeletons. */
 
+  /* Snapshots uses theme-token button skins, not the global Ore gray skin:
+     secondary = tinted theme surface, ghost = quiet bordered pill. All
+     colors come from CSS vars so every theme (light/sharp/minimal) reads
+     correctly. */
+  section button.secondary {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-bottom-width: 2px;
+    border-bottom-color: color-mix(in srgb, var(--border-color) 60%, transparent);
+  }
+  section button.secondary:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
+  }
+  section button.secondary:active:not(:disabled) {
+    filter: none;
+    background: var(--bg-active);
+  }
+  section button.ghost:not(.mini) {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-bottom-width: 2px;
+    border-bottom-color: color-mix(in srgb, var(--border-color) 55%, transparent);
+  }
+  section button.ghost:not(.mini):hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
+  }
+  section button.ghost:not(.mini):active:not(:disabled) {
+    filter: none;
+    background: var(--bg-active);
+  }
+  section button.ghost:disabled {
+    opacity: 0.55;
+  }
+
   /* Kind filter cards: flat quiet tiles, accent fill when active — the bare
      button here otherwise inherits the gray Ore skin (3px bottom edge). */
   .filter-card {

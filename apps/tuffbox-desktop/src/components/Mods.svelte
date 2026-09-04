@@ -5351,6 +5351,9 @@ import { trapFocus } from "../lib/focusTrap";
        vertical screens the panes grow with the viewport (no hard 70vh cap). */
     align-items: stretch;
     min-height: 0;
+    /* Small breathing room under the split panes so they don't sit flush
+       against the bottom edge of the content view. */
+    padding-bottom: 10px;
   }
   .installed-pane {
     min-width: 0;
