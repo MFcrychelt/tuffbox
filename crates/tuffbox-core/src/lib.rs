@@ -42,6 +42,7 @@ pub mod mod_suggest;
 pub mod modpack_index;
 pub mod options_sync;
 pub mod murmur2;
+pub mod pack_diff;
 pub mod process;
 pub mod provider;
 pub mod quest_chat;

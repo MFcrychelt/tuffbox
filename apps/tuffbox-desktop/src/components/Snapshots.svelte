@@ -10,6 +10,8 @@
     api,
     type BackupEntry,
     type ManifestSnapshotDiff,
+    type PackSource,
+    type PackStateDiff,
     type Snapshot,
     type SnapshotDetail,
     type SnapshotDiff,
@@ -61,6 +63,16 @@
 
   let manifestDiff = $state<ManifestSnapshotDiff | null>(null);
   let manifestDiffLoading = $state(false);
+
+  // Pack Diff: compare across snapshots / backups / other instances.
+  type DiffSourceKind = "snapshot" | "backup" | "manifest";
+  let fromKind = $state<DiffSourceKind>("snapshot");
+  let toKind = $state<DiffSourceKind>("snapshot");
+  let otherManifestPath = $state("");
+  let backupFromId = $state("");
+  let backupToId = $state("");
+  let packDiff = $state<PackStateDiff | null>(null);
+  let packDiffLoading = $state(false);
 
   let backups = $state<BackupEntry[]>([]);
   let backupLoading = $state(false);
@@ -434,6 +446,43 @@
     }
   }
 
+  function packSourceFor(kind: DiffSourceKind, side: "from" | "to"): PackSource | null {
+    const dir = projectDir ?? "";
+    if (side === "from") {
+      if (kind === "snapshot")
+        return fromId ? { type: "snapshot", projectDir: dir, snapshotId: fromId } : null;
+      if (kind === "backup")
+        return backupFromId ? { type: "backup", projectDir: dir, backupId: backupFromId } : null;
+      return otherManifestPath ? { type: "manifest", path: otherManifestPath } : null;
+    }
+    if (kind === "snapshot")
+      return toId ? { type: "snapshot", projectDir: dir, snapshotId: toId } : null;
+    if (kind === "backup")
+      return backupToId ? { type: "backup", projectDir: dir, backupId: backupToId } : null;
+    return otherManifestPath ? { type: "manifest", path: otherManifestPath } : null;
+  }
+
+  async function runPackDiff() {
+    const dir = await ensureProjectDir();
+    if (!dir) return;
+    const a = packSourceFor(fromKind, "from");
+    const b = packSourceFor(toKind, "to");
+    if (!a || !b) {
+      error = "Pick both sources first.";
+      return;
+    }
+    packDiffLoading = true;
+    error = null;
+    packDiff = null;
+    try {
+      packDiff = await api.packDiff.compare(a, b);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      packDiffLoading = false;
+    }
+  }
+
   async function openFileDiff(path: string) {
     const dir = await ensureProjectDir();
     if (!dir || !fromId || !toId) return;
@@ -771,6 +820,82 @@
                 { manifestDiffLoading ? "Loading…" : "Diff manifest" }
               </button>
             </div>
+          </div>
+
+          <!-- ── Pack Diff: cross-source compare ─────────────────── -->
+          <div class="grid gap-2.5 p-3.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+            <h3 class="m-0 text-[14px] text-[var(--text-secondary)] font-bold">Compare packs</h3>
+            <div class="grid gap-2" style="grid-template-columns: repeat(2, minmax(180px, 1fr));">
+              <div class="grid gap-1">
+                <label for="pd-from-kind" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">From source</label>
+                <select id="pd-from-kind" bind:value={fromKind}>
+                  <option value="snapshot">Snapshot</option>
+                  <option value="backup">Zip backup</option>
+                  <option value="manifest">Other instance manifest</option>
+                </select>
+              </div>
+              <div class="grid gap-1">
+                <label for="pd-to-kind" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">To source</label>
+                <select id="pd-to-kind" bind:value={toKind}>
+                  <option value="snapshot">Snapshot</option>
+                  <option value="backup">Zip backup</option>
+                  <option value="manifest">Other instance</option>
+                </select>
+              </div>
+              {#if fromKind === "snapshot" || toKind === "snapshot"}
+                <p class="m-0 col-span-2 text-[12px] text-[var(--text-muted)]">Snapshot side uses the From/To snapshot selects above.</p>
+              {/if}
+              {#if fromKind === "backup" || toKind === "backup"}
+                <label class="grid gap-1">
+                  <span class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">Backup ids</span>
+                  <span class="flex gap-2">
+                    <input class="flex-1 min-w-0" bind:value={backupFromId} placeholder="From backup id" />
+                    <input class="flex-1 min-w-0" bind:value={backupToId} placeholder="To backup id" />
+                  </span>
+                </label>
+              {/if}
+              {#if fromKind === "manifest" || toKind === "manifest"}
+                <label class="grid gap-1 col-span-2">
+                  <span class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">Other instance manifest path</span>
+                  <input bind:value={otherManifestPath} placeholder="U:/…/project.tuffbox.json" />
+                </label>
+              {/if}
+            </div>
+            <button class="secondary" onclick={runPackDiff} disabled={packDiffLoading}>
+              { packDiffLoading ? "Comparing…" : "Compare packs" }
+            </button>
+
+            {#if packDiff}
+              {@const r = packDiff.report}
+              <div class="grid gap-1.5 mb-1.5">
+                {#if r.mcA !== r.mcB}
+                  <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(245,158,11,0.3)]">
+                    <strong class="text-[var(--text-primary)]">MC version</strong><span class="text-[var(--text-muted)] tb-truncate">{ r.mcA || "—" } → { r.mcB || "—" }</span>
+                  </div>
+                {/if}
+                <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)]">
+                  <strong class="text-[var(--accent-primary)]">+{ r.addedMods.length } mods</strong><span class="text-[var(--text-muted)] tb-truncate">{ r.addedMods.map((m) => m.id).join(", ") }</span>
+                </div>
+                <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(239,68,68,0.3)]">
+                  <strong class="text-[#fca5a5]">-{ r.removedMods.length } mods</strong><span class="text-[var(--text-muted)] tb-truncate">{ r.removedMods.map((m) => m.id).join(", ") }</span>
+                </div>
+                <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(147,197,253,0.35)]">
+                  <strong class="text-[#93c5fd]">~{ r.updatedMods.length } updated</strong><span class="text-[var(--text-muted)] tb-truncate">{ r.updatedMods.map((u) => `${u.id} ${u.from.version}→${u.to.version}`).join(", ") }</span>
+                </div>
+              </div>
+              {#if packDiff.configDiffs.length}
+                <div class="grid gap-2">
+                  {#each packDiff.configDiffs as cd (cd.path)}
+                    <details>
+                      <summary class="cursor-pointer text-[12.5px] text-[var(--text-secondary)] font-mono">{ cd.path }</summary>
+                      <pre class="m-1.5 p-3 rounded-[var(--border-radius-sm)] bg-[#0d0d10] text-[#b4b4bc] font-mono text-[12.5px] leading-relaxed max-h-[360px] overflow-auto whitespace-pre-wrap">{ cd.diffText }</pre>
+                    </details>
+                  {/each}
+                </div>
+              {:else}
+                <p class="m-0 text-[12.5px] text-[var(--text-muted)]">No config file changes.</p>
+              {/if}
+            {/if}
           </div>
           {#if manifestDiff}
             <div class="p-3.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] grid gap-2.5">

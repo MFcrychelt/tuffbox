@@ -16,6 +16,7 @@ mod listing_api;
 mod mca_selector;
 mod mod_presets;
 mod overlay_hook;
+mod pack_diff_api;
 mod taurpc_api;
 mod window_glass;
 mod pack_events;
@@ -18112,6 +18113,7 @@ pub fn run() {
             get_snapshot_detail,
             diff_manifest_snapshots,
             get_snapshot_file_diff,
+            pack_diff_api::compare_pack_states,
             validate_modrinth_export,
             validate_curseforge_export,
             generate_release_changelog,

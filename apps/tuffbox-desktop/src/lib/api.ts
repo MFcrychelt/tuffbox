@@ -848,6 +848,45 @@ export interface ManifestSnapshotDiff {
   diffText?: string;
 }
 
+// ── Pack Diff (compare builds / snapshots / backups) ────────────────
+
+export type PackSource =
+  | { type: "manifest"; path: string }
+  | { type: "snapshot"; projectDir: string; snapshotId: string }
+  | { type: "backup"; projectDir: string; backupId: string };
+
+export interface PackModRow {
+  id: string;
+  name: string;
+  version: string;
+  fileName?: string | null;
+}
+
+export interface ModUpdate {
+  id: string;
+  name: string;
+  from: PackModRow;
+  to: PackModRow;
+}
+
+export interface PackDiffReport {
+  addedMods: PackModRow[];
+  removedMods: PackModRow[];
+  updatedMods: ModUpdate[];
+  changedConfigPaths: string[];
+  nameA: string;
+  nameB: string;
+  mcA: string;
+  mcB: string;
+  loaderA: string;
+  loaderB: string;
+}
+
+export interface PackStateDiff {
+  report: PackDiffReport;
+  configDiffs: Array<{ path: string; diffText: string }>;
+}
+
 export interface TestRunRecord {
   id: string;
   profile: string;
@@ -1899,6 +1938,13 @@ export const api = {
     list(p?: string) { return cmd<BackupEntry[]>("list_backups", pathArg(p)); },
     delete(backupId: string, p?: string) { return cmd<void>("delete_backup", { ...pathArg(p), backupId }); },
     restore(backupId: string, p?: string) { return cmd<void>("restore_backup", { ...pathArg(p), backupId }); },
+  },
+
+  // ── Pack Diff (compare builds / snapshots / backups) ──────────────
+  packDiff: {
+    compare(sourceA: PackSource, sourceB: PackSource) {
+      return cmd<PackStateDiff>("compare_pack_states", { sourceA, sourceB });
+    },
   },
 
   // ── Worlds ────────────────────────────────────────────────────────
