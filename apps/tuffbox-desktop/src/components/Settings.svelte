@@ -39,7 +39,7 @@
 
   type SettingsTab = "appearance" | "launcher" | "ai" | "integrations" | "about";
   let tab = $state<SettingsTab>("appearance");
-  let launcherSub = $state<"general" | "java" | "commands" | "runtime">("general");
+  let launcherSub = $state<"general" | "java" | "commands" | "runtime" | "storage">("general");
 
   $effect(() => {
     const req = $settingsNavRequest;
@@ -190,6 +190,8 @@
     youtubeInlinePlayer: true,
     showYoutubeOnHome: false,
     ingameOverlay: true,
+    cpuAffinityMode: "off",
+    cpuAffinityMask: null,
     autoHideWorkflowRail: false,
     sidebarMode: "full",
     uiScalePercent: 100,
@@ -259,7 +261,64 @@
     { id: "java", label: "Java" },
     { id: "commands", label: "Commands" },
     { id: "runtime", label: "Paths" },
+    { id: "storage", label: "Storage" },
   ];
+
+  // ── Storage / dedup store maintenance (docs/17) ──────────────────────
+  let storeObjectCount = $state<number | null>(null);
+  let storeBytes = $state<number | null>(null);
+  let storeBusy = $state(false);
+  let storeMsg = $state("");
+
+  function formatBytes(n: number | null): string {
+    if (n == null) return "…";
+    if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(2)} GB`;
+    if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+    if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${n} B`;
+  }
+
+  async function loadStoreStats() {
+    try {
+      const s: any = await invoke("store_stats");
+      storeObjectCount = s.objectCount ?? 0;
+      storeBytes = s.storeBytes ?? 0;
+    } catch {
+      storeObjectCount = null;
+    }
+  }
+
+  async function runRetroDedup() {
+    storeBusy = true;
+    storeMsg = "";
+    try {
+      const r: any = await invoke("store_retro_dedup", { extraPaths: null });
+      storeMsg =
+        `Dedup done: ${r.linked} duplicate file(s) linked, ` +
+        `${r.recorded} new object(s) stored, ` +
+        `${formatBytes(r.bytesReclaimed ?? 0)} reclaimed` +
+        (r.errors?.length ? `, ${r.errors.length} error(s)` : "");
+      await loadStoreStats();
+    } catch (e) {
+      storeMsg = `Dedup failed: ${e}`;
+    } finally {
+      storeBusy = false;
+    }
+  }
+
+  async function runStoreGc() {
+    storeBusy = true;
+    storeMsg = "";
+    try {
+      const r: any = await invoke("store_gc");
+      storeMsg = `GC done: removed ${r.removed} orphaned object(s), ${formatBytes(r.bytesReclaimed ?? 0)} freed`;
+      await loadStoreStats();
+    } catch (e) {
+      storeMsg = `GC failed: ${e}`;
+    } finally {
+      storeBusy = false;
+    }
+  }
 
   function syncResModeFromLauncher() {
     const r = launcher.gameResolution;
@@ -1123,7 +1182,10 @@
           type="button"
           class="launcher-sub press-effect"
           class:active={launcherSub === s.id}
-          onclick={() => (launcherSub = s.id)}
+          onclick={() => {
+            launcherSub = s.id;
+            if (s.id === "storage") void loadStoreStats();
+          }}
         >
           {s.label}
         </button>
@@ -1520,6 +1582,34 @@
           ></textarea>
         </label>
         <label>
+          CPU affinity
+          <div class="path-row">
+            <select
+              bind:value={launcher.cpuAffinityMode}
+              onchange={() => persistLauncher({ cpuAffinityMode: launcher.cpuAffinityMode })}
+            >
+              <option value="off">Off (let Windows decide)</option>
+              <option value="performance">Performance cores (hybrid CPUs)</option>
+              <option value="manual">Manual mask</option>
+            </select>
+          </div>
+          <small class="auto-tune-msg">
+            Pins the game process to fast cores via SetProcessAffinityMask. "Performance cores"
+            needs a P/E hybrid CPU (Intel 12th gen+); AMD X3D users should pick a manual mask.
+          </small>
+        </label>
+        {#if launcher.cpuAffinityMode === "manual"}
+          <label>
+            Affinity mask (hex)
+            <input
+              bind:value={launcher.cpuAffinityMask}
+              placeholder="0xFF0"
+              onblur={() =>
+                persistLauncher({ cpuAffinityMask: launcher.cpuAffinityMask?.trim() || null })}
+            />
+          </label>
+        {/if}
+        <label>
           Default memory (MB)
           <div class="path-row">
             <input
@@ -1676,6 +1766,31 @@
             Reset to default
           </button>
         </div>
+      </section>
+    {/if}
+
+    {#if tab === "launcher" && launcherSub === "storage"}
+      <section class="card card-wide">
+        <div class="card-title">
+          <HardDrive size={18} />
+          <h3>Dedup store</h3>
+        </div>
+        <p class="hint">
+          TuffBox stores identical mod jars, resourcepacks, shaderpacks, libraries and
+          game files once on disk and hard-links them into every project that uses them.
+          {storeObjectCount ?? "…"} shared file(s), {storeBytes == null ? "…" : formatBytes(storeBytes)} on disk.
+        </p>
+        <div class="row-actions">
+          <button type="button" onclick={runRetroDedup} disabled={storeBusy}>
+            {storeBusy ? "Working…" : "Deduplicate existing projects"}
+          </button>
+          <button type="button" class="ghost" onclick={runStoreGc} disabled={storeBusy}>
+            Clean unused store files
+          </button>
+        </div>
+        {#if storeMsg}
+          <p class="hint" style="margin-top: 8px">{storeMsg}</p>
+        {/if}
       </section>
     {/if}
 
