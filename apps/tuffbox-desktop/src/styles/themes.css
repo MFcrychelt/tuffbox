@@ -907,6 +907,13 @@ html.glass-os {
   --app-shell-bg: color-mix(in srgb, var(--bg-primary) 62%, transparent);
 }
 
+/* The body itself paints --bg-primary (styles.css); an opaque body would sit
+   on top of the Acrylic/Mica backdrop and hide the OS glass completely. */
+html.glass-os,
+html.glass-os body {
+  background: transparent;
+}
+
 html.glass-os .app-shell {
   background: var(--app-shell-bg);
 }

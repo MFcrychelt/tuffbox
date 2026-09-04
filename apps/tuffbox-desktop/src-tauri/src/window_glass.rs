@@ -28,14 +28,9 @@ pub fn set_window_glass(app: tauri::AppHandle, on: bool) -> Result<String, Strin
 
     #[cfg(target_os = "windows")]
     {
-        // Windows 11 22H2+ has Tabbed/Mica; older Win11 has Mica; Win10 has
-        // Acrylic. Try the most modern first, fall back down the chain.
-        if window_vibrancy::apply_tabbed(&win, None).is_ok() {
-            return Ok("tabbed".into());
-        }
-        if window_vibrancy::apply_mica(&win, None).is_ok() {
-            return Ok("mica".into());
-        }
+        // Acrylic first: real blur of the desktop — the most visibly
+        // "glassy" effect. Tabbed/Mica are opaque-ish washes on Win11 and
+        // read as "no transparency" to the user, so they are fallbacks.
         // Acrylic: RGBWA tint (RGBA). A dark slate matches the default
         // TuffBox palette; light themes still read fine because the WebView
         // paints its own tinted surfaces on top.
@@ -46,6 +41,12 @@ pub fn set_window_glass(app: tauri::AppHandle, on: bool) -> Result<String, Strin
         .is_ok()
         {
             return Ok("acrylic".into());
+        }
+        if window_vibrancy::apply_tabbed(&win, None).is_ok() {
+            return Ok("tabbed".into());
+        }
+        if window_vibrancy::apply_mica(&win, None).is_ok() {
+            return Ok("mica".into());
         }
         Err("no windows glass effect available (Acrylic/Mica/Tabbed all failed)".into())
     }
