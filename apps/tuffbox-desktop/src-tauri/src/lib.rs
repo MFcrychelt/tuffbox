@@ -1,5 +1,6 @@
 mod auth;
 mod cosmetics_local;
+mod cpu_affinity;
 mod create_mode_api;
 mod deep_link;
 mod file_manager;
@@ -5283,7 +5284,79 @@ fn options_sync_push(path: String) -> Result<(), String> {
 
 #[tauri::command(rename_all = "camelCase")]
 fn options_sync_groups() -> Result<Vec<tuffbox_core::options_sync::GroupInfo>, String> {
-   Ok(tuffbox_core::options_sync::list_groups())
+    Ok(tuffbox_core::options_sync::list_groups())
+}
+
+/// ── Store maintenance: retro-dedup + stats (docs/17, M3) ──────────────
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreStats {
+    object_count: u64,
+    store_bytes: u64,
+}
+
+/// Approximate store size: object count + total bytes on disk.
+#[tauri::command(rename_all = "camelCase")]
+fn store_stats() -> Result<StoreStats, String> {
+    let root = tuffbox_core::mod_store::store_root().join("objects");
+    let mut count = 0u64;
+    let mut bytes = 0u64;
+    if root.is_dir() {
+        for prefix in std::fs::read_dir(&root).map_err(|e| e.to_string())?.flatten() {
+            let p = prefix.path();
+            if !p.is_dir() {
+                continue;
+            }
+            for obj in std::fs::read_dir(&p).map_err(|e| e.to_string())?.flatten() {
+                if let Ok(meta) = obj.metadata() {
+                    if meta.is_file() {
+                        count += 1;
+                        bytes += meta.len();
+                    }
+                }
+            }
+        }
+    }
+    Ok(StoreStats { object_count: count, store_bytes: bytes })
+}
+
+/// Retroactive deduplication over the user's known projects (recent list +
+/// any extra dirs the UI passes). Long-running: call from a background task.
+#[tauri::command(rename_all = "camelCase")]
+async fn store_retro_dedup(extra_paths: Option<Vec<String>>) -> Result<serde_json::Value, String> {
+    // Collect project roots: recent projects list (deduped, existing only).
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for entry in helpers::load_recent_projects() {
+        let path = PathBuf::from(&entry.path);
+        if path.is_dir() && !roots.contains(&path) {
+            roots.push(path);
+        }
+    }
+    for p in extra_paths.unwrap_or_default() {
+        let path = PathBuf::from(&p);
+        if path.is_dir() && !roots.contains(&path) {
+            roots.push(path);
+        }
+    }
+
+    // The sweep hashes potentially gigabytes — run it off the main thread.
+    let report = tokio::task::spawn_blocking(move || {
+        let root_refs: Vec<std::path::PathBuf> = roots;
+        let refs: Vec<&std::path::Path> = root_refs.iter().map(|p| p.as_path()).collect();
+        tuffbox_core::mod_store::retro_dedup(&refs)
+    })
+    .await
+    .map_err(|e| format!("dedup task panicked: {e}"))?;
+
+    Ok(serde_json::to_value(&report).map_err(|e| e.to_string())?)
+}
+
+/// Run store GC (remove objects no longer referenced by any instance).
+#[tauri::command(rename_all = "camelCase")]
+fn store_gc() -> Result<serde_json::Value, String> {
+    let (removed, bytes) = tuffbox_core::mod_store::gc().map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "removed": removed, "bytesReclaimed": bytes }))
 }
 
 /// Sodium config checks: (filename, fn(&content, &mut findings))
@@ -17979,6 +18052,9 @@ pub fn run() {
             options_sync_disable,
             options_sync_push,
             options_sync_groups,
+            store_stats,
+            store_retro_dedup,
+            store_gc,
             scan_ore_generation,
             detect_duplicate_items,
             generate_unify_config,
