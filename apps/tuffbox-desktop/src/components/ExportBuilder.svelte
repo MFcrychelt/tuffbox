@@ -350,6 +350,7 @@
 </script>
 
 <div class="export-builder w-full">
+  <div class="eb-cap">
   <div class="flex items-start justify-between gap-3 mb-3 flex-wrap">
     <div class="min-w-0">
       <div class="flex items-center gap-2 text-[color:var(--text-secondary)] font-bold text-[13px]"><UploadCloud size={16} /> Export</div>
@@ -568,10 +569,15 @@
       </p>
     </section>
   {/if}
+  </div>
 </div>
 
 <style>
   /* Theming/states only — layout lives in Tailwind utilities. */
+  .eb-cap {
+    max-width: min(1240px, 100%);
+    margin: 0 auto;
+  }
   .format-card.active {
     color: var(--text-primary);
     border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);

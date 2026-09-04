@@ -148,6 +148,20 @@
     if (historyFilter === "crashed") return s === "crashed";
     return true;
   }));
+  /** Share of recorded runs that reached a healthy state. */
+  const passRate = $derived.by(() => {
+    if (runs.length === 0) return 100;
+    const passed = runs.filter((r) => {
+      const s = normalizeStatus(r.status);
+      return s === "pass" || s === "finished";
+    }).length;
+    return Math.round((passed / runs.length) * 100);
+  });
+  const avgRunSeconds = $derived.by(() => {
+    const withDur = runs.filter((r) => r.durationSeconds != null);
+    if (withDur.length === 0) return null;
+    return Math.round(withDur.reduce((acc, r) => acc + (r.durationSeconds ?? 0), 0) / withDur.length);
+  });
   const statusLabel = $derived((() => {
     switch (livePhase) {
       case "launching": return "Launching…";
@@ -1151,8 +1165,23 @@
           {#if launchStats}
             <div class="p-3 border border-[var(--border-color)] rounded-[var(--border-radius-md)] bg-[var(--bg-tertiary)] mb-3.5 grid gap-1.5">
               <h3 class="text-[var(--text-secondary)] text-[12px] m-0 mb-1 uppercase tracking-[0.04em]">Launch stats</h3>
-              <div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Total launches</span><strong class="text-[var(--text-primary)] text-[16px]">{ launchStats.totalLaunches }</strong></div>
-              <div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Total crashes</span><strong class="text-[16px] { launchStats.totalCrashes > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ launchStats.totalCrashes }</strong></div>
+              <div class="grid grid-cols-3 gap-2 mb-1">
+                <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                  <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Launches</span>
+                  <strong class="text-[15px] text-[var(--text-primary)] tabular-nums">{ launchStats.totalLaunches }</strong>
+                </div>
+                <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                  <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Crashes</span>
+                  <strong class="text-[15px] tabular-nums { launchStats.totalCrashes > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ launchStats.totalCrashes }</strong>
+                </div>
+                <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                  <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Pass rate</span>
+                  <strong class="text-[15px] tabular-nums { passRate < 80 && runs.length > 0 ? "text-[#fbbf24]" : "text-[var(--text-primary)]" }">{ passRate }%</strong>
+                </div>
+              </div>
+              {#if avgRunSeconds != null}
+                <div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Avg run duration</span><span class="text-[var(--text-secondary)] tabular-nums">{ avgRunSeconds }s</span></div>
+              {/if}
               {#if launchStats.lastLaunch}<div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Last launch</span><span class="text-[10px] text-[var(--text-muted)]">{launchStats.lastLaunch}</span></div>{/if}
             </div>
           {/if}

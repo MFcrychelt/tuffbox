@@ -1189,7 +1189,7 @@
 {/if}
 
 <style>
-  .change-history { width: 100%; }
+  .change-history { width: 100%; max-width: min(1440px, 100%); margin: 0 auto; }
   .toolbar, .toolbar-actions, .title, .preview-header, .preview-header h2, .editor-head, .editor-actions, .tracking-controls, .preview-actions, .summary-row { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 800; flex-shrink: 0; }

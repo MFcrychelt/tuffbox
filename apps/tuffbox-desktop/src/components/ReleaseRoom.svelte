@@ -575,7 +575,7 @@
 </div>
 
 <style>
-  .release-room { max-width: none; width: 100%; }
+  .release-room { max-width: min(1240px, 100%); margin: 0 auto; width: 100%; }
   .toolbar, .title, .notice, .version-row, .changelog-header { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; margin-bottom: 16px; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }

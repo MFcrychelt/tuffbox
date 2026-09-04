@@ -1021,6 +1021,19 @@
     }
   }
 
+  /** Compact relative time for the recent-changes strip ("5m ago", "2h ago"). */
+  function relTime(ts: string | undefined): string {
+    if (!ts) return "";
+    const then = Date.parse(ts.endsWith("Z") || ts.includes("T") ? ts : ts.replace(" ", "T") + "Z");
+    if (!Number.isFinite(then)) return ts.slice(11, 16);
+    const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+    if (mins < 1) return "now";
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+  }
+
   function openHistoryEvent(eventId: string, fingerprintKey?: string | null) {
     historyFocusEventId.set(eventId);
     if (fingerprintKey) historyFocusFingerprintKey.set(fingerprintKey);
@@ -2782,14 +2795,16 @@
     <section class="panel recent-pack-panel">
       <div class="recent-head">
         <strong><History size={14} /> Recent pack changes</strong>
+        <span class="recent-meta">{recentPackEvents.length} event{recentPackEvents.length === 1 ? "" : "s"}</span>
         <button class="ghost mini" onclick={() => ideStageRequest.set("history")}>Open History</button>
       </div>
       <div class="recent-list">
         {#each recentPackEvents as ev (ev.id)}
-          <button type="button" class="recent-row" onclick={() => openHistoryEvent(ev.id, ev.meta?.fingerprintKey ?? null)}>
+          <button type="button" class="recent-row" onclick={() => openHistoryEvent(ev.id, ev.meta?.fingerprintKey ?? null)} title={ev.summary}>
             <span class="recent-actor">{ev.actor}</span>
+            <span class="recent-op">{ev.op}</span>
             <span class="recent-sum">{ev.summary}</span>
-            <small>{ev.ts?.slice(0, 19) ?? ""}</small>
+            <small>{relTime(ev.ts)}</small>
           </button>
         {/each}
       </div>
@@ -3203,7 +3218,7 @@
     min-height: 0;
     overflow: hidden;
     /* Responsive: centered column, grows on 1440p without edge-to-edge. */
-    max-width: min(1440px, 100%);
+    max-width: min(1320px, 100%);
     width: 100%;
     margin: 0 auto;
   }
@@ -3351,6 +3366,11 @@
   .recent-pack-panel {
     margin-bottom: 14px;
   }
+  .recent-meta {
+    flex: 1;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
   .recent-head {
     display: flex;
     align-items: center;
@@ -3371,18 +3391,28 @@
   }
   .recent-row {
     display: grid;
-    grid-template-columns: 64px 1fr auto;
+    grid-template-columns: 64px 68px 1fr auto;
     gap: 8px;
     align-items: center;
     width: 100%;
     text-align: left;
-    padding: 6px 8px;
+    padding: 5px 8px;
     border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
     background: var(--bg-primary);
     color: inherit;
     cursor: pointer;
     font: inherit;
+  }
+  .recent-op {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .recent-row:hover {
     border-color: var(--border-color);

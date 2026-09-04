@@ -359,7 +359,7 @@
 </div>
 
 <style>
-  .ore-visualizer { max-width: none; width: 100%; }
+  .ore-visualizer { max-width: min(1240px, 100%); margin: 0 auto; width: 100%; }
   .toolbar, .title { display: flex; align-items: center; gap: 10px; }
   .toolbar { justify-content: space-between; margin-bottom: 12px; }
   .toolbar-actions { display: flex; gap: 8px; align-items: center; }
