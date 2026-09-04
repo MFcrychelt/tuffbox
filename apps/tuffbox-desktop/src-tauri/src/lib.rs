@@ -2,6 +2,7 @@ mod auth;
 mod cosmetics_local;
 mod create_mode_api;
 mod deep_link;
+mod file_manager;
 mod github_auth;
 mod github_pack_commands;
 mod helpers;
@@ -3137,10 +3138,17 @@ fn execute_fix_action_inner(
                 auto_snapshot(&manifest_path, "fix-auto-java").map_err(|e| e.to_string())?;
             }
             let mut manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
-            let runtimes = tuffbox_core::jre::find_all_runtimes().map_err(|e| e.to_string())?;
-            let required = tuffbox_core::jre::required_java_major(&manifest.minecraft.version);
-            let best = tuffbox_core::jre::find_runtime_for(&runtimes, required)
-                .ok_or_else(|| "no compatible Java runtime found on this machine".to_string())?;
+            // ensure_java_for_minecraft_with_log picks the best installed
+            // runtime for the Minecraft version AND downloads the matching
+            // GraalVM JDK when nothing installed satisfies the requirement.
+            let best = {
+                let log = |line: &str| eprintln!("[autoJava] {line}");
+                tuffbox_core::jre::ensure_java_for_minecraft_with_log(
+                    &manifest.minecraft.version,
+                    log,
+                )
+                .map_err(|e| format!("failed to provision Java: {e}"))?
+            };
             let mut java = manifest.java.clone().unwrap_or(tuffbox_core::manifest::JavaSpec {
                 major: None,
                 distribution: None,
@@ -5571,6 +5579,13 @@ fn run_crash_assistant(path: String) -> Result<serde_json::Value, String> {
         latest_log: latest_log,
         launcher_log: launcher_log,
         installed_mods: installed_mods.clone(),
+        installed_versions: Some(
+            manifest
+                .mods
+                .iter()
+                .map(|m| (m.id.clone(), m.version.clone()))
+                .collect(),
+        ),
         previous_mods: Vec::new(),
         java_version,
         java_vendor: String::new(),
@@ -6201,6 +6216,13 @@ fn prepare_ai_crash_context(
         latest_log: latest_log.clone(),
         launcher_log: launcher_tail.clone(),
         installed_mods: manifest.mods.iter().map(|m| m.id.clone()).collect(),
+        installed_versions: Some(
+            manifest
+                .mods
+                .iter()
+                .map(|m| (m.id.clone(), m.version.clone()))
+                .collect(),
+        ),
         previous_mods: Vec::new(),
         java_version: java_version.clone(),
         java_vendor: String::new(),
@@ -7283,14 +7305,13 @@ fn get_authored_case_export(path: String, case_id: String) -> Result<String, Str
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(deprecated)]
-fn open_authored_kb_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
+fn open_authored_kb_folder(_app: tauri::AppHandle, path: String) -> Result<(), String> {
     let project_dir = manifest_parent(&path)?;
     let dir = tuffbox_core::crash_kb::author_export_dir(&project_dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    use tauri_plugin_shell::ShellExt;
-    app.shell()
-        .open(dir.to_string_lossy().to_string(), None)
-        .map_err(|e| e.to_string())
+    // Same detached-spawn helper as open_project_folder — shell plugin's
+    // CoInitialize/ShellExecuteExW path aborted the app on Windows.
+    file_manager::open_in_file_manager(&dir, None)
 }
 
 /// ── Mod recommendation engine ─────────────────────────────────────
@@ -10559,6 +10580,13 @@ fn run_crash_assistant_analysis(
         latest_log,
         launcher_log,
         installed_mods: installed,
+        installed_versions: Some(
+            manifest
+                .mods
+                .iter()
+                .map(|m| (m.id.clone(), m.version.clone()))
+                .collect(),
+        ),
         previous_mods: Vec::new(),
         java_version,
         java_vendor: String::new(),
@@ -14528,10 +14556,10 @@ fn open_project_folder(
         }
         None => project_dir,
     };
-    use tauri_plugin_shell::ShellExt;
-    app.shell()
-        .open(dir.to_string_lossy().to_string(), None)
-        .map_err(|e| e.to_string())
+    // Direct detached spawn instead of tauri-plugin-shell: its open() path
+    // uses ShellExecuteExW + CoInitialize on the IPC thread and aborted the
+    // whole app (0xC0000409) when the user pressed the Home Folder button.
+    file_manager::open_in_file_manager(&dir, None)
 }
 
 static PENDING_LAUNCH_PROJECT: Lazy<Mutex<Option<String>>> =
