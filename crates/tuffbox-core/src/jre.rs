@@ -303,7 +303,17 @@ where
     Ok(installed)
 }
 
+/// True when none of the discovered runtimes can run `required_major`, so a
+/// managed download is required. A newer JVM counts as compatible (vanilla /
+/// Fabric run fine on newer majors; only old Forge installers are strict).
+pub fn managed_install_needed(runtimes: &[JavaRuntime], required_major: u32) -> bool {
+    !runtimes.iter().any(|r| r.major >= required_major)
+}
+
 /// Like [`ensure_java`], then picks the best match for `mc_version`.
+/// If no installed runtime satisfies the Minecraft requirement, the matching
+/// GraalVM Community JDK major is downloaded automatically — instead of
+/// launching on a JVM that cannot run the game.
 pub fn ensure_java_for_minecraft(mc_version: &str) -> Result<JavaRuntime, JreError> {
     ensure_java_for_minecraft_with_log(mc_version, |_| {})
 }
@@ -319,13 +329,16 @@ where
     if runtimes.is_empty() {
         runtimes = find_all_runtimes_full()?;
     }
-    if runtimes.is_empty() {
-        log("# No Java found on this PC — downloading latest GraalVM Community JDK…");
-        let installed = install_latest_graalvm(&mut log)?;
+    let required = required_java_major(mc_version);
+    if managed_install_needed(&runtimes, required) {
+        log(&format!(
+            "# No compatible Java found (need Java {required}+ for Minecraft {mc_version}) — downloading GraalVM Community JDK {required}…"
+        ));
+        let installed = install_graalvm_major(required, &mut log)?;
         invalidate_runtime_cache();
         runtimes.push(installed);
+        runtimes.sort_by(|a, b| b.major.cmp(&a.major));
     }
-    let required = required_java_major(mc_version);
     find_runtime_for(&runtimes, required).ok_or(JreError::NotFound)
 }
 
@@ -475,6 +488,46 @@ fn install_latest_graalvm<F>(log: &mut F) -> Result<JavaRuntime, JreError>
 where
     F: FnMut(&str),
 {
+    install_graalvm_matching(
+        log,
+        "https://api.github.com/repos/graalvm/graalvm-ce-builds/releases/latest",
+        "latest",
+        &|_tag| true,
+    )
+}
+
+/// Downloads the newest GraalVM Community release whose major Java version
+/// equals `major` (e.g. a `jdk-17.0.x` release) into the managed runtime.
+/// Used when installed JVMs do not satisfy what the target Minecraft version
+/// requires — the old behavior ("newest GraalVM or nothing") could not fix
+/// a machine that only has an older Java than the game needs.
+pub fn install_graalvm_major<F>(major: u32, log: &mut F) -> Result<JavaRuntime, JreError>
+where
+    F: FnMut(&str),
+{
+    install_graalvm_matching(
+        log,
+        "https://api.github.com/repos/graalvm/graalvm-ce-builds/releases?per_page=100",
+        &format!("jdk-{major}"),
+        &|tag| {
+            // Release tags look like `jdk-17.0.12` (new scheme) — match the
+            // major component exactly. Older tag schemes (`vm-22.3.1/jdk-17…`)
+            // still contain `jdk-<major>.` so this covers both.
+            let prefix = format!("jdk-{major}.");
+            tag.contains(&prefix)
+        },
+    )
+}
+
+fn install_graalvm_matching<F>(
+    log: &mut F,
+    releases_url: &str,
+    release_label: &str,
+    tag_matches: &dyn Fn(&str) -> bool,
+) -> Result<JavaRuntime, JreError>
+where
+    F: FnMut(&str),
+{
     let suffix = platform_asset_suffix();
     if suffix == "unsupported" {
         return Err(JreError::Install(
@@ -487,20 +540,23 @@ where
     let downloads = root.join("downloads");
     fs::create_dir_all(&downloads).map_err(JreError::Io)?;
 
-    log("# Fetching latest GraalVM Community release metadata…");
-    let release: GhRelease = crate::http::get_json(
-        "https://api.github.com/repos/graalvm/graalvm-ce-builds/releases/latest",
-    )
-    .map_err(|e| JreError::Download(format!("GitHub releases API: {e}")))?;
+    log("# Fetching GraalVM Community release metadata…");
+    let releases: Vec<GhRelease> = crate::http::get_json(releases_url)
+        .map_err(|e| JreError::Download(format!("GitHub releases API: {e}")))?;
 
-    let asset = release
-        .assets
+    // First release (newest first) that has a platform asset with a matching tag.
+    let (release, asset) = releases
         .iter()
-        .find(|a| a.name.ends_with(suffix) && !a.name.ends_with(".sha256"))
+        .filter(|r| tag_matches(&r.tag_name))
+        .find_map(|r| {
+            r.assets
+                .iter()
+                .find(|a| a.name.ends_with(suffix) && !a.name.ends_with(".sha256"))
+                .map(|a| (r, a))
+        })
         .ok_or_else(|| {
             JreError::Download(format!(
-                "no GraalVM asset matching '*{suffix}' in release {}",
-                release.tag_name
+                "no GraalVM release matching '{release_label}' with asset '*{suffix}'"
             ))
         })?;
 
@@ -736,6 +792,28 @@ mod tests {
     #[test]
     fn find_runtime_for_empty_list_returns_none() {
         assert!(find_runtime_for(&[], 17).is_none());
+    }
+
+    #[test]
+    fn managed_install_needed_when_all_runtimes_too_old() {
+        // Only Java 8 + 11 installed, MC needs 17 → must download, not
+        // silently fall back to an old JVM that will refuse to boot MC.
+        let runtimes = vec![runtime(8), runtime(11)];
+        assert!(managed_install_needed(&runtimes, 17));
+    }
+
+    #[test]
+    fn managed_install_not_needed_when_compatible_runtime_exists() {
+        let runtimes = vec![runtime(8), runtime(17), runtime(21)];
+        assert!(!managed_install_needed(&runtimes, 17));
+        // Newer-than-required JVM is usable for vanilla/Fabric.
+        let runtimes = vec![runtime(8), runtime(21)];
+        assert!(!managed_install_needed(&runtimes, 17));
+    }
+
+    #[test]
+    fn managed_install_needed_when_nothing_installed() {
+        assert!(managed_install_needed(&[], 17));
     }
 
     #[test]

@@ -119,6 +119,18 @@ mod tests {
     }
 
     #[test]
+    fn sodium_06_version_strings_from_modrinth_are_recognized() {
+        // Modrinth version numbers for Sodium 0.6+ look like "mc1.21.4-0.6.4-fabric"
+        // or "0.6.13+mc1.21.4" — the numeric prefix parse must not choke on the
+        // leading "mc" segment and still recognize the dependency as obsolete.
+        assert!(is_obsolete_dependency(
+            "sodium",
+            Some("0.6.0+mc1.21.1"),
+            "indium"
+        ));
+    }
+
+    #[test]
     fn unrelated_deps_untouched() {
         assert!(!is_obsolete_dependency(
             "sodium",

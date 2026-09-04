@@ -57,6 +57,11 @@ pub struct AnalysisCtx {
     pub latest_log: String,
     pub launcher_log: String,
     pub installed_mods: Vec<String>,
+    /// Mod id -> resolved version (from the manifest). Used to gate
+    /// version-sensitive findings like "Indium is missing" (only true for
+    /// Sodium < 0.6). `None` or a missing id means "version unknown" —
+    /// checks then keep the conservative (warn) behavior.
+    pub installed_versions: Option<std::collections::HashMap<String, String>>,
     pub previous_mods: Vec<String>,
     pub java_version: String,
     pub java_vendor: String,
@@ -499,13 +504,31 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
 fn check_missing_mods(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
     let mut out = Vec::new();
     let has = |s: &str| ctx.installed_mods.contains(&s.to_string());
-    if has("sodium") && !has("indium") && ctx.loader == "fabric" {
+    // Version-aware obsolete-dep gate: Sodium 0.6+ bundles the Fabric
+    // Rendering API (see knowledge::obsolete_deps), so "Indium is missing"
+    // must only fire for older Sodium. When the Sodium version is unknown we
+    // keep the historical (conservative) behavior and still warn.
+    let sodium_version = ctx
+        .installed_versions
+        .as_ref()
+        .and_then(|m| m.get("sodium"))
+        .map(|s| s.as_str());
+    let indium_obsolete = sodium_version
+        .map(|v| {
+            crate::knowledge::obsolete_deps::is_obsolete_dependency("sodium", Some(v), "indium")
+        })
+        .unwrap_or(false);
+    if has("sodium")
+        && !has("indium")
+        && !indium_obsolete
+        && ctx.loader == "fabric"
+    {
         out.push(fx(
             "error",
             "MISSING_INDIUM",
             "Indium is missing",
-            "Sodium on Fabric needs Indium for Fabric Renderer API.",
-            Some("Install Indium from Modrinth."),
+            "Sodium on Fabric needs Indium for Fabric Renderer API (Sodium below 0.6).",
+            Some("Install Indium from Modrinth (or update Sodium to 0.6+)."),
             &["https://modrinth.com/mod/indium"],
             vec![fix_action(
                 "installDependency",
@@ -2565,6 +2588,7 @@ pub fn classify_launch_crash(
         latest_log: tail.clone(),
         launcher_log: String::new(),
         installed_mods: installed_mods.to_vec(),
+        installed_versions: None,
         previous_mods: Vec::new(),
         java_version: java_version.to_string(),
         java_vendor: String::new(),
@@ -2805,6 +2829,7 @@ Caused by: java.io.FileNotFoundException: minecraft:shaders/core/rendertype_soli
             latest_log: String::new(),
             launcher_log: String::new(),
             installed_mods: Vec::new(),
+            installed_versions: None,
             previous_mods: Vec::new(),
             java_version: "17".into(),
             java_vendor: String::new(),
@@ -2834,6 +2859,7 @@ Caused by: java.io.FileNotFoundException: minecraft:shaders/core/rendertype_soli
                 "create".into(),
                 "create_connected".into(),
             ],
+            installed_versions: None,
             previous_mods: vec!["sodium".into(), "create".into()],
             java_version: "17".into(),
             java_vendor: "Adoptium".into(),
@@ -2856,6 +2882,47 @@ Caused by: java.io.FileNotFoundException: minecraft:shaders/core/rendertype_soli
             &(ctx().crash_content.join("\n") + "\n" + &ctx().latest_log)
         )
         .is_empty());
+    }
+
+    #[test]
+    fn sodium_06_without_indium_is_not_flagged() {
+        // Sodium 0.6+ ships the Fabric Rendering API itself — the legacy
+        // "Indium is missing" finding must not fire for it.
+        let mut c = ctx();
+        c.installed_mods = vec!["sodium".into()];
+        let mut version_map = std::collections::HashMap::new();
+        version_map.insert("sodium".to_string(), "0.6.13+mc1.21.4".to_string());
+        c.installed_versions = Some(version_map);
+        let findings = check_missing_mods(&c, "");
+        assert!(
+            !findings.iter().any(|f| f.code == "MISSING_INDIUM"),
+            "sodium 0.6+ must not raise MISSING_INDIUM: {:?}",
+            findings.iter().map(|f| &f.code).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sodium_05_without_indium_is_still_flagged() {
+        // Old Sodium really does need Indium — keep the diagnostic.
+        let mut c = ctx();
+        c.installed_mods = vec!["sodium".into()];
+        let mut version_map = std::collections::HashMap::new();
+        version_map.insert("sodium".to_string(), "0.5.8".to_string());
+        c.installed_versions = Some(version_map);
+        let findings = check_missing_mods(&c, "");
+        assert!(findings.iter().any(|f| f.code == "MISSING_INDIUM"));
+    }
+
+    #[test]
+    fn sodium_06_semver_from_manifest_is_not_flagged() {
+        // Manifest version strings are plain semver ("0.6.0") — no prefix games.
+        let mut c = ctx();
+        c.installed_mods = vec!["sodium".into()];
+        let mut version_map = std::collections::HashMap::new();
+        version_map.insert("sodium".to_string(), "0.6.0".to_string());
+        c.installed_versions = Some(version_map);
+        let findings = check_missing_mods(&c, "");
+        assert!(!findings.iter().any(|f| f.code == "MISSING_INDIUM"));
     }
     #[test]
     fn detects_intel() {
