@@ -962,7 +962,7 @@
     z-index: 40;
     min-width: 220px;
     padding: 6px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated, #1a1f28);
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
@@ -1317,7 +1317,7 @@
     display: inline-flex;
     gap: 4px;
     padding: 3px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     flex-shrink: 0;
@@ -1350,7 +1350,7 @@
     align-items: center;
     gap: 8px;
     padding: 0 14px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
   }
@@ -1365,7 +1365,7 @@
   .search-btn {
     padding: 0 18px;
     height: 44px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     font-weight: 700;
     font-size: 13px;
     background: var(--accent-primary);
@@ -1397,7 +1397,7 @@
     min-width: 0;
     height: 40px;
     padding: 0 12px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-primary);
@@ -1406,7 +1406,7 @@
   .path-btn {
     height: 40px;
     padding: 0 12px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-secondary);
     color: var(--text-secondary);
@@ -1510,7 +1510,7 @@
   .error,
   .catalog-warn {
     padding: 10px 12px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     margin-bottom: 16px;
   }
   .error {

@@ -183,12 +183,17 @@ html[data-ui-scaled="1"] #app {
   --badge-ygg-border: #000080;
 }
 
+/* Light themes: tokens instead of hardcoded gray. The old rule forced
+   `#39393b` on EVERY button, overriding component theme-token skins
+   (Library tabs, toolbar buttons) with the Ore gray. Buttons now follow
+   --bg-elevated / --border-color so component skins stay in control; the
+   Ore-style pressed edge is kept via border-bottom width. */
 [data-theme="light"] button,
 [data-theme="tuffbox-light"] button {
-  color: #ffffff;
-  background: #39393b;
-  border-color: #39393b;
-  border-bottom-color: #232425;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border-color: var(--border-color);
+  border-bottom-color: color-mix(in srgb, var(--border-color) 60%, transparent);
 }
 
 [data-theme="light"] button.primary,
