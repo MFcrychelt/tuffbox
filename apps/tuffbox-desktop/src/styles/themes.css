@@ -898,6 +898,18 @@ html[data-glass="on"].potato-pc :where(.card, .panel, .tb-card, .rail, .header) 
   backdrop-filter: none;
 }
 
+/* CSS-only fallback (OS effect refused / not applied — no `.glass-os`):
+   when the Rust core could not layer Acrylic/Mica/Tabbed on the window, the
+   scoped `.app-shell` would keep its opaque gradient (--app-shell-bg) and the
+   "Glass transparency" toggle would look dead. Force a translucent shell
+   backdrop here (specificity 0,3,1 beats the opaque shell rules) so toggling
+   glass is ALWAYS visibly see-through, per the module's intent ("CSS-only
+   translucency over the textured shell background"). */
+html[data-glass="on"]:not(.glass-os) .app-shell {
+  background: color-mix(in srgb, var(--bg-secondary) 68%, transparent);
+  background-image: none;
+}
+
 /* ── OS-level window glass (html.glass-os) ──────────────────────────────
    The Rust core applied Acrylic/Mica/Tabbed to the actual window. The
    WebView must now let that blurred desktop show through: shell background

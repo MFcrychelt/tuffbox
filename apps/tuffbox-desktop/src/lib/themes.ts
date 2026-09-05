@@ -1,4 +1,5 @@
 /** Theme catalog (recreated for TuffBox CSS vars). */
+import { invoke } from "@tauri-apps/api/core";
 
 export type ThemeId =
   | "tuffbox"
@@ -66,12 +67,13 @@ export async function applyGlassEffects(enabled: unknown) {
   } catch {
     /* ignore */
   }
-  // OS-level window glass (better than backdrop-filter alone).
-  const w = window as unknown as {
-    __TAURI__?: { invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
-  };
-  const invoke = w.__TAURI__?.invoke;
-  if (on && invoke) {
+  // OS-level window glass (better than backdrop-filter alone). Real command
+  // invocations go through @tauri-apps/api/core — the global __TAURI__.invoke
+  // does NOT exist in Tauri 2 (commands live under __TAURI__.core.invoke), so
+  // reading w.__TAURI__.invoke always returned undefined and glass appeared
+  // dead even though the OS effect applies fine.
+  const invokeAvailable = typeof invoke === "function";
+  if (on && invokeAvailable) {
     try {
       const effect = ((await invoke("set_window_glass", { on: true })) as string) || "";
       // OS effect active → let the desktop blur show through the shell.
@@ -87,7 +89,7 @@ export async function applyGlassEffects(enabled: unknown) {
     } catch {
       /* fall through to CSS-only glass */
     }
-  } else if (!on && invoke) {
+  } else if (!on && invokeAvailable) {
     try {
       await invoke("set_window_glass", { on: false });
     } catch {
