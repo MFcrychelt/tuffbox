@@ -113,8 +113,8 @@
   const youtubeBesideSkin = $derived(youtubeOnHome && $homeYoutubePlacement === "right");
   const youtubeFullOnHome = $derived(youtubeOnHome && !youtubeBesideSkin);
   const homeBackdropOn = $derived($launcherSettingsLive?.homeBackdrop !== false);
-  const skinPreviewHeight = $derived(youtubeBesideSkin ? 240 : 400);
-  const skinAvatarSize = $derived(youtubeBesideSkin ? 72 : 120);
+  const skinPreviewHeight = $derived(youtubeBesideSkin ? 340 : 400);
+    const skinAvatarSize = $derived(youtubeBesideSkin ? 96 : 120);
 
   type CoverState = { url: string | null; kind: PosterCoverKind };
   let coverByPath = $state<Record<string, CoverState>>({});

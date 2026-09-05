@@ -634,21 +634,27 @@
   }
 
   .feed-row {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 12px;
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding-bottom: 6px;
-    scrollbar-width: thin;
-    scrollbar-color: var(--bg-elevated) transparent;
-    overscroll-behavior-x: contain;
-    -webkit-overflow-scrolling: touch;
-    touch-action: pan-x;
-  }
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 12px;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding-bottom: 6px;
+      /* Hide the scrollbar chrome but keep wheel/touch scrolling active. */
+      scrollbar-width: none;
+      scrollbar-color: transparent transparent;
+      overscroll-behavior-x: contain;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-x;
+    }
+
+    .feed-row::-webkit-scrollbar {
+      display: none;
+      height: 0;
+    }
 
   /* Rail: natural height — parent `.home-side` scrolls skin + feed together. */
   .rail .feed-row {
@@ -721,20 +727,11 @@
 
   .is-full .skel-card {
     width: 100%;
-  }
+      }
 
-  .feed-row::-webkit-scrollbar {
-    height: 6px;
-  }
-
-  .feed-row::-webkit-scrollbar-thumb {
-    background: var(--bg-elevated);
-    border-radius: 3px;
-  }
-
-  .youtube-feed.rail {
-    min-width: 0;
-  }
+      .youtube-feed.rail {
+        min-width: 0;
+      }
 
   .rail .section-header-row {
     margin-bottom: 10px;
@@ -836,27 +833,27 @@
   }
 
   .rail .title {
-    font-size: 12px;
-    line-height: 1.35;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow: hidden;
-  }
+      font-size: 12px;
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+      overflow: hidden;
+    }
 
-  .rail .channel {
-    font-size: 11px;
-  }
+    .rail .channel {
+      font-size: 11px;
+    }
 
-  .rail .video-card:hover {
-    transform: none;
-  }
+    .rail .video-card:hover {
+      transform: none;
+    }
 
-  .skel-card {
-    cursor: default;
-    pointer-events: none;
-  }
+    .skel-card {
+      cursor: default;
+      pointer-events: none;
+    }
 
   .skel-card .thumb {
     border-color: transparent;
