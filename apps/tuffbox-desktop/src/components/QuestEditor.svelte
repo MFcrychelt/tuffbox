@@ -2005,7 +2005,7 @@
 
 <svelte:window onkeydown={handleKeydown} onpointerdowncapture={onWindowPointerDown} />
 
-<div class="qe ftbq flex w-full min-h-0 flex-col">
+<div class="qe ftbq flex w-full min-h-0 flex-col bg-black/30 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] p-3">
 <div class="qe-tb flex items-center gap-2 flex-wrap shrink-0 justify-between mb-1 px-3 py-[7px] min-h-11 max-h-[52px]">
     <div class="qe-title flex items-center gap-2 flex-wrap min-w-0">
       <ScrollText size={18} />
@@ -3415,10 +3415,10 @@
     display: grid;
     grid-template-columns: var(--qe-rail, 200px) 4px 1fr;
     gap: 0;
-    border: 1px solid var(--ftbq-frame);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: var(--ftbq-radius-panel);
     overflow: hidden;
-    background: var(--ftbq-bg-canvas);
+    background: rgba(0, 0, 0, 0.25);
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.05),
       0 2px 8px rgba(0, 0, 0, 0.4);
@@ -3644,6 +3644,17 @@
   .qe-actions button:focus-visible {
     outline: 2px solid var(--ftbq-accent-teal);
     outline-offset: 1px;
+  }
+  :global(.qe .ftbq-rail) {
+    background: rgba(255, 255, 255, 0.02) !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  :global(.qe .insp) {
+    background: rgba(255, 255, 255, 0.02) !important;
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  :global(.qe .ftbq-canvas) {
+    background: rgba(0, 0, 0, 0.18) !important;
   }
   :global(.spin) {
     animation: spin 0.8s linear infinite;
