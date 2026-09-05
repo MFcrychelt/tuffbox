@@ -66,6 +66,7 @@ fn split_namespaced<'a>(value: &'a str, default_ns: &'a str) -> (&'a str, &'a st
 
 /// `minecraft:item/generated` → `assets/minecraft/models/item/generated.json`
 /// `item/generated` → `assets/<ns>/models/item/generated.json`
+#[cfg(test)]
 fn model_zip_path(default_ns: &str, model_ref: &str) -> String {
     let (ns, path) = split_namespaced(model_ref, default_ns);
     if path.starts_with("item/") || path.starts_with("block/") {
@@ -112,21 +113,148 @@ fn resolve_from_model(
     item_path: &str,
     depth: u8,
 ) -> Option<Vec<u8>> {
-    if depth > 8 {
+    if depth > 10 {
         return None;
     }
-    let model_path = model_zip_path(namespace, item_path);
-    let content = read_text_any(archives, &model_path).or_else(|| {
-        // 1.21.4+ item definitions sometimes live under items/, not models/item/.
-        read_text_any(
-            archives,
-            &format!("assets/{namespace}/items/{item_path}.json"),
-        )
-    })?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
 
+    // Prefer 1.21.4+ item definitions (`assets/<ns>/items/<id>.json`), then classic models.
+    let item_def = read_text_any(
+        archives,
+        &format!("assets/{namespace}/items/{item_path}.json"),
+    );
+    if let Some(content) = item_def {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(png) = resolve_modern_item_def(archives, namespace, &json, depth) {
+                return Some(png);
+            }
+        }
+    }
+
+    resolve_model_file(archives, namespace, &format!("item/{item_path}"), depth)
+}
+
+/// Follow a namespaced model reference like `minecraft:item/diamond` or
+/// `minecraft:block/blackstone_wall_inventory`.
+fn resolve_model_ref(
+    archives: &mut [ZipArchive<File>],
+    default_ns: &str,
+    model_ref: &str,
+    depth: u8,
+) -> Option<Vec<u8>> {
+    let (ns, path) = split_namespaced(model_ref, default_ns);
+    if path.starts_with("item/") || path.starts_with("block/") {
+        resolve_model_file(archives, ns, path, depth)
+    } else {
+        // Bare id → assume item model
+        resolve_model_file(archives, ns, &format!("item/{path}"), depth)
+    }
+}
+
+fn resolve_model_file(
+    archives: &mut [ZipArchive<File>],
+    namespace: &str,
+    model_path: &str,
+    depth: u8,
+) -> Option<Vec<u8>> {
+    if depth > 10 {
+        return None;
+    }
+    let zip_path = format!("assets/{namespace}/models/{model_path}.json");
+    let content = read_text_any(archives, &zip_path)?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    extract_texture_from_model_json(archives, namespace, &json, depth)
+}
+
+/// 1.21.4+ `assets/<ns>/items/<id>.json` — walk `model` / `fallback` / select entries.
+fn resolve_modern_item_def(
+    archives: &mut [ZipArchive<File>],
+    namespace: &str,
+    json: &serde_json::Value,
+    depth: u8,
+) -> Option<Vec<u8>> {
+    if let Some(model) = json.get("model") {
+        return resolve_modern_model_node(archives, namespace, model, depth);
+    }
+    None
+}
+
+fn resolve_modern_model_node(
+    archives: &mut [ZipArchive<File>],
+    namespace: &str,
+    node: &serde_json::Value,
+    depth: u8,
+) -> Option<Vec<u8>> {
+    if depth > 10 {
+        return None;
+    }
+    // String shortcut (rare)
+    if let Some(model_ref) = node.as_str() {
+        return resolve_model_ref(archives, namespace, model_ref, depth + 1);
+    }
+    let obj = node.as_object()?;
+
+    if let Some(model_ref) = obj.get("model").and_then(|v| v.as_str()) {
+        if let Some(png) = resolve_model_ref(archives, namespace, model_ref, depth + 1) {
+            return Some(png);
+        }
+    }
+
+    // minecraft:special — use the `base` item model (e.g. banners, shields, beds).
+    if let Some(base_ref) = obj.get("base").and_then(|v| v.as_str()) {
+        if let Some(png) = resolve_model_ref(archives, namespace, base_ref, depth + 1) {
+            return Some(png);
+        }
+    }
+
+    // minecraft:condition
+    for key in ["on_true", "on_false"] {
+        if let Some(child) = obj.get(key) {
+            if let Some(png) = resolve_modern_model_node(archives, namespace, child, depth + 1) {
+                return Some(png);
+            }
+        }
+    }
+
+    // minecraft:select — prefer fallback, then first entry
+    if let Some(fallback) = obj.get("fallback") {
+        if let Some(png) = resolve_modern_model_node(archives, namespace, fallback, depth + 1) {
+            return Some(png);
+        }
+    }
+    if let Some(entries) = obj.get("entries").and_then(|v| v.as_array()) {
+        for entry in entries {
+            if let Some(model) = entry.get("model") {
+                if let Some(png) = resolve_modern_model_node(archives, namespace, model, depth + 1)
+                {
+                    return Some(png);
+                }
+            }
+        }
+    }
+
+    // minecraft:composite
+    if let Some(models) = obj.get("models").and_then(|v| v.as_array()) {
+        for model in models {
+            if let Some(png) = resolve_modern_model_node(archives, namespace, model, depth + 1) {
+                return Some(png);
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_texture_from_model_json(
+    archives: &mut [ZipArchive<File>],
+    namespace: &str,
+    json: &serde_json::Value,
+    depth: u8,
+) -> Option<Vec<u8>> {
     if let Some(textures) = json.get("textures").and_then(|value| value.as_object()) {
-        for key in ["layer0", "layer1", "particle", "all", "texture", "side", "end"] {
+        for key in [
+            "layer0", "layer1", "particle", "all", "texture", "side", "end", "wall", "cross",
+            "crop", "plant", "fire", "fan", "wool", "pane",
+        ] {
             let Some(texture_ref) = textures.get(key).and_then(|value| value.as_str()) else {
                 continue;
             };
@@ -136,7 +264,6 @@ fn resolve_from_model(
                 }
             }
         }
-        // Any remaining texture key as a last resort.
         for (_key, value) in textures {
             let Some(texture_ref) = value.as_str() else {
                 continue;
@@ -155,21 +282,33 @@ fn resolve_from_model(
 
     // Block-item parents often point straight at a block texture.
     if let Some(rest) = parent.strip_prefix("minecraft:block/") {
-        return read_png_any(
+        if let Some(png) = read_png_any(
             archives,
             &format!("assets/minecraft/textures/block/{rest}.png"),
+        ) {
+            return Some(png);
+        }
+        return resolve_model_ref(
+            archives,
+            "minecraft",
+            &format!("minecraft:block/{rest}"),
+            depth + 1,
         );
     }
     if let Some(rest) = parent.strip_prefix("block/") {
-        if let Some(png) =
-            read_png_any(archives, &format!("assets/{namespace}/textures/block/{rest}.png"))
-        {
+        if let Some(png) = read_png_any(
+            archives,
+            &format!("assets/{namespace}/textures/block/{rest}.png"),
+        ) {
             return Some(png);
         }
-        return read_png_any(
+        if let Some(png) = read_png_any(
             archives,
             &format!("assets/minecraft/textures/block/{rest}.png"),
-        );
+        ) {
+            return Some(png);
+        }
+        return resolve_model_ref(archives, namespace, &format!("block/{rest}"), depth + 1);
     }
 
     let (parent_ns, parent_path) = split_namespaced(parent, namespace);
@@ -179,13 +318,23 @@ fn resolve_from_model(
         "item/generated"
             | "item/handheld"
             | "item/handheld_rod"
+            | "item/handheld_mace"
             | "builtin/generated"
             | "builtin/entity"
     ) {
         return None;
     }
 
-    resolve_from_model(archives, parent_ns, parent_path, depth + 1)
+    if parent_path.starts_with("item/") || parent_path.starts_with("block/") {
+        resolve_model_file(archives, parent_ns, parent_path, depth + 1)
+    } else {
+        resolve_model_file(
+            archives,
+            parent_ns,
+            &format!("item/{parent_path}"),
+            depth + 1,
+        )
+    }
 }
 
 fn find_in_archives(

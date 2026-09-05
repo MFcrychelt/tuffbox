@@ -1,14 +1,17 @@
 <script lang="ts">
   import {
-    History, Plus, RefreshCw, RotateCcw, Calendar, GitCompare, FileText, Archive, Trash2,
-    Search, ChevronDown, ChevronRight, ExternalLink, AlertTriangle,
-  } from "lucide-svelte";
+    History, Plus, RefreshCw, RotateCcw, GitCompare, FileText, Archive, Trash2,
+    Search, ChevronDown, ChevronRight, ExternalLink, AlertTriangle, Sparkles, FolderOpen,
+    ArrowRightLeft, Clock, Zap, Hand, ShieldAlert, Database,
+  } from "@lucide/svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import EmptyState from "./EmptyState.svelte";
   import {
     api,
     type BackupEntry,
     type ManifestSnapshotDiff,
+    type PackSource,
+    type PackStateDiff,
     type Snapshot,
     type SnapshotDetail,
     type SnapshotDiff,
@@ -16,33 +19,33 @@
   } from "../lib/api";
   import { historyFocusSnapshotId, ideStageRequest, projectPath } from "../lib/store";
 
-  let snapshots: Snapshot[] = [];
-  let loading = false;
-  let newName = "";
-  let error: string | null = null;
-  let message: string | null = null;
-  let projectDir: string | null = null;
-  let lastLoadedPath: string | null = null;
-  let fromId = "";
-  let toId = "";
-  let diff: SnapshotDiff | null = null;
-  let selectedDiffPath = "";
-  let fileDiff: SnapshotFileDiff | null = null;
-  let diffLoading = false;
+  let snapshots = $state<Snapshot[]>([]);
+  let loading = $state(false);
+  let newName = $state("");
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let projectDir = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
+  let fromId = $state("");
+  let toId = $state("");
+  let diff = $state<SnapshotDiff | null>(null);
+  let selectedDiffPath = $state("");
+  let fileDiff = $state<SnapshotFileDiff | null>(null);
+  let diffLoading = $state(false);
 
-  let selectedId = "";
-  let detail: SnapshotDetail | null = null;
-  let detailLoading = false;
-  let search = "";
-  let filterKind: "all" | "auto" | "manual" | "crash" = "all";
-  let backupsOpen = false;
-  let compareOpen = false;
+  let selectedId = $state("");
+  let detail = $state<SnapshotDetail | null>(null);
+  let detailLoading = $state(false);
+  let search = $state("");
+  let filterKind = $state<"all" | "auto" | "manual" | "crash">("all");
+  let backupsOpen = $state(false);
+  let compareOpen = $state(false);
 
-  let confirmOpen = false;
-  let confirmTitle = "";
-  let confirmMessage = "";
-  let confirmDanger = false;
-  let confirmAction: (() => void) | null = null;
+  let confirmOpen = $state(false);
+  let confirmTitle = $state("");
+  let confirmMessage = $state("");
+  let confirmDanger = $state(false);
+  let confirmAction = $state<(() => void) | null>(null);
 
   function showConfirm(title: string, message: string, action: () => void, danger = false) {
     confirmTitle = title;
@@ -58,12 +61,22 @@
     confirmAction = null;
   }
 
-  let manifestDiff: ManifestSnapshotDiff | null = null;
-  let manifestDiffLoading = false;
+  let manifestDiff = $state<ManifestSnapshotDiff | null>(null);
+  let manifestDiffLoading = $state(false);
 
-  let backups: BackupEntry[] = [];
-  let backupLoading = false;
-  let backupName = "";
+  // Pack Diff: compare across snapshots / backups / other instances.
+  type DiffSourceKind = "snapshot" | "backup" | "manifest";
+  let fromKind = $state<DiffSourceKind>("snapshot");
+  let toKind = $state<DiffSourceKind>("snapshot");
+  let otherManifestPath = $state("");
+  let backupFromId = $state("");
+  let backupToId = $state("");
+  let packDiff = $state<PackStateDiff | null>(null);
+  let packDiffLoading = $state(false);
+
+  let backups = $state<BackupEntry[]>([]);
+  let backupLoading = $state(false);
+  let backupName = $state("");
 
   async function ensureProjectDir() {
     if (!$projectPath) return null;
@@ -102,8 +115,19 @@
 
   async function deleteBackup(id: string) {
     if (!$projectPath) return;
-    await api.backups.delete(id, $projectPath);
-    await loadBackups();
+    showConfirm(
+      "Delete backup",
+      "Delete this backup permanently? This cannot be undone.",
+      async () => {
+        try {
+          await api.backups.delete(id, $projectPath!);
+          await loadBackups();
+        } catch (e) {
+          error = String(e);
+        }
+      },
+      true,
+    );
   }
 
   async function restoreBackup(id: string) {
@@ -143,6 +167,21 @@
     }
   }
 
+  function formatRelative(iso: string) {
+    try {
+      const t = new Date(iso).getTime();
+      const diffMs = Date.now() - t;
+      const min = 60_000;
+      if (diffMs < min) return "just now";
+      if (diffMs < 60 * min) return `${Math.floor(diffMs / min)}m ago`;
+      if (diffMs < 24 * 60 * min) return `${Math.floor(diffMs / (60 * min))}h ago`;
+      if (diffMs < 7 * 24 * 60 * min) return `${Math.floor(diffMs / (24 * 60 * min))}d ago`;
+      return new Date(iso).toLocaleDateString();
+    } catch {
+      return iso;
+    }
+  }
+
   function operationLabel(s: Snapshot): string {
     if (s.operation) return s.operation;
     if (s.name?.startsWith("auto-before-")) return s.name.slice("auto-before-".length);
@@ -162,13 +201,31 @@
     return s.actor === "user" || s.operation === "manual" || (!isAuto(s) && !isCrash(s));
   }
 
+  function kindOf(s: Snapshot): "auto" | "manual" | "crash" {
+    if (isCrash(s)) return "crash";
+    if (isAuto(s)) return "auto";
+    return "manual";
+  }
+
+  function kindLabel(kind: string): string {
+    if (kind === "crash") return "Crash fix";
+    if (kind === "auto") return "Auto";
+    return "Manual";
+  }
+
+  /** Short prefixed id for tight badges ("bf3a…c21"). */
+  function shortId(id: string) {
+    if (id.length <= 9) return id;
+    return `${id.slice(0, 4)}…${id.slice(-3)}`;
+  }
+
   function previewLine(s: Snapshot): string {
     const summary = s.actionsSummary?.filter(Boolean) ?? [];
     if (summary.length) return summary.slice(0, 2).join(" · ");
     return s.reason || "No action details";
   }
 
-  $: filtered = (() => {
+  const filtered = $derived((() => {
     const q = search.trim().toLowerCase();
     let list = [...snapshots].reverse();
     if (filterKind === "auto") list = list.filter(isAuto);
@@ -190,7 +247,14 @@
       });
     }
     return list;
-  })();
+  })());
+
+  const stats = $derived({
+    all: snapshots.length,
+    auto: snapshots.filter(isAuto).length,
+    manual: snapshots.filter(isManual).length,
+    crash: snapshots.filter(isCrash).length,
+  });
 
   async function load(force = false) {
     if (!$projectPath) return;
@@ -210,7 +274,11 @@
         selectedId = "";
         detail = null;
       }
-      if (!selectedId && snapshots.length) {
+      const focusSnap = $historyFocusSnapshotId;
+      if (focusSnap && snapshots.some((s) => s.id === focusSnap)) {
+        historyFocusSnapshotId.set(null);
+        await selectSnapshot(focusSnap);
+      } else if (!selectedId && snapshots.length) {
         await selectSnapshot(snapshots[snapshots.length - 1].id);
       } else if (selectedId) {
         await selectSnapshot(selectedId);
@@ -223,19 +291,26 @@
     }
   }
 
+  let snapshotRequestGen = 0;
+
   async function selectSnapshot(id: string) {
     selectedId = id;
     const dir = await ensureProjectDir();
     if (!dir) return;
+    const generation = ++snapshotRequestGen;
     detailLoading = true;
     error = null;
     try {
-      detail = await api.snapshots.detail(id, dir);
+      const result = await api.snapshots.detail(id, dir);
+      // Ignore stale responses if the user clicked another snapshot meanwhile.
+      if (generation !== snapshotRequestGen) return;
+      detail = result;
     } catch (e) {
+      if (generation !== snapshotRequestGen) return;
       error = String(e);
       detail = null;
     } finally {
-      detailLoading = false;
+      if (generation === snapshotRequestGen) detailLoading = false;
     }
   }
 
@@ -328,6 +403,13 @@
     compare();
   }
 
+  function swapCompare() {
+    const tmp = fromId;
+    fromId = toId;
+    toId = tmp;
+    void compare();
+  }
+
   function openInHistory(id: string) {
     historyFocusSnapshotId.set(id);
     ideStageRequest.set("history");
@@ -364,6 +446,43 @@
     }
   }
 
+  function packSourceFor(kind: DiffSourceKind, side: "from" | "to"): PackSource | null {
+    const dir = projectDir ?? "";
+    if (side === "from") {
+      if (kind === "snapshot")
+        return fromId ? { type: "snapshot", projectDir: dir, snapshotId: fromId } : null;
+      if (kind === "backup")
+        return backupFromId ? { type: "backup", projectDir: dir, backupId: backupFromId } : null;
+      return otherManifestPath ? { type: "manifest", path: otherManifestPath } : null;
+    }
+    if (kind === "snapshot")
+      return toId ? { type: "snapshot", projectDir: dir, snapshotId: toId } : null;
+    if (kind === "backup")
+      return backupToId ? { type: "backup", projectDir: dir, backupId: backupToId } : null;
+    return otherManifestPath ? { type: "manifest", path: otherManifestPath } : null;
+  }
+
+  async function runPackDiff() {
+    const dir = await ensureProjectDir();
+    if (!dir) return;
+    const a = packSourceFor(fromKind, "from");
+    const b = packSourceFor(toKind, "to");
+    if (!a || !b) {
+      error = "Pick both sources first.";
+      return;
+    }
+    packDiffLoading = true;
+    error = null;
+    packDiff = null;
+    try {
+      packDiff = await api.packDiff.compare(a, b);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      packDiffLoading = false;
+    }
+  }
+
   async function openFileDiff(path: string) {
     const dir = await ensureProjectDir();
     if (!dir || !fromId || !toId) return;
@@ -385,176 +504,259 @@
     return "context";
   }
 
-  $: allDiffFiles = diff
+  /** Friendly snapshot label for select dropdowns. */
+  function snapshotSelectLabel(s: Snapshot) {
+    return `${s.name} · ${formatRelative(s.createdAt)}`;
+  }
+
+  function changedCount(s: Snapshot) {
+    return s.changedFiles?.length ?? 0;
+  }
+
+  const allDiffFiles = $derived(diff
     ? Array.from(new Set([...diff.addedFiles, ...diff.removedFiles, ...diff.modifiedFiles])).sort()
-    : [];
-  $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+    : []);
+  const detailKind = $derived(detail ? kindOf(detail.snapshot) : "manual");
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+  });
+  $effect(() => {
+    const focusSnap = $historyFocusSnapshotId;
+    if (!focusSnap || !snapshots.length) return;
+    if (!snapshots.some((s) => s.id === focusSnap)) return;
+    historyFocusSnapshotId.set(null);
+    void selectSnapshot(focusSnap);
+  });
 </script>
 
-<div class="snapshots">
-  <div class="toolbar">
-    <div class="title">
-      <History size={18} />
-      <span>Snapshots</span>
+<div class="snapshots flex flex-col gap-3.5 h-full min-h-0 w-full max-w-[1440px] mx-auto box-border bg-black/30 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] p-6">
+  <!-- ── Toolbar ─────────────────────────────────────────────── -->
+  <div class="flex justify-between items-center gap-4 flex-wrap shrink-0">
+    <div class="grid gap-1">
+      <div class="flex items-center gap-2.5 text-[var(--text-primary)] font-extrabold text-[16px]">
+        <History size={19} class="text-[var(--accent-primary)]" />
+        <span>Snapshots</span>
+      </div>
+      <p class="m-0 text-[var(--text-muted)] text-[13px]">Checkpoints of your pack — roll back to any saved state</p>
     </div>
-    <div class="actions">
-      <input bind:value={newName} placeholder="Snapshot name" />
-      <button on:click={create} disabled={!$projectPath || loading}>
-        <Plus size={16} />
-        Create
-      </button>
-      <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
+    <div class="flex items-center gap-2.5 flex-wrap">
+      <div class="flex items-center gap-2">
+        <input
+          class="min-w-[200px] max-w-[300px]"
+          bind:value={newName}
+          placeholder="Snapshot name"
+          onkeydown={(e) => e.key === "Enter" && !loading && ($projectPath ? create() : null)}
+        />
+        <button onclick={create} disabled={!$projectPath || loading} title="Create a safety snapshot of the current state">
+          <Plus size={16} />
+          Snapshot
+        </button>
+      </div>
+      <button class="ghost w-[38px] h-[38px] p-0 shrink-0 justify-center" onclick={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
       </button>
     </div>
   </div>
 
-  {#if error}<div class="notice error">{error}</div>{/if}
-  {#if message}<div class="notice success">{message}</div>{/if}
+  {#if error}<div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] border text-[13px] leading-snug text-[#fecaca] bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.28)]">{error}</div>{/if}
+  {#if message}<div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] border text-[13px] leading-snug text-[var(--accent-primary)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)] border-[color-mix(in_srgb,var(--accent-primary)_25%,transparent)]">{message}</div>{/if}
 
   {#if loading && snapshots.length === 0}
-    <div class="loading">Loading snapshots...</div>
+    <div class="text-[var(--text-muted)] py-20 text-center text-[14px] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">Loading snapshots…</div>
   {:else if !$projectPath}
     <EmptyState icon={History} title="No project selected" description="Open a project to manage snapshots." />
   {:else if snapshots.length === 0}
     <EmptyState icon={History} title="No snapshots yet" description="Create a snapshot to save the current state of your project." />
   {:else}
-    <div class="filters">
-      <div class="search">
-        <Search size={14} />
-        <input bind:value={search} placeholder="Search name, actions, tags…" />
-      </div>
-      <div class="chips">
-        <button class:active={filterKind === "all"} on:click={() => (filterKind = "all")}>All</button>
-        <button class:active={filterKind === "auto"} on:click={() => (filterKind = "auto")}>Auto</button>
-        <button class:active={filterKind === "manual"} on:click={() => (filterKind = "manual")}>Manual</button>
-        <button class:active={filterKind === "crash"} on:click={() => (filterKind = "crash")}>Crash fix</button>
-      </div>
+    <!-- ── Kind filter cards ───────────────────────────────────── -->
+    <div class="grid grid-cols-4 max-[900px]:grid-cols-2 gap-2.5 shrink-0" role="group" aria-label="Filter snapshots">
+      <button type="button" class="filter-card {filterKind === "all" ? "active" : ""}" onclick={() => (filterKind = "all")}>
+        <Database size={16} />
+        <span class="text-[19px] font-extrabold leading-none">{ stats.all }</span>
+        <span>All</span>
+      </button>
+      <button type="button" class="filter-card {filterKind === "auto" ? "active" : ""}" onclick={() => (filterKind = "auto")}>
+        <Zap size={16} />
+        <span class="text-[19px] font-extrabold leading-none">{ stats.auto }</span>
+        <span>Auto</span>
+      </button>
+      <button type="button" class="filter-card {filterKind === "manual" ? "active" : ""}" onclick={() => (filterKind = "manual")}>
+        <Hand size={16} />
+        <span class="text-[19px] font-extrabold leading-none">{ stats.manual }</span>
+        <span>Manual</span>
+      </button>
+      <button type="button" class="filter-card {filterKind === "crash" ? "active" : ""}" onclick={() => (filterKind = "crash")}>
+        <ShieldAlert size={16} />
+        <span class="text-[19px] font-extrabold leading-none">{ stats.crash }</span>
+        <span>Crash fix</span>
+      </button>
     </div>
 
-    <div class="master-detail">
-      <aside class="list-pane">
+    <!-- ── Search ──────────────────────────────────────────────── -->
+    <div class="flex gap-3 items-center shrink-0">
+      <div class="flex-1 min-w-[240px] flex items-center gap-2 bg-black/40 border border-white/10 rounded-[var(--border-radius-md)] px-2.5 text-[var(--text-muted)] focus-within:border-emerald-500/50 focus-within:ring-1 focus-within:ring-emerald-500/30">
+        <Search size={15} />
+        <input class="flex-1 border-0 bg-transparent text-[var(--text-primary)] py-2.5 outline-none min-w-0 text-[13px]" bind:value={search} placeholder="Search name, actions, tags…" />
+      </div>
+      <span class="text-[var(--text-muted)] text-[13px] whitespace-nowrap">{ filtered.length } of { snapshots.length }</span>
+    </div>
+
+    <!-- ── Master / detail ─────────────────────────────────────── -->
+    <div class="grid grid-cols-[minmax(300px,380px)_minmax(0,1fr)] max-[900px]:grid-cols-1 gap-3.5 flex-1 min-h-0">
+      <aside class="overflow-auto min-h-0 p-2 flex flex-col gap-1.5 bg-white/[0.03] border border-white/[0.08] backdrop-blur-md rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable]">
         {#each filtered as s (s.id)}
+          {@const kind = kindOf(s)}
           <button
             type="button"
-            class="row"
-            class:selected={selectedId === s.id}
-            on:click={() => selectSnapshot(s.id)}
+            class="w-full text-left rounded-[var(--border-radius-md)] border px-3 py-3 flex gap-2.5 cursor-pointer transition-colors duration-150 { selectedId === s.id
+              ? kind === "crash"
+                ? "bg-[rgba(245,158,11,0.08)] border-[rgba(245,158,11,0.35)] text-[var(--text-primary)] border-l-[3px] border-l-[#f59e0b]"
+                : kind === "auto"
+                  ? "bg-[rgba(147,197,253,0.07)] border-[rgba(147,197,253,0.35)] text-[var(--text-primary)] border-l-[3px] border-l-[#93c5fd]"
+                  : "bg-[color-mix(in_srgb,var(--accent-primary)_8%,var(--bg-tertiary))] border-[color-mix(in_srgb,var(--accent-primary)_32%,var(--border-color))] text-[var(--text-primary)] border-l-[3px] border-l-[var(--accent-primary)]"
+              : "border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" }"
+            onclick={() => selectSnapshot(s.id)}
           >
-            <div class="row-top">
-              <strong>{s.name}</strong>
-              <span class="op-badge">{operationLabel(s)}</span>
-            </div>
-            <p class="preview">{previewLine(s)}</p>
-            <div class="row-meta">
-              <span><Calendar size={12} /> {formatDate(s.createdAt)}</span>
-              {#if s.tags?.length}
-                <span class="tags">
-                  {#each s.tags as t}<span class="tag" class:crash-fix={t === "crash_fix"}>{t}</span>{/each}
-                </span>
-              {/if}
+            <span class="w-2 h-2 rounded-full shrink-0 mt-[7px] {
+              kind === "auto" ? "bg-[#93c5fd] shadow-[0_0_0_3px_rgba(147,197,253,0.16)]"
+              : kind === "crash" ? "bg-[#f59e0b] shadow-[0_0_0_3px_rgba(245,158,11,0.16)]"
+              : "bg-[var(--accent-primary)] shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent-primary)_16%,transparent)]"
+            }" aria-hidden="true"></span>
+            <div class="min-w-0 flex-1 grid gap-1.5">
+              <div class="flex justify-between gap-2 items-start min-w-0">
+                <strong class="text-[13.5px] text-[var(--text-primary)] max-w-full tb-truncate">{ s.name }</strong>
+                <span class="text-[10.5px] px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-muted)] font-mono max-w-[130px] shrink-0 tb-truncate">{ operationLabel(s) }</span>
+              </div>
+              <p class="m-0 text-[12.5px] text-[var(--text-muted)] leading-snug line-clamp-2">{ previewLine(s) }</p>
+              <div class="flex items-center gap-2 text-[11.5px] text-[var(--text-muted)] flex-wrap">
+                <span class="kind-tag { kind }">{ kindLabel(kind) }</span>
+                <span class="inline-flex items-center gap-1"><Clock size={12} /> { formatDate(s.createdAt) }</span>
+                {#if changedCount(s) > 0}
+                  <span class="inline-flex items-center gap-1"><FileText size={12} /> { changedCount(s) }</span>
+                {/if}
+                {#if s.tags?.length}
+                  <span class="flex gap-1 flex-wrap">
+                    {#each s.tags as t}
+                      <span class="tag" class:crash-fix={ t === "crash_fix" }>{ t }</span>
+                    {/each}
+                  </span>
+                {/if}
+              </div>
             </div>
           </button>
         {:else}
-          <div class="muted pad">No snapshots match filters.</div>
+          <div class="text-[var(--text-muted)] text-[13px] p-6">No snapshots match filters.</div>
         {/each}
       </aside>
 
-      <section class="detail-pane">
+      <section class="p-[18px] overflow-auto min-h-0 flex flex-col gap-3.5 bg-white/[0.02] border border-white/[0.08] backdrop-blur-2xl rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable] shadow-xl">
         {#if detailLoading}
-          <div class="muted pad">Loading details…</div>
+          <div class="flex flex-col gap-3">
+            <span class="skeleton" style="width: 44%; height: 26px"></span>
+            <span class="skeleton" style="width: 70%"></span>
+            <span class="skeleton" style="width: 90%"></span>
+            <span class="skeleton" style="height: 120px"></span>
+          </div>
         {:else if detail}
           {@const s = detail.snapshot}
-          <div class="detail-header">
-            <div>
-              <h2>{s.name}</h2>
-              <div class="detail-sub">
-                <span class="badge">{s.id}</span>
-                <span class="muted">{formatDate(s.createdAt)}</span>
-                {#if s.actor}<span class="tag">{s.actor}</span>{/if}
-                {#if s.planSource}<span class="tag">{s.planSource}</span>{/if}
+          <div class="flex justify-between gap-3.5 flex-wrap items-start">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2.5 flex-wrap">
+                <h2 class="m-0 text-[20px] leading-tight [overflow-wrap:anywhere] text-[var(--text-primary)]">{ s.name }</h2>
+                <span class="kind-pill { detailKind }">{ kindLabel(detailKind) }</span>
+              </div>
+              <div class="flex items-center gap-2 flex-wrap mt-1.5">
+                <span class="text-[12px] text-[var(--text-muted)] bg-[var(--bg-elevated)] px-2 py-1 rounded font-mono" title={ s.id }>{ shortId(s.id) }</span>
+                <span class="text-[13px] text-[var(--text-secondary)] inline-flex items-center gap-1.5"><Clock size={13} /> { formatRelative(s.createdAt) }</span>
+                {#if s.actor}<span class="actor-pill">{ s.actor }</span>{/if}
+                {#if s.planSource}<span class="actor-pill plan">{ s.planSource }</span>{/if}
               </div>
             </div>
-            <div class="detail-actions">
-              <button class="secondary" on:click={() => compareWithPrevious(s.id)} title="Compare with previous">
+            <div class="flex items-center gap-2 flex-wrap">
+              <button class="secondary" onclick={() => compareWithPrevious(s.id)} title="Compare with previous">
                 <GitCompare size={14} /> Compare prev
               </button>
-              <button class="secondary" on:click={() => openInHistory(s.id)}>
+              <button class="secondary" onclick={() => openInHistory(s.id)} title="Open in History">
                 <ExternalLink size={14} /> History
               </button>
-              <button class="ghost rollback" on:click={() => rollback(s.id)}>
+              <button class="ghost rollback" onclick={() => rollback(s.id)}>
                 <RotateCcw size={14} /> Rollback
               </button>
-              <button class="ghost danger" on:click={() => removeSnapshot(s.id)}>
+              <button class="ghost danger" onclick={() => removeSnapshot(s.id)}>
                 <Trash2 size={14} /> Delete
               </button>
             </div>
           </div>
 
           {#if s.tags?.length || s.crashFingerprintKey || s.matchedCaseIds?.length}
-            <div class="tag-row">
+            <div class="flex flex-wrap gap-1.5">
               {#each s.tags ?? [] as t}
-                <span class="tag" class:crash-fix={t === "crash_fix"}>{t}</span>
+                <span class="tag" class:crash-fix={ t === "crash_fix" }>{ t }</span>
               {/each}
               {#if s.crashFingerprintKey}
-                <span class="tag mono" title={s.crashFingerprintKey}>{s.crashFingerprintKey.slice(0, 28)}…</span>
+                <span class="tag font-mono max-w-[200px] overflow-hidden text-ellipsis whitespace-nowrap" title={ s.crashFingerprintKey }>{ s.crashFingerprintKey.slice(0, 28) }…</span>
               {/if}
               {#each s.matchedCaseIds ?? [] as cid}
-                <span class="tag mono">{cid}</span>
+                <span class="tag font-mono">{ cid }</span>
               {/each}
             </div>
           {/if}
 
-          <p class="reason">{s.reason}</p>
+          <p class="text-[14px] text-[var(--text-secondary)] m-0 leading-relaxed">{ s.reason }</p>
 
           {#if detail.manifestOnly}
-            <div class="notice warn">
-              <AlertTriangle size={14} />
-              Manifest/lockfile checkpoint — no tracked file copies. Rollback will not restore mod jars from this snapshot.
+            <div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] border text-[13px] leading-snug inline-flex items-center gap-2 text-[#fcd34d] bg-[rgba(245,158,11,0.08)] border-[rgba(245,158,11,0.28)]">
+              <AlertTriangle size={15} />
+              <span><strong>Checkpoint without file copies.</strong> Rollback restores the manifest but not mod jars from this snapshot.</span>
             </div>
           {/if}
 
           {#if detail.humanExplanation}
-            <div class="block">
-              <h3>Explanation</h3>
-              <p>{detail.humanExplanation}</p>
+            <div class="grid gap-2.5">
+              <h3 class="flex items-center gap-1.5 m-0 text-[12.5px] uppercase tracking-wider text-[var(--text-muted)] font-bold"><Sparkles size={14} class="text-[var(--accent-primary)]" /> Explanation</h3>
+              <p class="m-0 text-[14px] text-[var(--text-secondary)] leading-relaxed">{ detail.humanExplanation }</p>
             </div>
           {/if}
 
-          <div class="block">
-            <h3>Actions ({detail.actionsSummary.length})</h3>
-            {#if detail.actionsSummary.length}
-              <ul class="action-list">
-                {#each detail.actionsSummary as line}
-                  <li>{line}</li>
+          <div class="grid gap-2.5">
+            <h3 class="flex items-center gap-1.5 m-0 text-[12.5px] uppercase tracking-wider text-[var(--text-muted)] font-bold"><Zap size={14} class="text-[var(--accent-primary)]" /> Actions ({ (detail.actionsSummary ?? []).length })</h3>
+            {#if (detail.actionsSummary ?? []).length > 0}
+              <ul class="m-0 p-0 list-none grid gap-1.5">
+                {#each detail.actionsSummary ?? [] as line}
+                  <li class="flex items-start gap-2.5 text-[13.5px] leading-snug text-[var(--text-secondary)] px-2.5 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-sm)]">
+                    <span class="w-1.5 h-1.5 rounded-full bg-[var(--accent-primary)] shrink-0 mt-[7px]" aria-hidden="true"></span>{ line }
+                  </li>
                 {/each}
               </ul>
             {:else}
-              <p class="muted">No action details recorded.</p>
+              <p class="text-[13px] text-[var(--text-muted)] m-0">No action details recorded.</p>
             {/if}
           </div>
 
-          <div class="block">
-            <h3>Changed files ({detail.changedFiles.length})</h3>
-            {#if detail.changedFiles.length}
-              <ul class="file-list">
-                {#each detail.changedFiles as f}
-                  <li><span class="cat">{f.category}</span> {f.path}</li>
+          <div class="grid gap-2">
+            <h3 class="flex items-center gap-1.5 m-0 text-[12.5px] uppercase tracking-wider text-[var(--text-muted)] font-bold"><FolderOpen size={14} class="text-[var(--accent-primary)]" /> Changed files ({ (detail.changedFiles ?? []).length })</h3>
+            {#if (detail.changedFiles ?? []).length > 0}
+              <ul class="m-0 p-0 list-none grid gap-1">
+                {#each detail.changedFiles ?? [] as f}
+                  <li class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-[var(--border-radius-sm)] bg-[var(--bg-tertiary)] border border-transparent hover:border-[var(--border-color)] min-w-0">
+                    <span class="shrink-0 text-[10.5px] font-extrabold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-muted)]">{ f.category }</span>
+                    <span class="text-[var(--text-secondary)] font-mono text-[12.5px] flex-1 min-w-0 tb-truncate">{ f.path }</span>
+                  </li>
                 {/each}
               </ul>
             {:else}
-              <p class="muted">No tracked files copied into this snapshot.</p>
+              <p class="text-[13px] text-[var(--text-muted)] m-0">No tracked files copied into this snapshot.</p>
             {/if}
           </div>
 
           {#if detail.relatedEvents.length}
-            <div class="block">
-              <h3>Related activity ({detail.relatedEvents.length})</h3>
-              <ul class="event-list">
+            <div class="grid gap-2.5">
+              <h3 class="flex items-center gap-1.5 m-0 text-[12.5px] uppercase tracking-wider text-[var(--text-muted)] font-bold"><History size={14} class="text-[var(--accent-primary)]" /> Related activity ({ detail.relatedEvents.length })</h3>
+              <ul class="m-0 p-0 list-none grid gap-1.5">
                 {#each detail.relatedEvents as ev}
-                  <li>
-                    <span class="tag">{ev.actor}</span>
-                    <span>{ev.summary}</span>
+                  <li class="flex items-center gap-2.5 px-2.5 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-sm)] min-w-0">
+                    <span class="actor-pill">{ ev.actor }</span>
+                    <span class="text-[13.5px] text-[var(--text-secondary)] min-w-0 [overflow-wrap:anywhere]">{ ev.summary }</span>
                   </li>
                 {/each}
               </ul>
@@ -566,121 +768,250 @@
       </section>
     </div>
 
-    <div class="collapsible">
-      <button type="button" class="collapse-toggle" on:click={() => (compareOpen = !compareOpen)}>
-        {#if compareOpen}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}
-        <GitCompare size={16} /> Compare snapshots
+    <!-- ── Compare snapshots ───────────────────────────────────── -->
+    <div class="overflow-hidden flex flex-col shrink-0 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+      <button type="button" class="w-full flex items-center gap-2.5 bg-transparent border-0 text-[var(--text-secondary)] font-bold px-3.5 py-3 text-[13.5px] cursor-pointer rounded-none transition-colors duration-150 hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" onclick={() => (compareOpen = !compareOpen)}>
+        <span class="inline-flex text-[var(--text-muted)]">{#if compareOpen}<ChevronDown size={17} />{:else}<ChevronRight size={17} />{/if}</span>
+        <GitCompare size={17} /> Compare snapshots
+        <span class="flex-1"></span>
+        {#if diff}
+          <span class="text-[12px] font-bold text-[var(--text-muted)] bg-[var(--bg-elevated)] px-2 py-0.5 rounded-full">{ allDiffFiles.length } file{ allDiffFiles.length === 1 ? "" : "s" }</span>
+        {/if}
       </button>
       {#if compareOpen}
-        <div class="compare-panel">
-          <select bind:value={fromId}>
-            {#each snapshots as s}<option value={s.id}>{s.name} · {s.id}</option>{/each}
-          </select>
-          <select bind:value={toId}>
-            {#each snapshots as s}<option value={s.id}>{s.name} · {s.id}</option>{/each}
-          </select>
-          <button class="secondary" on:click={compare} disabled={fromId === toId}>Diff files</button>
-          <button class="secondary" on:click={loadManifestDiff} disabled={fromId === toId || manifestDiffLoading}>
-            {manifestDiffLoading ? "Loading..." : "Diff manifest"}
-          </button>
-        </div>
-        {#if manifestDiff}
-          <div class="manifest-diff-panel">
-            <h3>Manifest changes</h3>
-            <div class="manifest-diff-stats">
-              {#if manifestDiff.mcVersionChanged}
-                <div class="diff-stat changed"><strong>MC version</strong><span>{manifestDiff.fromMcVersion} → {manifestDiff.toMcVersion}</span></div>
+        <div class="grid gap-3.5 px-3.5 pb-3.5">
+          <div class="flex items-center gap-2.5 flex-wrap">
+            <div class="grid gap-1 flex-1 min-w-[200px]">
+              <label for="snap-from" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">From</label>
+              <select id="snap-from" class="w-full min-w-0" bind:value={fromId}>
+                {#each snapshots as s}<option value={s.id}>{ snapshotSelectLabel(s) }</option>{/each}
+              </select>
+            </div>
+            <button class="ghost w-[38px] h-[38px] p-0 justify-center shrink-0 border border-[var(--border-color)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-[var(--accent-primary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)]" onclick={swapCompare} title="Swap direction" disabled={!fromId || !toId}>
+              <ArrowRightLeft size={16} />
+            </button>
+            <div class="grid gap-1 flex-1 min-w-[200px]">
+              <label for="snap-to" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">To</label>
+              <select id="snap-to" class="w-full min-w-0" bind:value={toId}>
+                {#each snapshots as s}<option value={s.id}>{ snapshotSelectLabel(s) }</option>{/each}
+              </select>
+            </div>
+            <div class="flex gap-2">
+              <button class="secondary" onclick={compare} disabled={fromId === toId || !fromId || !toId}>
+                Diff files
+              </button>
+              <button class="secondary" onclick={loadManifestDiff} disabled={fromId === toId || !fromId || !toId || manifestDiffLoading}>
+                { manifestDiffLoading ? "Loading…" : "Diff manifest" }
+              </button>
+            </div>
+          </div>
+
+          <!-- ── Pack Diff: cross-source compare ─────────────────── -->
+          <div class="grid gap-2.5 p-3.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+            <h3 class="m-0 text-[14px] text-[var(--text-secondary)] font-bold">Compare packs</h3>
+            <div class="grid gap-2" style="grid-template-columns: repeat(2, minmax(180px, 1fr));">
+              <div class="grid gap-1">
+                <label for="pd-from-kind" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">From source</label>
+                <select id="pd-from-kind" bind:value={fromKind}>
+                  <option value="snapshot">Snapshot</option>
+                  <option value="backup">Zip backup</option>
+                  <option value="manifest">Other instance manifest</option>
+                </select>
+              </div>
+              <div class="grid gap-1">
+                <label for="pd-to-kind" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">To source</label>
+                <select id="pd-to-kind" bind:value={toKind}>
+                  <option value="snapshot">Snapshot</option>
+                  <option value="backup">Zip backup</option>
+                  <option value="manifest">Other instance</option>
+                </select>
+              </div>
+              {#if fromKind === "snapshot" || toKind === "snapshot"}
+                <p class="m-0 col-span-2 text-[12px] text-[var(--text-muted)]">Snapshot side uses the From/To snapshot selects above.</p>
               {/if}
-              {#if manifestDiff.loaderVersionChanged}
-                <div class="diff-stat changed"><strong>Loader</strong><span>{manifestDiff.fromLoaderVersion} → {manifestDiff.toLoaderVersion}</span></div>
+              {#if fromKind === "backup" || toKind === "backup"}
+                <label class="grid gap-1">
+                  <span class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">Backup ids</span>
+                  <span class="flex gap-2">
+                    <input class="flex-1 min-w-0" bind:value={backupFromId} placeholder="From backup id" />
+                    <input class="flex-1 min-w-0" bind:value={backupToId} placeholder="To backup id" />
+                  </span>
+                </label>
               {/if}
-              {#if manifestDiff.addedMods?.length}
-                <div class="diff-stat added"><strong>+{manifestDiff.addedMods.length} mods</strong><span>{manifestDiff.addedMods.join(", ")}</span></div>
-              {/if}
-              {#if manifestDiff.removedMods?.length}
-                <div class="diff-stat removed"><strong>-{manifestDiff.removedMods.length} mods</strong><span>{manifestDiff.removedMods.join(", ")}</span></div>
+              {#if fromKind === "manifest" || toKind === "manifest"}
+                <label class="grid gap-1 col-span-2">
+                  <span class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">Other instance manifest path</span>
+                  <input bind:value={otherManifestPath} placeholder="U:/…/project.tuffbox.json" />
+                </label>
               {/if}
             </div>
-            <pre class="manifest-diff-text">{manifestDiff.diffText || "No differences."}</pre>
-          </div>
-        {/if}
-        {#if diff}
-          <div class="diff-panel">
-            <div><strong>{diff.addedFiles.length}</strong><span>Added</span></div>
-            <div><strong>{diff.removedFiles.length}</strong><span>Removed</span></div>
-            <div><strong>{diff.modifiedFiles.length}</strong><span>Modified by content</span></div>
-          </div>
-          {#if allDiffFiles.length > 0}
-            <div class="inline-diff-shell">
-              <aside class="diff-files">
-                <h3><FileText size={14} /> Changed files</h3>
-                {#each allDiffFiles as path}
-                  <button class:selected={selectedDiffPath === path} on:click={() => openFileDiff(path)}>
-                    <span>{path}</span>
-                    {#if diff.addedFiles.includes(path)}<small class="added-label">added</small>{/if}
-                    {#if diff.removedFiles.includes(path)}<small class="removed-label">removed</small>{/if}
-                    {#if diff.modifiedFiles.includes(path)}<small>modified</small>{/if}
-                  </button>
-                {/each}
-              </aside>
-              <section class="inline-diff">
-                {#if diffLoading}
-                  <div class="muted">Loading file diff...</div>
-                {:else if fileDiff}
-                  <div class="inline-diff-header">
-                    <strong>{fileDiff.path}</strong>
-                    <span>{fileDiff.fromExists ? "from exists" : "from missing"} → {fileDiff.toExists ? "to exists" : "to missing"}</span>
+            <button class="secondary" onclick={runPackDiff} disabled={packDiffLoading}>
+              { packDiffLoading ? "Comparing…" : "Compare packs" }
+            </button>
+
+            {#if packDiff}
+              {@const r = packDiff.report}
+              <div class="grid gap-1.5 mb-1.5">
+                {#if r.mcA !== r.mcB}
+                  <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(245,158,11,0.3)]">
+                    <strong class="text-[var(--text-primary)]">MC version</strong><span class="text-[var(--text-muted)] tb-truncate">{ r.mcA || "—" } → { r.mcB || "—" }</span>
                   </div>
-                  <pre>
-{#each fileDiff.text.split("\n") as line}
-<span class={lineClass(line)}>{line}</span>
-{/each}
-                  </pre>
-                {:else}
-                  <div class="muted">Select a file to view inline diff.</div>
                 {/if}
-              </section>
+                <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)]">
+                  <strong class="text-[var(--accent-primary)]">+{ r.addedMods.length } mods</strong><span class="text-[var(--text-muted)] tb-truncate">{ r.addedMods.map((m) => m.id).join(", ") }</span>
+                </div>
+                <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(239,68,68,0.3)]">
+                  <strong class="text-[#fca5a5]">-{ r.removedMods.length } mods</strong><span class="text-[var(--text-muted)] tb-truncate">{ r.removedMods.map((m) => m.id).join(", ") }</span>
+                </div>
+                <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(147,197,253,0.35)]">
+                  <strong class="text-[#93c5fd]">~{ r.updatedMods.length } updated</strong><span class="text-[var(--text-muted)] tb-truncate">{ r.updatedMods.map((u) => `${u.id} ${u.from.version}→${u.to.version}`).join(", ") }</span>
+                </div>
+              </div>
+              {#if packDiff.configDiffs.length}
+                <div class="grid gap-2">
+                  {#each packDiff.configDiffs as cd (cd.path)}
+                    <details>
+                      <summary class="cursor-pointer text-[12.5px] text-[var(--text-secondary)] font-mono">{ cd.path }</summary>
+                      <pre class="m-1.5 p-3 rounded-[var(--border-radius-sm)] bg-[#0d0d10] text-[#b4b4bc] font-mono text-[12.5px] leading-relaxed max-h-[360px] overflow-auto whitespace-pre-wrap">{ cd.diffText }</pre>
+                    </details>
+                  {/each}
+                </div>
+              {:else}
+                <p class="m-0 text-[12.5px] text-[var(--text-muted)]">No config file changes.</p>
+              {/if}
+            {/if}
+          </div>
+          {#if manifestDiff}
+            <div class="p-3.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] grid gap-2.5">
+              <h3 class="m-0 text-[14px] text-[var(--text-secondary)] font-bold">Manifest changes</h3>
+              <div class="grid gap-1.5 mb-1.5">
+                {#if manifestDiff.mcVersionChanged}
+                  <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(245,158,11,0.3)]">
+                    <strong class="text-[var(--text-primary)]">MC version</strong><span class="text-[var(--text-muted)] tb-truncate">{ manifestDiff.fromMcVersion } → { manifestDiff.toMcVersion }</span>
+                  </div>
+                {/if}
+                {#if manifestDiff.loaderVersionChanged}
+                  <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(245,158,11,0.3)]">
+                    <strong class="text-[var(--text-primary)]">Loader</strong><span class="text-[var(--text-muted)] tb-truncate">{ manifestDiff.fromLoaderVersion } → { manifestDiff.toLoaderVersion }</span>
+                  </div>
+                {/if}
+                {#if manifestDiff.addedMods?.length}
+                  <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)]">
+                    <strong class="text-[var(--accent-primary)]">+{ manifestDiff.addedMods.length } mods</strong><span class="text-[var(--text-muted)] tb-truncate">{ manifestDiff.addedMods.join(", ") }</span>
+                  </div>
+                {/if}
+                {#if manifestDiff.removedMods?.length}
+                  <div class="flex justify-between gap-2.5 px-2.5 py-2 rounded-[var(--border-radius-sm)] text-[13px] bg-[var(--bg-tertiary)] border border-[rgba(239,68,68,0.3)]">
+                    <strong class="text-[#fca5a5]">-{ manifestDiff.removedMods.length } mods</strong><span class="text-[var(--text-muted)] tb-truncate">{ manifestDiff.removedMods.join(", ") }</span>
+                  </div>
+                {/if}
+              </div>
+              <pre class="m-0 p-3 rounded-[var(--border-radius-sm)] bg-[#0d0d10] text-[#b4b4bc] font-mono text-[12.5px] leading-relaxed max-h-[360px] overflow-auto whitespace-pre-wrap">{ manifestDiff.diffText || "No differences." }</pre>
             </div>
           {/if}
-        {/if}
+          {#if diff}
+            <div class="grid grid-cols-3 gap-2.5">
+              <div class="bg-[var(--bg-tertiary)] border border-[color-mix(in_srgb,var(--accent-primary)_35%,transparent)] rounded-[var(--border-radius-md)] px-3.5 py-3 flex flex-col gap-0.5">
+                <strong class="text-[26px] leading-tight text-[var(--accent-primary)]">{ diff.addedFiles.length }</strong>
+                <span class="text-[var(--text-muted)] text-[13px]">Added</span>
+              </div>
+              <div class="bg-[var(--bg-tertiary)] border border-[rgba(239,68,68,0.35)] rounded-[var(--border-radius-md)] px-3.5 py-3 flex flex-col gap-0.5">
+                <strong class="text-[26px] leading-tight text-[#fca5a5]">{ diff.removedFiles.length }</strong>
+                <span class="text-[var(--text-muted)] text-[13px]">Removed</span>
+              </div>
+              <div class="bg-[var(--bg-tertiary)] border border-[rgba(147,197,253,0.35)] rounded-[var(--border-radius-md)] px-3.5 py-3 flex flex-col gap-0.5">
+                <strong class="text-[26px] leading-tight text-[#93c5fd]">{ diff.modifiedFiles.length }</strong>
+                <span class="text-[var(--text-muted)] text-[13px]">Modified</span>
+              </div>
+            </div>
+            {#if allDiffFiles.length > 0}
+              <div class="grid grid-cols-[320px_minmax(0,1fr)] max-[900px]:grid-cols-1 gap-3.5 p-3.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+                <aside class="min-w-0">
+                  <h3 class="text-[var(--text-muted)] text-[12.5px] uppercase tracking-wider mb-2.5 flex items-center gap-2 font-bold"><FileText size={14} /> Changed files</h3>
+                  {#each allDiffFiles as path}
+                    <button class="w-full flex items-center justify-between gap-2 text-left bg-transparent text-[var(--text-secondary)] border rounded-[var(--border-radius-sm)] px-2.5 py-2 mb-1.5 text-[12.5px] cursor-pointer transition-colors duration-150 {
+                      selectedDiffPath === path
+                        ? "bg-[var(--bg-elevated)] border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] text-[var(--text-primary)]"
+                        : "border-transparent hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+                    }" onclick={() => openFileDiff(path)}>
+                      <span class="tb-truncate">{ path }</span>
+                      <span class="inline-flex gap-1 shrink-0">
+                        {#if diff.addedFiles.includes(path)}<small class="diff-label added">added</small>{/if}
+                        {#if diff.removedFiles.includes(path)}<small class="diff-label removed">removed</small>{/if}
+                        {#if diff.modifiedFiles.includes(path)}<small class="diff-label modified">modified</small>{/if}
+                      </span>
+                    </button>
+                  {/each}
+                </aside>
+                <section class="min-w-0 flex flex-col gap-2">
+                  {#if diffLoading}
+                    <div class="text-[var(--text-muted)] text-[13px]">Loading file diff…</div>
+                  {:else if fileDiff}
+                    <div class="flex justify-between items-center gap-3 text-[var(--text-secondary)]">
+                      <strong class="text-[14px] tb-truncate">{ fileDiff.path }</strong>
+                      <span class="text-[var(--text-muted)] text-[12.5px] shrink-0">{ fileDiff.fromExists ? "from exists" : "from missing" } → { fileDiff.toExists ? "to exists" : "to missing" }</span>
+                    </div>
+                    {#if fileDiff.text}
+                      <pre class="overflow-auto max-h-[420px] bg-[#0d0d10] rounded-[var(--border-radius-md)] p-3 m-0 text-[12.5px] leading-relaxed">
+{#each fileDiff.text.split("\n") as line}
+<span class="block whitespace-pre-wrap font-mono { lineClass(line) }">{ line }</span>
+{/each}
+                      </pre>
+                    {:else}
+                      <div class="text-[var(--text-muted)] text-[13px] p-6">File looks identical — content unchanged.</div>
+                    {/if}
+                  {:else}
+                    <div class="text-[var(--text-muted)] text-[13px]">Select a file to view inline diff.</div>
+                  {/if}
+                </section>
+              </div>
+            {/if}
+          {/if}
+        </div>
       {/if}
     </div>
 
-    <div class="collapsible">
-      <button type="button" class="collapse-toggle" on:click={() => (backupsOpen = !backupsOpen)}>
-        {#if backupsOpen}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}
-        <Archive size={16} /> Project backups ({backups.length})
+    <!-- ── Project backups ─────────────────────────────────────── -->
+    <div class="overflow-hidden flex flex-col shrink-0 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
+      <button type="button" class="w-full flex items-center gap-2.5 bg-transparent border-0 text-[var(--text-secondary)] font-bold px-3.5 py-3 text-[13.5px] cursor-pointer transition-colors duration-150 hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" onclick={() => (backupsOpen = !backupsOpen)}>
+        <span class="inline-flex text-[var(--text-muted)]">{#if backupsOpen}<ChevronDown size={17} />{:else}<ChevronRight size={17} />{/if}</span>
+        <Archive size={17} /> Project backups
+        <span class="flex-1"></span>
+        <span class="text-[12px] font-bold text-[var(--text-muted)] bg-[var(--bg-elevated)] px-2 py-0.5 rounded-full">{ backups.length } saved</span>
       </button>
       {#if backupsOpen}
-        <div class="backup-section">
-          <div class="backup-create">
-            <input bind:value={backupName} placeholder="Backup name" />
-            <button on:click={createBackup} disabled={!$projectPath || loading}>
-              <Archive size={16} /> Backup
+        <div class="px-3.5 pb-3.5 grid gap-3">
+          <div class="flex items-center gap-2 flex-wrap">
+            <input class="flex-1 min-w-[200px]" bind:value={backupName} placeholder="Backup name" onkeydown={(e) => e.key === "Enter" && !loading && ($projectPath ? createBackup() : null)} />
+            <button class="secondary" onclick={createBackup} disabled={!$projectPath || loading}>
+              <Archive size={16} /> Create zip
             </button>
-            <button class="ghost" on:click={loadBackups} disabled={backupLoading}>
-              <RefreshCw size={14} class={backupLoading ? "spin" : ""} />
+            <button class="ghost w-[38px] h-[38px] p-0 justify-center shrink-0" onclick={loadBackups} disabled={backupLoading} title="Refresh backups">
+              <RefreshCw size={15} class={backupLoading ? "spin" : ""} />
             </button>
+            <p class="m-0 w-full text-[13px] text-[var(--text-muted)]">Full zip of tracked files — restore to bring back an older pack state.</p>
           </div>
           {#if backups.length > 0}
-            <div class="backup-list">
+            <div class="grid gap-1.5">
               {#each backups.slice(0, 12) as b}
-                <div class="backup-row">
-                  <div class="backup-info">
-                    <strong>{b.name}</strong>
-                    <span>{formatDate(b.createdAt)} · {formatBytes(b.sizeBytes)}</span>
+                <div class="flex items-center gap-3 px-3 py-2.5 rounded-[var(--border-radius-md)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] min-w-0 hover:border-[color-mix(in_srgb,var(--accent-primary)_25%,var(--border-color))]">
+                  <div class="inline-flex items-center justify-center w-8 h-8 rounded-[var(--border-radius-sm)] bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-muted)] shrink-0"><Archive size={16} /></div>
+                  <div class="grid gap-0.5 flex-1 min-w-0">
+                    <strong class="text-[var(--text-primary)] text-[13.5px] tb-truncate">{ b.name }</strong>
+                    <span class="text-[var(--text-muted)] text-[12.5px]">{ formatDate(b.createdAt) }{#if b.fileCount} · { b.fileCount } files{/if}</span>
                   </div>
-                  <button class="ghost mini" on:click={() => restoreBackup(b.id)} title="Restore">
-                    <RotateCcw size={14} />
+                  <span class="text-[var(--text-muted)] text-[12.5px] font-mono shrink-0">{ formatBytes(b.sizeBytes) }</span>
+                  <button class="ghost mini" onclick={() => restoreBackup(b.id)} title="Restore">
+                    <RotateCcw size={15} />
                   </button>
-                  <button class="ghost mini danger" on:click={() => deleteBackup(b.id)}>
-                    <Trash2 size={14} />
+                  <button class="ghost mini danger" onclick={() => deleteBackup(b.id)} title="Delete">
+                    <Trash2 size={15} />
                   </button>
                 </div>
               {/each}
             </div>
           {:else}
-            <p class="muted">No zip backups yet.</p>
+            <p class="text-[13px] text-[var(--text-muted)] m-0">No zip backups yet.</p>
           {/if}
         </div>
       {/if}
@@ -692,112 +1023,129 @@
       title={confirmTitle}
       message={confirmMessage}
       danger={confirmDanger}
-      on:confirm={handleConfirm}
-      on:cancel={() => ((confirmOpen = false), (confirmAction = null))}
+      onconfirm={handleConfirm}
+      oncancel={() => ((confirmOpen = false), (confirmAction = null))}
     />
   {/if}
 </div>
 
 <style>
-  .snapshots { max-width: none; width: 100%; display: flex; flex-direction: column; gap: 14px; }
-  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
-  .title, .actions, .row-meta, .detail-sub, .detail-actions, .backup-create, .search, .collapse-toggle {
-    display: flex; align-items: center; gap: 10px;
+  /* Layout comes from Tailwind utilities. Scoped styles only for
+     pieces Tailwind can't express: shared app button skins used here
+     (ghost/secondary/danger/mini are defined app-wide), the Ore-style
+     kind tags, and skeletons. */
+
+  /* Snapshots uses theme-token button skins, not the global Ore gray skin:
+     secondary = tinted theme surface, ghost = quiet bordered pill. All
+     colors come from CSS vars so every theme (light/sharp/minimal) reads
+     correctly. Scoped to the component root class (not `section`) — the
+     toolbar, Compare block and backups block are <div>s, and those buttons
+     were falling back to the gray global skin. */
+  :global(.snapshots) button.secondary {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-bottom-width: 2px;
+    border-bottom-color: color-mix(in srgb, var(--border-color) 60%, transparent);
   }
-  .title { color: var(--text-secondary); font-weight: 600; }
-  .actions input, .backup-create input, .search input { min-width: 180px; }
-  .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); border: 1px solid var(--border-color); display: flex; align-items: flex-start; gap: 8px; }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
-  .notice.warn { color: #fcd34d; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); font-size: 13px; }
-
-  .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
-  .search { flex: 1; min-width: 220px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 0 10px; color: var(--text-muted); }
-  .search input { flex: 1; border: 0; background: transparent; color: var(--text-primary); padding: 10px 0; outline: none; min-width: 0; }
-  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-  .chips button { background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-muted); padding: 6px 12px; font-size: 12px; transform: none; }
-  .chips button.active { color: var(--text-primary); border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.08); }
-
-  .master-detail { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 14px; min-height: 420px; }
-  .list-pane, .detail-pane, .compare-panel, .diff-panel, .inline-diff-shell, .backup-section, .collapsible {
-    background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg);
+  :global(.snapshots) button.secondary:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
   }
-  .list-pane { overflow: auto; max-height: 70vh; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-  .row { width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); display: grid; gap: 6px; transform: none; }
-  .row:hover, .row.selected { background: var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.28); color: var(--text-primary); }
-  .row-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
-  .row-top strong { font-size: 13px; color: var(--text-primary); }
-  .op-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); font-family: ui-monospace, monospace; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .preview { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .row-meta { font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
-  .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+  :global(.snapshots) button.secondary:active:not(:disabled) {
+    filter: none;
+    background: var(--bg-active);
+  }
+  :global(.snapshots) button.ghost:not(.mini) {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-bottom-width: 2px;
+    border-bottom-color: color-mix(in srgb, var(--border-color) 55%, transparent);
+  }
+  :global(.snapshots) button.ghost:not(.mini):hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
+  }
+  :global(.snapshots) button.ghost:not(.mini):active:not(:disabled) {
+    filter: none;
+    background: var(--bg-active);
+  }
+  :global(.snapshots) button.ghost:disabled {
+    opacity: 0.55;
+  }
 
-  .detail-pane { padding: 18px; overflow: auto; max-height: 70vh; display: flex; flex-direction: column; gap: 14px; }
-  .detail-header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
-  .detail-header h2 { margin: 0 0 6px; font-size: 18px; }
-  .detail-actions { flex-wrap: wrap; }
-  .badge { font-size: 11px; color: var(--text-muted); background: var(--bg-elevated); padding: 3px 8px; border-radius: 4px; font-family: ui-monospace, monospace; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-  .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg-elevated); color: var(--text-muted); }
-  .tag.crash-fix { color: var(--accent-primary); background: rgba(27, 217, 106, 0.12); }
-  .tag.mono { font-family: ui-monospace, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
-  .tag-row { display: flex; flex-wrap: wrap; gap: 6px; }
-  .reason { color: var(--text-secondary); font-size: 13px; margin: 0; }
-  .block h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
-  .action-list, .file-list, .event-list { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--text-secondary); font-size: 13px; }
-  .file-list .cat { color: var(--text-muted); font-size: 11px; margin-right: 6px; }
-  .event-list li { display: flex; gap: 8px; align-items: flex-start; }
+  /* Kind filter cards: glass chips, emerald accent fill when active. */
+  .filter-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--border-radius-md);
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(12px);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--motion-fast) ease;
+  }
+  .filter-card:hover:not(.active) {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+    border-color: rgba(16, 185, 129, 0.35);
+  }
+  .filter-card.active {
+    color: #34d399;
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.45);
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.3);
+  }
 
-  .collapsible { overflow: hidden; }
-  .collapse-toggle { width: 100%; justify-content: flex-start; background: transparent; border: 0; color: var(--text-secondary); font-weight: 600; padding: 12px 14px; transform: none; }
-  .compare-panel { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 0 14px 14px; }
-  .compare-panel select { flex: 1; min-width: 180px; }
-  .diff-panel { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 12px; margin: 0 14px 14px; padding: 0; border: 0; background: transparent; }
-  .diff-panel div { background: var(--bg-tertiary); border-radius: var(--border-radius-md); padding: 12px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border-color); }
-  .diff-panel strong { font-size: 24px; color: var(--text-primary); }
-  .diff-panel span, .muted { color: var(--text-muted); font-size: 12px; }
-  .pad { padding: 24px; }
-  .inline-diff-shell { display: grid; grid-template-columns: 310px minmax(0, 1fr); gap: 14px; margin: 0 14px 14px; padding: 14px; }
-  .diff-files { border-right: 1px solid var(--border-color); padding-right: 14px; }
-  .diff-files h3 { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
-  .diff-files button { width: 100%; justify-content: space-between; text-align: left; background: transparent; color: var(--text-secondary); border: 1px solid transparent; padding: 9px 10px; margin-bottom: 5px; transform: none; }
-  .diff-files button:hover, .diff-files button.selected { background: var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.28); color: var(--text-primary); }
-  .diff-files small { color: var(--text-muted); }
-  .added-label { color: var(--accent-primary) !important; }
-  .removed-label { color: #fca5a5 !important; }
-  .manifest-diff-panel { margin: 0 14px 14px; padding: 14px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
-  .manifest-diff-panel h3 { font-size: 13px; margin: 0 0 10px; color: var(--text-secondary); }
-  .manifest-diff-stats { display: grid; gap: 6px; margin-bottom: 12px; }
-  .diff-stat { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); font-size: 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
-  .diff-stat strong { color: var(--text-primary); }
-  .diff-stat span { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .diff-stat.changed { border-color: rgba(245,158,11,.30); }
-  .diff-stat.added { border-color: rgba(27,217,106,.30); }
-  .diff-stat.removed { border-color: rgba(239,68,68,.30); }
-  .manifest-diff-text { margin: 0; padding: 12px; border-radius: 10px; background: #0d0d10; color: #a1a1aa; font-family: ui-monospace,monospace; font-size: 11px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; }
-  .inline-diff { min-width: 0; }
-  .inline-diff-header { display: flex; justify-content: space-between; gap: 12px; padding: 0 0 10px; color: var(--text-secondary); }
-  .inline-diff-header span { color: var(--text-muted); font-size: 12px; }
-  pre { overflow: auto; max-height: 420px; background: #0d0d10; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin: 0; }
-  pre span { display: block; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-  pre span.added { color: #86efac; background: rgba(27, 217, 106, 0.08); }
-  pre span.removed { color: #fca5a5; background: rgba(239, 68, 68, 0.08); }
-  pre span.context { color: #a1a1aa; }
+  /* Rollback / Delete detail actions: soft tinted pills, not gray blocks. */
+  .rollback {
+    color: var(--accent-primary);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+  .rollback:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  }
+  .ghost.danger {
+    color: #fca5a5;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+  }
+  .ghost.danger:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.12);
+    color: #fecaca;
+  }
 
-  .backup-section { padding: 0 14px 14px; display: grid; gap: 10px; border: 0; background: transparent; }
-  .backup-list { display: grid; gap: 6px; }
-  .backup-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-  .backup-info { display: grid; gap: 3px; flex: 1; }
-  .backup-info strong { color: var(--text-primary); font-size: 13px; }
-  .backup-info span { color: var(--text-muted); font-size: 11px; }
-  .rollback { padding: 6px 10px; font-size: 12px; font-weight: 600; }
-  .danger { color: #fca5a5; }
-  .loading { color: var(--text-muted); padding: 80px; text-align: center; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
+  .kind-tag {
+    font-size: 10.5px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+  }
+  .kind-tag.auto { color: #93c5fd; border-color: rgba(147, 197, 253, 0.4); }
+  .kind-tag.manual { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
+  .kind-tag.crash { color: #fbbf24; border-color: rgba(251, 191, 36, 0.4); }
+
+  .actor-pill { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 9px; border-radius: 999px; border: 1px solid rgba(147, 197, 253, 0.4); color: #93c5fd; background: rgba(147, 197, 253, 0.07); }
+  .actor-pill.plan { color: #c4b5fd; border-color: rgba(196, 181, 253, 0.35); background: rgba(196, 181, 253, 0.07); }
+
+  .tag { font-size: 11.5px; padding: 2px 9px; border-radius: 999px; background: var(--bg-elevated); color: var(--text-secondary); }
+  .tag.crash-fix { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
+
+  .diff-label { color: var(--text-muted); font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 6px; border-radius: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
+  .diff-label.added { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
+  .diff-label.removed { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
+  .diff-label.modified { color: #93c5fd; border-color: rgba(147, 197, 253, 0.35); }
 
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @media (max-width: 900px) {
-    .master-detail, .inline-diff-shell { grid-template-columns: 1fr; }
-    .list-pane, .detail-pane { max-height: none; }
-    .diff-files { border-right: 0; padding-right: 0; }
-  }
 </style>

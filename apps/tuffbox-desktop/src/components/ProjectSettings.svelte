@@ -1,14 +1,20 @@
 <script lang="ts">
-  import { ArrowLeft, Save, Cpu, Container, Coffee, Terminal, Search, Database, RefreshCw, AlertTriangle } from "lucide-svelte";
+  import { ArrowLeft, Save, Cpu, Container, Coffee, Terminal, Search, Database, RefreshCw, AlertTriangle, FileCog } from "@lucide/svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { projectInfo, projectPath, recentProjects } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import JavaPickerModal from "./JavaPickerModal.svelte";
 
-  export let onBack: () => void = () => {};
-  export let showBack = true;
-  export let stayAfterSave = false;
+  let {
+    onBack = () => {},
+    showBack = true,
+    stayAfterSave = false,
+  }: {
+    onBack?: () => void;
+    showBack?: boolean;
+    stayAfterSave?: boolean;
+  } = $props();
 
   const memoryMarks = [1024, 2048, 4096, 6144, 8192, 12288, 16384];
   const loaders = [
@@ -19,27 +25,27 @@
     { id: "quilt", label: "Quilt" },
   ];
 
-  let memory = $projectInfo?.memoryMb ?? 4096;
-  let jvmArgs = ($projectInfo?.jvmArgs ?? ["-XX:+UseG1GC"]).join(" ");
-  let javaPath = $projectInfo?.javaPath ?? "Auto-detect";
-  let javaVersion = "";
-  let playerName = $projectInfo?.playerName ?? "Player";
+  let memory = $state($projectInfo?.memoryMb ?? 4096);
+  let jvmArgs = $state(($projectInfo?.jvmArgs ?? ["-XX:+UseG1GC"]).join(" "));
+  let javaPath = $state($projectInfo?.javaPath ?? "Auto-detect");
+  let javaVersion = $state("");
+  let playerName = $state($projectInfo?.playerName ?? "Player");
 
-  let mcVersion = $projectInfo?.minecraftVersion ?? "";
-  let loader = $projectInfo?.loaderKind ?? "vanilla";
-  let loaderVersion = $projectInfo?.loaderVersion ?? "";
+  let mcVersion = $state($projectInfo?.minecraftVersion ?? "");
+  let loader = $state($projectInfo?.loaderKind ?? "vanilla");
+  let loaderVersion = $state($projectInfo?.loaderVersion ?? "");
 
-  let mcVersions: { id: string; popular: boolean }[] = [];
-  let loaderVersions: { id: string; stable: boolean }[] = [];
-  let showJavaPicker = false;
-  let saving = false;
-  let loading = false;
-  let error = "";
+  let mcVersions = $state<{ id: string; popular: boolean }[]>([]);
+  let loaderVersions = $state<{ id: string; stable: boolean }[]>([]);
+  let showJavaPicker = $state(false);
+  let saving = $state(false);
+  let loading = $state(false);
+  let error = $state("");
 
   // Schema status
-  let schemaVersion = "";
-  let schemaNeedsMigration = false;
-  let schemaLoading = false;
+  let schemaVersion = $state("");
+  let schemaNeedsMigration = $state(false);
+  let schemaLoading = $state(false);
 
   async function loadSchemaStatus() {
     if (!$projectPath) return;
@@ -52,6 +58,69 @@
       schemaVersion = "?";
     } finally {
       schemaLoading = false;
+    }
+  }
+
+  // ── Shared options.txt sync (docs/17) ─────────────────────────────────
+  let optionsManaged = $state(false);
+  let optionsGroup = $state("");
+  let optionsHasTemplate = $state(false);
+  let optionsBusy = $state(false);
+
+  async function loadOptionsStatus() {
+    if (!$projectPath) return;
+    try {
+      const s: any = await invoke("options_sync_status", { path: $projectPath });
+      optionsManaged = s.managed ?? false;
+      optionsGroup = s.groupId ?? "";
+      optionsHasTemplate = s.hasGroupTemplate ?? false;
+    } catch {
+      /* status stays at defaults */
+    }
+  }
+
+  async function enableOptionsSync() {
+    if (!$projectPath) return;
+    optionsBusy = true;
+    error = "";
+    try {
+      const imported: boolean = await invoke("options_sync_enable", { path: $projectPath });
+      if (!imported && !optionsHasTemplate) {
+        error = "Enabled, but this version group has no template yet — current options.txt will be adopted on first launch.";
+      }
+      await loadOptionsStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      optionsBusy = false;
+    }
+  }
+
+  async function disableOptionsSync() {
+    if (!$projectPath) return;
+    optionsBusy = true;
+    error = "";
+    try {
+      await invoke("options_sync_disable", { path: $projectPath });
+      await loadOptionsStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      optionsBusy = false;
+    }
+  }
+
+  async function pushOptionsToGroup() {
+    if (!$projectPath) return;
+    optionsBusy = true;
+    error = "";
+    try {
+      await invoke("options_sync_push", { path: $projectPath });
+      await loadOptionsStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      optionsBusy = false;
     }
   }
 
@@ -72,23 +141,41 @@
   onMount(async () => {
     loading = true;
     error = "";
-    try {
-      // All fetches are independent and run in parallel.
-      const [versions] = await Promise.all([
-        invoke("get_minecraft_versions"),
-        detectJavaPreview(),
-        loadSchemaStatus(),
-        loadLoaderVersions(),
-      ]);
-      mcVersions = versions as { id: string; popular: boolean }[];
-    } catch (e) {
-      error = `${e}`;
-    } finally {
-      loading = false;
-    }
+    // Independent fetches start in parallel, but the form is usable as soon
+    // as the current project's settings are known — the dropdown options
+    // (MC versions / loader versions) stream in afterwards without blocking
+    // the page behind a dimmed overlay.
+    const localFill = (async () => {
+      try {
+        const info = await invoke("validate_project", { path: $projectPath });
+        applyProjectInfo(info as any);
+      } catch {
+        /* keep the seeded $projectInfo defaults */
+      }
+    })();
+    void detectJavaPreview();
+    void loadSchemaStatus();
+    void loadOptionsStatus();
+    void (async () => {
+      try {
+        const versions = (await invoke("get_minecraft_versions")) as {
+          id: string;
+          popular: boolean;
+        }[];
+        mcVersions = versions;
+        // MC list arrived: loader versions can now resolve against the
+        // selected Minecraft version.
+        await loadLoaderVersions();
+      } catch (e) {
+        error = `${e}`;
+      } finally {
+        loading = false;
+      }
+    })();
+    await localFill;
   });
 
-  let loadingLoader = false;
+  let loadingLoader = $state(false);
   async function loadLoaderVersions() {
     if (loadingLoader) return;
     if (loader === "vanilla") {
@@ -121,6 +208,25 @@
     }
   }
 
+  /** Seed the form fields from a validated project manifest. */
+  function applyProjectInfo(info: {
+    minecraftVersion?: string;
+    loaderKind?: string;
+    loaderVersion?: string;
+    memoryMb?: number;
+    jvmArgs?: string[];
+    javaPath?: string | null;
+    playerName?: string | null;
+  }) {
+    if (info.minecraftVersion) mcVersion = info.minecraftVersion;
+    if (info.loaderKind) loader = info.loaderKind;
+    if (info.loaderVersion) loaderVersion = info.loaderVersion;
+    if (info.memoryMb) memory = info.memoryMb;
+    if (info.jvmArgs?.length) jvmArgs = info.jvmArgs.join(" ");
+    if (info.javaPath) javaPath = info.javaPath;
+    if (info.playerName) playerName = info.playerName;
+  }
+
   async function save() {
     if (!$projectPath) return;
     saving = true;
@@ -137,6 +243,7 @@
         playerName: playerName.trim() || null,
       });
       const info = await invoke("validate_project", { path: $projectPath });
+      applyProjectInfo(info as any);
       projectInfo.set(info as any);
       recentProjects.updateInfo($projectPath, info as any);
       if (!stayAfterSave) onBack();
@@ -147,8 +254,8 @@
     }
   }
 
-  async function onJavaSelected(event: CustomEvent<string>) {
-    javaPath = event.detail;
+  async function onJavaSelected(path: string) {
+    javaPath = path;
     await detectJavaPreview();
   }
 
@@ -157,9 +264,11 @@
     return `${mb} MB`;
   }
 
-  $: if (mcVersions.length > 0 && loader !== "vanilla" && loaderVersions.length === 0) {
-    loadLoaderVersions();
-  }
+  $effect(() => {
+    if (mcVersions.length > 0 && loader !== "vanilla" && loaderVersions.length === 0) {
+      loadLoaderVersions();
+    }
+  });
 
   function onLoaderChange() {
     loaderVersions = [];
@@ -174,36 +283,36 @@
   }
 </script>
 
-<div class="settings-page">
-  <header class="page-header">
+<div class="settings-page w-full">
+  <header class="page-header flex items-center gap-4 mb-6">
     {#if showBack}
-      <button class="ghost back" on:click={onBack}>
+      <button class="ghost back px-3 py-2" onclick={onBack}>
         <ArrowLeft size={18} />
         Back
       </button>
     {/if}
-    <h1>Instance Settings</h1>
+    <h1 class="text-2xl font-extrabold">Instance Settings</h1>
   </header>
 
   {#if $projectPath}
     {#if loading}
-      <div class="loading">
+      <div class="loading flex items-center gap-2.5 text-[color:var(--text-muted)] px-4 py-3.5 mb-4 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)]">
         <RefreshCw size={18} class="spin" />
         Loading instance settings…
       </div>
     {/if}
-    <div class="settings-groups" class:dimmed={loading}>
-      <div class="section-group">
-        <h2 class="section-heading">Runtime</h2>
-        <div class="settings-grid">
-      <section class="card">
-        <div class="card-title">
+    <div class="settings-groups flex flex-col gap-7 mb-6" class:dimmed={loading}>
+      <div class="section-group flex flex-col gap-3.5">
+        <h2 class="section-heading text-[13px] font-extrabold uppercase tracking-[0.06em] text-[color:var(--text-muted)] m-0 pb-1 border-b border-[var(--border-color)]">Runtime</h2>
+        <div class="settings-grid grid grid-cols-1 md:grid-cols-2 gap-5">
+      <section class="card bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
           <Container size={18} />
-          <h3>Game</h3>
+          <h3 class="text-base text-[color:var(--text-primary)]">Game</h3>
         </div>
         <div class="field">
           <label for="mc-version">Minecraft version</label>
-          <select id="mc-version" bind:value={mcVersion} on:change={onMcVersionChange}>
+          <select id="mc-version" bind:value={mcVersion} onchange={onMcVersionChange}>
             {#each mcVersions as v}
               <option value={v.id}>
                 {v.id}{#if v.popular} ★{/if}
@@ -211,10 +320,10 @@
             {/each}
           </select>
         </div>
-        <div class="field-row">
+        <div class="field-row grid grid-cols-2 gap-3">
           <div class="field">
             <label for="loader-kind">Loader</label>
-            <select id="loader-kind" bind:value={loader} on:change={onLoaderChange}>
+            <select id="loader-kind" bind:value={loader} onchange={onLoaderChange}>
               {#each loaders as l}
                 <option value={l.id}>{l.label}</option>
               {/each}
@@ -235,16 +344,16 @@
         </div>
       </section>
 
-      <section class="card">
-        <div class="card-title">
-          <Coffee size={18} />
-          <h3>Java</h3>
-        </div>
+      <section class="card bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+              <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
+                <Coffee size={18} />
+                <h3 class="text-base text-[color:var(--text-primary)]">Java</h3>
+              </div>
         <div class="field">
           <label for="java-path">Java executable</label>
-          <div class="input-row">
+          <div class="input-row flex gap-2">
             <input id="java-path" bind:value={javaPath} readonly />
-            <button class="icon-btn" on:click={() => (showJavaPicker = true)} aria-label="Search Java">
+            <button class="icon-btn" onclick={() => (showJavaPicker = true)} aria-label="Search Java">
               <Search size={18} />
             </button>
           </div>
@@ -254,13 +363,13 @@
         </div>
       </section>
 
-      <section class="card wide">
-        <div class="card-title">
+      <section class="card wide col-span-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
           <Cpu size={18} />
-          <h3>Memory</h3>
+          <h3 class="text-base text-[color:var(--text-primary)]">Memory</h3>
         </div>
-        <div class="memory-control">
-          <div class="memory-value">{formatMemory(memory)}</div>
+        <div class="memory-control flex flex-col gap-4">
+          <div class="memory-value text-[32px] font-black text-center">{formatMemory(memory)}</div>
           <input
             type="range"
             min={1024}
@@ -269,12 +378,12 @@
             bind:value={memory}
             class="memory-slider"
           />
-          <div class="memory-marks">
+          <div class="memory-marks flex justify-between gap-2 flex-wrap">
             {#each memoryMarks as mark}
               <button
                 class="mark"
                 class:active={memory === mark}
-                on:click={() => (memory = mark)}
+                onclick={() => (memory = mark)}
               >
                 {formatMemory(mark)}
               </button>
@@ -283,10 +392,10 @@
         </div>
       </section>
 
-      <section class="card wide">
-        <div class="card-title">
+      <section class="card wide col-span-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
           <Terminal size={18} />
-          <h3>JVM Arguments</h3>
+          <h3 class="text-base text-[color:var(--text-primary)]">JVM Arguments</h3>
         </div>
         <div class="field">
           <textarea bind:value={jvmArgs} rows={4}></textarea>
@@ -295,13 +404,13 @@
         </div>
       </div>
 
-      <div class="section-group">
-        <h2 class="section-heading">Project</h2>
-        <div class="settings-grid">
-      <section class="card">
-        <div class="card-title">
+      <div class="section-group flex flex-col gap-3.5">
+        <h2 class="section-heading text-[13px] font-extrabold uppercase tracking-[0.06em] text-[color:var(--text-muted)] m-0 pb-1 border-b border-[var(--border-color)]">Project</h2>
+        <div class="settings-grid grid grid-cols-1 md:grid-cols-2 gap-5">
+      <section class="card bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
           <Terminal size={18} />
-          <h3>Player</h3>
+          <h3 class="text-base text-[color:var(--text-primary)]">Player</h3>
         </div>
         <div class="field">
           <label for="player-name">Player name (offline test launches)</label>
@@ -314,10 +423,10 @@
         </div>
       </section>
 
-      <section class="card wide">
-        <div class="card-title">
+      <section class="card wide col-span-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
           <Database size={18} />
-          <h3>Project schema</h3>
+          <h3 class="text-base text-[color:var(--text-primary)]">Project schema</h3>
         </div>
         <div class="schema-info">
           <div class="schema-row">
@@ -329,7 +438,7 @@
               <AlertTriangle size={16} />
               <span>Schema migration available. This will normalize your manifest to the current format.</span>
             </div>
-            <button class="secondary" on:click={migrateSchema} disabled={saving}>
+            <button class="secondary" onclick={migrateSchema} disabled={saving}>
               <RefreshCw size={16} />
               {saving ? "Migrating..." : "Migrate schema"}
             </button>
@@ -338,19 +447,51 @@
           {/if}
         </div>
       </section>
+
+      <section class="card wide col-span-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-6">
+        <div class="card-title flex items-center gap-2.5 text-[color:var(--text-secondary)] mb-5">
+          <FileCog size={18} />
+          <h3 class="text-base text-[color:var(--text-primary)]">Shared options.txt</h3>
+        </div>
+        <div class="schema-info">
+          <div class="schema-row">
+            <span>Status</span>
+            <code>{optionsManaged ? `Shared (${optionsGroup})` : "Independent"}</code>
+          </div>
+          <p class="field-hint">
+            Shared projects of the same Minecraft version keep one options.txt:
+            your in-game settings sync between them. Edits you make in-game always
+            win; backups are created before any automatic change.
+          </p>
+          <div class="flex flex-wrap gap-3 mt-3">
+            {#if optionsManaged}
+              <button class="secondary" onclick={disableOptionsSync} disabled={optionsBusy}>
+                {optionsBusy ? "Working..." : "Use independent options"}
+              </button>
+              <button class="secondary" onclick={pushOptionsToGroup} disabled={optionsBusy}>
+                Push current to group
+              </button>
+            {:else}
+              <button class="secondary" onclick={enableOptionsSync} disabled={optionsBusy}>
+                {optionsBusy ? "Working..." : "Share options across projects"}
+              </button>
+            {/if}
+          </div>
+        </div>
+      </section>
         </div>
       </div>
     </div>
 
     {#if error}
-      <div class="error">{error}</div>
+      <div class="error bg-[rgba(239,68,68,0.12)] text-[#ef4444] px-3 py-2.5 rounded-[length:var(--border-radius-md)] text-[13px] mb-4">{error}</div>
     {/if}
 
-    <div class="actions">
+    <div class="actions flex justify-end gap-3">
       {#if showBack}
-        <button class="secondary" on:click={onBack}>Cancel</button>
+        <button class="secondary" onclick={onBack}>Cancel</button>
       {/if}
-      <button on:click={save} disabled={saving}>
+      <button onclick={save} disabled={saving}>
         <Save size={16} />
         {saving ? "Saving..." : "Save changes"}
       </button>
@@ -363,107 +504,21 @@
 {#if showJavaPicker}
   <JavaPickerModal
     current={javaPath === "Auto-detect" ? "" : javaPath}
-    on:close={() => (showJavaPicker = false)}
-    on:selected={onJavaSelected}
+    onclose={() => (showJavaPicker = false)}
+    onselected={onJavaSelected}
   />
 {/if}
 
 <style>
-  .settings-page {
-    max-width: none;
-    width: 100%;
-  }
+  /* .settings-page layout moved to Tailwind utilities */
 
-  .page-header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 24px;
-  }
-
-  .page-header h1 {
-    font-size: 24px;
-    font-weight: 800;
-  }
-
-  .back {
-    padding: 8px 12px;
-  }
-
-  .settings-groups {
-    display: flex;
-    flex-direction: column;
-    gap: 28px;
-    margin-bottom: 24px;
-  }
-
+  /* While dropdown options stream in, the form stays visible and clickable —
+     only a light veil hints that lists are still loading. No full lock-out:
+     blocking the whole panel behind pointer-events:none was why Setup felt
+     "stuck" until every network fetch resolved. */
   .settings-groups.dimmed {
-    opacity: 0.5;
-    pointer-events: none;
-  }
-
-  .section-group {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  .section-heading {
-    font-size: 13px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
-    margin: 0;
-    padding-bottom: 4px;
-    border-bottom: 1px solid var(--border-color);
-  }
-
-  .settings-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 20px;
-  }
-
-  .settings-grid.dimmed {
-    opacity: 0.5;
-    pointer-events: none;
-  }
-
-  .loading {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--text-muted);
-    padding: 14px 16px;
-    margin-bottom: 16px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-  }
-
-  .card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    padding: 24px;
-  }
-
-  .card.wide {
-    grid-column: 1 / -1;
-  }
-
-  .card-title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--text-secondary);
-    margin-bottom: 20px;
-  }
-
-  .card-title h3 {
-    font-size: 16px;
-    color: var(--text-primary);
+    opacity: 0.85;
+    transition: opacity var(--motion-fast) var(--ease-out);
   }
 
   .field {
@@ -475,12 +530,6 @@
 
   .field:last-child {
     margin-bottom: 0;
-  }
-
-  .field-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
   }
 
   label {
@@ -514,11 +563,6 @@
 
   input:disabled {
     opacity: 0.6;
-  }
-
-  .input-row {
-    display: flex;
-    gap: 8px;
   }
 
   .input-row input {
@@ -572,18 +616,6 @@
     border-color: var(--accent-primary);
   }
 
-  .memory-control {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .memory-value {
-    font-size: 32px;
-    font-weight: 900;
-    text-align: center;
-  }
-
   .memory-slider {
     -webkit-appearance: none;
     appearance: none;
@@ -602,7 +634,7 @@
     background: var(--accent-primary);
     border-radius: 50%;
     cursor: pointer;
-    box-shadow: 0 0 12px rgba(27, 217, 106, 0.4);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 40%, transparent);
   }
 
   .memory-slider::-moz-range-thumb {
@@ -612,13 +644,6 @@
     border-radius: 50%;
     cursor: pointer;
     border: none;
-  }
-
-  .memory-marks {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-    flex-wrap: wrap;
   }
 
   .mark {
@@ -637,25 +662,10 @@
     border-color: var(--accent-primary);
   }
 
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-  }
-
-  .error {
-    background: rgba(239, 68, 68, 0.12);
-    color: #ef4444;
-    padding: 10px 12px;
-    border-radius: var(--border-radius-md);
-    font-size: 13px;
-    margin-bottom: 16px;
-  }
-
   .schema-info { display: grid; gap: 12px; }
   .schema-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--bg-tertiary); border-radius: var(--border-radius-md); border: 1px solid var(--border-color); }
   .schema-row span { color: var(--text-muted); font-size: 13px; }
   .schema-row code { font-family: ui-monospace, monospace; font-size: 14px; color: var(--accent-primary); }
   .schema-warning { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); color: #fcd34d; font-size: 13px; }
-  .schema-ok { color: var(--accent-primary); font-size: 13px; padding: 10px 14px; background: rgba(27,217,106,0.06); border-radius: 10px; border: 1px solid rgba(27,217,106,0.20); }
+  .schema-ok { color: var(--accent-primary); font-size: 13px; padding: 10px 14px; background: color-mix(in srgb, var(--accent-primary) 6%, transparent); border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent-primary) 20%, transparent); }
 </style>

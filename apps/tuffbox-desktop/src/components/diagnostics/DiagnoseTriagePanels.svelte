@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
   import {
     AlertTriangle,
     ChevronDown,
@@ -8,46 +7,70 @@
     Layers,
     Ban,
     ArrowUpCircle,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
 
-  export let signalGroups: {
-    title: string;
-    hint: string;
-    items: { source: string; lineNumber: number; kind: string; text: string }[];
-  }[] = [];
-  export let sections: { title: string; startLine: number; endLine: number; preview: string }[] = [];
-  export let suspected: {
-    id: string;
-    name: string;
-    confidence: number;
-    knownInManifest: boolean;
-    blameRole?: string;
-    evidence?: { text: string; lineNumber: number }[];
-  }[] = [];
-  export let recentSnapshots: { id: string; name: string; createdAt: string; reason: string }[] = [];
-  export let mcreatorMods: string[] = [];
-  export let classFinderResults: { className: string; modId: string; modName: string }[] = [];
-  export let classQuery = "";
-  export let classBusy = false;
-  export let classResults: { className: string; modId: string; modName: string }[] = [];
-  export let dependentResults: { className: string; modId: string; modName: string }[] = [];
-  export let toolsOpen = false;
-  export let disablingModId: string | null = null;
-  export let bisectMods: string[] = [];
-  export let worldCoords: { x: number; y: number; z: number; label: string } | null = null;
-  export let memoryHint: string | null = null;
-  export let cascadingBanner: string | null = null;
-  export let sourceHint = "";
-
-  const dispatch = createEventDispatcher<{
-    jumpLine: number;
-    disableMod: string;
-    updateMod: string;
-    toggleBisect: string;
-    findClass: string;
-    findDependents: string;
-    openSnapshots: void;
-  }>();
+  let {
+    signalGroups = [],
+    sections = [],
+    suspected = [],
+    recentSnapshots = [],
+    mcreatorMods = [],
+    classFinderResults = [],
+    classQuery = $bindable(""),
+    classBusy = false,
+    classResults = [],
+    dependentResults = [],
+    toolsOpen = $bindable(false),
+    disablingModId = null,
+    bisectMods = [],
+    worldCoords = null,
+    memoryHint = null,
+    cascadingBanner = null,
+    sourceHint = "",
+    onJumpLine,
+    onDisableMod,
+    onUpdateMod,
+    onToggleBisect,
+    onFindClass,
+    onFindDependents,
+    onOpenSnapshots,
+  }: {
+    signalGroups?: {
+      title: string;
+      hint: string;
+      items: { source: string; lineNumber: number; kind: string; text: string }[];
+    }[];
+    sections?: { title: string; startLine: number; endLine: number; preview: string }[];
+    suspected?: {
+      id: string;
+      name: string;
+      confidence: number;
+      knownInManifest: boolean;
+      blameRole?: string;
+      evidence?: { text: string; lineNumber: number }[];
+    }[];
+    recentSnapshots?: { id: string; name: string; createdAt: string; reason: string }[];
+    mcreatorMods?: string[];
+    classFinderResults?: { className: string; modId: string; modName: string }[];
+    classQuery?: string;
+    classBusy?: boolean;
+    classResults?: { className: string; modId: string; modName: string }[];
+    dependentResults?: { className: string; modId: string; modName: string }[];
+    toolsOpen?: boolean;
+    disablingModId?: string | null;
+    bisectMods?: string[];
+    worldCoords?: { x: number; y: number; z: number; label: string } | null;
+    memoryHint?: string | null;
+    cascadingBanner?: string | null;
+    sourceHint?: string;
+    onJumpLine?: (line: number) => void;
+    onDisableMod?: (modId: string) => void;
+    onUpdateMod?: (modId: string) => void;
+    onToggleBisect?: (modId: string) => void;
+    onFindClass?: (query: string) => void;
+    onFindDependents?: (query: string) => void;
+    onOpenSnapshots?: () => void;
+  } = $props();
 </script>
 
 {#if sourceHint}
@@ -58,7 +81,7 @@
   <div class="dx-banner warn">
     <AlertTriangle size={14} />
     <span>{cascadingBanner}</span>
-    <button type="button" class="ghost mini" on:click={() => dispatch("jumpLine", 0)}>Jump to early error</button>
+    <button type="button" class="ghost mini" onclick={() => onJumpLine?.(0)}>Jump to early error</button>
   </div>
 {/if}
 
@@ -66,7 +89,7 @@
   <div class="dx-banner info">
     <strong>Memory</strong>
     <span>{memoryHint}</span>
-    <button type="button" class="ghost mini" on:click={() => dispatch("openSnapshots")}>Setup / JVM</button>
+    <button type="button" class="ghost mini" onclick={() => onOpenSnapshots?.()}>Setup / JVM</button>
   </div>
 {/if}
 
@@ -99,21 +122,21 @@
                       type="button"
                       class="ghost mini"
                       disabled={disablingModId === m.id}
-                      on:click={() => dispatch("disableMod", m.id)}
+                      onclick={() => onDisableMod?.(m.id)}
                     >
                       <Ban size={12} /> Disable
                     </button>
-                    <button type="button" class="ghost mini" on:click={() => dispatch("updateMod", m.id)}>
+                    <button type="button" class="ghost mini" onclick={() => onUpdateMod?.(m.id)}>
                       <ArrowUpCircle size={12} /> Update
                     </button>
                   {/if}
-                  <label class="bisect-check" title="Include in bisect checklist">
+                  <label class="bisect-check" title="Include in group-test pool">
                     <input
                       type="checkbox"
                       checked={bisectMods.includes(m.id)}
-                      on:change={() => dispatch("toggleBisect", m.id)}
+                      onchange={() => onToggleBisect?.(m.id)}
                     />
-                    Bisect
+                    Pool
                   </label>
                 </div>
               </li>
@@ -132,7 +155,7 @@
               </li>
             {/each}
           </ul>
-          <button type="button" class="ghost mini" on:click={() => dispatch("openSnapshots")}>Open Snapshots</button>
+          <button type="button" class="ghost mini" onclick={() => onOpenSnapshots?.()}>Open Snapshots</button>
         </div>
       {/if}
     </div>
@@ -162,7 +185,7 @@
                     <button
                       type="button"
                       class="sig-line"
-                      on:click={() => dispatch("jumpLine", item.lineNumber)}
+                      onclick={() => onJumpLine?.(item.lineNumber)}
                       title={item.text}
                     >
                       L{item.lineNumber}: {item.text.slice(0, 120)}
@@ -177,7 +200,7 @@
       {#if sections.length}
         <div class="sec-list">
           {#each sections as sec (sec.title + sec.startLine)}
-            <button type="button" class="sec-card" on:click={() => dispatch("jumpLine", sec.startLine)}>
+            <button type="button" class="sec-card" onclick={() => onJumpLine?.(sec.startLine)}>
               <strong>{sec.title}</strong>
               <pre>{sec.preview.slice(0, 280)}</pre>
             </button>
@@ -205,8 +228,8 @@
           type="search"
           placeholder="e.g. me.jellysquid.mods.sodium"
           bind:value={classQuery}
-          on:keydown={(e) => {
-            if (e.key === "Enter") dispatch("findClass", classQuery);
+          onkeydown={(e) => {
+            if (e.key === "Enter") onFindClass?.(classQuery);
           }}
         />
       </label>
@@ -215,7 +238,7 @@
           type="button"
           class="secondary small"
           disabled={classBusy || !classQuery.trim()}
-          on:click={() => dispatch("findClass", classQuery)}
+          onclick={() => onFindClass?.(classQuery)}
         >
           Find in mods
         </button>
@@ -223,7 +246,7 @@
           type="button"
           class="ghost mini"
           disabled={classBusy || !classQuery.trim()}
-          on:click={() => dispatch("findDependents", classQuery)}
+          onclick={() => onFindDependents?.(classQuery)}
         >
           Who depends?
         </button>

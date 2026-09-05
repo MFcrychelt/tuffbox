@@ -1,9 +1,35 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
+    fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Mutex,
+    time::UNIX_EPOCH,
 };
 use thiserror::Error;
+
+/// How far to search the disk for Java installs.
+///
+/// `Fast` skips listing the Windows drive root (`C:\`), which hitchs the
+/// launcher when Settings asks for a default version. The Java picker uses
+/// `Full` so portable `C:\graalvm*` / `C:\jdk*` installs still appear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JavaScanDepth {
+    Fast,
+    Full,
+}
+
+static RUNTIME_CACHE: Mutex<Option<(JavaScanDepth, Vec<JavaRuntime>)>> = Mutex::new(None);
+
+/// `java -version` is 200–800ms on Windows. Cache by binary size+mtime so
+/// repeated Play clicks do not spawn a JVM just to read the version string.
+struct JavaPathCacheEntry {
+    len: u64,
+    mtime_secs: u64,
+    runtime: JavaRuntime,
+}
+
+static JAVA_PATH_CACHE: Mutex<Option<HashMap<PathBuf, JavaPathCacheEntry>>> = Mutex::new(None);
 
 #[derive(Debug, Error)]
 pub enum JreError {
@@ -11,6 +37,12 @@ pub enum JreError {
     Io(#[from] std::io::Error),
     #[error("failed to parse java version")]
     InvalidVersion,
+    #[error("java not found")]
+    NotFound,
+    #[error("failed to download GraalVM: {0}")]
+    Download(String),
+    #[error("failed to install GraalVM: {0}")]
+    Install(String),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -25,7 +57,7 @@ pub struct JavaRuntime {
 /// (hardcoded here for the common release boundaries since we don't fetch
 /// per-version manifests just for this check).
 ///
-/// This exists because [`find_all_runtimes`]/callers previously picked
+/// This exists because [`find_all_runtimes`] callers previously picked
 /// "the newest installed Java" unconditionally, with no regard for what
 /// the target Minecraft/loader version actually needs. That silently
 /// launches e.g. Forge 1.20.1 (which needs Java 17) on a Java 21 JVM,
@@ -70,7 +102,94 @@ pub fn find_runtime_for(runtimes: &[JavaRuntime], required_major: u32) -> Option
         .cloned()
 }
 
+/// Directory where TuffBox stores a managed GraalVM install.
+pub fn managed_java_root() -> PathBuf {
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        return PathBuf::from(local)
+            .join("TuffBox")
+            .join("runtime")
+            .join("java");
+    }
+    if let Some(data) = dirs::data_local_dir() {
+        return data.join("TuffBox").join("runtime").join("java");
+    }
+    std::env::temp_dir()
+        .join("tuffbox")
+        .join("runtime")
+        .join("java")
+}
+
+pub fn invalidate_runtime_cache() {
+    if let Ok(mut guard) = RUNTIME_CACHE.lock() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = JAVA_PATH_CACHE.lock() {
+        *guard = None;
+    }
+}
+
+/// Cached discovery. Settings / auto-detect use Fast; the Java picker uses Full.
 pub fn find_all_runtimes() -> Result<Vec<JavaRuntime>, JreError> {
+    cached_runtimes(JavaScanDepth::Fast)
+}
+
+pub fn find_all_runtimes_full() -> Result<Vec<JavaRuntime>, JreError> {
+    cached_runtimes(JavaScanDepth::Full)
+}
+
+fn cached_runtimes(depth: JavaScanDepth) -> Result<Vec<JavaRuntime>, JreError> {
+    if let Ok(guard) = RUNTIME_CACHE.lock() {
+        if let Some((cached_depth, runtimes)) = guard.as_ref() {
+            if *cached_depth == JavaScanDepth::Full || *cached_depth == depth {
+                return Ok(runtimes.clone());
+            }
+        }
+    }
+    let runtimes = discover_runtimes(depth)?;
+    if let Ok(mut guard) = RUNTIME_CACHE.lock() {
+        *guard = Some((depth, runtimes.clone()));
+    }
+    Ok(runtimes)
+}
+
+/// Directories we `read_dir` while looking for Java `bin` folders.
+/// Exported for tests so Fast never includes the Windows drive root.
+pub fn java_search_roots(depth: JavaScanDepth) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let managed = managed_java_root();
+    if managed.is_dir() {
+        roots.push(managed);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        roots.extend(
+            [
+                r"C:\Program Files\Java",
+                r"C:\Program Files (x86)\Java",
+                r"C:\Program Files\Eclipse Adoptium",
+                r"C:\Program Files (x86)\Eclipse Adoptium",
+                r"C:\Program Files\Microsoft",
+                r"C:\Program Files (x86)\Microsoft",
+                r"C:\Program Files\GraalVM",
+                r"C:\Program Files\Common Files\Oracle\Java",
+            ]
+            .iter()
+            .map(PathBuf::from),
+        );
+        if depth == JavaScanDepth::Full {
+            roots.push(PathBuf::from(r"C:\"));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = depth;
+        roots.push(PathBuf::from("/usr/lib/jvm"));
+        roots.push(PathBuf::from("/Library/Java/JavaVirtualMachines"));
+    }
+    roots
+}
+
+fn discover_runtimes(depth: JavaScanDepth) -> Result<Vec<JavaRuntime>, JreError> {
     let mut paths = HashSet::new();
 
     // PATH entries.
@@ -90,41 +209,29 @@ pub fn find_all_runtimes() -> Result<Vec<JavaRuntime>, JreError> {
         paths.insert(PathBuf::from(java_home).join("bin"));
     }
 
-    // Common install directories.
-    #[cfg(target_os = "windows")]
-    {
-        let common = [
-            r"C:\Program Files\Java",
-            r"C:\Program Files (x86)\Java",
-            r"C:\Program Files\Eclipse Adoptium",
-            r"C:\Program Files (x86)\Eclipse Adoptium",
-            r"C:\Program Files\Microsoft",
-            r"C:\Program Files (x86)\Microsoft",
-        ];
-        for base in &common {
-            if let Ok(entries) = std::fs::read_dir(base) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    paths.insert(path.join("bin"));
-                }
+    for root in java_search_roots(depth) {
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
+        let is_drive_root = cfg!(windows) && root == Path::new(r"C:\");
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
             }
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        for base in ["/usr/lib/jvm", "/Library/Java/JavaVirtualMachines"] {
-            if let Ok(entries) = std::fs::read_dir(base) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let bin = path.join("Contents").join("Home").join("bin");
-                    if bin.exists() {
-                        paths.insert(bin);
-                    } else {
-                        paths.insert(path.join("bin"));
-                    }
-                }
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if name == "downloads" {
+                continue;
             }
+            if is_drive_root
+                && !(name.starts_with("graalvm")
+                    || name.starts_with("jdk")
+                    || name.starts_with("zulu"))
+            {
+                continue;
+            }
+            paths.insert(path.join("bin"));
+            paths.insert(path.join("Contents").join("Home").join("bin"));
         }
     }
 
@@ -173,6 +280,79 @@ pub fn find_all_runtimes() -> Result<Vec<JavaRuntime>, JreError> {
     Ok(runtimes)
 }
 
+/// Returns any installed Java, or downloads the latest GraalVM Community JDK
+/// into the TuffBox managed runtime folder when none is found.
+pub fn ensure_java() -> Result<JavaRuntime, JreError> {
+    ensure_java_with_log(|_| {})
+}
+
+pub fn ensure_java_with_log<F>(mut log: F) -> Result<JavaRuntime, JreError>
+where
+    F: FnMut(&str),
+{
+    let mut runtimes = find_all_runtimes()?;
+    if runtimes.is_empty() {
+        runtimes = find_all_runtimes_full()?;
+    }
+    if let Some(rt) = runtimes.into_iter().next() {
+        return Ok(rt);
+    }
+    log("# No Java found on this PC — downloading latest GraalVM Community JDK…");
+    let installed = install_latest_graalvm(&mut log)?;
+    invalidate_runtime_cache();
+    Ok(installed)
+}
+
+/// True when none of the discovered runtimes can run `required_major`, so a
+/// managed download is required. A newer JVM counts as compatible (vanilla /
+/// Fabric run fine on newer majors; only old Forge installers are strict).
+pub fn managed_install_needed(runtimes: &[JavaRuntime], required_major: u32) -> bool {
+    !runtimes.iter().any(|r| r.major >= required_major)
+}
+
+/// Like [`ensure_java`], then picks the best match for `mc_version`.
+/// If no installed runtime satisfies the Minecraft requirement, the matching
+/// GraalVM Community JDK major is downloaded automatically — instead of
+/// launching on a JVM that cannot run the game.
+pub fn ensure_java_for_minecraft(mc_version: &str) -> Result<JavaRuntime, JreError> {
+    ensure_java_for_minecraft_with_log(mc_version, |_| {})
+}
+
+pub fn ensure_java_for_minecraft_with_log<F>(
+    mc_version: &str,
+    mut log: F,
+) -> Result<JavaRuntime, JreError>
+where
+    F: FnMut(&str),
+{
+    let mut runtimes = find_all_runtimes()?;
+    if runtimes.is_empty() {
+        runtimes = find_all_runtimes_full()?;
+    }
+    let required = required_java_major(mc_version);
+    if managed_install_needed(&runtimes, required) {
+        log(&format!(
+            "# No compatible Java found (need Java {required}+ for Minecraft {mc_version}) — downloading GraalVM Community JDK {required}…"
+        ));
+        let installed = install_graalvm_major(required, &mut log)?;
+        invalidate_runtime_cache();
+        runtimes.push(installed);
+        runtimes.sort_by(|a, b| b.major.cmp(&a.major));
+    }
+    find_runtime_for(&runtimes, required).ok_or(JreError::NotFound)
+}
+
+fn java_bin_fingerprint(path: &Path) -> Option<(u64, u64)> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Some((meta.len(), mtime))
+}
+
 pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
     let bin = path.to_path_buf();
     let java_bin = if bin
@@ -192,6 +372,16 @@ pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
         )));
     }
 
+    if let Some((len, mtime_secs)) = java_bin_fingerprint(&java_bin) {
+        if let Ok(guard) = JAVA_PATH_CACHE.lock() {
+            if let Some(entry) = guard.as_ref().and_then(|m| m.get(&java_bin)) {
+                if entry.len == len && entry.mtime_secs == mtime_secs {
+                    return Ok(entry.runtime.clone());
+                }
+            }
+        }
+    }
+
     let output = {
         let mut c = Command::new(&java_bin);
         c.arg("-version").stderr(Stdio::piped());
@@ -206,11 +396,24 @@ pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
     let first_line = stderr.lines().next().unwrap_or("").to_string();
     let major = parse_java_major(&first_line).ok_or(JreError::InvalidVersion)?;
 
-    Ok(JavaRuntime {
+    let runtime = JavaRuntime {
         path: java_bin.to_string_lossy().to_string(),
         version: first_line,
         major,
-    })
+    };
+    if let Some((len, mtime_secs)) = java_bin_fingerprint(&java_bin) {
+        if let Ok(mut guard) = JAVA_PATH_CACHE.lock() {
+            guard.get_or_insert_with(HashMap::new).insert(
+                java_bin,
+                JavaPathCacheEntry {
+                    len,
+                    mtime_secs,
+                    runtime: runtime.clone(),
+                },
+            );
+        }
+    }
+    Ok(runtime)
 }
 
 fn java_binary_name() -> &'static str {
@@ -232,6 +435,301 @@ fn parse_java_major(version_string: &str) -> Option<u32> {
     } else {
         Some(first)
     }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GhRelease {
+    tag_name: String,
+    assets: Vec<GhAsset>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GhAsset {
+    name: String,
+    browser_download_url: String,
+    #[serde(default)]
+    digest: Option<String>,
+}
+
+fn platform_asset_suffix() -> &'static str {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        return "windows-x64_bin.zip";
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        return "linux-x64_bin.tar.gz";
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        return "linux-aarch64_bin.tar.gz";
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        return "macos-aarch64_bin.tar.gz";
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        return "macos-x64_bin.tar.gz";
+    }
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+    )))]
+    {
+        "unsupported"
+    }
+}
+
+fn install_latest_graalvm<F>(log: &mut F) -> Result<JavaRuntime, JreError>
+where
+    F: FnMut(&str),
+{
+    install_graalvm_matching(
+        log,
+        "https://api.github.com/repos/graalvm/graalvm-ce-builds/releases/latest",
+        "latest",
+        &|_tag| true,
+    )
+}
+
+/// Downloads the newest GraalVM Community release whose major Java version
+/// equals `major` (e.g. a `jdk-17.0.x` release) into the managed runtime.
+/// Used when installed JVMs do not satisfy what the target Minecraft version
+/// requires — the old behavior ("newest GraalVM or nothing") could not fix
+/// a machine that only has an older Java than the game needs.
+pub fn install_graalvm_major<F>(major: u32, log: &mut F) -> Result<JavaRuntime, JreError>
+where
+    F: FnMut(&str),
+{
+    install_graalvm_matching(
+        log,
+        "https://api.github.com/repos/graalvm/graalvm-ce-builds/releases?per_page=100",
+        &format!("jdk-{major}"),
+        &|tag| {
+            // Release tags look like `jdk-17.0.12` (new scheme) — match the
+            // major component exactly. Older tag schemes (`vm-22.3.1/jdk-17…`)
+            // still contain `jdk-<major>.` so this covers both.
+            let prefix = format!("jdk-{major}.");
+            tag.contains(&prefix)
+        },
+    )
+}
+
+fn install_graalvm_matching<F>(
+    log: &mut F,
+    releases_url: &str,
+    release_label: &str,
+    tag_matches: &dyn Fn(&str) -> bool,
+) -> Result<JavaRuntime, JreError>
+where
+    F: FnMut(&str),
+{
+    let suffix = platform_asset_suffix();
+    if suffix == "unsupported" {
+        return Err(JreError::Install(
+            "this platform is not supported for automatic GraalVM download".into(),
+        ));
+    }
+
+    let root = managed_java_root();
+    fs::create_dir_all(&root).map_err(JreError::Io)?;
+    let downloads = root.join("downloads");
+    fs::create_dir_all(&downloads).map_err(JreError::Io)?;
+
+    log("# Fetching GraalVM Community release metadata…");
+    let releases: Vec<GhRelease> = crate::http::get_json(releases_url)
+        .map_err(|e| JreError::Download(format!("GitHub releases API: {e}")))?;
+
+    // First release (newest first) that has a platform asset with a matching tag.
+    let (release, asset) = releases
+        .iter()
+        .filter(|r| tag_matches(&r.tag_name))
+        .find_map(|r| {
+            r.assets
+                .iter()
+                .find(|a| a.name.ends_with(suffix) && !a.name.ends_with(".sha256"))
+                .map(|a| (r, a))
+        })
+        .ok_or_else(|| {
+            JreError::Download(format!(
+                "no GraalVM release matching '{release_label}' with asset '*{suffix}'"
+            ))
+        })?;
+
+    let install_dir = root.join(&release.tag_name);
+    let marker = install_dir.join(".tuffbox-java-ok");
+    if marker.is_file() {
+        if let Ok(rt) = find_java_under(&install_dir) {
+            log(&format!(
+                "# Reusing managed GraalVM {} at {}",
+                release.tag_name, rt.path
+            ));
+            return Ok(rt);
+        }
+    }
+
+    let archive_path = downloads.join(&asset.name);
+    let sha256 = asset
+        .digest
+        .as_deref()
+        .and_then(|d| d.strip_prefix("sha256:"))
+        .map(|s| s.trim().to_string());
+
+    log(&format!(
+        "# Downloading {} ({})…",
+        asset.name, release.tag_name
+    ));
+    crate::download_engine::download_resumable(
+        &asset.browser_download_url,
+        &archive_path,
+        sha256
+            .as_deref()
+            .map(|s| (s, crate::download_engine::ChecksumKind::Sha256)),
+        None,
+        Some(std::time::Duration::from_secs(300)),
+    )
+    .map_err(|e| JreError::Download(e.to_string()))?;
+
+    // Fresh extract target.
+    if install_dir.exists() {
+        let _ = fs::remove_dir_all(&install_dir);
+    }
+    fs::create_dir_all(&install_dir).map_err(JreError::Io)?;
+
+    log(&format!("# Extracting to {}…", install_dir.display()));
+    extract_archive(&archive_path, &install_dir)?;
+
+    // GraalVM zips usually contain a single top-level folder; flatten if needed.
+    flatten_single_child_dir(&install_dir)?;
+
+    let runtime = find_java_under(&install_dir).map_err(|e| {
+        JreError::Install(format!(
+            "extracted GraalVM but java binary not found under {}: {e}",
+            install_dir.display()
+        ))
+    })?;
+
+    fs::write(&marker, release.tag_name.as_bytes()).map_err(JreError::Io)?;
+    log(&format!(
+        "# GraalVM {} ready: {} (Java {})",
+        release.tag_name, runtime.path, runtime.major
+    ));
+    Ok(runtime)
+}
+
+fn find_java_under(dir: &Path) -> Result<JavaRuntime, JreError> {
+    let candidates = [
+        dir.join("bin"),
+        dir.join("Contents").join("Home").join("bin"),
+    ];
+    for bin in &candidates {
+        if let Ok(rt) = check_java_at_path(bin) {
+            return Ok(rt);
+        }
+    }
+    // Shallow walk one extra level (zip root folder rename edge cases).
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if !p.is_dir() {
+                continue;
+            }
+            for rel in ["bin", "Contents/Home/bin"] {
+                if let Ok(rt) = check_java_at_path(&p.join(rel)) {
+                    return Ok(rt);
+                }
+            }
+        }
+    }
+    Err(JreError::NotFound)
+}
+
+fn flatten_single_child_dir(install_dir: &Path) -> Result<(), JreError> {
+    let mut children: Vec<PathBuf> = fs::read_dir(install_dir)
+        .map_err(JreError::Io)?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .map(|n| n != ".tuffbox-java-ok")
+                .unwrap_or(true)
+        })
+        .collect();
+    if children.len() != 1 || !children[0].is_dir() {
+        return Ok(());
+    }
+    // If the only child already has bin/java, keep nested layout — find_java_under handles it.
+    let only = children.remove(0);
+    if only.join("bin").join(java_binary_name()).is_file()
+        || only
+            .join("Contents")
+            .join("Home")
+            .join("bin")
+            .join(java_binary_name())
+            .is_file()
+    {
+        return Ok(());
+    }
+    Ok(())
+}
+
+fn extract_archive(archive: &Path, dest: &Path) -> Result<(), JreError> {
+    let name = archive.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name.ends_with(".zip") {
+        extract_zip(archive, dest)
+    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        extract_tar_gz_via_system_tar(archive, dest)
+    } else {
+        Err(JreError::Install(format!(
+            "unsupported archive format: {name}"
+        )))
+    }
+}
+
+fn extract_zip(archive: &Path, dest: &Path) -> Result<(), JreError> {
+    let file = fs::File::open(archive).map_err(JreError::Io)?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| JreError::Install(e.to_string()))?;
+    for i in 0..zip.len() {
+        let mut entry = zip
+            .by_index(i)
+            .map_err(|e| JreError::Install(e.to_string()))?;
+        let name = entry.name().replace('\\', "/");
+        if name.contains("..") || name.starts_with('/') {
+            return Err(JreError::Install(format!("path traversal in zip: {name}")));
+        }
+        let out_path = dest.join(&name);
+        if entry.is_dir() || name.ends_with('/') {
+            fs::create_dir_all(&out_path).map_err(JreError::Io)?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent).map_err(JreError::Io)?;
+        }
+        let mut out = fs::File::create(&out_path).map_err(JreError::Io)?;
+        io::copy(&mut entry, &mut out).map_err(JreError::Io)?;
+    }
+    Ok(())
+}
+
+fn extract_tar_gz_via_system_tar(archive: &Path, dest: &Path) -> Result<(), JreError> {
+    // Prefer system tar on Unix (always present); avoids adding a tar crate dep.
+    let status = Command::new("tar")
+        .arg("-xzf")
+        .arg(archive)
+        .arg("-C")
+        .arg(dest)
+        .status()
+        .map_err(|e| JreError::Install(format!("failed to run tar: {e}")))?;
+    if !status.success() {
+        return Err(JreError::Install(format!(
+            "tar exited with status {status}"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -294,5 +792,65 @@ mod tests {
     #[test]
     fn find_runtime_for_empty_list_returns_none() {
         assert!(find_runtime_for(&[], 17).is_none());
+    }
+
+    #[test]
+    fn managed_install_needed_when_all_runtimes_too_old() {
+        // Only Java 8 + 11 installed, MC needs 17 → must download, not
+        // silently fall back to an old JVM that will refuse to boot MC.
+        let runtimes = vec![runtime(8), runtime(11)];
+        assert!(managed_install_needed(&runtimes, 17));
+    }
+
+    #[test]
+    fn managed_install_not_needed_when_compatible_runtime_exists() {
+        let runtimes = vec![runtime(8), runtime(17), runtime(21)];
+        assert!(!managed_install_needed(&runtimes, 17));
+        // Newer-than-required JVM is usable for vanilla/Fabric.
+        let runtimes = vec![runtime(8), runtime(21)];
+        assert!(!managed_install_needed(&runtimes, 17));
+    }
+
+    #[test]
+    fn managed_install_needed_when_nothing_installed() {
+        assert!(managed_install_needed(&[], 17));
+    }
+
+    #[test]
+    fn platform_suffix_is_known() {
+        assert_ne!(platform_asset_suffix(), "unsupported");
+    }
+
+    #[test]
+    fn java_bin_fingerprint_reads_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("java.exe");
+        std::fs::write(&bin, b"not-a-real-jvm").unwrap();
+        let (len, _mtime) = java_bin_fingerprint(&bin).expect("fingerprint");
+        assert_eq!(len, 14);
+    }
+
+    #[test]
+    fn check_java_at_path_errors_when_binary_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = check_java_at_path(&dir.path().join("missing-java")).unwrap_err();
+        match err {
+            JreError::Io(e) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound),
+            other => panic!("expected Io, got {other}"),
+        }
+    }
+
+    #[test]
+    fn fast_search_roots_skip_windows_drive_root() {
+        let roots = java_search_roots(JavaScanDepth::Fast);
+        assert!(
+            !roots.iter().any(|p| p == Path::new(r"C:\")),
+            "Fast scan must not list C:\\"
+        );
+        let full = java_search_roots(JavaScanDepth::Full);
+        #[cfg(target_os = "windows")]
+        assert!(full.iter().any(|p| p == Path::new(r"C:\")));
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(roots, full);
     }
 }

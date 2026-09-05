@@ -180,8 +180,14 @@ mod tests {
         // These labels are part of the contract the frontend keys off of
         // (see launch.ts RETRYABLE set), so assert they never drift.
         assert_eq!(LaunchErrorKind::Offline.as_label(), "offline");
-        assert_eq!(LaunchErrorKind::HostUnreachable.as_label(), "host_unreachable");
-        assert_eq!(LaunchErrorKind::VersionResolve.as_label(), "version_resolve");
+        assert_eq!(
+            LaunchErrorKind::HostUnreachable.as_label(),
+            "host_unreachable"
+        );
+        assert_eq!(
+            LaunchErrorKind::VersionResolve.as_label(),
+            "version_resolve"
+        );
         assert_eq!(LaunchErrorKind::ModDownload.as_label(), "mod_download");
         assert_eq!(LaunchErrorKind::JavaMissing.as_label(), "java_missing");
         assert_eq!(LaunchErrorKind::Install.as_label(), "install");
@@ -207,12 +213,22 @@ mod tests {
 
     #[test]
     fn looks_offline_detects_common_conditions() {
-        assert!(message_looks_offline("reqwest: error sending request: connection refused"));
-        assert!(message_looks_offline("failed to resolve host example.com: DNS error"));
-        assert!(message_looks_offline("notify: operation timed out after 30s"));
-        assert!(message_looks_offline("os error 10060: network is unreachable"));
+        assert!(message_looks_offline(
+            "reqwest: error sending request: connection refused"
+        ));
+        assert!(message_looks_offline(
+            "failed to resolve host example.com: DNS error"
+        ));
+        assert!(message_looks_offline(
+            "notify: operation timed out after 30s"
+        ));
+        assert!(message_looks_offline(
+            "os error 10060: network is unreachable"
+        ));
         assert!(!message_looks_offline("mod file not found on server"));
-        assert!(!message_looks_offline("java.lang.OutOfMemoryError: heap space"));
+        assert!(!message_looks_offline(
+            "java.lang.OutOfMemoryError: heap space"
+        ));
     }
 
     #[test]
@@ -226,7 +242,9 @@ mod tests {
         // A network failure mentioning java must still surface as Offline so
         // the UI offers a retry rather than blaming the Java install.
         assert_eq!(
-            classify_build_error_kind("reqwest: error sending request: connection refused while downloading java runtime"),
+            classify_build_error_kind(
+                "reqwest: error sending request: connection refused while downloading java runtime"
+            ),
             LaunchErrorKind::Offline
         );
         assert_eq!(
@@ -242,7 +260,9 @@ mod tests {
             LaunchErrorKind::JavaMissing
         );
         assert_eq!(
-            classify_build_error_kind("the system cannot find the path specified: java.exe not found"),
+            classify_build_error_kind(
+                "the system cannot find the path specified: java.exe not found"
+            ),
             LaunchErrorKind::JavaMissing
         );
     }
@@ -250,9 +270,10 @@ mod tests {
     #[test]
     fn classify_build_error_falls_back_to_install() {
         assert_eq!(
-            classify_build_error_kind("failed to build minecraft launch command: unknown profile field"),
+            classify_build_error_kind(
+                "failed to build minecraft launch command: unknown profile field"
+            ),
             LaunchErrorKind::Install
         );
     }
 }
-

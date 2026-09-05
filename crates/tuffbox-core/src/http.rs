@@ -47,10 +47,13 @@ static CIRCUIT: LazyLock<Mutex<CircuitBreakerState>> = LazyLock::new(|| {
 pub(crate) fn circuit_check(host: &str) -> Result<(), CircuitBreakerOpen> {
     let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
     let now = Instant::now();
-    let entry = cb.hosts.entry(host.to_string()).or_insert_with(|| HostBreaker {
-        failures: Vec::new(),
-        state: CircuitState::Closed,
-    });
+    let entry = cb
+        .hosts
+        .entry(host.to_string())
+        .or_insert_with(|| HostBreaker {
+            failures: Vec::new(),
+            state: CircuitState::Closed,
+        });
 
     match entry.state {
         CircuitState::Open { opened_at } => {
@@ -85,10 +88,13 @@ pub(crate) fn circuit_record_success(host: &str) {
 pub(crate) fn circuit_record_failure(host: &str) {
     let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
     let now = Instant::now();
-    let entry = cb.hosts.entry(host.to_string()).or_insert_with(|| HostBreaker {
-        failures: Vec::new(),
-        state: CircuitState::Closed,
-    });
+    let entry = cb
+        .hosts
+        .entry(host.to_string())
+        .or_insert_with(|| HostBreaker {
+            failures: Vec::new(),
+            state: CircuitState::Closed,
+        });
 
     entry.failures.push(now);
     // Prune stale failures.
@@ -135,10 +141,31 @@ static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .timeout(Duration::from_secs(60))
         .connect_timeout(Duration::from_secs(15))
         .tcp_keepalive(Duration::from_secs(10))
+        .tcp_nodelay(true)
         .user_agent("TuffBox-IDE/0.1.0")
         .build()
         .expect("Failed to build HTTP client")
 });
+
+static HTTP_ASYNC: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(15))
+        .tcp_keepalive(Duration::from_secs(10))
+        .user_agent("TuffBox-IDE/0.1.0")
+        .build()
+        .expect("Failed to build async HTTP client")
+});
+
+/// Shared blocking HTTP client with connection pooling.
+pub(crate) fn http() -> &'static reqwest::blocking::Client {
+    &HTTP
+}
+
+/// Shared async HTTP client with connection pooling.
+pub(crate) fn http_async() -> &'static reqwest::Client {
+    &HTTP_ASYNC
+}
 
 const MAX_RETRIES: u32 = 3;
 const MAX_RATE_LIMIT_RETRIES: u32 = 4;
@@ -378,8 +405,8 @@ pub fn download_streaming(
     progress: Option<Box<dyn FnMut(u64, u64) + Send>>,
 ) -> Result<(), StreamingDownloadError> {
     let expected = expected_sha1.map(|s| (s, crate::download_engine::ChecksumKind::Sha1));
-    crate::download_engine::download_resumable(url, dest, expected, progress, None).map_err(
-        |e| match e {
+    crate::download_engine::download_resumable(url, dest, expected, progress, None).map_err(|e| {
+        match e {
             crate::download_engine::DownloadEngineError::Http(err) => {
                 StreamingDownloadError::Http(err)
             }
@@ -391,8 +418,8 @@ pub fn download_streaming(
                 std::io::ErrorKind::Other,
                 other.to_string(),
             )),
-        },
-    )
+        }
+    })
 }
 
 #[cfg(test)]

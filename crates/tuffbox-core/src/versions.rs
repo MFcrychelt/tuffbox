@@ -48,32 +48,56 @@ pub struct MinecraftVersion {
     pub popular: bool,
 }
 
-pub fn fetch_minecraft_versions() -> Result<Vec<MinecraftVersion>, VersionsError> {
-    let popular: HashSet<String> = POPULAR_MINECRAFT.iter().map(|s| s.to_string()).collect();
-    let mut popular_versions: Vec<MinecraftVersion> = POPULAR_MINECRAFT
-        .iter()
-        .map(|id| MinecraftVersion {
-            id: id.to_string(),
-            popular: true,
-        })
-        .collect();
+pub fn fetch_minecraft_versions() -> Vec<MinecraftVersion> {
+    // Process-global TTL cache: the Mojang manifest is large and rarely
+    // changes; re-fetching it on every Setup-tab open made the stage load
+    // for seconds. Stale entries are still served after TTL expiry so the
+    // tab opens instantly even when offline / rate-limited.
+    crate::api_cache::get_or_insert_with_ttl(
+        "versions:minecraft",
+        std::time::Duration::from_secs(60 * 60),
+        || -> Vec<MinecraftVersion> {
+            let popular: HashSet<String> =
+                POPULAR_MINECRAFT.iter().map(|s| s.to_string()).collect();
+            let mut popular_versions: Vec<MinecraftVersion> = POPULAR_MINECRAFT
+                .iter()
+                .map(|id| MinecraftVersion {
+                    id: id.to_string(),
+                    popular: true,
+                })
+                .collect();
 
-    let manifest: Manifest = crate::http::get_json_with_context(VERSION_MANIFEST_URL)
-        .map_err(VersionsError::Other)?;
-    let mut rest: Vec<MinecraftVersion> = manifest
-        .versions
-        .into_iter()
-        .filter(|v| v.kind == "release" && !popular.contains(&v.id))
-        .map(|v| MinecraftVersion {
-            id: v.id,
-            popular: false,
-        })
-        .collect();
+            let manifest: Manifest = match crate::http::get_json_with_context(VERSION_MANIFEST_URL)
+            {
+                Ok(m) => m,
+                Err(e) => return fallback_popular_only(popular_versions, e),
+            };
+            let mut rest: Vec<MinecraftVersion> = manifest
+                .versions
+                .into_iter()
+                .filter(|v| v.kind == "release" && !popular.contains(&v.id))
+                .map(|v| MinecraftVersion {
+                    id: v.id,
+                    popular: false,
+                })
+                .collect();
 
-    rest.sort_by(|a, b| compare_versions(&b.id, &a.id));
+            rest.sort_by(|a, b| compare_versions(&b.id, &a.id));
 
-    popular_versions.append(&mut rest);
-    Ok(popular_versions)
+            popular_versions.append(&mut rest);
+            popular_versions
+        },
+    )
+}
+
+/// Offline / failed-manifest fallback: return at least the popular pins so
+/// the Setup dropdown is usable; the error is logged to stderr.
+fn fallback_popular_only(
+    popular_versions: Vec<MinecraftVersion>,
+    e: String,
+) -> Vec<MinecraftVersion> {
+    eprintln!("[versions] manifest fetch failed, serving popular pins only: {e}");
+    popular_versions
 }
 
 fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
@@ -197,11 +221,11 @@ fn resolve_alias_offline(
             }
         }
     }
-    best
-        .map(|(id, _)| id)
-        .ok_or_else(|| VersionsError::Other(format!(
+    best.map(|(id, _)| id).ok_or_else(|| {
+        VersionsError::Other(format!(
             "no locally installed {kind} version found for alias '{alias}' (offline)"
-        )))
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -222,10 +246,7 @@ mod tests {
     fn unknown_aliases_are_not_special_cased() {
         // Anything that isn't a recognized alias passes through untouched
         // (e.g. a loader-ish string someone typo'd into the version field).
-        assert_eq!(
-            resolve_minecraft_version_alias("fabric").unwrap(),
-            "fabric"
-        );
+        assert_eq!(resolve_minecraft_version_alias("fabric").unwrap(), "fabric");
     }
 
     #[test]
@@ -234,17 +255,25 @@ mod tests {
         // We can't assert the resolved value (it changes over time / needs
         // network), but we can assert each known alias maps to *some*
         // concrete version and not back to the alias string.
-        for alias in ["latest", "release", "latest-release", "snapshot", "latest-snapshot"] {
+        for alias in [
+            "latest",
+            "release",
+            "latest-release",
+            "snapshot",
+            "latest-snapshot",
+        ] {
             let resolved = resolve_minecraft_version_alias(alias).unwrap();
-            assert_ne!(resolved, alias, "alias {alias} should resolve to a concrete version");
+            assert_ne!(
+                resolved, alias,
+                "alias {alias} should resolve to a concrete version"
+            );
         }
     }
 
     #[test]
     fn offline_alias_picks_newest_installed_of_kind() {
         // Deterministically exercises the local-scan fallback (no network).
-        let base =
-            std::env::temp_dir().join(format!("tuffbox_va_test_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("tuffbox_va_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let versions_dir = base.join("versions");
         for (id, kind) in [
@@ -272,8 +301,7 @@ mod tests {
             "25w14craftmine"
         );
         // a kind with no installed matches errors rather than cross-contaminating
-        let empty =
-            std::env::temp_dir().join(format!("tuffbox_va_empty_{}", std::process::id()));
+        let empty = std::env::temp_dir().join(format!("tuffbox_va_empty_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&empty);
         std::fs::create_dir_all(empty.join("versions")).unwrap();
         assert!(resolve_alias_offline("latest", &empty, "release").is_err());
@@ -289,23 +317,38 @@ pub struct LoaderVersion {
     pub stable: bool,
 }
 
-pub fn fetch_loader_versions(
-    loader: &str,
-    minecraft_version: &str,
-) -> Result<Vec<LoaderVersion>, VersionsError> {
-    match loader {
-        "fabric" => fetch_fabric_versions(minecraft_version),
-        "quilt" => fetch_quilt_versions(minecraft_version),
-        "forge" => fetch_forge_versions(minecraft_version),
-        "neoforge" => fetch_neoforge_versions(minecraft_version),
-        _ => Ok(Vec::new()),
-    }
+pub fn fetch_loader_versions(loader: &str, minecraft_version: &str) -> Vec<LoaderVersion> {
+    // Loader metadata changes rarely; cache per loader+MC so switching back
+    // and forth between Setup tabs (or changing MC version) doesn't re-hit
+    // the meta endpoints on every open.
+    let key = format!("versions:loader:{loader}:{minecraft_version}");
+    let loader = loader.to_string();
+    let mc = minecraft_version.to_string();
+    crate::api_cache::get_or_insert_with_ttl(
+        key.as_str(),
+        std::time::Duration::from_secs(10 * 60),
+        move || -> Vec<LoaderVersion> {
+            match loader.as_str() {
+                "fabric" => fetch_fabric_versions(&mc),
+                "quilt" => fetch_quilt_versions(&mc),
+                "forge" => fetch_forge_versions(&mc),
+                "neoforge" => fetch_neoforge_versions(&mc),
+                _ => Ok(Vec::new()),
+            }
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "[versions] loader fetch failed for {loader}/{mc}, serving empty list: {e}"
+                );
+                Vec::new()
+            })
+        },
+    )
 }
 
 fn fetch_fabric_versions(mc: &str) -> Result<Vec<LoaderVersion>, VersionsError> {
     let url = format!("https://meta.fabricmc.net/v2/versions/loader/{mc}");
-    let entries: Vec<FabricLoaderEntry> = crate::http::get_json_with_context(&url)
-        .map_err(VersionsError::Other)?;
+    let entries: Vec<FabricLoaderEntry> =
+        crate::http::get_json_with_context(&url).map_err(VersionsError::Other)?;
     Ok(entries
         .into_iter()
         .map(|e| LoaderVersion {
@@ -328,8 +371,8 @@ struct FabricLoader {
 
 fn fetch_quilt_versions(mc: &str) -> Result<Vec<LoaderVersion>, VersionsError> {
     let url = format!("https://meta.quiltmc.org/v3/versions/loader/{mc}");
-    let entries: Vec<QuiltLoaderEntry> = crate::http::get_json_with_context(&url)
-        .map_err(VersionsError::Other)?;
+    let entries: Vec<QuiltLoaderEntry> =
+        crate::http::get_json_with_context(&url).map_err(VersionsError::Other)?;
     Ok(entries
         .into_iter()
         .map(|e| LoaderVersion {
@@ -375,8 +418,8 @@ struct ModrinthLoaderEntry {
 
 fn fetch_forge_versions(mc: &str) -> Result<Vec<LoaderVersion>, VersionsError> {
     let url = "https://launcher-meta.modrinth.com/forge/v0/manifest.json";
-    let manifest: ModrinthLoaderManifest = crate::http::get_json_with_context(url)
-        .map_err(VersionsError::Other)?;
+    let manifest: ModrinthLoaderManifest =
+        crate::http::get_json_with_context(url).map_err(VersionsError::Other)?;
     Ok(manifest
         .game_versions
         .into_iter()

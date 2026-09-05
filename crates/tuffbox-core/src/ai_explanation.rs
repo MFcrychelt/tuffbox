@@ -6,7 +6,7 @@
 //! backend can use with any LLM provider (OpenAI, Anthropic, local).
 
 use crate::crash_assistant::CrashAnalysisFinding;
-use crate::crash_kb::{SimilarCaseHit, smart_excerpt};
+use crate::crash_kb::{smart_excerpt, SimilarCaseHit};
 use crate::project_ai_inventory::ProjectAiInventory;
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +41,70 @@ pub struct CrashAiContext {
     /// Full project inventory (mods, packs, datapacks, configs).
     #[serde(default)]
     pub inventory: Option<ProjectAiInventory>,
+    /// Live Diagnose group-test session (launcher facts, not hypotheses).
+    #[serde(default)]
+    pub group_test: Option<CrashAiGroupTest>,
+    /// COMP-style decode of the crash→launch trail (healthy ⇒ enabled are clean).
+    #[serde(default)]
+    pub trail_covering: Option<CrashAiTrailCovering>,
+}
+
+/// Compact group-test snapshot for the Crash Planner prompt.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashAiGroupTest {
+    pub phase: String,
+    #[serde(default)]
+    pub covering: Vec<String>,
+    #[serde(default)]
+    pub known_clean: Vec<String>,
+    #[serde(default)]
+    pub defectives: Vec<String>,
+    #[serde(default)]
+    pub verified: bool,
+}
+
+impl CrashAiGroupTest {
+    pub fn from_session(session: &crate::mod_group_test::GroupTestSession) -> Self {
+        use crate::mod_group_test::GroupTestPhase;
+        let phase = match &session.phase {
+            GroupTestPhase::NeedCovering => "needCovering".into(),
+            GroupTestPhase::Testing => "testing".into(),
+            GroupTestPhase::VerifyAll => "verifyAll".into(),
+            GroupTestPhase::VerifyOne { index } => format!("verifyOne:{index}"),
+            GroupTestPhase::Done => "done".into(),
+            GroupTestPhase::Failed { reason } => format!("failed:{reason}"),
+        };
+        Self {
+            phase,
+            covering: session.covering.clone(),
+            known_clean: session.known_clean.clone(),
+            defectives: session.defectives.clone(),
+            verified: session.verified,
+        }
+    }
+}
+
+/// Decoded disable covering from the player trail (not a guessed single root cause).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashAiTrailCovering {
+    #[serde(default)]
+    pub clean: Vec<String>,
+    #[serde(default)]
+    pub covering: Vec<String>,
+    #[serde(default)]
+    pub explanation: String,
+}
+
+impl CrashAiTrailCovering {
+    pub fn from_decoded(decoded: &crate::mod_group_test::DecodedTrail) -> Self {
+        Self {
+            clean: decoded.clean.clone(),
+            covering: decoded.covering.clone(),
+            explanation: decoded.explanation.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,7 +200,10 @@ fn is_small_local_model(model: &str) -> bool {
         "tinydolphin",
         "tinyllama",
     ];
-    if SMALL.iter().any(|s| m == *s || m.starts_with(&format!("{s}-"))) {
+    if SMALL
+        .iter()
+        .any(|s| m == *s || m.starts_with(&format!("{s}-")))
+    {
         return true;
     }
     // Heuristic: parameter tags under 7b.
@@ -184,7 +251,10 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
 
     p.push_str("## System Context\n");
     p.push_str(&format!("- Minecraft: {}\n", ctx.mc_version));
-    p.push_str(&format!("- Loader: {} {}\n", ctx.loader, ctx.loader_version));
+    p.push_str(&format!(
+        "- Loader: {} {}\n",
+        ctx.loader, ctx.loader_version
+    ));
     p.push_str(&format!("- Java: {}\n", ctx.java_version));
     p.push_str(&format!("- OS: {}\n", ctx.os));
     p.push_str(&format!(
@@ -232,6 +302,57 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
         p.push('\n');
     }
 
+    if let Some(ref gt) = ctx.group_test {
+        p.push_str("## Group test (launcher facts — not hypotheses)\n");
+        if gt.verified {
+            p.push_str(
+                "Verified covering. Prefer disable_mod on each isolated defective. Do not invent a different single root cause.\n",
+            );
+        } else {
+            p.push_str(
+                "In progress. Do not blame known_clean. Do not treat the whole remaining covering as one root cause.\n",
+            );
+        }
+        p.push_str(&format!("- phase: {}\n", gt.phase));
+        p.push_str(&format!("- verified: {}\n", gt.verified));
+        if !gt.defectives.is_empty() {
+            p.push_str(&format!("- defectives: [{}]\n", gt.defectives.join(", ")));
+        }
+        if !gt.covering.is_empty() {
+            p.push_str(&format!("- covering: [{}]\n", gt.covering.join(", ")));
+        }
+        if !gt.known_clean.is_empty() {
+            p.push_str(&format!("- known_clean: [{}]\n", gt.known_clean.join(", ")));
+        }
+        p.push('\n');
+    }
+
+    if let Some(ref trail) = ctx.trail_covering {
+        p.push_str("## Player trail covering (decoded group tests)\n");
+        p.push_str(
+            "Healthy launch ⇒ every enabled mod is clean. Remaining disables are a covering, not proof of a single culprit. Do not collapse covering size > 1 into one mod.\n",
+        );
+        if !trail.explanation.is_empty() {
+            p.push_str(&format!("- {}\n", trail.explanation));
+        }
+        if !trail.covering.is_empty() {
+            p.push_str(&format!("- covering: [{}]\n", trail.covering.join(", ")));
+        }
+        if !trail.clean.is_empty() {
+            let shown: Vec<&String> = trail.clean.iter().take(24).collect();
+            p.push_str(&format!(
+                "- clean (enabled on healthy): [{}{}]\n",
+                shown
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if trail.clean.len() > 24 { ", …" } else { "" }
+            ));
+        }
+        p.push('\n');
+    }
+
     if !ctx.crash_assistant_findings.is_empty() {
         p.push_str("## Automated Analysis Results\n");
         for f in &ctx.crash_assistant_findings {
@@ -246,7 +367,12 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
     if !ctx.similar_cases.is_empty() {
         p.push_str("## Similar known cases (from local knowledge base)\n");
         p.push_str("Prefer these solutions when they match. Do not invent mods outside the project inventory.\n");
-        for (i, c) in ctx.similar_cases.iter().take(budget.similar_cases).enumerate() {
+        for (i, c) in ctx
+            .similar_cases
+            .iter()
+            .take(budget.similar_cases)
+            .enumerate()
+        {
             p.push_str(&format!(
                 "{}. score={:.2} source={} key={}\n   Solution: {}\n",
                 i + 1,
@@ -285,6 +411,25 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
                 ids.push(c.id.clone());
             }
         }
+        if let Some(ref gt) = ctx.group_test {
+            for id in gt
+                .defectives
+                .iter()
+                .chain(gt.covering.iter())
+                .chain(gt.known_clean.iter())
+            {
+                if !ids.iter().any(|x| x.eq_ignore_ascii_case(id)) {
+                    ids.push(id.clone());
+                }
+            }
+        }
+        if let Some(ref trail) = ctx.trail_covering {
+            for id in trail.covering.iter().chain(trail.clean.iter().take(12)) {
+                if !ids.iter().any(|x| x.eq_ignore_ascii_case(id)) {
+                    ids.push(id.clone());
+                }
+            }
+        }
         for d in missing_dep_hints_from_graph(&ctx.graph_diagnostics) {
             if !ids.iter().any(|x| x.eq_ignore_ascii_case(&d)) {
                 ids.push(d);
@@ -310,11 +455,15 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
 
     if !ctx.recent_changes.is_empty() {
         p.push_str("## Recent Changes (may have caused the crash)\n");
-        for c in ctx.recent_changes.iter().take(if budget.include_full_inventory {
-            usize::MAX
-        } else {
-            6
-        }) {
+        for c in ctx
+            .recent_changes
+            .iter()
+            .take(if budget.include_full_inventory {
+                usize::MAX
+            } else {
+                6
+            })
+        {
             p.push_str(&format!("- {c}\n"));
         }
         p.push('\n');
@@ -339,6 +488,10 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
         "Apply AI Decision making in order: (1) Understand the context from sections above, \
 (2) Isolate ONE primary problem, (3) Accept the risk on every action (risk + needsUserReview + confidence), \
 (4) Map decision to minimal `actions` with `op`.\n",
+    );
+    p.push_str(
+        "Fact priority: verified group test covering > player-trail covering > culprits/KB. \
+Do not invent mods outside inventory. Do not collapse a covering of size > 1 into a single root-cause mod.\n",
     );
     p.push_str(CRASH_JSON_SCHEMA_HINT);
     p.push_str(
@@ -539,13 +692,18 @@ mod tests {
             fingerprint_key: "test".into(),
             report_id: None,
             inventory: None,
+            group_test: None,
+            trail_covering: None,
         };
         let prompt = build_compact_crash_prompt(&ctx);
         assert!(!prompt.starts_with("You are TuffBox"));
         assert!(prompt.contains("Relevant mod ids") || prompt.contains("indium"));
         assert!(prefers_compact_crash_prompt("ollama", "llama3.2:3b"));
         assert!(!prefers_compact_crash_prompt("ollama", "qwen2.5:7b"));
-        assert!(!prefers_compact_crash_prompt("openai-compatible", "gpt-4o-mini"));
+        assert!(!prefers_compact_crash_prompt(
+            "openai-compatible",
+            "gpt-4o-mini"
+        ));
     }
 
     #[test]
@@ -577,6 +735,8 @@ mod tests {
             fingerprint_key: "test".into(),
             report_id: Some("crash-2024".into()),
             inventory: None,
+            group_test: None,
+            trail_covering: None,
         };
         let prompt = build_crash_prompt(&ctx);
         assert!(prompt.contains("iris"));
@@ -588,6 +748,53 @@ mod tests {
         assert!(prompt.contains("Isolate the problem"));
         assert!(prompt.contains("Accept the risk"));
         assert!(prompt.contains("Map decision"));
+        assert!(prompt.contains("verified group test"));
+    }
+
+    #[test]
+    fn prompt_includes_group_test_and_trail_covering_not_toggle_spam() {
+        let ctx = CrashAiContext {
+            mc_version: "1.21.1".into(),
+            loader: "neoforge".into(),
+            loader_version: "21".into(),
+            java_version: "21".into(),
+            os: "Windows".into(),
+            installed_mods: vec!["foo".into(), "bar".into(), "baz".into()],
+            installed_mod_count: 3,
+            crash_report_excerpt: "java.lang.Error".into(),
+            latest_log_excerpt: "crash".into(),
+            suspected_mods: vec!["foo".into()],
+            culprit_details: vec![],
+            crash_assistant_findings: vec![],
+            recent_changes: vec!["Updated sodium".into()],
+            graph_diagnostics: vec![],
+            similar_cases: vec![],
+            fingerprint_key: "fp".into(),
+            report_id: None,
+            inventory: None,
+            group_test: Some(CrashAiGroupTest {
+                phase: "done".into(),
+                covering: vec![],
+                known_clean: vec!["bar".into()],
+                defectives: vec!["foo".into(), "baz".into()],
+                verified: true,
+            }),
+            trail_covering: Some(CrashAiTrailCovering {
+                clean: vec!["bar".into()],
+                covering: vec!["foo".into(), "baz".into()],
+                explanation: "Launch succeeded with these mods disabled: foo, baz.".into(),
+            }),
+        };
+        let prompt = build_crash_prompt(&ctx);
+        assert!(prompt.contains("defectives: [foo, baz]"), "{prompt}");
+        assert!(prompt.contains("covering: [foo, baz]"), "{prompt}");
+        assert!(prompt.contains("known_clean: [bar]"));
+        assert!(prompt.contains("Verified covering"));
+        assert!(prompt.contains("Player trail covering"));
+        assert!(prompt.contains("Updated sodium"));
+        assert!(!prompt.contains("Enable foo"));
+        assert!(!prompt.contains("Disable bar"));
+        assert!(prompt.contains("Do not collapse a covering"));
     }
 
     #[test]

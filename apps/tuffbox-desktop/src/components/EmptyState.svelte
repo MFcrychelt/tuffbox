@@ -1,20 +1,32 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export let icon: any = null;
-  export let iconSize = 48;
-  export let title = "";
-  export let description = "";
-  export let actionLabel = "";
-  export let compact = false;
+  import type { Component, Snippet } from "svelte";
 
-  const dispatch = createEventDispatcher<{ action: void }>();
+  let {
+    icon = null,
+    iconSize = 48,
+    title = "",
+    description = "",
+    actionLabel = "",
+    compact = false,
+    onaction,
+    children,
+  }: {
+    icon?: Component | null;
+    iconSize?: number;
+    title?: string;
+    description?: string;
+    actionLabel?: string;
+    compact?: boolean;
+    onaction?: () => void;
+    children?: Snippet;
+  } = $props();
 </script>
 
 <div class="empty-state" class:compact>
   {#if icon}
+    {@const Icon = icon}
     <div class="empty-icon" class:compact-icon={compact}>
-      <svelte:component this={icon} size={compact ? 28 : iconSize} strokeWidth={1.5} />
+      <Icon size={compact ? 28 : iconSize} strokeWidth={1.5} />
     </div>
   {/if}
   {#if title}
@@ -24,9 +36,9 @@
     <p>{description}</p>
   {/if}
   {#if actionLabel}
-    <button class="empty-action" on:click={() => dispatch("action")}>{actionLabel}</button>
+    <button class="empty-action" onclick={() => onaction?.()}>{actionLabel}</button>
   {/if}
-  <slot />
+  {@render children?.()}
 </div>
 
 <style>

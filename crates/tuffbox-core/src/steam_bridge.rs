@@ -4,9 +4,7 @@
 //! Resolves the GitHub release jar that matches the project's Minecraft version
 //! and loader (Fabric / Forge / NeoForge). Quilt uses the Fabric build.
 
-use crate::manifest::{
-    ContentType, LoaderKind, ModSource, ModSpec, Side, SourceKind,
-};
+use crate::manifest::{ContentType, LoaderKind, ModSource, ModSpec, Side, SourceKind};
 use serde::Deserialize;
 
 pub const STEAM_BRIDGE_MOD_ID: &str = "steambridge";
@@ -52,9 +50,9 @@ pub fn loader_asset_label(kind: &LoaderKind) -> Result<&'static str, String> {
         LoaderKind::Fabric | LoaderKind::Quilt => Ok("Fabric"),
         LoaderKind::Forge => Ok("Forge"),
         LoaderKind::Neoforge => Ok("NeoForge"),
-        LoaderKind::Vanilla => Err(
-            "Steam Bridge needs Fabric, Forge, or NeoForge — vanilla has no mod loader.".into(),
-        ),
+        LoaderKind::Vanilla => {
+            Err("Steam Bridge needs Fabric, Forge, or NeoForge — vanilla has no mod loader.".into())
+        }
     }
 }
 
@@ -185,7 +183,7 @@ pub fn build_steam_bridge_mod_spec(asset: &SteamBridgeAsset) -> ModSpec {
         status: vec!["ok".into()],
         content_type: ContentType::Mod,
         authors: vec!["Ragalikx".into()],
-    option: None,
+        option: None,
     }
 }
 

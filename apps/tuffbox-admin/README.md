@@ -30,14 +30,14 @@ npx --yes serve apps/tuffbox-admin
 ## Crash Votes moderation
 
 1. Вкладка **Crash Votes**
-2. Введи admin secret (по умолчанию в БД: `tuffbox-mod-change-me`)
+2. Введи admin secret (хранится в `admin_config.moderation_secret`; не коммить в git)
 3. Load queue → **Accept → saved** или **Reject**
 
 Сменить секрет:
 
 ```sql
 update public.admin_config
-set value = 'your-long-secret', updated_at = now()
+set value = 'your-long-secret-min-6-chars', updated_at = now()
 where key = 'moderation_secret';
 ```
 

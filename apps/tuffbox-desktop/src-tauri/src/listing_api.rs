@@ -10,13 +10,15 @@ use tuffbox_core::{
     ProjectListing, ProjectManifest, GALLERY_DIR_REL, LISTING_DIR_REL,
 };
 
-use crate::{auto_snapshot, save_manifest};
+use crate::{auto_snapshot, resolve_manifest_path, save_manifest};
 
-fn project_dir_from_manifest(path: &str) -> Result<PathBuf, String> {
-    PathBuf::from(path)
+fn resolve_paths(path: &str) -> Result<(PathBuf, PathBuf), String> {
+    let manifest_path = resolve_manifest_path(path)?;
+    let project_dir = manifest_path
         .parent()
         .map(|p| p.to_path_buf())
-        .ok_or_else(|| "manifest has no parent directory".to_string())
+        .ok_or_else(|| "manifest has no parent directory".to_string())?;
+    Ok((manifest_path, project_dir))
 }
 
 fn seed_listing(manifest: &ProjectManifest) -> ProjectListing {
@@ -73,21 +75,21 @@ fn bytes_to_data_url(bytes: &[u8], path: &Path) -> String {
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_project_listing(path: String) -> Result<ProjectListing, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (manifest_path, _) = resolve_paths(&path)?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     Ok(seed_listing(&manifest))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn update_project_listing(path: String, listing: ProjectListing) -> Result<(), String> {
-    let manifest_path = PathBuf::from(&path);
+    let (manifest_path, _) = resolve_paths(&path)?;
     let _ = save_listing(&manifest_path, listing)?;
     Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_project_listing_icon(path: String, source_file: String) -> Result<ProjectListing, String> {
-    let manifest_path = PathBuf::from(&path);
-    let project_dir = project_dir_from_manifest(&path)?;
+    let (manifest_path, project_dir) = resolve_paths(&path)?;
     let source = PathBuf::from(&source_file);
     if !source.is_file() {
         return Err(format!("source file not found: {source_file}"));
@@ -102,26 +104,29 @@ pub fn set_project_listing_icon(path: String, source_file: String) -> Result<Pro
     fs::copy(&source, &dest).map_err(|e| e.to_string())?;
 
     let mut listing = {
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
         seed_listing(&manifest)
     };
     listing.icon_path = Some(dest_rel.replace('\\', "/"));
-    save_listing(&manifest_path, listing)
+    let updated = save_listing(&manifest_path, listing)?;
+    crate::helpers::invalidate_recent_home_cache(&path);
+    Ok(updated)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn clear_project_listing_icon(path: String) -> Result<ProjectListing, String> {
-    let manifest_path = PathBuf::from(&path);
-    let project_dir = project_dir_from_manifest(&path)?;
+    let (manifest_path, project_dir) = resolve_paths(&path)?;
     let mut listing = {
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
         seed_listing(&manifest)
     };
     if let Some(rel) = listing.icon_path.take() {
         let abs = project_dir.join(&rel);
         let _ = fs::remove_file(abs);
     }
-    save_listing(&manifest_path, listing)
+    let updated = save_listing(&manifest_path, listing)?;
+    crate::helpers::invalidate_recent_home_cache(&path);
+    Ok(updated)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -131,10 +136,9 @@ pub fn add_listing_gallery_image(
     url: Option<String>,
     caption: Option<String>,
 ) -> Result<ProjectListing, String> {
-    let manifest_path = PathBuf::from(&path);
-    let project_dir = project_dir_from_manifest(&path)?;
+    let (manifest_path, project_dir) = resolve_paths(&path)?;
     let mut listing = {
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
         seed_listing(&manifest)
     };
 
@@ -179,10 +183,9 @@ pub fn add_listing_gallery_image(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn remove_listing_gallery_image(path: String, index: usize) -> Result<ProjectListing, String> {
-    let manifest_path = PathBuf::from(&path);
-    let project_dir = project_dir_from_manifest(&path)?;
+    let (manifest_path, project_dir) = resolve_paths(&path)?;
     let mut listing = {
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
         seed_listing(&manifest)
     };
     if index >= listing.gallery.len() {
@@ -202,9 +205,9 @@ pub fn reorder_listing_gallery(
     from: usize,
     to: usize,
 ) -> Result<ProjectListing, String> {
-    let manifest_path = PathBuf::from(&path);
+    let (manifest_path, _) = resolve_paths(&path)?;
     let mut listing = {
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
         seed_listing(&manifest)
     };
     let len = listing.gallery.len();
@@ -218,7 +221,7 @@ pub fn reorder_listing_gallery(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn read_listing_asset(path: String, relative_path: String) -> Result<String, String> {
-    let project_dir = project_dir_from_manifest(&path)?;
+    let (_, project_dir) = resolve_paths(&path)?;
     let rel = relative_path.replace('\\', "/");
     if rel.contains("..") || Path::new(&rel).is_absolute() {
         return Err("invalid relative path".into());
@@ -231,9 +234,24 @@ pub fn read_listing_asset(path: String, relative_path: String) -> Result<String,
     Ok(bytes_to_data_url(&bytes, &abs))
 }
 
+/// Best-effort listing icon → data URL for home bootstrap / sidebar cache.
+pub(crate) fn try_read_listing_icon_data_url(path: &str) -> Option<String> {
+    let (manifest_path, project_dir) = resolve_paths(path).ok()?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).ok()?;
+    let listing = seed_listing(&manifest);
+    let rel = listing.icon_path.as_ref()?;
+    let rel = rel.replace('\\', "/");
+    if rel.contains("..") || !rel.starts_with(".tuffbox/listing/") {
+        return None;
+    }
+    let abs = project_dir.join(&rel);
+    let bytes = fs::read(&abs).ok()?;
+    Some(bytes_to_data_url(&bytes, &abs))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn ensure_listing_folder(path: String) -> Result<String, String> {
-    let project_dir = project_dir_from_manifest(&path)?;
+    let (_, project_dir) = resolve_paths(&path)?;
     let dir = listing_dir(&project_dir);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     fs::create_dir_all(gallery_dir(&project_dir)).map_err(|e| e.to_string())?;
@@ -246,10 +264,10 @@ pub fn update_project_brief_and_listing(
     brief: PackBrief,
     listing: ProjectListing,
 ) -> Result<(), String> {
-    let manifest_path = PathBuf::from(&path);
+    let (manifest_path, _) = resolve_paths(&path)?;
     auto_snapshot(&manifest_path, "update-listing").map_err(|e| e.to_string())?;
     let mut manifest =
-        ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     apply_listing_to_project(&mut manifest, &listing);
     manifest.listing = Some(listing);
     manifest.brief = Some(brief);
@@ -264,8 +282,7 @@ pub fn add_listing_gallery_bytes(
     extension: Option<String>,
     caption: Option<String>,
 ) -> Result<ProjectListing, String> {
-    let manifest_path = PathBuf::from(&path);
-    let project_dir = project_dir_from_manifest(&path)?;
+    let (manifest_path, project_dir) = resolve_paths(&path)?;
     let raw = STANDARD
         .decode(bytes_base64.trim())
         .map_err(|e| format!("invalid base64: {e}"))?;
@@ -289,7 +306,7 @@ pub fn add_listing_gallery_bytes(
     file.write_all(&raw).map_err(|e| e.to_string())?;
 
     let mut listing = {
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
         seed_listing(&manifest)
     };
     let rel = format!("{GALLERY_DIR_REL}/{name}").replace('\\', "/");

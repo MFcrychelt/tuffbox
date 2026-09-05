@@ -14,6 +14,7 @@ pub struct GameResolution {
 #[serde(rename_all = "camelCase")]
 pub struct LauncherSettings {
     /// Theme id: tuffbox | tuffbox-light | carbon | inferno | aether | frost | pixelato | win95
+    /// | solar | fern | blaze | dusk | glacier | minecraft
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]
@@ -51,6 +52,9 @@ pub struct LauncherSettings {
     /// In-app YouTube player (lite nocookie embed). `false` = preview thumbnails only → system browser.
     #[serde(default = "default_youtube_inline_player")]
     pub youtube_inline_player: bool,
+    /// Show the YouTube feed strip on the home dashboard. Off by default; enable in Settings.
+    #[serde(default)]
+    pub show_youtube_on_home: bool,
     /// Hide IDE workflow rail (Content / Setup / …); reveal on bottom-edge hover.
     #[serde(default)]
     pub auto_hide_workflow_rail: bool,
@@ -60,9 +64,30 @@ pub struct LauncherSettings {
     /// UI zoom percent (75–150). Applied as CSS `--ui-scale` on the app shell.
     #[serde(default = "default_ui_scale_percent")]
     pub ui_scale_percent: u32,
+    /// `auto` follows screen/window size; `manual` locks `ui_scale_percent`.
+    /// Empty string = unset (migrated on load: non-100% → manual, else auto).
+    #[serde(default)]
+    pub ui_scale_mode: String,
     /// Round corners on panels/cards/chrome everywhere (CSS `--border-radius-*`).
     #[serde(default = "default_rounded_corners")]
     pub rounded_corners: bool,
+    /// Hide InstanceHome preview block on the home dashboard.
+    #[serde(default)]
+    pub hide_instance_home: bool,
+    /// Quartz backdrop panel behind the home dashboard (home-only).
+    #[serde(default = "default_home_backdrop")]
+    pub home_backdrop: bool,
+    /// Inject the in-game overlay bridge (YouTube player + friends/chat) on launch.
+    #[serde(default = "default_ingame_overlay")]
+    pub ingame_overlay: bool,
+    /// CPU affinity for the game process: `off` | `performance` | `manual`.
+    /// `performance` pins to the highest-efficiency-class cores on hybrid CPUs
+    /// (no-op on uniform CPUs); `manual` uses `cpu_affinity_mask`.
+    #[serde(default = "default_cpu_affinity_mode")]
+    pub cpu_affinity_mode: String,
+    /// Hex bitmask for `manual` mode (e.g. "0xFF0" = first 4 E-cores excluded).
+    #[serde(default)]
+    pub cpu_affinity_mask: String,
 }
 
 fn default_theme() -> String {
@@ -86,6 +111,30 @@ fn default_ui_scale_percent() -> u32 {
 fn default_rounded_corners() -> bool {
     true
 }
+fn default_home_backdrop() -> bool {
+    true
+}
+fn default_ingame_overlay() -> bool {
+    true
+}
+fn default_cpu_affinity_mode() -> String {
+    "off".into()
+}
+
+fn normalize_ui_scale_mode(settings: &mut LauncherSettings) {
+    let mode = settings.ui_scale_mode.trim().to_ascii_lowercase();
+    settings.ui_scale_mode = match mode.as_str() {
+        "auto" | "manual" => mode,
+        _ => {
+            // Migration: respect an existing manual zoom choice.
+            if settings.ui_scale_percent != 100 {
+                "manual".into()
+            } else {
+                "auto".into()
+            }
+        }
+    };
+}
 
 impl Default for LauncherSettings {
     fn default() -> Self {
@@ -104,10 +153,17 @@ impl Default for LauncherSettings {
             java_custom_args: None,
             default_memory_mb: default_memory(),
             youtube_inline_player: default_youtube_inline_player(),
+            show_youtube_on_home: false,
             auto_hide_workflow_rail: false,
             sidebar_mode: default_sidebar_mode(),
             ui_scale_percent: default_ui_scale_percent(),
+            ui_scale_mode: "auto".into(),
             rounded_corners: default_rounded_corners(),
+            hide_instance_home: false,
+            home_backdrop: default_home_backdrop(),
+            ingame_overlay: default_ingame_overlay(),
+            cpu_affinity_mode: default_cpu_affinity_mode(),
+            cpu_affinity_mask: String::new(),
         }
     }
 }
@@ -122,7 +178,7 @@ fn settings_path() -> PathBuf {
 
 pub fn load_launcher_settings() -> LauncherSettings {
     let path = settings_path();
-    let settings = if path.is_file() {
+    let mut settings = if path.is_file() {
         std::fs::read_to_string(&path)
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -130,6 +186,7 @@ pub fn load_launcher_settings() -> LauncherSettings {
     } else {
         LauncherSettings::default()
     };
+    normalize_ui_scale_mode(&mut settings);
     apply_runtime_side_effects(&settings);
     settings
 }
@@ -139,9 +196,11 @@ pub fn save_launcher_settings(settings: &LauncherSettings) -> Result<(), String>
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let raw = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    let mut normalized = settings.clone();
+    normalize_ui_scale_mode(&mut normalized);
+    let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
     std::fs::write(&path, raw).map_err(|e| e.to_string())?;
-    apply_runtime_side_effects(settings);
+    apply_runtime_side_effects(&normalized);
     Ok(())
 }
 
@@ -156,6 +215,11 @@ pub fn default_runtime_path() -> PathBuf {
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("TuffBox")
+}
+
+/// Whether the in-game overlay bridge should be injected on launch.
+pub fn overlay_enabled() -> bool {
+    load_launcher_settings().ingame_overlay
 }
 
 pub fn resolve_runtime_path() -> PathBuf {
@@ -269,9 +333,197 @@ pub fn split_custom_jvm_args(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+fn jvm_args_contain(args: &[String], needle: &str) -> bool {
+    args.iter().any(|a| a.contains(needle))
+}
+
+/// Push `arg` unless an equivalent flag is already present (same `-XX:Name=`
+/// or `-XX:±Name` prefix). Keeps user/profile overrides authoritative when
+/// auto-tune appends its GC recommendations.
+pub fn append_unique_jvm_arg(args: &mut Vec<String>, arg: String) {
+    let key = arg
+        .trim_start_matches(['-', 'X', 'P'])
+        .split('=')
+        .next()
+        .unwrap_or(&arg)
+        .trim_start_matches(['+', '-'])
+        .to_string();
+    if !key.is_empty() && jvm_args_contain(args, &key) {
+        return;
+    }
+    args.push(arg);
+}
+
+/// Append launch-stability / low-end JVM flags without overriding user or
+/// profile args that already set the same option.
+pub fn append_stability_jvm_args(args: &mut Vec<String>, potato_pc: bool) {
+    // Prefer G1 on modern JDKs; harmless if already the default.
+    if !jvm_args_contain(args, "UseG1GC") {
+        args.push("-XX:+UseG1GC".into());
+    }
+    if !jvm_args_contain(args, "MaxGCPauseMillis") {
+        args.push("-XX:MaxGCPauseMillis=50".into());
+    }
+    if potato_pc {
+        // G1HeapRegionSize is an experimental VM option on HotSpot — the JVM
+        // only accepts it after -XX:+UnlockExperimentalVMOptions, which must
+        // come earlier in the arg list. Push the unlock flag when any
+        // experimental option is about to be added.
+        let mut needs_unlock = false;
+        if !jvm_args_contain(args, "G1HeapRegionSize") {
+            args.push("-XX:G1HeapRegionSize=16M".into());
+            needs_unlock = true;
+        }
+        if needs_unlock && !jvm_args_contain(args, "UnlockExperimentalVMOptions") {
+            // Insert after any leading -X flags; safest is right after the
+            // first arg or at position 0 — the JVM accepts it anywhere before
+            // the options it unlocks, but first keeps ordering obvious.
+            args.insert(0, "-XX:+UnlockExperimentalVMOptions".into());
+        }
+        if !jvm_args_contain(args, "ParallelGCThreads") {
+            args.push("-XX:ParallelGCThreads=2".into());
+        }
+        if !jvm_args_contain(args, "ConcGCThreads") {
+            args.push("-XX:ConcGCThreads=1".into());
+        }
+        if !jvm_args_contain(args, "ReservedCodeCacheSize") {
+            args.push("-XX:ReservedCodeCacheSize=256m".into());
+        }
+        // Avoid long GC stalls that look like freezes on weak CPUs.
+        if !jvm_args_contain(args, "DisableExplicitGC") {
+            args.push("-XX:+DisableExplicitGC".into());
+        }
+    }
+}
+
+/// Resolve heap size: profile → launcher default, then clamp for potato PCs.
+pub fn resolve_launch_memory_mb(
+    profile_memory_mb: Option<u32>,
+    settings: &LauncherSettings,
+    override_mb: Option<u32>,
+) -> u32 {
+    if let Some(mb) = override_mb {
+        return mb.max(512);
+    }
+    let base = profile_memory_mb
+        .unwrap_or(settings.default_memory_mb)
+        .max(512);
+    if settings.potato_pc {
+        base.min(3072)
+    } else {
+        base
+    }
+}
+
+// ── Auto-tune (Millida tuning.rs-inspired): heap + GC profile from hardware
+//    and mod count. Used when the user leaves memory on "Auto". ──────────
+
+/// Recommended `-Xmx` for a machine with `total_ram_mb` and `mod_count`
+/// loaded mods. Never exceeds 60% of physical RAM (leaves room for OS,
+/// WebView, and off-heap JVM overhead) and clamps to [2048, 12288].
+pub fn recommend_memory_mb(total_ram_mb: u64, mod_count: usize) -> u32 {
+    if total_ram_mb == 0 {
+        return 4096;
+    }
+    // Mod-heavy packs need more heap: 2 GB base + ~64 MB per mod, capped.
+    let mod_demand: u64 = (mod_count as u64).saturating_mul(64);
+    let wanted = 2048 + mod_demand;
+    let ceiling = (total_ram_mb * 60 / 100).max(2048);
+    let mb = wanted.min(ceiling).clamp(2048, 12288);
+    // Round down to a clean 512 MB step.
+    ((mb / 512) * 512) as u32
+}
+
+/// JVM GC flags for the auto-tuned profile. Returns flags the caller appends
+/// after custom user args (user flags win — caller filters duplicates via
+/// `jvm_args_contain` semantics, same as `append_stability_jvm_args`).
+/// Heavier packs get a low-pause G1 tuning; small ones get the defaults.
+pub fn recommend_gc_args(memory_mb: u32, mod_count: usize) -> Vec<String> {
+    let mut args = vec![
+        // Required before the experimental G1 tuning flags below — the JVM
+        // otherwise refuses to start ("VM option 'G1NewSizePercent' is
+        // experimental and must be enabled via -XX:+UnlockExperimentalVMOptions").
+        "-XX:+UnlockExperimentalVMOptions".into(),
+        "-XX:+UseG1GC".into(),
+        "-XX:MaxGCPauseMillis=40".into(),
+        // 32–48% of heap as young gen target: smooths chunk/mod churn.
+        format!(
+            "-XX:G1NewSizePercent={}",
+            if mod_count > 150 { 32 } else { 40 }
+        ),
+    ];
+    if memory_mb >= 4096 {
+        // Big heaps: region sizing avoids humongous allocations with
+        // mod-heavy class loading.
+        args.push("-XX:G1HeapRegionSize=16M".into());
+    }
+    args
+}
+
+/// Full auto recommendation: heap + GC args for a launch.
+pub fn auto_tune_launch(total_ram_mb: u64, mod_count: usize) -> (u32, Vec<String>) {
+    let memory = recommend_memory_mb(total_ram_mb, mod_count);
+    let gc = recommend_gc_args(memory, mod_count);
+    (memory, gc)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_launcher_settings() -> LauncherSettings {
     load_launcher_settings()
+}
+
+/// Auto-tuned heap + GC flags for the current machine and mod count.
+/// Reads total RAM itself; mod_count is provided by the caller (0 = small
+/// default). Feeds the "Auto" memory option in launcher settings.
+#[tauri::command(rename_all = "camelCase")]
+pub fn get_auto_tune(mod_count: usize) -> serde_json::Value {
+    let total_ram_mb = {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        sys.total_memory() / 1024 / 1024
+    };
+    let (memory_mb, gc_args) = auto_tune_launch(total_ram_mb, mod_count);
+    serde_json::json!({
+        "memoryMb": memory_mb,
+        "gcArgs": gc_args,
+        "totalRamMb": total_ram_mb,
+    })
+}
+
+/// Count .jar files in all `mods/` folders under the instances directory —
+/// input for the auto-tune heap recommendation. Folders deeper than two
+/// levels (e.g. `.disabled` backups) are skipped; errors count as 0.
+#[tauri::command(rename_all = "camelCase")]
+pub fn count_instance_mods_cmd() -> usize {
+    fn count_jars(dir: &std::path::Path, depth: u8, acc: &mut usize) {
+        if depth > 2 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                count_jars(&path, depth + 1, acc);
+            } else if depth >= 2
+                && path.extension().and_then(|e| e.to_str()) == Some("jar")
+            {
+                *acc += 1;
+            }
+        }
+    }
+    let root = resolve_instances_path();
+    let mut total = 0usize;
+    let Ok(instances) = std::fs::read_dir(&root) else {
+        return 0;
+    };
+    for inst in instances.flatten() {
+        if inst.path().is_dir() {
+            count_jars(&inst.path().join("mods"), 1, &mut total);
+        }
+    }
+    total
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -304,4 +556,111 @@ pub fn validate_runtime_path_cmd(path: String) -> Result<bool, String> {
 #[tauri::command(rename_all = "camelCase")]
 pub fn validate_instances_path_cmd(path: String) -> Result<bool, String> {
     validate_instances_path(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn potato_memory_clamps_to_3gb() {
+        let mut settings = LauncherSettings::default();
+        settings.potato_pc = true;
+        settings.default_memory_mb = 8192;
+        assert_eq!(resolve_launch_memory_mb(Some(8192), &settings, None), 3072);
+        assert_eq!(resolve_launch_memory_mb(None, &settings, None), 3072);
+        assert_eq!(resolve_launch_memory_mb(None, &settings, Some(4096)), 4096);
+    }
+
+    #[test]
+    fn stability_args_skip_existing() {
+        let mut args = vec!["-XX:MaxGCPauseMillis=200".into()];
+        append_stability_jvm_args(&mut args, true);
+        assert_eq!(
+            args.iter()
+                .filter(|a| a.contains("MaxGCPauseMillis"))
+                .count(),
+            1
+        );
+        assert!(args.iter().any(|a| a.contains("UseG1GC")));
+        assert!(args.iter().any(|a| a.contains("ParallelGCThreads")));
+    }
+
+    #[test]
+    fn recommend_memory_scales_with_mods_and_respects_ceiling() {
+        // 8 GB machine, no mods: 60% ceiling = 4.8 GB → wanted 2048 → 2048.
+        assert_eq!(recommend_memory_mb(8192, 0), 2048);
+        // 8 GB machine, 100 mods: wanted 8448 → ceiling 4915 → 4608 (512 step).
+        assert_eq!(recommend_memory_mb(8192, 100), 4608);
+        // 32 GB machine, 300 mods: wanted 21248 → clamp 12288.
+        assert_eq!(recommend_memory_mb(32768, 300), 12288);
+        // Tiny 2 GB machine: ceiling max(2048) → 2048.
+        assert_eq!(recommend_memory_mb(2048, 50), 2048);
+        // Unknown RAM: safe default.
+        assert_eq!(recommend_memory_mb(0, 0), 4096);
+    }
+
+    #[test]
+    fn recommend_gc_args_match_heap_and_mods() {
+        let small = recommend_gc_args(2048, 10);
+        assert!(small.iter().any(|a| a.contains("UseG1GC")));
+        assert!(small.iter().any(|a| a.contains("G1NewSizePercent=40")));
+        assert!(!small.iter().any(|a| a.contains("G1HeapRegionSize")));
+        // Experimental G1 flags need the unlock flag, and it must precede them.
+        assert!(small
+            .iter()
+            .any(|a| a.contains("UnlockExperimentalVMOptions")));
+        let unlock_pos = small
+            .iter()
+            .position(|a| a.contains("UnlockExperimentalVMOptions"))
+            .unwrap();
+        let newsize_pos = small
+            .iter()
+            .position(|a| a.contains("G1NewSizePercent"))
+            .unwrap();
+        assert!(unlock_pos < newsize_pos);
+
+        let big = recommend_gc_args(8192, 200);
+        assert!(big.iter().any(|a| a.contains("G1NewSizePercent=32")));
+        assert!(big.iter().any(|a| a.contains("G1HeapRegionSize=16M")));
+    }
+
+    #[test]
+    fn stability_args_unlock_experimental_flags() {
+        let mut args: Vec<String> = vec!["-Xmx1024m".into()];
+        append_stability_jvm_args(&mut args, true);
+        assert!(args.iter().any(|a| a.contains("G1HeapRegionSize")));
+        let unlock_pos = args
+            .iter()
+            .position(|a| a.contains("UnlockExperimentalVMOptions"))
+            .expect("unlock flag must be present");
+        let region_pos = args
+            .iter()
+            .position(|a| a.contains("G1HeapRegionSize"))
+            .unwrap();
+        assert!(unlock_pos < region_pos);
+
+        // No duplicate unlock flag on a second pass.
+        append_stability_jvm_args(&mut args, true);
+        assert_eq!(
+            args.iter()
+                .filter(|a| a.contains("UnlockExperimentalVMOptions"))
+                .count(),
+            1
+        );
+
+        // Non-potato path adds no G1HeapRegionSize → no unlock flag.
+        let mut plain: Vec<String> = vec!["-Xmx1024m".into()];
+        append_stability_jvm_args(&mut plain, false);
+        assert!(!plain
+            .iter()
+            .any(|a| a.contains("UnlockExperimentalVMOptions")));
+    }
+
+    #[test]
+    fn auto_tune_pairs_memory_with_gc() {
+        let (memory, gc) = auto_tune_launch(16384, 60);
+        assert_eq!(memory, recommend_memory_mb(16384, 60));
+        assert_eq!(gc, recommend_gc_args(memory, 60));
+    }
 }

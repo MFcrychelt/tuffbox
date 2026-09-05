@@ -188,6 +188,28 @@ Deno.serve(async (req) => {
     return jsonResponse(500, { error: updErr.message });
   }
 
+  // Kudos/RAC: reward capsule author on soft-verify confirm only (not Fog, not reject).
+  let kudos: Record<string, unknown> | null = null;
+  if (vote === "confirm") {
+    const authorKey = asString(capsule.signer_public_key).trim();
+    if (authorKey) {
+      const { data: award, error: awardErr } = await admin.rpc(
+        "kudos_award_soft_verify",
+        {
+          p_beneficiary_key: authorKey,
+          p_content_hash: resolvedHash,
+          p_voter_user_id: userId,
+          p_amount: 10,
+        },
+      );
+      if (awardErr) {
+        console.warn("kudos_award_soft_verify:", awardErr.message);
+      } else if (award && typeof award === "object") {
+        kudos = award as Record<string, unknown>;
+      }
+    }
+  }
+
   return jsonResponse(200, {
     ok: true,
     contentHash: resolvedHash,
@@ -197,5 +219,6 @@ Deno.serve(async (req) => {
     rejectCount: reject,
     trustScore: trust,
     userId,
+    kudos,
   });
 });

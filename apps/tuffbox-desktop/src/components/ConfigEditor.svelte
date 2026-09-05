@@ -2,13 +2,14 @@
   import { invoke } from "@tauri-apps/api/core";
   import {
     FileCode2, RefreshCw, Save, Search, RotateCcw, AlertTriangle, FileSearch,
-    ChevronRight, ChevronDown, File, Folder, FolderOpen, History, Camera, Code2,
-  } from "lucide-svelte";
+    ChevronRight, ChevronDown, File, Folder, FolderOpen, History, Camera, Code2, Sparkles,
+  } from "@lucide/svelte";
   import { onDestroy, tick } from "svelte";
   import { EditorView } from "@codemirror/view";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import EmptyState from "./EmptyState.svelte";
-  import { ideStageRequest, projectPath, tuneDirty } from "../lib/store";
+  import TuneAiSidebar from "./tune/TuneAiSidebar.svelte";
+  import { configFocusPath, ideStageRequest, projectPath, tuneDirty, tuneChatFocusId } from "../lib/store";
   import CodeMirror from "svelte-codemirror-editor";
   import { json } from "@codemirror/lang-json";
   import { javascript } from "@codemirror/lang-javascript";
@@ -126,39 +127,69 @@
     },
   ];
 
-  let files: ConfigFile[] = [];
-  let selected: ConfigFile | null = null;
-  let content = "";
-  let originalContent = "";
-  let filter = "";
-  let rootFilter: string | null = null;
-  let loading = false;
-  let saving = false;
-  let formatting = false;
-  let error: string | null = null;
-  let message: string | null = null;
-  let lastSnapshotId: string | null = null;
-  let lastLoadedPath: string | null = null;
+  let files = $state<ConfigFile[]>([]);
+  let selected = $state<ConfigFile | null>(null);
+  let content = $state("");
+  let originalContent = $state("");
+  let filter = $state("");
+  let rootFilter = $state<string | null>(null);
+  let loading = $state(false);
+  let saving = $state(false);
+  let formatting = $state(false);
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let lastSnapshotId = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
 
-  let searchQuery = "";
-  let searchResults: SearchHit[] = [];
-  let searchLoading = false;
-  let searchError: string | null = null;
+  let searchQuery = $state("");
+  let searchResults = $state<SearchHit[]>([]);
+  let searchLoading = $state(false);
+  let searchError = $state<string | null>(null);
 
-  let expandedDirs = new Set<string>();
-  let flatTree: FlatNode[] = [];
+  let expandedDirs = $state(new Set<string>());
+  let aiOpen = $state(
+    typeof localStorage !== "undefined" && localStorage.getItem("tuffbox.tuneAiOpen") === "1",
+  );
+  let editorEpoch = $state(0);
 
-  let confirmOpen = false;
-  let pendingFile: ConfigFile | null = null;
-  let pendingJumpLine: number | null = null;
-  let highlightLine: number | null = null;
+  function setAiOpen(next: boolean) {
+    aiOpen = next;
+    try {
+      localStorage.setItem("tuffbox.tuneAiOpen", next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function onAiApplied(paths: string[]) {
+    message = `AI applied ${paths.length} config patch(es)`;
+    await loadFiles(true);
+    if (selected && paths.some((p) => p.replace(/\\/g, "/") === selected?.path)) {
+      try {
+        const text = await invoke<string>("read_config_file", {
+          path: $projectPath,
+          relativePath: selected.path,
+        });
+        content = text;
+        originalContent = text;
+        editorEpoch += 1;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  let confirmOpen = $state(false);
+  let pendingFile = $state<ConfigFile | null>(null);
+  let pendingJumpLine = $state<number | null>(null);
+  let highlightLine = $state<number | null>(null);
   let highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
-  let lintIssues: { severity: string; code: string; message: string; line?: number | null }[] = [];
-  let lintLoading = false;
+  let lintIssues = $state<{ severity: string; code: string; message: string; line?: number | null }[]>([]);
+  let lintLoading = $state(false);
 
   let cmView: EditorView | null = null;
-  let showSnippets = false;
+  let showSnippets = $state(false);
 
   function buildFlatTree(fileList: ConfigFile[], filterQuery: string, rootPrefix: string | null): FlatNode[] {
     const q = filterQuery.toLowerCase().trim();
@@ -185,18 +216,6 @@
       if (parts.length > 1) {
         const parentPath = parts.slice(0, -1).join("/");
         dirs.get(parentPath)?.children.push(file);
-      }
-    }
-
-    if (q) {
-      for (const file of list) {
-        const parts = file.path.split("/");
-        for (let i = 0; i < parts.length - 1; i++) {
-          expandedDirs.add(parts.slice(0, i + 1).join("/"));
-        }
-      }
-      for (const [dirPath, dir] of dirs) {
-        dir.expanded = expandedDirs.has(dirPath) || true;
       }
     }
 
@@ -266,19 +285,23 @@
   }
 
   function toggleDir(fullPath: string) {
-    if (expandedDirs.has(fullPath)) expandedDirs.delete(fullPath);
-    else expandedDirs.add(fullPath);
-    flatTree = buildFlatTree(files, filter, rootFilter);
+    const next = new Set(expandedDirs);
+    if (next.has(fullPath)) next.delete(fullPath);
+    else next.add(fullPath);
+    expandedDirs = next;
   }
 
   function setRootChip(root: string | null) {
     rootFilter = rootFilter === root ? null : root;
-    if (rootFilter) expandedDirs.add(rootFilter);
-    flatTree = buildFlatTree(files, filter, rootFilter);
+    if (rootFilter) {
+      const next = new Set(expandedDirs);
+      next.add(rootFilter);
+      expandedDirs = next;
+    }
   }
 
-  $: flatTree = buildFlatTree(files, filter, rootFilter);
-  $: presentRoots = ROOT_CHIPS.filter((r) => files.some((f) => f.path === r || f.path.startsWith(r + "/")));
+  const flatTree = $derived(buildFlatTree(files, filter, rootFilter));
+  const presentRoots = $derived(ROOT_CHIPS.filter((r) => files.some((f) => f.path === r || f.path.startsWith(r + "/"))));
 
   function langForFile(file: ConfigFile | null) {
     if (!file) return undefined;
@@ -325,13 +348,15 @@
     return ext || "text";
   }
 
-  $: currentLang = langForFile(selected) ?? (looksLikeProps(content) ? propsLang() : undefined);
-  $: dirty = content !== originalContent;
-  $: tuneDirty.set(dirty);
-  $: canFormat = ["json", "toml"].includes(selected?.extension?.toLowerCase() ?? "");
-  $: isKubejsFile = !!selected?.path.startsWith("kubejs/");
-  $: lintErrorCount = lintIssues.filter((i) => i.severity === "error").length;
-  $: lintWarnCount = lintIssues.filter((i) => i.severity !== "error").length;
+  const currentLang = $derived(langForFile(selected) ?? (looksLikeProps(content) ? propsLang() : undefined));
+  const dirty = $derived(content !== originalContent);
+  $effect(() => {
+    tuneDirty.set(dirty);
+  });
+  const canFormat = $derived(["json", "toml"].includes(selected?.extension?.toLowerCase() ?? ""));
+  const isKubejsFile = $derived(!!selected?.path.startsWith("kubejs/"));
+  const lintErrorCount = $derived(lintIssues.filter((i) => i.severity === "error").length);
+  const lintWarnCount = $derived(lintIssues.filter((i) => i.severity !== "error").length);
 
   onDestroy(() => {
     tuneDirty.set(false);
@@ -352,12 +377,42 @@
         originalContent = "";
         lintIssues = [];
       }
+      consumeConfigFocus();
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
   }
+
+  function consumeConfigFocus() {
+    const p = ($configFocusPath ?? "").trim().replace(/\\/g, "/");
+    if (!p || !files.length) return;
+    configFocusPath.set(null);
+    const norm = p.toLowerCase();
+    const file =
+      files.find((f) => f.path.replace(/\\/g, "/") === p) ??
+      files.find((f) => f.path.replace(/\\/g, "/").toLowerCase() === norm) ??
+      files.find((f) => f.path.replace(/\\/g, "/").toLowerCase().endsWith("/" + norm)) ??
+      files.find((f) => f.path.replace(/\\/g, "/").toLowerCase().endsWith(norm));
+    if (file) tryOpenFile(file);
+  }
+
+  $effect(() => {
+    const p = $configFocusPath;
+    if (!p) return;
+    if (files.length > 0) {
+      consumeConfigFocus();
+      return;
+    }
+    void loadFiles(false);
+  });
+
+  $effect(() => {
+    if ($tuneChatFocusId) {
+      setAiOpen(true);
+    }
+  });
 
   function tryOpenFile(file: ConfigFile, line?: number) {
     if (dirty && file.path !== selected?.path) {
@@ -369,8 +424,11 @@
     openFileInternal(file, line);
   }
 
+  let openFileGeneration = 0;
+
   async function openFileInternal(file: ConfigFile, line?: number) {
     if (!$projectPath) return;
+    const generation = ++openFileGeneration;
     selected = file;
     content = "";
     originalContent = "";
@@ -379,26 +437,29 @@
     message = null;
     lintIssues = [];
     try {
-      content = await invoke("read_config_file", {
+      const nextContent = await invoke<string>("read_config_file", {
         path: $projectPath,
         relativePath: file.path,
       });
+      if (generation !== openFileGeneration) return;
+      content = nextContent;
       originalContent = content;
       await lintFile();
-      if (line != null) {
+      if (line != null && generation === openFileGeneration) {
         pendingJumpLine = line;
         await tick();
         jumpToLine(line);
       }
     } catch (e) {
+      if (generation !== openFileGeneration) return;
       error = String(e);
     } finally {
-      loading = false;
+      if (generation === openFileGeneration) loading = false;
     }
   }
 
-  function onCmReady(e: CustomEvent<EditorView>) {
-    cmView = e.detail;
+  function onCmReady(view: EditorView) {
+    cmView = view;
     if (pendingJumpLine != null) {
       jumpToLine(pendingJumpLine);
     }
@@ -566,7 +627,9 @@
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
-  $: if ($projectPath && lastLoadedPath !== $projectPath) loadFiles(true);
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) loadFiles(true);
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === "s") {
@@ -575,12 +638,12 @@
     }
   }
 
-  function handleCmChange(e: CustomEvent<string>) {
-    content = e.detail;
+  function handleCmChange(value: string) {
+    content = value;
   }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="config-editor">
   <div class="toolbar">
@@ -589,7 +652,17 @@
       <span>Tune · configs</span>
     </div>
     <div class="toolbar-actions">
-      <button class="ghost" on:click={() => loadFiles(true)} disabled={!$projectPath || loading}>
+      <button
+        class="secondary"
+        class:active-ai={aiOpen}
+        onclick={() => setAiOpen(!aiOpen)}
+        disabled={!$projectPath}
+        title="Config AI advisor"
+      >
+        <Sparkles size={16} />
+        AI
+      </button>
+      <button class="ghost" onclick={() => loadFiles(true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
         Refresh
       </button>
@@ -597,7 +670,7 @@
         class="secondary"
         class:lint-bad={lintErrorCount > 0}
         class:lint-warn={lintErrorCount === 0 && lintWarnCount > 0}
-        on:click={lintFile}
+        onclick={lintFile}
         disabled={!selected || lintLoading}
         title={lintIssues.length ? `${lintIssues.length} issue(s)` : "Lint config"}
       >
@@ -611,27 +684,27 @@
         {/if}
       </button>
       <div class="snippet-wrap">
-        <button class="secondary" on:click={() => (showSnippets = !showSnippets)} disabled={!selected} title="Insert snippet">
+        <button class="secondary" onclick={() => (showSnippets = !showSnippets)} disabled={!selected} title="Insert snippet">
           <Code2 size={16} /> Snippets
         </button>
         {#if showSnippets}
           <div class="snippet-menu">
             {#each SNIPPETS as sn (sn.id)}
-              <button type="button" on:click={() => insertSnippet(sn)}>{sn.label}</button>
+              <button type="button" onclick={() => insertSnippet(sn)}>{sn.label}</button>
             {/each}
             {#if isKubejsFile}
-              <button type="button" class="gen" on:click={insertFromRecipeGenerator}>Insert from recipe generator</button>
+              <button type="button" class="gen" onclick={insertFromRecipeGenerator}>Insert from recipe generator</button>
             {/if}
           </div>
         {/if}
       </div>
-      <button class="secondary" on:click={formatFile} disabled={!canFormat || saving || formatting} title={canFormat ? "Pretty-print JSON/TOML" : "Format: .json or .toml"}>
+      <button class="secondary" onclick={formatFile} disabled={!canFormat || saving || formatting} title={canFormat ? "Pretty-print JSON/TOML" : "Format: .json or .toml"}>
         <FileCode2 size={16} /> {formatting ? "…" : "Format"}
       </button>
-      <button class="secondary" on:click={resetFile} disabled={!dirty || saving}>
+      <button class="secondary" onclick={resetFile} disabled={!dirty || saving}>
         <RotateCcw size={16} /> Reset
       </button>
-      <button on:click={saveFile} disabled={!dirty || saving || !selected}>
+      <button onclick={saveFile} disabled={!dirty || saving || !selected}>
         <Save size={16} />
         {saving ? "Saving…" : "Save"}
       </button>
@@ -645,8 +718,8 @@
     <div class="notice success">
       <span>{message}</span>
       <div class="trail-actions">
-        <button class="ghost mini" on:click={openHistory}><History size={12} /> History</button>
-        <button class="ghost mini" on:click={openSnapshots}><Camera size={12} /> Snapshots</button>
+        <button class="ghost mini" onclick={openHistory}><History size={12} /> History</button>
+        <button class="ghost mini" onclick={openSnapshots}><Camera size={12} /> Snapshots</button>
       </div>
     </div>
   {/if}
@@ -654,12 +727,12 @@
   {#if !$projectPath}
     <EmptyState icon={FileCode2} title="No project selected" description="Open a project to edit configs." />
   {:else}
-    <div class="layout">
+    <div class="layout" class:with-ai={aiOpen}>
       <aside class="file-panel">
         <div class="root-chips">
-          <button class="chip" class:active={rootFilter === null} on:click={() => setRootChip(null)}>All</button>
+          <button class="chip" class:active={rootFilter === null} onclick={() => setRootChip(null)}>All</button>
           {#each presentRoots as root (root)}
-            <button class="chip" class:active={rootFilter === root} on:click={() => setRootChip(root)}>{root}</button>
+            <button class="chip" class:active={rootFilter === root} onclick={() => setRootChip(root)}>{root}</button>
           {/each}
         </div>
 
@@ -672,8 +745,8 @@
 
         <div class="search-across">
           <div class="search-across-row">
-            <input bind:value={searchQuery} placeholder="Search in contents…" on:keydown={(e) => e.key === "Enter" && doSearch()} />
-            <button class="mini-btn" on:click={doSearch} disabled={searchLoading || !searchQuery.trim()}>
+            <input bind:value={searchQuery} placeholder="Search in contents…" onkeydown={(e) => e.key === "Enter" && doSearch()} />
+            <button class="mini-btn" onclick={doSearch} disabled={searchLoading || !searchQuery.trim()}>
               <FileSearch size={14} />
             </button>
           </div>
@@ -682,14 +755,14 @@
           {/if}
           {#if searchResults.length > 0}
             <div class="search-results">
-              {#each searchResults.slice(0, 40) as hit (hit.path + ':' + hit.line + hit.text)}
-                <button class="search-hit" on:click={() => openSearchHit(hit)}>
+              {#each searchResults.slice(0, 80) as hit (hit.path + ':' + hit.line + hit.text)}
+                <button class="search-hit" onclick={() => openSearchHit(hit)}>
                   <span class="hit-path">{hit.path}:{hit.line}</span>
                   <span class="hit-text">{hit.text}</span>
                 </button>
               {/each}
-              {#if searchResults.length >= 40}
-                <div class="search-truncated">… and {searchResults.length - 40} more results</div>
+              {#if searchResults.length >= 80}
+                <div class="search-truncated">… and {searchResults.length - 80} more results</div>
               {/if}
             </div>
           {:else if searchLoading}
@@ -711,7 +784,7 @@
                   class="tree-dir"
                   class:root={node.isRoot}
                   style:padding-left="{12 + node.depth * 16}px"
-                  on:click={() => toggleDir(node.fullPath)}
+                  onclick={() => toggleDir(node.fullPath)}
                 >
                   {#if node.expanded}
                     <ChevronDown size={14} />
@@ -727,7 +800,7 @@
                   class="tree-file"
                   class:selected={selected?.path === node.file.path}
                   style:padding-left="{12 + node.depth * 16}px"
-                  on:click={() => { if (node.file) tryOpenFile(node.file); }}
+                  onclick={() => { if (node.file) tryOpenFile(node.file); }}
                   title={node.file.path}
                 >
                   <File size={14} />
@@ -755,13 +828,13 @@
             </div>
           </div>
           <div class="cm-wrapper" class:line-hl={highlightLine != null}>
-            {#key selected.path}
+            {#key selected.path + ':' + editorEpoch}
               <CodeMirror
                 value={content}
                 lang={currentLang}
                 theme={oneDark}
-                on:change={handleCmChange}
-                on:ready={onCmReady}
+                on:change={(e) => handleCmChange(e.detail)}
+                on:ready={(e) => onCmReady(e.detail)}
               />
             {/key}
           </div>
@@ -769,7 +842,7 @@
           {#if lintIssues.length > 0}
             <div class="lint-panel">
               {#each lintIssues as issue, i (issue.code + '-' + i + '-' + (issue.line ?? 0))}
-                <button type="button" class="lint-item {issue.severity}" on:click={() => openLintIssue(issue)}>
+                <button type="button" class="lint-item {issue.severity}" onclick={() => openLintIssue(issue)}>
                   <span class="lint-sev">{issue.severity}</span>
                   <code>{issue.code}</code>
                   <span>{issue.message}</span>
@@ -782,13 +855,20 @@
           <EmptyState icon={FileCode2} compact={true} title="No file selected" description="Select a config from the tree. Roots: config, defaultconfigs, kubejs, scripts, overrides, options.txt." />
         {/if}
       </section>
+
+      <TuneAiSidebar
+        open={aiOpen}
+        focusPath={selected?.path ?? null}
+        onclose={() => setAiOpen(false)}
+        onapplied={onAiApplied}
+      />
     </div>
   {/if}
 </div>
 
 {#if confirmOpen}
   <ConfirmDialog title="Discard changes?" message="You have unsaved changes. Discard them?" danger={false}
-    confirmLabel="Discard" on:confirm={() => {
+    confirmLabel="Discard" onconfirm={() => {
       confirmOpen = false;
       if (pendingFile) {
         const line = pendingJumpLine;
@@ -796,20 +876,22 @@
         pendingFile = null;
       }
     }}
-    on:cancel={() => { confirmOpen = false; pendingFile = null; pendingJumpLine = null; }} />
+    oncancel={() => { confirmOpen = false; pendingFile = null; pendingJumpLine = null; }} />
 {/if}
 
 <style>
   .config-editor {
-    max-width: none;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    padding: 8px 10px 10px;
-  }
+      /* Responsive: centered cap on 1440p+ (code panes keep readable width). */
+      max-width: min(1680px, 100%);
+      margin: 0 auto;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+      padding: 8px 10px 10px;
+    }
   .toolbar, .toolbar-actions, .title, .editor-header, .editor-stats, .notice, .trail-actions, .root-chips { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 10px; margin-bottom: 6px; flex-shrink: 0; min-height: 36px; }
   .title { gap: 8px; color: var(--text-secondary); font-weight: 700; font-size: 14px; }
@@ -819,9 +901,13 @@
     padding: 5px 10px;
     font-size: 12px;
   }
+  .toolbar-actions button.active-ai {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    color: var(--accent-primary);
+  }
   .notice { gap: 8px; padding: 8px 10px; border-radius: var(--border-radius-md); margin-bottom: 8px; border: 1px solid var(--border-color); flex-shrink: 0; justify-content: space-between; flex-wrap: wrap; font-size: 13px; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .trail-actions { gap: 6px; }
   .mini { padding: 4px 8px; font-size: 11px; }
   .lint-bad { border-color: rgba(239, 68, 68, 0.45) !important; color: #fca5a5 !important; }
@@ -847,15 +933,24 @@
     padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-muted); cursor: pointer;
   }
-  .chip.active, .chip:hover { border-color: rgba(27, 217, 106, 0.4); color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); }
+  .chip.active, .chip:hover { border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
 
   .layout {
     flex: 1;
     min-height: 0;
     display: grid;
     grid-template-columns: 300px minmax(0, 1fr);
+    /* Explicit single row: without it the implicit row sizes to content (auto),
+       grows past the panel and gets clipped by overflow:hidden — so neither the
+       file tree nor the editor ever scroll. */
+    grid-template-rows: minmax(0, 1fr);
     gap: 12px;
     overflow: hidden;
+  }
+  .layout.with-ai {
+    grid-template-columns: 260px minmax(0, 1fr) minmax(280px, 320px);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0 12px;
   }
   .file-panel, .editor-panel { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .file-panel {
@@ -898,7 +993,7 @@
     width: 100%;
     min-height: 32px;
     box-sizing: border-box;
-    padding: 6px 12px 6px 34px;
+    padding: 6px 12px 6px 40px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
@@ -907,7 +1002,7 @@
     font-size: 12px;
   }
 
-  .search-across { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
+  .search-across { display: flex; flex-direction: column; min-height: 0; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
   .search-across-row { display: flex; gap: 6px; align-items: center; }
   .search-across-row input {
     flex: 1;
@@ -926,9 +1021,18 @@
   .mini-btn:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
   .search-error, .search-status { color: #fecaca; font-size: 11px; margin-top: 4px; }
   .search-status { color: var(--text-muted); }
-  .search-results { max-height: 140px; overflow: auto; margin-top: 6px; }
+  .search-results {
+    /* Give content search room to breathe: up to ~38% of the panel height on
+       big result sets, while short lists stay compact (no empty gap). */
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: clamp(140px, 38vh, 420px);
+    overflow: auto;
+    margin-top: 6px;
+    overscroll-behavior: contain;
+  }
   .search-hit { width: 100%; display: grid; gap: 2px; text-align: left; padding: 5px 6px; margin-bottom: 2px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); transform: none; }
-  .search-hit:hover { background: var(--bg-tertiary); border-color: rgba(27,217,106,0.25); }
+  .search-hit:hover { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .hit-path { font-size: 11px; color: var(--accent-primary); font-family: ui-monospace, monospace; }
   .hit-text { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .search-truncated { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
@@ -951,7 +1055,7 @@
   .tree-dir { font-weight: 600; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
   .tree-dir.root { color: var(--accent-primary); opacity: 0.9; }
   .tree-dir:hover { background: var(--bg-tertiary); color: var(--text-primary); }
-  .tree-file:hover, .tree-file.selected { background: var(--bg-tertiary); border-color: rgba(27,217,106,0.35); color: var(--text-primary); }
+  .tree-file:hover, .tree-file.selected { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); color: var(--text-primary); }
   .tree-dir :global(.folder-icon) { color: var(--accent-primary); opacity: 0.7; }
   .tree-dir-name, .tree-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tree-file-name { font-weight: 500; }
@@ -965,12 +1069,44 @@
   .editor-header p { margin: 0; font-size: 12px; color: var(--text-muted); }
   .editor-stats { gap: 10px; white-space: nowrap; }
   .editor-stats strong { color: var(--accent-warning); font-size: 12px; }
-  .lang-badge { background: rgba(139,92,246,0.15); color: var(--accent-secondary); padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
+  .lang-badge { background: color-mix(in srgb, var(--accent-secondary) 15%, transparent); color: var(--accent-secondary); padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
 
   .cm-wrapper { flex: 1; min-height: 0; overflow: hidden; }
+  /* The lib renders .cm-wrapper > .codemirror-wrapper > .cm-editor. The middle
+     div has no intrinsic height; without pinning it to 100% the editor's
+     height:100% resolves to auto, the document grows past the panel and gets
+     clipped by overflow:hidden — the open file never scrolls. */
+  .cm-wrapper :global(.codemirror-wrapper) {
+    height: 100%;
+    overflow: hidden;
+  }
   .cm-wrapper :global(.cm-editor) { height: 100%; }
-  .cm-wrapper :global(.cm-scroller) { overflow: auto; }
-  .cm-wrapper.line-hl :global(.cm-selectionBackground) { background: rgba(27, 217, 106, 0.22) !important; }
+  .cm-wrapper :global(.cm-scroller) {
+    overflow: auto;
+    /* Lift the horizontal scrollbar above the IDE's bottom rail hotzone:
+       the rail slides over the lower edge on hover, which swallowed
+       bottom-edge pointer events and made the H-scrollbar unusable. */
+    padding-bottom: 8px;
+  }
+  /* Style the CodeMirror horizontal scrollbar into a clearly grabbable bar. */
+  .cm-wrapper :global(.cm-scroller)::-webkit-scrollbar {
+    height: 12px;
+  }
+  .cm-wrapper :global(.cm-scroller)::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .cm-wrapper :global(.cm-scroller)::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--accent-primary) 70%, transparent);
+    background-clip: content-box;
+    border: 3px solid transparent;
+  }
+  .cm-wrapper :global(.cm-scroller)::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .cm-wrapper.line-hl :global(.cm-selectionBackground) { background: color-mix(in srgb, var(--accent-primary) 22%, transparent) !important; }
 
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -989,5 +1125,8 @@
   .lint-item code { font-size: 10px; color: var(--accent-primary); }
   .lint-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lint-item small { color: var(--text-muted); font-size: 10px; }
-  @media (max-width: 1050px) { .layout { grid-template-columns: 1fr; } }
+  @media (max-width: 1050px) {
+    .layout { grid-template-columns: 1fr; }
+    .layout.with-ai { grid-template-columns: 1fr; }
+  }
 </style>

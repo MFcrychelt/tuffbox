@@ -11,6 +11,7 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "TuffBox IDE",
@@ -19,16 +20,17 @@
         "minWidth": 1100,
         "minHeight": 700,
         "resizable": true,
+        "dragDropEnabled": false,
         "fullscreen": false,
         "center": true,
-        "transparent": false,
+        "transparent": true,
         "decorations": true
       }
     ],
     "security": {
       "csp": {
         "default-src": "'self' ipc: http://ipc.localhost",
-        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* https://api.mclo.gs https://mclo.gs https://*.supabase.co wss://*.supabase.co https://vsoqnwknpueuubiovyjd.supabase.co wss://vsoqnwknpueuubiovyjd.supabase.co",
+        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* https://api.mclo.gs https://mclo.gs https://*.supabase.co wss://*.supabase.co https://vsoqnwknpueuubiovyjd.supabase.co wss://vsoqnwknpueuubiovyjd.supabase.co https://api.github.com https://github.com https://codeload.github.com https://www.youtube.com https://i.ytimg.com https://launchercontent.mojang.com https://feedback.minecraft.net",
         "img-src": "'self' asset: http://asset.localhost https: http: data: blob:",
         "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
@@ -39,7 +41,14 @@
       "assetProtocol": {
         "enable": true,
         "scope": {
-          "allow": ["**"],
+          "allow": [
+            "$APPDATA/**",
+            "$LOCALAPPDATA/**",
+            "$CACHE/**",
+            "$HOME/**",
+            "$TEMP/**",
+            "$RESOURCE/**"
+          ],
           "requireLiteralLeadingDot": false
         }
       }
@@ -49,7 +58,9 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../../../bridges/jei-runtime/prebuilt/": "jei-bridge/"
+      "../../../bridges/jei-runtime/prebuilt/": "jei-bridge/",
+      "../../../bridges/mca-selector/prebuilt/": "mca-selector/",
+      "binaries/": "tuffswarm-bin/"
     },
     "icon": [
       "icons/32x32.png",
@@ -59,5 +70,12 @@
       "icons/icon.ico",
       "icons/icon.png"
     ]
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["tuffbox"]
+      }
+    }
   }
 }

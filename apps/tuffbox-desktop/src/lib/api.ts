@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { projectPath, type AuthState, type McProfile, type DeviceCodeInfo, type SkinSource, type AccountEntry, type McCapeEntry, type CapeProvider, type CapeCatalog, type YggdrasilPreset, type PresenceSettings, type LauncherSettings } from "./store";
 import { get } from "svelte/store";
 
@@ -40,6 +41,8 @@ export interface QuestTask {
   title?: string | null;
   value?: unknown;
   properties?: Record<string, unknown>;
+  /** False when title came only from lang overlay — omit on chapter SNBT export. */
+  titleFromSnbt?: boolean;
 }
 
 export interface QuestReward {
@@ -56,7 +59,8 @@ export interface QuestData {
   description: string[];
   x: number;
   y: number;
-  icon?: string | null;
+  /** String id or full item-stack compound `{ id, Count, tag, ... }`. */
+  icon?: string | Record<string, unknown> | null;
   dependencies: string[];
   tasks: QuestTask[];
   rewards: QuestReward[];
@@ -71,12 +75,19 @@ export interface QuestData {
   disableToast?: boolean | null;
   dependencyRequirement?: string | null;
   extras?: Record<string, unknown>;
+  /** False when title came only from lang overlay — omit on chapter SNBT export. */
+  titleFromSnbt?: boolean;
+  /** False when subtitle came only from lang overlay — omit on chapter SNBT export. */
+  subtitleFromSnbt?: boolean;
+  /** False when description came only from lang overlay — omit on chapter SNBT export. */
+  descriptionFromSnbt?: boolean;
 }
 
 export interface QuestChapter {
   id: string;
   title: string;
-  icon?: string | null;
+  /** String id or full item-stack compound. */
+  icon?: string | Record<string, unknown> | null;
   quests: QuestData[];
   group?: string | null;
   orderIndex?: number | null;
@@ -85,11 +96,122 @@ export interface QuestChapter {
   defaultHideDependencyLines?: boolean | null;
   extras?: Record<string, unknown>;
   sourceFile?: string | null;
+  /** False when title came only from lang overlay — omit on chapter SNBT export. */
+  titleFromSnbt?: boolean;
 }
 
 export interface QuestChapterGroup {
   id: string;
   title: string;
+  titleFromSnbt?: boolean;
+}
+
+/**
+ * Prefer omitting via `chapterToSnbtJson`. Safety net: drop locale-sourced text
+ * when the corresponding *FromSnbt flag is false.
+ */
+export function stripLocaleOverlay<T = unknown>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    return value.map((v) => stripLocaleOverlay(v)) as T;
+  }
+  const obj = value as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...obj };
+  if (out.titleFromSnbt === false) delete out.title;
+  if (out.subtitleFromSnbt === false) delete out.subtitle;
+  if (out.descriptionFromSnbt === false) delete out.description;
+  delete out.titleFromSnbt;
+  delete out.subtitleFromSnbt;
+  delete out.descriptionFromSnbt;
+  if (Array.isArray(out.quests)) {
+    out.quests = out.quests.map((q) => stripLocaleOverlay(q));
+  }
+  if (Array.isArray(out.tasks)) {
+    out.tasks = out.tasks.map((t) => stripLocaleOverlay(t));
+  }
+  return out as T;
+}
+
+function omitEmpty<T extends Record<string, unknown>>(obj: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || v === null) continue;
+    if (typeof v === "string" && v.length === 0) continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    out[k] = v;
+  }
+  return out as T;
+}
+
+function taskToSnbtJson(t: QuestTask): Record<string, unknown> {
+  return omitEmpty({
+    id: t.id,
+    type: t.type,
+    title: t.titleFromSnbt !== false && t.title ? t.title : undefined,
+    value: t.value ?? undefined,
+    ...(t.properties ?? {}),
+  });
+}
+
+function rewardToSnbtJson(r: QuestReward): Record<string, unknown> {
+  return omitEmpty({
+    id: r.id,
+    type: r.type,
+    title: r.title ?? undefined,
+    ...(r.properties ?? {}),
+  });
+}
+
+function questToSnbtJson(q: QuestData): Record<string, unknown> {
+  return omitEmpty({
+    id: q.id,
+    title: q.titleFromSnbt !== false ? q.title : undefined,
+    subtitle: q.subtitleFromSnbt !== false ? (q.subtitle ?? undefined) : undefined,
+    description:
+      q.descriptionFromSnbt !== false && q.description?.length
+        ? q.description
+        : undefined,
+    x: q.x,
+    y: q.y,
+    icon: q.icon ?? undefined,
+    dependencies: q.dependencies?.length ? q.dependencies : undefined,
+    tasks: q.tasks?.length ? q.tasks.map(taskToSnbtJson) : undefined,
+    rewards: q.rewards?.length ? q.rewards.map(rewardToSnbtJson) : undefined,
+    optional: q.optional || undefined,
+    shape: q.shape ?? undefined,
+    size: q.size ?? undefined,
+    hide_dependency_lines: q.hideDependencyLines ?? undefined,
+    hide_dependent_lines: q.hideDependentLines ?? undefined,
+    min_required_dependencies: q.minRequiredDependencies ?? undefined,
+    can_repeat: q.canRepeat ?? undefined,
+    invisible: q.invisible ?? undefined,
+    disable_toast: q.disableToast ?? undefined,
+    dependency_requirement: q.dependencyRequirement ?? undefined,
+    ...(q.extras ?? {}),
+  });
+}
+
+/** Convert editor chapter model to FTB Quests SNBT-shaped JSON (before locale strip). */
+export function chapterToSnbtJson(ch: QuestChapter): Record<string, unknown> {
+  return omitEmpty({
+    id: ch.id,
+    title: ch.titleFromSnbt !== false ? ch.title : undefined,
+    icon: ch.icon ?? undefined,
+    group: ch.group ?? undefined,
+    order_index: ch.orderIndex ?? undefined,
+    filename: ch.filename ?? undefined,
+    default_quest_shape: ch.defaultQuestShape ?? undefined,
+    default_hide_dependency_lines: ch.defaultHideDependencyLines ?? undefined,
+    quests: ch.quests.map(questToSnbtJson),
+    ...(ch.extras ?? {}),
+  });
+}
+
+function joinProjectPath(projectDir: string, relative: string): string {
+  const sep = projectDir.includes("\\") ? "\\" : "/";
+  const base = projectDir.replace(/[/\\]+$/, "");
+  const rel = relative.replace(/^[/\\]+/, "").replace(/[/\\]/g, sep);
+  return `${base}${sep}${rel}`;
 }
 
 export interface QuestBook {
@@ -99,14 +221,91 @@ export interface QuestBook {
   chapterGroups?: QuestChapterGroup[];
   rewardTables?: QuestRewardTable[];
   bookSettings?: Record<string, unknown>;
+  /** locale code → translation keys from `lang/*.snbt`. */
+  locales?: Record<string, Record<string, string | string[] | unknown>>;
+  activeLocale?: string | null;
+  /** Non-fatal problems while loading SNBT (corrupt chapter, bad lang, etc.). */
+  loadWarnings?: string[];
+}
+
+export interface QuestKubeJsHandler {
+  kind: string;
+  id: string;
+  relativePath: string;
+  line: number;
+}
+
+export interface QuestKubeJsScriptFile {
+  relativePath: string;
+  name: string;
+  managed: boolean;
+}
+
+export interface QuestKubeJsBinding {
+  kind: string;
+  id: string;
+  questId: string;
+  questTitle: string;
+  chapterId: string;
+  title?: string | null;
+  status: "linked" | "missing" | string;
+  handlers: QuestKubeJsHandler[];
+}
+
+export interface QuestKubeJsAudit {
+  linked: number;
+  missing: number;
+  orphan: number;
+  bindings: QuestKubeJsBinding[];
+  orphanHandlers: QuestKubeJsHandler[];
+  scripts: QuestKubeJsScriptFile[];
+}
+
+export interface QuestKubeJsTemplateParams {
+  kind: string;
+  id: string;
+  maxProgress?: number | null;
+  blockId?: string | null;
+  itemId?: string | null;
+  count?: number | null;
+  title?: string | null;
 }
 
 export interface QuestRewardTable {
   id: string;
   title?: string | null;
-  entries: { rewardId: string; weight: number }[];
+  /** Full FTB reward compounds (type/item/NBT preserved). */
+  rewards: Record<string, unknown>[];
   emptyWeight?: number;
   sourceFile?: string | null;
+  extras?: Record<string, unknown>;
+}
+
+/** Display id for UI; works with string or stack compound. */
+export function iconDisplayId(
+  icon: string | Record<string, unknown> | null | undefined,
+): string | null {
+  if (!icon) return null;
+  if (typeof icon === "string") return icon.trim() || null;
+  const id = icon.id ?? icon.item;
+  return typeof id === "string" && id.trim() ? id.trim() : null;
+}
+
+/** Read weight from a reward-table entry compound. */
+export function rewardEntryWeight(entry: Record<string, unknown>): number {
+  const w = entry.weight;
+  if (typeof w === "number") return w;
+  if (typeof w === "string") {
+    const n = Number(w);
+    return Number.isFinite(n) ? n : 1;
+  }
+  return 1;
+}
+
+/** Read id from a reward-table entry compound. */
+export function rewardEntryId(entry: Record<string, unknown>): string {
+  const id = entry.id;
+  return typeof id === "string" ? id : "";
 }
 
 export interface QuestValidationIssue {
@@ -133,12 +332,19 @@ export interface QuestPlanRewardTable {
   emptyWeight?: number;
 }
 
+export interface AiTokenUsage {
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  totalTokens?: number | null;
+}
+
 export interface QuestChatMessage {
   role: string;
   content: string;
   createdAt?: string | null;
   plan?: QuestPlan | null;
   progressLog?: string[] | null;
+  usage?: AiTokenUsage | null;
 }
 
 export interface QuestChatSession {
@@ -149,10 +355,58 @@ export interface QuestChatSession {
   updatedAt: string;
 }
 
+export interface TuneChatMessage {
+  role: string;
+  content: string;
+  createdAt?: string | null;
+}
+
+export interface TunePendingAdvise {
+  plan: Record<string, unknown>;
+  explanation: string;
+  researchLog?: Record<string, unknown>[];
+  unknownKeys?: Record<string, unknown>[];
+  diffs?: Record<string, unknown>[];
+  validationOk?: boolean;
+  validationErrors?: string[];
+  validationWarnings?: string[];
+}
+
+export interface TuneChatSession {
+  id: string;
+  title: string;
+  messages: TuneChatMessage[];
+  pendingAdvise?: TunePendingAdvise | null;
+  updatedAt: string;
+  focusPath?: string | null;
+}
+
+export interface TuneChatTurnResult {
+  session: TuneChatSession;
+  advise: {
+    plan: Record<string, unknown>;
+    explanation: string;
+    researchLog: { step: string; detail: string; ok: boolean; url?: string | null }[];
+    unknownKeys: { path: string; key: string; modHint?: string | null }[];
+    diffs: {
+      path: string;
+      patchType: string;
+      beforeExcerpt: string;
+      afterExcerpt: string;
+      ok: boolean;
+      error?: string | null;
+    }[];
+    validationOk: boolean;
+    validationErrors: string[];
+    validationWarnings: string[];
+  };
+}
+
 export interface QuestChatTurnResult {
   session: QuestChatSession;
   merge: QuestPlanMergeResult;
   progressLog: string[];
+  usage?: AiTokenUsage | null;
 }
 
 export interface QuestPlanChapter {
@@ -268,6 +522,16 @@ export interface RecipeScanResult {
   datapackFiles: number;
   truncated: boolean;
   totalScanned: number;
+  /** False when no installed vanilla client jar was found (vanilla recipes missing). */
+  vanillaJarFound?: boolean;
+}
+
+export interface VanillaClientJarStatus {
+  found: boolean;
+  version: string;
+  resolvedVersion: string;
+  jarPath?: string | null;
+  downloadSize?: number | null;
 }
 
 export interface RecipeRuntimeStatus {
@@ -340,6 +604,16 @@ export interface PackBrief {
   notes: string;
 }
 
+export interface CreateModeBrief {
+  title: string;
+  mcVersion: string;
+  loader: string;
+  targetCount: number;
+  mustHave: Array<{ name: string; reason: string; facet?: string | null }>;
+  categories: Array<{ name: string; budget: number; facet?: string | null }>;
+  exclude: string[];
+}
+
 export interface ListingGalleryItem {
   path?: string | null;
   url?: string | null;
@@ -371,6 +645,9 @@ export interface ModInstallPreview {
   fileName: string | null;
   side: string;
   dependencies: ModDependencySpec[];
+  /** Dependency targets already present in the project (slug or provider id). */
+  installedDependencies?: string[];
+  dependents?: { id: string; slug: string; name: string }[];
 }
 
 export interface GraphNode {
@@ -402,6 +679,12 @@ export interface Diagnostic {
   code: string;
   message: string;
   relatedNodes: string[];
+}
+
+export interface DiagnosticCounts {
+  errorCount: number;
+  warningCount: number;
+  cached: boolean;
 }
 
 export interface ChangePlan {
@@ -441,6 +724,30 @@ export interface ProjectChangeEntry {
   planSource?: string | null;
   actor?: string;
   op?: string;
+  episodeId?: string | null;
+  fixMethod?: string | null;
+  logPath?: string | null;
+}
+
+/** Crash → actions → outcome grouping for Smart History. */
+export interface HistoryEpisode {
+  id: string;
+  outcome: "open" | "fixed" | "broke" | "rolled_back" | string;
+  fixMethod: "ai" | "heuristic" | "kb" | "swarm" | "manual" | "unknown" | string;
+  fingerprintKey?: string | null;
+  startedAt: string;
+  endedAt?: string | null;
+  summary: string;
+  actionIds: string[];
+  planSource?: string | null;
+  snapshotId?: string | null;
+  resolutionSummary?: string | null;
+  logPath?: string | null;
+}
+
+export interface HistoryListResult {
+  entries: ProjectChangeEntry[];
+  episodes: HistoryEpisode[];
 }
 
 export interface PackEvent {
@@ -541,6 +848,45 @@ export interface ManifestSnapshotDiff {
   diffText?: string;
 }
 
+// ── Pack Diff (compare builds / snapshots / backups) ────────────────
+
+export type PackSource =
+  | { type: "manifest"; path: string }
+  | { type: "snapshot"; projectDir: string; snapshotId: string }
+  | { type: "backup"; projectDir: string; backupId: string };
+
+export interface PackModRow {
+  id: string;
+  name: string;
+  version: string;
+  fileName?: string | null;
+}
+
+export interface ModUpdate {
+  id: string;
+  name: string;
+  from: PackModRow;
+  to: PackModRow;
+}
+
+export interface PackDiffReport {
+  addedMods: PackModRow[];
+  removedMods: PackModRow[];
+  updatedMods: ModUpdate[];
+  changedConfigPaths: string[];
+  nameA: string;
+  nameB: string;
+  mcA: string;
+  mcB: string;
+  loaderA: string;
+  loaderB: string;
+}
+
+export interface PackStateDiff {
+  report: PackDiffReport;
+  configDiffs: Array<{ path: string; diffText: string }>;
+}
+
 export interface TestRunRecord {
   id: string;
   profile: string;
@@ -550,11 +896,18 @@ export interface TestRunRecord {
   durationSeconds: number | null;
   verdictReason?: string | null;
   capturedPaths?: string[];
+  peakProcMb?: number | null;
+  peakHostMb?: number | null;
+  recommendedRamGb?: number | null;
 }
 
 export interface LaunchResult {
   exitCode: number | null;
   logPath: string;
+  pid?: number | null;
+  instanceId?: string | null;
+  profileId?: string | null;
+  startedAt?: number | null;
 }
 
 /// Structured launch error returned by the launch Tauri commands
@@ -743,6 +1096,23 @@ export interface WorldListItem {
   size: number;
   sizeFormatted: string;
   hasLevelDat: boolean;
+  hasIcon?: boolean;
+  displayName?: string | null;
+  gameType?: string | null;
+  difficulty?: string | null;
+  hardcore?: boolean | null;
+  cheatsEnabled?: boolean | null;
+  /** Unix epoch milliseconds, from level.dat LastPlayed. */
+  lastPlayed?: number | null;
+}
+
+export interface WorldBackupEntry {
+  file: string;
+  worldName: string | null;
+  size: number;
+  sizeFormatted: string;
+  /** Unix epoch seconds (file mtime). */
+  createdAt: number;
 }
 
 export interface ContentPackEntry {
@@ -773,7 +1143,8 @@ export interface WorldDetail {
   seed: number;
   gameType: string | number;
   difficulty: string | number;
-  lastPlayed: string | null;
+  /** Unix epoch milliseconds, from level.dat LastPlayed. */
+  lastPlayed: number | null;
   time: number;
   spawnX: number;
   spawnY: number;
@@ -1006,6 +1377,9 @@ function pathArg(p?: string): { path: string } {
 }
 
 async function cmd<T>(name: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauri()) {
+    throw new Error(`Desktop IPC unavailable (${name}). Run the Tauri app, not the browser preview.`);
+  }
   try {
     return await invoke<T>(name, args);
   } catch (e) {
@@ -1075,6 +1449,7 @@ export const api = {
     getManifestSchema(p?: string) { return cmd<Record<string, unknown>>("get_manifest_schema", pathArg(p)); },
     runValidation(p?: string) { return cmd<Record<string, unknown>>("run_project_validation", pathArg(p)); },
     getDiagnostics(p?: string) { return cmd<Diagnostic[]>("get_diagnostics", pathArg(p)); },
+    getDiagnosticCounts(p?: string) { return cmd<DiagnosticCounts>("get_diagnostic_counts", pathArg(p)); },
     repair(p?: string) { return cmd<ModSyncReport>("repair_project", pathArg(p)); },
     cleanup(p?: string) { return cmd<Record<string, unknown>>("cleanup_project", pathArg(p)); },
     listProfiles(p?: string) { return cmd<ProfileSummary[]>("list_profiles", pathArg(p)); },
@@ -1115,13 +1490,27 @@ export const api = {
       });
     },
     add(modId: string, side: string, p?: string) { return cmd<void>("add_modrinth_mod", { ...pathArg(p), modId, side }); },
-    addWithDeps(modId: string, side: string, p?: string) { return cmd<string[]>("add_modrinth_mod_with_dependencies", { ...pathArg(p), modId, side }); },
-    addManyWithDeps(modIds: string[], side: string, p?: string) { return cmd<string[]>("add_modrinth_mods_with_dependencies", { ...pathArg(p), modIds, side }); },
+    addWithDeps(modId: string, side: string, p?: string, dependencyTargets?: string[] | null) { return cmd<string[]>("add_modrinth_mod_with_dependencies", { ...pathArg(p), modId, side, dependencyTargets: dependencyTargets ?? null }); },
+    addManyWithDeps(modIds: string[], side: string, p?: string, dependencyTargets?: string[] | null) { return cmd<string[]>("add_modrinth_mods_with_dependencies", { ...pathArg(p), modIds, side, dependencyTargets: dependencyTargets ?? null }); },
+    resolveInstallDependencies(modId: string, p?: string) { return cmd<{ target: string; name: string | null; depth: number }[]>("resolve_install_dependencies", { ...pathArg(p), modId }); },
     addCurseforge(modId: string, side: string, p?: string) {
       return cmd<void>("add_curseforge_mod", { ...pathArg(p), modId, side });
     },
     addCurseforgeManyWithDeps(modIds: string[], side: string, p?: string) {
       return cmd<string[]>("add_curseforge_mods_with_dependencies", { ...pathArg(p), modIds, side });
+    },
+    // ── Mod presets (Optimize → user-built sets) ──
+    getPresets() {
+      return cmd<{ presets: Array<{ id: string; name: string; createdAt: string; mods: Array<{ provider: string; projectId: string; slug: string; name: string }> }> }>("get_mod_presets");
+    },
+    savePresets(store: { presets: Array<{ id: string; name: string; createdAt: string; mods: Array<{ provider: string; projectId: string; slug: string; name: string }> }> }) {
+      return cmd<void>("save_mod_presets_cmd", { store });
+    },
+    resolvePresetMod(entry: { provider: string; projectId: string; slug?: string; name?: string }, p?: string) {
+      return cmd<{
+        slug: string; name: string; provider: string; projectId: string;
+        versionId?: string | null; reason: string; risk: string; alreadyInstalled: boolean;
+      }>("resolve_preset_mod", { ...pathArg(p), entry: { slug: entry.slug ?? "", name: entry.name ?? "", provider: entry.provider, projectId: entry.projectId } });
     },
     /** Install Steam Bridge jar matching this pack's MC + loader (GitHub releases). */
     installSteamBridge(p?: string) {
@@ -1153,6 +1542,72 @@ export const api = {
       return cmd<Record<string, unknown>>("retry_failed_mod_downloads", { ...pathArg(p), modIds });
     },
     recommend(p?: string) { return cmd<Record<string, unknown>[]>("recommend_mods", pathArg(p)); },
+    listCuratedOptimizePacks(p?: string) {
+      return cmd<{
+        loader: string;
+        minecraftVersion: string;
+        available: boolean;
+        unavailableMessage?: string | null;
+        current: { projectId: string; slug?: string | null; name?: string | null } | null;
+        entries: Array<{ minecraftVersion: string; projectId: string; slug?: string | null; name?: string | null }>;
+      }>("list_curated_optimize_packs", pathArg(p));
+    },
+    previewCuratedOptimizePack(p?: string) {
+      return cmd<{
+        pack: { projectId: string; slug: string; name: string; versionId: string; versionNumber?: string };
+        mods: Array<{ slug: string; name: string; projectId: string; alreadyInstalled: boolean; role: string }>;
+        configActions: Record<string, unknown>[];
+        warnings: string[];
+        minecraftVersion: string;
+        loader: string;
+      }>("preview_curated_optimize_pack", pathArg(p));
+    },
+    installCuratedOptimizePack(
+      applyConfigs: boolean,
+      configPlan?: Record<string, unknown> | null,
+      p?: string,
+    ) {
+      return cmd<Record<string, unknown>>("install_curated_optimize_pack", {
+        ...pathArg(p),
+        applyConfigs,
+        configPlan: configPlan ?? null,
+      });
+    },
+    buildOptimizePlan(useAiConfigs: boolean, p?: string) {
+      return cmd<{
+        mode: string;
+        mods: Array<{
+          slug: string;
+          name: string;
+          provider: string;
+          projectId: string;
+          versionId?: string | null;
+          reason: string;
+          risk: string;
+          alreadyInstalled: boolean;
+        }>;
+        plan: Record<string, unknown>;
+        findings: Record<string, unknown>[];
+        warnings: string[];
+        minecraftVersion: string;
+        loader: string;
+        curatedAvailable: boolean;
+        catalogSource?: string;
+      }>("build_optimize_plan", { ...pathArg(p), useAiConfigs });
+    },
+    applyOptimizeCustomPlan(
+      mods: Array<Record<string, unknown>>,
+      applyConfigs: boolean,
+      configPlan: Record<string, unknown> | null,
+      p?: string,
+    ) {
+      return cmd<Record<string, unknown>>("apply_optimize_custom_plan", {
+        ...pathArg(p),
+        mods,
+        applyConfigs,
+        configPlan,
+      });
+    },
     disable(modId: string, p?: string) {
       return cmd<{ id: string; disabled: boolean; fileName?: string }>("disable_project_mod", {
         ...pathArg(p),
@@ -1197,6 +1652,7 @@ export const api = {
     },
     searchCurseforge(query: string, opts?: {
       gameVersion?: string | null; loader?: string | null; contentType?: string | null;
+      categoryId?: number | null;
       page?: number; pageSize?: number; sortField?: number | null; p?: string;
     }) {
       const { p, ...rest } = opts ?? {};
@@ -1226,6 +1682,12 @@ export const api = {
     listCategories(projectType?: string | null) {
       return cmd<Array<{ name: string; projectType: string; header: string; icon: string }>>(
         "list_modrinth_categories",
+        { projectType: projectType ?? null },
+      );
+    },
+    listCurseforgeCategories(projectType?: string | null) {
+      return cmd<Array<{ id: number; name: string; parentCategoryId: number | null }>>(
+        "list_curseforge_categories",
         { projectType: projectType ?? null },
       );
     },
@@ -1267,6 +1729,98 @@ export const api = {
     search(query: string, p?: string) { return cmd<ConfigSearchMatch[]>("search_in_configs", { ...pathArg(p), query }); },
     lint(relativePath: string, p?: string) { return cmd<LintResult[]>("lint_config", { ...pathArg(p), relativePath }); },
     formatToml(content: string) { return cmd<string>("format_toml", { content }); },
+    advise(opts: {
+      goal?: string;
+      userMessage?: string;
+      focusPath?: string | null;
+      focusKeys?: string[] | null;
+      sessionId?: string | null;
+      enableWebResearch?: boolean | null;
+      path?: string;
+    }) {
+      return cmd<{
+        plan: Record<string, unknown>;
+        explanation: string;
+        researchLog: { step: string; detail: string; ok: boolean; url?: string | null }[];
+        unknownKeys: { path: string; key: string; modHint?: string | null }[];
+        diffs: {
+          path: string;
+          patchType: string;
+          beforeExcerpt: string;
+          afterExcerpt: string;
+          ok: boolean;
+          error?: string | null;
+        }[];
+        validationOk: boolean;
+        validationErrors: string[];
+        validationWarnings: string[];
+      }>("tune_config_advise", {
+        ...pathArg(opts.path),
+        goal: opts.goal ?? "free_text",
+        userMessage: opts.userMessage ?? "",
+        focusPath: opts.focusPath ?? null,
+        focusKeys: opts.focusKeys ?? null,
+        sessionId: opts.sessionId ?? null,
+        enableWebResearch: opts.enableWebResearch ?? null,
+      });
+    },
+    previewDiffs(plan: Record<string, unknown>, p?: string) {
+      return cmd<
+        {
+          path: string;
+          patchType: string;
+          beforeExcerpt: string;
+          afterExcerpt: string;
+          ok: boolean;
+          error?: string | null;
+        }[]
+      >("tune_config_preview_diffs", { ...pathArg(p), plan });
+    },
+    listChats(p?: string) {
+      return cmd<{ sessions: TuneChatSession[]; corruptSkipped: number }>(
+        "list_tune_chat_sessions",
+        pathArg(p),
+      );
+    },
+    newChat(title?: string | null, p?: string) {
+      return cmd<TuneChatSession>("new_tune_chat_session", {
+        ...pathArg(p),
+        title: title ?? null,
+      });
+    },
+    loadChat(chatId: string, p?: string) {
+      return cmd<TuneChatSession>("load_tune_chat_session", {
+        ...pathArg(p),
+        chatId,
+      });
+    },
+    saveChat(session: TuneChatSession, p?: string) {
+      return cmd<void>("save_tune_chat_session", { ...pathArg(p), session });
+    },
+    deleteChat(chatId: string, p?: string) {
+      return cmd<void>("delete_tune_chat_session", { ...pathArg(p), chatId });
+    },
+    chatTurn(
+      message: string,
+      opts?: {
+        chatId?: string | null;
+        goal?: string | null;
+        focusPath?: string | null;
+        focusKeys?: string[] | null;
+        enableWebResearch?: boolean | null;
+      },
+      p?: string,
+    ) {
+      return cmd<TuneChatTurnResult>("tune_chat_turn", {
+        ...pathArg(p),
+        message,
+        chatId: opts?.chatId ?? null,
+        goal: opts?.goal ?? null,
+        focusPath: opts?.focusPath ?? null,
+        focusKeys: opts?.focusKeys ?? null,
+        enableWebResearch: opts?.enableWebResearch ?? null,
+      });
+    },
   },
 
   // ── Graph & Resolve ───────────────────────────────────────────────
@@ -1347,7 +1901,10 @@ export const api = {
   history: {
     getSettings(p?: string) { return cmd<HistorySettings>("get_history_settings", pathArg(p)); },
     updateSettings(settings: HistorySettings, p?: string) { return cmd<HistorySettings>("update_history_settings", { ...pathArg(p), settings }); },
-    list(p?: string) { return cmd<ProjectChangeEntry[]>("list_project_change_history", pathArg(p)); },
+    list(p?: string) { return cmd<HistoryListResult>("list_project_change_history", pathArg(p)); },
+    getEntryDiff(entryId: string, p?: string) {
+      return cmd<string>("get_history_entry_diff", { ...pathArg(p), entryId });
+    },
     readFile(relativePath: string, p?: string) { return cmd<HistoryFileContent>("read_project_history_file", { ...pathArg(p), relativePath }); },
     createSnapshot(roots: string[], p?: string) { return cmd<Snapshot>("create_tracked_history_snapshot", { ...pathArg(p), roots }); },
     rollbackFile(snapshotId: string, relativePath: string, p?: string) { return cmd<void>("rollback_history_file", { ...pathArg(p), snapshotId, relativePath }); },
@@ -1357,6 +1914,9 @@ export const api = {
     },
     explain(eventId: string, p?: string) {
       return cmd<Record<string, unknown>>("explain_pack_change", { ...pathArg(p), eventId });
+    },
+    explainEpisode(episodeId: string, p?: string) {
+      return cmd<Record<string, unknown>>("explain_history_episode", { ...pathArg(p), episodeId });
     },
   },
 
@@ -1380,11 +1940,35 @@ export const api = {
     restore(backupId: string, p?: string) { return cmd<void>("restore_backup", { ...pathArg(p), backupId }); },
   },
 
+  // ── Pack Diff (compare builds / snapshots / backups) ──────────────
+  packDiff: {
+    compare(sourceA: PackSource, sourceB: PackSource) {
+      return cmd<PackStateDiff>("compare_pack_states", { sourceA, sourceB });
+    },
+  },
+
   // ── Worlds ────────────────────────────────────────────────────────
   worlds: {
     list(p?: string) { return cmd<WorldListItem[]>("list_worlds", pathArg(p)); },
     readInfo(worldName: string, p?: string) { return cmd<WorldDetail>("read_world_info", { ...pathArg(p), worldName }); },
     backup(worldName: string, p?: string) { return cmd<string>("backup_world", { ...pathArg(p), worldName }); },
+    restore(backupFile: string, overwrite?: boolean, p?: string) {
+      return cmd<string>("restore_world_backup", { ...pathArg(p), backupFile, overwrite: overwrite ?? false });
+    },
+    delete(worldName: string, backupFirst?: boolean, p?: string) {
+      return cmd<void>("delete_world", { ...pathArg(p), worldName, backupFirst: backupFirst ?? false });
+    },
+    listBackups(p?: string) { return cmd<WorldBackupEntry[]>("list_world_backups", pathArg(p)); },
+    deleteBackup(backupFile: string, p?: string) {
+      return cmd<void>("delete_world_backup", { ...pathArg(p), backupFile });
+    },
+    readIcon(worldName: string, p?: string) {
+      return cmd<string | null>("read_world_icon", { ...pathArg(p), worldName });
+    },
+    /** Open bundled Querz MCA Selector for this world (File → Open Recent). No download. */
+    openMcaSelector(worldName: string, p?: string) {
+      return cmd<void>("open_mca_selector", { ...pathArg(p), worldName });
+    },
     dimensions(worldName: string, p?: string) {
       return cmd<string[]>("list_world_dimensions", { ...pathArg(p), worldName });
     },
@@ -1424,6 +2008,7 @@ export const api = {
       offsetZ?: number,
       dimension?: string,
       p?: string,
+      overwrite?: boolean,
     ) {
       return cmd<number>("paste_world_chunks", {
         ...pathArg(p),
@@ -1432,6 +2017,7 @@ export const api = {
         offsetX: offsetX ?? 0,
         offsetZ: offsetZ ?? 0,
         dimension: dimension ?? "overworld",
+        overwrite: overwrite ?? true,
       });
     },
     purge(worldName: string, dimension?: string, p?: string) {
@@ -1632,6 +2218,9 @@ export const api = {
     listItemTags(p?: string) {
       return cmd<string[]>("list_item_tags", pathArg(p));
     },
+    listItemCatalog(p?: string) {
+      return cmd<Array<{ id: string; name: string; modNs: string }>>("list_item_catalog", pathArg(p));
+    },
     getTagEntries(tagId: string, p?: string) {
       return cmd<string[]>("get_item_tag_entries", { ...pathArg(p), tagId });
     },
@@ -1642,6 +2231,16 @@ export const api = {
         newItem: newItem ?? null,
         count: count ?? null,
       });
+    },
+  },
+
+  // ── Vanilla Minecraft client jar (recipes / quests catalog) ─────
+  minecraft: {
+    clientJarStatus(p?: string) {
+      return cmd<VanillaClientJarStatus>("get_vanilla_client_jar_status", pathArg(p));
+    },
+    downloadClientJar(p?: string) {
+      return cmd<string>("download_vanilla_client_jar", pathArg(p));
     },
   },
 
@@ -1669,6 +2268,17 @@ export const api = {
         ...pathArg(p),
         reportId: reportId ?? null,
       });
+    },
+    getPackHealth(p?: string) {
+      return cmd<{
+        diagnostics: { errors: number; warnings: number };
+        exportIssues: Array<{ severity: string; code: string; message: string }>;
+        wrongLoaderCount: number;
+        duplicateGroups: Array<{ modId: string; keepCandidate: string; count: number }>;
+        questIssues: number;
+        lastCrash: { at: string; exitCode: number | null } | null;
+        overall: "healthy" | "warnings" | "errors";
+      }>("get_pack_health", pathArg(p));
     },
     applyActionPlan(plan: Record<string, unknown>, p?: string, fingerprintKey?: string | null) {
       return cmd<Record<string, unknown>>("apply_action_plan", {
@@ -1715,12 +2325,36 @@ export const api = {
   // ── Quests (FTB Quests SNBT) ─────────────────────────────────────
   quests: {
     load(p?: string) { return cmd<QuestBook>("load_quest_book", pathArg(p)); },
-    saveChapter(chapter: QuestChapter, relativePath?: string | null, p?: string) {
-      return cmd<{ relativePath: string; questCount: number }>("save_quest_chapter", {
-        ...pathArg(p),
-        chapter,
-        relativePath: relativePath ?? null,
+    /**
+     * Save a chapter via `save_quest_chapter_raw`: strip locale text fields,
+     * then write SNBT to the chapter file path.
+     */
+    async saveChapter(chapter: QuestChapter, relativePath?: string | null, p?: string) {
+      const manifestOrPath = p ?? get(projectPath) ?? "";
+      const projectDir = await cmd<string>("get_project_dir", pathArg(manifestOrPath));
+      const rel =
+        relativePath ??
+        chapter.sourceFile ??
+        `config/ftbquests/quests/chapters/${chapter.filename ?? chapter.id}.snbt`;
+      const filePath = joinProjectPath(projectDir, rel);
+      const payload = stripLocaleOverlay(chapterToSnbtJson(chapter));
+      await cmd<void>("save_quest_chapter_raw", {
+        filePath,
+        jsonPayload: JSON.stringify(payload),
       });
+      return { relativePath: rel.replace(/\\/g, "/"), questCount: chapter.quests.length };
+    },
+    /** Low-level: write already-prepared JSON as SNBT to an absolute path. */
+    saveChapterRaw(filePath: string, jsonPayload: string) {
+      return cmd<void>("save_quest_chapter_raw", { filePath, jsonPayload });
+    },
+    /** Same serializer as save, without writing — for SNBT preflight diff. */
+    previewChapterSnbt(jsonPayload: string) {
+      return cmd<string>("preview_quest_chapter_snbt", { jsonPayload });
+    },
+    /** Read absolute chapter path as text (disk side of preflight diff). */
+    readChapterText(filePath: string) {
+      return cmd<string>("read_quest_chapter_text", { filePath });
     },
     validate(p?: string) { return cmd<QuestValidationIssue[]>("validate_quest_book", pathArg(p)); },
     saveRewardTable(table: QuestRewardTable, relativePath?: string | null, p?: string) {
@@ -1742,6 +2376,13 @@ export const api = {
         groups,
       });
     },
+    saveLocale(code: string, map: Record<string, string | string[]>, p?: string) {
+      return cmd<{ relativePath: string }>("save_quest_locale", {
+        ...pathArg(p),
+        code,
+        map,
+      });
+    },
     itemCatalog(p?: string) { return cmd<string[]>("list_quest_item_catalog", pathArg(p)); },
     listProgressTeams(p?: string) {
       return cmd<QuestProgressTeamRef[]>("list_quest_progress_teams", pathArg(p));
@@ -1750,6 +2391,18 @@ export const api = {
       return cmd<QuestProgressSnapshot>("load_quest_progress", {
         ...pathArg(p),
         relativePath,
+      });
+    },
+    /** In-memory classify; does not touch saves/. */
+    simulateProgress(
+      book: QuestBook,
+      completedIds: string[],
+      taskProgressIds?: string[],
+    ) {
+      return cmd<QuestProgressSnapshot>("simulate_quest_progress", {
+        book,
+        completedIds,
+        taskProgressIds: taskProgressIds ?? [],
       });
     },
     /** Parse AI QuestPlan JSON and merge into current book (memory only). */
@@ -1789,7 +2442,10 @@ export const api = {
       });
     },
     listChats(p?: string) {
-      return cmd<QuestChatSession[]>("list_quest_chat_sessions", pathArg(p));
+      return cmd<{ sessions: QuestChatSession[]; corruptSkipped: number }>(
+        "list_quest_chat_sessions",
+        pathArg(p),
+      );
     },
     newChat(title?: string | null, p?: string) {
       return cmd<QuestChatSession>("new_quest_chat_session", {
@@ -1811,7 +2467,13 @@ export const api = {
     },
     chatTurn(
       message: string,
-      opts?: { chatId?: string | null; forceAi?: boolean; intent?: string | null },
+      opts?: {
+        chatId?: string | null;
+        forceAi?: boolean;
+        intent?: string | null;
+        anchorQuestId?: string | null;
+        targetChapterId?: string | null;
+      },
       p?: string,
     ) {
       return cmd<QuestChatTurnResult>("quest_chat_turn", {
@@ -1820,13 +2482,48 @@ export const api = {
         chatId: opts?.chatId ?? null,
         forceAi: opts?.forceAi ?? false,
         intent: opts?.intent ?? null,
+        anchorQuestId: opts?.anchorQuestId ?? null,
+        targetChapterId: opts?.targetChapterId ?? null,
       });
+    },
+    cancelChatTurn() {
+      return cmd<void>("cancel_quest_chat_turn");
     },
     validatePlan(plan: QuestPlan) {
       return cmd<QuestPlanValidation>("validate_quest_plan", { plan });
     },
     planSystemPrompt() {
       return cmd<string>("quest_plan_system_prompt");
+    },
+    kubejs: {
+      listScripts(p?: string) {
+        return cmd<QuestKubeJsScriptFile[]>("quest_kubejs_list_scripts", pathArg(p));
+      },
+      audit(book: QuestBook, p?: string) {
+        return cmd<QuestKubeJsAudit>("quest_kubejs_audit", { ...pathArg(p), book });
+      },
+      readScript(relativePath: string, p?: string) {
+        return cmd<string>("quest_kubejs_read_script", { ...pathArg(p), relativePath });
+      },
+      ensureManaged(p?: string) {
+        return cmd<string>("quest_kubejs_ensure_managed", pathArg(p));
+      },
+      renderTemplate(params: QuestKubeJsTemplateParams) {
+        return cmd<string>("quest_kubejs_render_template", { params });
+      },
+      appendHandler(snippet: string, p?: string) {
+        return cmd<{ relativePath: string; snapshotId: string }>("quest_kubejs_append_handler", {
+          ...pathArg(p),
+          snippet,
+        });
+      },
+      writeScript(relativePath: string, content: string, p?: string) {
+        return cmd<{ snapshotId: string }>("write_config_file", {
+          ...pathArg(p),
+          relativePath,
+          content,
+        });
+      },
     },
   },
 
@@ -1836,9 +2533,114 @@ export const api = {
     serverPack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_server_pack", { ...pathArg(p), targetPath }); },
     prismInstance(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_prism_instance", { ...pathArg(p), targetPath }); },
     curseforgePack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_curseforge_pack", { ...pathArg(p), targetPath }); },
+    packwizPack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_packwiz_pack", { ...pathArg(p), targetPath }); },
     batchAll(p?: string) { return cmd<Record<string, unknown>[]>("batch_export_all", pathArg(p)); },
     projectReport(p?: string) { return cmd<Record<string, unknown>>("export_project_report", pathArg(p)); },
     validateModrinth(p?: string) { return cmd<ExportIssue[]>("validate_modrinth_export", pathArg(p)); },
+    validateCurseforge(p?: string) { return cmd<ExportIssue[]>("validate_curseforge_export", pathArg(p)); },
+  },
+
+  // ── GitHub Pack Transport (public repos, anonymous consume) ─────
+  transport: {
+    github: {
+      parseSource(source: string) {
+        return cmd<{ owner: string; repo: string; ref: string | null }>("github_pack_parse_source", { source });
+      },
+      inspectSource(source: string) {
+        return cmd<{
+          owner: string;
+          repo: string;
+          fullName: string;
+          description: string;
+          defaultBranch: string;
+          htmlUrl: string;
+          packVersion?: string | null;
+          status?: string | null;
+          ready: boolean;
+          /** Install-preview metadata below: present only when the repo
+           * carries .tuffbox/repo-transport.json + manifest; null otherwise. */
+          projectName?: string | null;
+          projectVersion?: string | null;
+          mcVersion?: string | null;
+          loaderKind?: string | null;
+          loaderVersion?: string | null;
+          modCount?: number | null;
+          /** Sum of transport releaseAssets sizes; null when any is unknown. */
+          totalAssetBytes?: number | null;
+          /** Mods whose source.type === "local" (custom in-repo mods). */
+          customModCount?: number | null;
+        }>("github_pack_inspect_source", { source });
+      },
+      authStatus() {
+        return cmd<boolean>("github_pack_auth_status");
+      },
+      startDeviceCode() {
+        return cmd<{
+          userCode: string;
+          verificationUri: string;
+          message: string;
+          expiresIn: number;
+          interval: number;
+        }>("github_pack_start_device_code");
+      },
+      pollDeviceCode() {
+        return cmd<string>("github_pack_poll_device_code");
+      },
+      stagePreview(p?: string) {
+        return cmd<{
+          packVersion: string;
+          manifestFile: string;
+          fileCount: number;
+          managedFiles: string[];
+          shareUrl: string | null;
+          contentDigest: string;
+          hasExternalAssets: boolean;
+        }>("github_pack_stage_preview", pathArg(p));
+      },
+      publish(repository: string, p?: string) {
+        return cmd<Record<string, unknown>>("github_pack_publish", { ...pathArg(p), repository });
+      },
+      install(source: string, targetDir: string, instanceName?: string | null) {
+        return cmd<Record<string, unknown>>("github_pack_install", {
+          source,
+          targetDir,
+          instanceName: instanceName ?? null,
+        });
+      },
+      checkUpdate(p?: string) {
+        return cmd<{
+          updateAvailable: boolean;
+          repo?: string;
+          installedVersion?: string;
+          installedCommitSha?: string | null;
+          remoteCommitSha?: string;
+          reason?: string;
+        }>("github_pack_check_update", pathArg(p));
+      },
+      previewUpdate(p?: string) {
+        return cmd<{
+          repo: string;
+          installedVersion: string;
+          incomingVersion: string;
+          remoteCommitSha: string;
+          requiresFullReinstall: boolean;
+          customFiles: boolean;
+          signerState?: "ok" | "changed" | "unsigned";
+          changes: Array<Record<string, unknown>>;
+        }>("github_pack_preview_update", pathArg(p));
+      },
+      applyUpdate(expectedCommitSha: string, p?: string) {
+        return cmd<{
+          ok: boolean;
+          snapshotId: string;
+          version: string;
+          changes: Array<Record<string, unknown>>;
+        }>("github_pack_apply_update", {
+          ...pathArg(p),
+          expectedCommitSha,
+        });
+      },
+    },
   },
 
   // ── Modpack library (remote browse + import) ─────────────────────
@@ -1948,7 +2750,14 @@ export const api = {
     finalize(
       runId: string,
       status: string,
-      opts?: { durationSeconds?: number | null; verdictReason?: string | null },
+      opts?: {
+        durationSeconds?: number | null;
+        verdictReason?: string | null;
+        peakProcMb?: number | null;
+        peakHostMb?: number | null;
+        hostTotalMb?: number | null;
+        xmxMb?: number | null;
+      },
       p?: string,
     ) {
       return cmd<TestRunRecord>("finalize_test_run", {
@@ -1957,6 +2766,10 @@ export const api = {
         status,
         durationSeconds: opts?.durationSeconds ?? null,
         verdictReason: opts?.verdictReason ?? null,
+        peakProcMb: opts?.peakProcMb ?? null,
+        peakHostMb: opts?.peakHostMb ?? null,
+        hostTotalMb: opts?.hostTotalMb ?? null,
+        xmxMb: opts?.xmxMb ?? null,
       });
     },
   },
@@ -1975,6 +2788,8 @@ export const api = {
     getMinecraftVersions() { return cmd<MinecraftVersion[]>("get_minecraft_versions"); },
     getLoaderVersions(loader: string, minecraftVersion: string) { return cmd<LoaderVersion[]>("get_loader_versions", { loader, minecraftVersion }); },
     findJavaRuntimes() { return cmd<JavaRuntime[]>("find_java_runtimes"); },
+    /** Download latest GraalVM Community JDK if no Java is found (or return existing). */
+    ensureJavaRuntime() { return cmd<JavaRuntime>("ensure_java_runtime"); },
     getJavaVersion(path: string) { return cmd<string>("get_java_version", { path }); },
     getDefaultJavaVersion() { return cmd<string>("get_default_java_version"); },
     getKeyboardShortcuts() { return cmd<KeyboardShortcut[]>("get_keyboard_shortcuts"); },
@@ -1987,15 +2802,56 @@ export const api = {
     isPinned(p?: string) { return cmd<boolean>("is_project_pinned", pathArg(p)); },
     setLastOpened(p?: string) { return cmd<void>("set_last_opened_project", pathArg(p)); },
     getLastOpened() { return cmd<string | null>("get_last_opened_project"); },
+    loadRecentProjects() {
+      return cmd<Array<{ path: string; info: object }>>("load_recent_projects");
+    },
+    saveRecentProjects(projects: Array<{ path: string; info: object }>) {
+      return cmd<void>("save_recent_projects", { projects });
+    },
+  },
+
+  // ── Home bootstrap pipeline ───────────────────────────────────────
+  home: {
+    bootstrap(selectedPath?: string | null) {
+      return cmd<import("./homeBootstrap").HomeSnapshot>("get_home_bootstrap", {
+        request: { selectedPath: selectedPath ?? null },
+      });
+    },
+    projectBriefs(paths: string[]) {
+      return cmd<
+        Array<{
+          path: string;
+          stats: { playtime: number; lastLaunch: string | null };
+          sizeLabel?: string | null;
+          iconDataUrl?: string | null;
+        }>
+      >("get_home_project_briefs", { paths });
+    },
+    accountSkinPaths(uuids: string[]) {
+      return cmd<Record<string, string>>("get_account_skin_paths", { uuids });
+    },
+    invalidateCache(p?: string) {
+      return cmd<void>("invalidate_home_project_cache", pathArg(p));
+    },
   },
 
   // ── File Operations ───────────────────────────────────────────────
   files: {
-    openFolder(p?: string) { return cmd<void>("open_project_folder", pathArg(p)); },
+    openFolder(p?: string, subdir?: string | null) {
+      return cmd<void>("open_project_folder", { ...pathArg(p), subdir: subdir ?? null });
+    },
     deleteProject(p?: string) { return cmd<void>("delete_project", pathArg(p)); },
     cloneProject(newName: string, p?: string) { return cmd<string>("clone_project", { ...pathArg(p), newName }); },
     createDesktopShortcut(p?: string) {
       return cmd<string>("create_project_desktop_shortcut", pathArg(p));
+    },
+    /** One-shot path from process `--launch` / `--open` (desktop shortcut). */
+    takePendingLaunch() {
+      return cmd<string | null>("take_pending_launch_project");
+    },
+    /** One-shot verdict from a `tuffbox://install?repo=…` deep link. */
+    takePendingInstall() {
+      return cmd<InstallLinkPayload | null>("take_pending_install_repo");
     },
   },
 
@@ -2008,13 +2864,16 @@ export const api = {
   // ── Minecraft Auth ───────────────────────────────────────────────
   mcAuth: {
     startDeviceCode() { return cmd<DeviceCodeInfo>("mc_start_device_code"); },
-    pollDeviceCode() { return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_poll_device_code"); },
+    pollDeviceCode() { return cmd<{ profile: McProfile }>("mc_poll_device_code"); },
     getMicrosoftLoginUrl() { return cmd<string>("mc_get_microsoft_login_url"); },
     loginWithAuthUrl(urlOrCode: string) {
-      return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_login_with_auth_url", { urlOrCode });
+      return cmd<{ profile: McProfile }>("mc_login_with_auth_url", { urlOrCode });
+    },
+    startMicrosoftWebviewAuth() {
+      return cmd<{ profile: McProfile }>("mc_start_microsoft_webview_auth");
     },
     offlineLogin(username: string, skinSource: SkinSource) {
-      return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_offline_login", { username, skinSource });
+      return cmd<{ profile: McProfile }>("mc_offline_login", { username, skinSource });
     },
     getAuthStatus() { return cmd<AuthState>("mc_get_auth_status"); },
     logout() { return cmd<AuthState>("mc_logout"); },
@@ -2038,7 +2897,7 @@ export const api = {
     getSkinBase64(url: string) { return cmd<string>("mc_get_skin_base64", { url }); },
     listYggdrasilPresets() { return cmd<YggdrasilPreset[]>("mc_list_yggdrasil_presets"); },
     yggdrasilLogin(username: string, password: string, authority: string) {
-      return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_yggdrasil_login", {
+      return cmd<{ profile: McProfile }>("mc_yggdrasil_login", {
         username,
         password,
         authority,
@@ -2081,3 +2940,177 @@ export const api = {
     },
   },
 };
+
+// ─── AI / Ollama settings ───────────────────────────────────────────
+
+export type AiProvider = "ollama" | "openai-compatible";
+
+export interface AiSettings {
+  provider: string;
+  endpoint: string;
+  model: string;
+  diagnoseMode?: string;
+  crashKbEndpoint?: string;
+  ollamaBinaryPath?: string;
+  ollamaModelsPath?: string;
+  speculativeDecoding?: boolean;
+  draftModel?: string;
+  /** Tune Config Advisor: allowlisted web research for unknown keys (default true). */
+  tuneWebResearch?: boolean;
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  sizeBytes: number;
+  parameterSize: string;
+  quantization: string;
+  family: string;
+  fit: string;
+}
+
+export interface SuggestedModel {
+  name: string;
+  note: string;
+  approxSizeBytes: number;
+  minRamGb: number;
+  minVramGb: number;
+}
+
+export interface OllamaDetect {
+  installed: boolean;
+  running: boolean;
+  binaryPath: string;
+  modelsPath?: string;
+  modelsPathConfigured?: boolean;
+  defaultModel?: string;
+  endpoint: string;
+  models: OllamaModelInfo[];
+  needsModel: boolean;
+  error?: string | null;
+  suggestedModels: SuggestedModel[];
+  hostRamBytes?: number;
+}
+
+export interface OllamaStorage {
+  path: string;
+  files: number;
+  usedBytes: number;
+  availableBytes: number;
+  totalBytes: number;
+  hostRamBytes?: number;
+}
+
+export interface OllamaPullProgress {
+  model: string;
+  status: string;
+  completed: number;
+  total: number;
+}
+
+export function formatBytes(bytes: number | null | undefined): string {
+  const n = Number(bytes) || 0;
+  if (n <= 0) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  const digits = i === 0 ? 0 : v >= 10 ? 1 : 2;
+  return `${v.toFixed(digits)} ${units[i]}`;
+}
+
+export function fitLabel(fit: string | undefined): string {
+  switch ((fit || "").toLowerCase()) {
+    case "ok":
+      return "OK";
+    case "tight":
+      return "Tight";
+    case "heavy":
+      return "Heavy";
+    default:
+      return "—";
+  }
+}
+
+/**
+ * Pack metadata line for the GitHub import confirm dialog, e.g.
+ * `MC 1.20.1 · fabric 0.15.11 · 142 mods (+12 custom)`.
+ * Absent/null fields are omitted instead of rendering "null".
+ */
+export function githubInspectMeta(info: {
+  mcVersion?: string | null;
+  loaderKind?: string | null;
+  loaderVersion?: string | null;
+  modCount?: number | null;
+  customModCount?: number | null;
+}): string {
+  const parts: string[] = [];
+  if (info.mcVersion) parts.push(`MC ${info.mcVersion}`);
+  const loader = [info.loaderKind, info.loaderVersion].filter(Boolean).join(" ");
+  if (loader) parts.push(loader);
+  if (typeof info.modCount === "number" && info.modCount > 0) {
+    const custom =
+      typeof info.customModCount === "number" && info.customModCount > 0
+        ? ` (+${info.customModCount} custom)`
+        : "";
+    parts.push(`${info.modCount} ${info.modCount === 1 ? "mod" : "mods"}${custom}`);
+  }
+  return parts.join(" · ");
+}
+
+// ── tuffbox://install deep link ──────────────────────────────────────
+
+export type InstallLinkPayload =
+  | { status: "valid"; repo: string }
+  | { status: "invalid"; raw: string };
+
+type InstallLinkHandler = (link: InstallLinkPayload) => void;
+
+const installLinkHandlers = new Set<InstallLinkHandler>();
+let queuedInstallLink: InstallLinkPayload | null = null;
+
+function deliverInstallLink(link: InstallLinkPayload): void {
+  // The Library view owns the GitHub confirm dialog; surface it first so a
+  // subscriber exists by the time the user looks.
+  window.dispatchEvent(new CustomEvent("tuffbox:open-library"));
+  if (!installLinkHandlers.size) {
+    // Cold start: Library has not mounted yet — hold until it subscribes.
+    queuedInstallLink = link;
+    return;
+  }
+  queuedInstallLink = null;
+  for (const handler of [...installLinkHandlers]) handler(link);
+}
+
+/** Subscribe to `tuffbox://install?repo=…` links. A subscriber that mounts
+ * late still receives a link that arrived before it existed. Returns an
+ * unlisten function. */
+export function onInstallLink(handler: InstallLinkHandler): () => void {
+  installLinkHandlers.add(handler);
+  const queued = queuedInstallLink;
+  queuedInstallLink = null;
+  if (queued) handler(queued);
+  return () => {
+    installLinkHandlers.delete(handler);
+  };
+}
+
+if (isTauri()) {
+  // Cold start: drain what the backend parked before any UI existed.
+  void api.files
+    .takePendingInstall()
+    .then((pending) => {
+      if (pending) deliverInstallLink(pending);
+    })
+    .catch(() => {});
+  // Warm start: a second instance forwarded the URL to this process.
+  void listen<InstallLinkPayload | null>("tuffbox:install-link", (event) => {
+    if (!event.payload) return;
+    // The backend parks the same link for the next cold start; drop it so a
+    // later launch doesn't replay a link the user already handled.
+    void api.files.takePendingInstall().catch(() => {});
+    deliverInstallLink(event.payload);
+  });
+}

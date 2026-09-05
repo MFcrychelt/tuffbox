@@ -1,4 +1,4 @@
-//! Create Mode: AI proposes a PackBrief; PackAssembler fills 50–100 mods via Modrinth search.
+//! Create Mode: AI proposes a CreateModeBrief; PackAssembler fills 50–100 mods via Modrinth search.
 
 use crate::provider::{
     ContentProvider, ModrinthProvider, ProjectInfo, ProviderSearchQuery, SearchPage,
@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub const CREATE_MODE_SYSTEM_PROMPT: &str = r#"You are TuffBox Create Mode — a Minecraft modpack planner.
-Your job is to turn the user's brief into (1) a machine search intent and (2) a PackBrief JSON plan for searching Modrinth.
+Your job is to turn the user's brief into (1) a machine search intent and (2) a CreateModeBrief JSON plan for searching Modrinth.
 Never invent Modrinth project IDs or claim specific mods are installed. Use search queries only.
 Do not output ActionPlan crash JSON.
 
@@ -47,13 +47,13 @@ Rules:
   across refinements unless the user explicitly asks to unlock/remove/re-include them.
 "#;
 
-pub const CREATE_MODE_REFINE_PROMPT: &str = r#"You are refining a Create Mode PackBrief for the TuffBox launcher.
+pub const CREATE_MODE_REFINE_PROMPT: &str = r#"You are refining a Create Mode CreateModeBrief for the TuffBox launcher.
 You are given catalog candidates (name + short description + Modrinth slug) from Modrinth + community co-occurrence
 (seeded from Modpack Index on the hub — never scraped from the user's IP).
 Pick mods that match the user intent (e.g. airplanes/flight → Create Aeronautics) and put them in mustHave.
 Always include the industrial/theme base mod when relevant (e.g. Create).
 
-Do NOT output crash ActionPlan JSON. Create Mode uses PackBrief + PackDraft only.
+Do NOT output crash ActionPlan JSON. Create Mode uses CreateModeBrief + PackDraft only.
 
 Return a single JSON object:
 {
@@ -104,7 +104,7 @@ pub struct CategoryBudget {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct PackBrief {
+pub struct CreateModeBrief {
     pub title: String,
     pub mc_version: String,
     pub loader: String,
@@ -162,7 +162,7 @@ fn pack_draft_mod_from_project(p: ProjectInfo, reason: String, category: String)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PackDraft {
-    pub brief: PackBrief,
+    pub brief: CreateModeBrief,
     pub mods: Vec<PackDraftMod>,
     #[serde(default)]
     pub unresolved: Vec<String>,
@@ -171,9 +171,10 @@ pub struct PackDraft {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateModeAiResponse {
+    #[serde(default)]
     pub reply: String,
     #[serde(default)]
-    pub brief: Option<PackBrief>,
+    pub brief: Option<CreateModeBrief>,
     /// Machine search intent for Modpack Index / catalogs (step 1).
     #[serde(default)]
     pub search: Option<crate::modpack_index::MpiSearchQuery>,
@@ -197,6 +198,9 @@ pub struct CreateChatSession {
     pub messages: Vec<CreateChatMessage>,
     #[serde(default)]
     pub draft: Option<PackDraft>,
+    /// Last Curate loop snapshot (pillars / memory / partial) — optional, forward-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curation: Option<crate::create_mode_curation::CurationSessionPersist>,
     #[serde(default)]
     pub updated_at: String,
 }
@@ -204,20 +208,20 @@ pub struct CreateChatSession {
 /// Progress callback for assemble/install phases.
 pub type ProgressFn = Box<dyn FnMut(&str, usize, usize, &str) + Send>;
 
-pub fn parse_pack_brief(raw: &str) -> Result<PackBrief, String> {
+pub fn parse_pack_brief(raw: &str) -> Result<CreateModeBrief, String> {
     let trimmed = strip_json_fences(raw);
-    // Accept either bare PackBrief or { brief: ... } / CreateModeAiResponse.
-    if let Ok(brief) = serde_json::from_str::<PackBrief>(trimmed) {
+    // Accept either bare CreateModeBrief or { brief: ... } / CreateModeAiResponse.
+    if let Ok(brief) = serde_json::from_str::<CreateModeBrief>(trimmed) {
         return Ok(normalize_brief(brief));
     }
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
         if let Some(b) = v.get("brief") {
-            let brief: PackBrief =
+            let brief: CreateModeBrief =
                 serde_json::from_value(b.clone()).map_err(|e| format!("invalid brief: {e}"))?;
             return Ok(normalize_brief(brief));
         }
     }
-    Err("could not parse PackBrief JSON".into())
+    Err("could not parse CreateModeBrief JSON".into())
 }
 
 pub fn parse_create_mode_ai_response(raw: &str) -> Result<CreateModeAiResponse, String> {
@@ -240,7 +244,10 @@ pub fn parse_create_mode_ai_response(raw: &str) -> Result<CreateModeAiResponse, 
     if let Ok(brief) = parse_pack_brief(trimmed) {
         let search = search_from_brief(&brief);
         return Ok(CreateModeAiResponse {
-            reply: format!("Draft plan ready: {} ({} mods).", brief.title, brief.target_count),
+            reply: format!(
+                "Draft plan ready: {} ({} mods).",
+                brief.title, brief.target_count
+            ),
             brief: Some(brief),
             search: Some(search).filter(|s| s.theme.is_some() || !s.keywords.is_empty()),
         });
@@ -248,8 +255,8 @@ pub fn parse_create_mode_ai_response(raw: &str) -> Result<CreateModeAiResponse, 
     Err("AI response was not valid Create Mode JSON".into())
 }
 
-/// Build a coarse MpiSearchQuery from an existing PackBrief (no LLM).
-pub fn search_from_brief(brief: &PackBrief) -> crate::modpack_index::MpiSearchQuery {
+/// Build a coarse MpiSearchQuery from an existing CreateModeBrief (no LLM).
+pub fn search_from_brief(brief: &CreateModeBrief) -> crate::modpack_index::MpiSearchQuery {
     let mut keywords: Vec<String> = brief
         .must_have
         .iter()
@@ -288,7 +295,7 @@ pub fn search_from_brief(brief: &PackBrief) -> crate::modpack_index::MpiSearchQu
 
 /// Merge Modpack Index hints into mustHave (skip duplicates).
 pub fn merge_mpi_hints_into_brief(
-    brief: &mut PackBrief,
+    brief: &mut CreateModeBrief,
     hints: &[crate::modpack_index::MpiModHint],
     max_extra: usize,
 ) {
@@ -298,10 +305,7 @@ pub fn merge_mpi_hints_into_brief(
         .flat_map(|m| {
             [
                 m.query.to_ascii_lowercase(),
-                m.slug_hint
-                    .as_deref()
-                    .unwrap_or("")
-                    .to_ascii_lowercase(),
+                m.slug_hint.as_deref().unwrap_or("").to_ascii_lowercase(),
             ]
         })
         .filter(|s| !s.is_empty())
@@ -343,7 +347,7 @@ fn strip_json_fences(raw: &str) -> &str {
     s.trim_end_matches("```").trim()
 }
 
-fn normalize_brief(mut brief: PackBrief) -> PackBrief {
+fn normalize_brief(mut brief: CreateModeBrief) -> CreateModeBrief {
     brief.loader = brief.loader.trim().to_ascii_lowercase();
     brief.target_count = brief.target_count.clamp(40, 120);
     if brief.categories.is_empty() {
@@ -358,9 +362,9 @@ fn normalize_brief(mut brief: PackBrief) -> PackBrief {
                 if i + 1 == n {
                     cat.count = brief.target_count.saturating_sub(allocated).max(1);
                 } else {
-                    let scaled =
-                        ((cat.count.max(1) as f64) * (brief.target_count as f64) / (sum as f64))
-                            .round() as u32;
+                    let scaled = ((cat.count.max(1) as f64) * (brief.target_count as f64)
+                        / (sum as f64))
+                        .round() as u32;
                     cat.count = scaled.max(1);
                     allocated = allocated.saturating_add(cat.count);
                 }
@@ -390,6 +394,129 @@ fn normalize_brief(mut brief: PackBrief) -> PackBrief {
         }
     }
     brief
+}
+
+/// Strict Intent-phase validation after normalize. Call before Catalog assemble.
+pub fn validate_pack_brief(brief: &CreateModeBrief) -> Result<(), String> {
+    if brief.title.trim().is_empty() {
+        return Err("CreateModeBrief.title is empty".into());
+    }
+    let loader = brief.loader.trim().to_ascii_lowercase();
+    if !matches!(
+        loader.as_str(),
+        "fabric" | "forge" | "neoforge" | "quilt" | "vanilla"
+    ) {
+        return Err(format!(
+            "CreateModeBrief.loader must be fabric|forge|neoforge|quilt (got '{loader}')"
+        ));
+    }
+    let ver = brief.mc_version.trim();
+    if ver.is_empty() {
+        return Err("CreateModeBrief.mcVersion is empty".into());
+    }
+    // Coarse Minecraft version: 1.20, 1.20.1, 1.21.4-pre…
+    let ver_ok = ver.chars().next().is_some_and(|c| c.is_ascii_digit()) && ver.contains('.');
+    if !ver_ok {
+        return Err(format!(
+            "CreateModeBrief.mcVersion looks invalid: '{ver}' (expected e.g. 1.20.1)"
+        ));
+    }
+    if brief.must_have.is_empty() && brief.categories.is_empty() {
+        return Err("CreateModeBrief needs mustHave and/or categories".into());
+    }
+    if !(40..=120).contains(&brief.target_count) {
+        return Err(format!(
+            "CreateModeBrief.targetCount out of range: {}",
+            brief.target_count
+        ));
+    }
+    Ok(())
+}
+
+/// Ollama Structured Outputs schema for Create Mode Intent JSON (`format` field).
+/// OpenAI-compat path keeps `response_format: json_object` + validate_pack_brief.
+pub fn create_mode_response_json_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "required": ["reply", "search", "brief"],
+        "properties": {
+            "reply": { "type": "string" },
+            "search": {
+                "type": "object",
+                "properties": {
+                    "loader": { "type": ["string", "null"] },
+                    "version": { "type": ["string", "null"] },
+                    "theme": { "type": ["string", "null"] },
+                    "keywords": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                }
+            },
+            "brief": {
+                "type": "object",
+                "required": ["title", "mcVersion", "loader", "targetCount"],
+                "properties": {
+                    "title": { "type": "string" },
+                    "mcVersion": { "type": "string" },
+                    "loader": { "type": "string" },
+                    "targetCount": { "type": "integer" },
+                    "mustHave": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["query"],
+                            "properties": {
+                                "query": { "type": "string" },
+                                "slugHint": { "type": ["string", "null"] },
+                                "reason": { "type": "string" }
+                            }
+                        }
+                    },
+                    "categories": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["id", "query", "count"],
+                            "properties": {
+                                "id": { "type": "string" },
+                                "query": { "type": "string" },
+                                "count": { "type": "integer" },
+                                "reason": { "type": "string" }
+                            }
+                        }
+                    },
+                    "exclude": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Compact candidate line for Rank prompt (no URLs / file ids).
+pub fn format_candidates_for_rank(mods: &[PackDraftMod], limit: usize) -> String {
+    mods.iter()
+        .take(limit)
+        .enumerate()
+        .map(|(i, m)| {
+            format!(
+                "{}. {} ({}) [{}] — {}",
+                i + 1,
+                m.name,
+                m.slug,
+                m.provider,
+                if m.reason.is_empty() {
+                    m.category.as_str()
+                } else {
+                    m.reason.as_str()
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn prefer_short_query(query: &str) -> String {
@@ -434,13 +561,13 @@ const KNOWN_MUST_HAVE: &[&str] = &[
     "forge config",
 ];
 
-/// Build a PackBrief without an LLM: default category budgets + must-haves from known names / quotes.
+/// Build a CreateModeBrief without an LLM: default category budgets + must-haves from known names / quotes.
 pub fn brief_from_prompt(
     prompt: &str,
     mc_version: &str,
     loader: &str,
     target_count: u32,
-) -> PackBrief {
+) -> CreateModeBrief {
     let prompt = prompt.trim();
     let target = target_count.clamp(40, 120);
     let title = {
@@ -453,7 +580,7 @@ pub fn brief_from_prompt(
         }
     };
     let must_have = extract_must_haves(prompt);
-    normalize_brief(PackBrief {
+    normalize_brief(CreateModeBrief {
         title,
         mc_version: mc_version.trim().to_string(),
         loader: loader.trim().to_ascii_lowercase(),
@@ -618,7 +745,7 @@ pub fn default_categories(target: u32) -> Vec<CategoryBudget> {
 }
 
 /// Abstraction over Modrinth search for unit tests.
-pub trait ModSearch {
+pub trait ModSearch: Sync {
     fn search(&self, query: &ProviderSearchQuery) -> Result<SearchPage, String>;
     fn get_project(&self, id_or_slug: &str) -> Result<ProjectInfo, String>;
 }
@@ -677,6 +804,7 @@ impl LiveCatalogSearch {
                 query.offset.unwrap_or(0),
                 query.limit.unwrap_or(10).clamp(1, 20),
                 Some(2), // popularity
+                None,
             )
             .map_err(|e| e.to_string())?;
 
@@ -711,6 +839,9 @@ impl LiveCatalogSearch {
                     license: None,
                     client_side: None,
                     server_side: None,
+                    issues_url: None,
+                    source_url: None,
+                    date_created: None,
                 });
             }
         }
@@ -734,15 +865,10 @@ impl ModSearch for LiveCatalogSearch {
             Err(mr_err) => {
                 // CF lookup by slug → retry Modrinth with CF slug (often identical).
                 let loader = None;
-                if let Ok(page) = self.curseforge.search_content(
-                    6,
-                    id_or_slug,
-                    None,
-                    loader,
-                    0,
-                    5,
-                    Some(2),
-                ) {
+                if let Ok(page) =
+                    self.curseforge
+                        .search_content(6, id_or_slug, None, loader, 0, 5, Some(2), None)
+                {
                     for hit in page.hits {
                         if hit.slug.eq_ignore_ascii_case(id_or_slug)
                             || hit.name.eq_ignore_ascii_case(id_or_slug)
@@ -760,14 +886,18 @@ impl ModSearch for LiveCatalogSearch {
 }
 
 pub struct AssembleOptions<'a> {
-    pub brief: &'a PackBrief,
+    pub brief: &'a CreateModeBrief,
     pub installed_ids: HashSet<String>,
     pub max_pages_per_category: u32,
     pub page_size: u32,
     pub on_progress: Option<&'a mut dyn FnMut(&str, usize, usize, &str)>,
 }
 
-fn base_query(brief: &PackBrief, query: Option<String>, category: Option<String>) -> ProviderSearchQuery {
+fn base_query(
+    brief: &CreateModeBrief,
+    query: Option<String>,
+    category: Option<String>,
+) -> ProviderSearchQuery {
     ProviderSearchQuery {
         query,
         minecraft_version: Some(brief.mc_version.clone()),
@@ -781,13 +911,12 @@ fn base_query(brief: &PackBrief, query: Option<String>, category: Option<String>
     }
 }
 
-fn category_search_plans(cat: &CategoryBudget) -> Vec<(Option<String>, Option<String>, &'static str)> {
+fn category_search_plans(
+    cat: &CategoryBudget,
+) -> Vec<(Option<String>, Option<String>, &'static str)> {
     // (query, facet, sort) — try focused strategies until budget filled.
     let mut plans = Vec::new();
-    let facet = cat
-        .facet
-        .clone()
-        .or_else(|| modrinth_facet_for_id(&cat.id));
+    let facet = cat.facet.clone().or_else(|| modrinth_facet_for_id(&cat.id));
     let primary = cat.query.trim().to_string();
 
     if !primary.is_empty() {
@@ -865,7 +994,9 @@ fn must_have_score(query: &str, p: &ProjectInfo) -> u64 {
 }
 
 fn pick_best_must_have(query: &str, results: Vec<ProjectInfo>) -> Option<ProjectInfo> {
-    results.into_iter().max_by_key(|p| must_have_score(query, p))
+    results
+        .into_iter()
+        .max_by_key(|p| must_have_score(query, p))
 }
 
 fn is_library_mod(p: &ProjectInfo) -> bool {
@@ -948,7 +1079,10 @@ pub fn assemble_pack_draft<S: ModSearch>(
     searcher: &S,
     opts: AssembleOptions<'_>,
 ) -> Result<PackDraft, String> {
+    use rayon::prelude::*;
+
     let brief = opts.brief;
+    validate_pack_brief(brief)?;
     let target = brief.target_count.clamp(40, 120) as usize;
     let page_size = opts.page_size.clamp(1, 100);
     let max_pages = opts.max_pages_per_category.max(1);
@@ -985,53 +1119,64 @@ pub fn assemble_pack_draft<S: ModSearch>(
     let work_units = brief.must_have.len() + brief.categories.len() + 1;
     let mut done_units = 0usize;
 
-    // 1) mustHave first — slug hint, then scored search
-    for mh in &brief.must_have {
+    report(
+        &mut on_progress,
+        "catalog",
+        0,
+        work_units.max(1),
+        "Resolving must-have…",
+    );
+
+    // 1) Parallel mustHave HTTP lookups, then sequential merge into draft.
+    let must_results: Vec<(usize, String, String, Option<ProjectInfo>)> = brief
+        .must_have
+        .par_iter()
+        .enumerate()
+        .map(|(idx, mh)| {
+            let mut found = None;
+            if let Some(hint) = mh.slug_hint.as_deref().filter(|s| !s.trim().is_empty()) {
+                if let Ok(p) = searcher.get_project(hint.trim()) {
+                    found = Some(p);
+                }
+            }
+            if found.is_none() {
+                let mut q = base_query(brief, Some(mh.query.clone()), None);
+                q.limit = Some(page_size.min(25));
+                q.offset = Some(0);
+                q.sort = Some("relevance".into());
+                if let Ok(page) = searcher.search(&q) {
+                    found = pick_best_must_have(&mh.query, page.results);
+                }
+            }
+            if found.is_none() {
+                let mut q = base_query(brief, Some(mh.query.clone()), None);
+                q.limit = Some(page_size.min(25));
+                q.offset = Some(0);
+                q.sort = Some("downloads".into());
+                if let Ok(page) = searcher.search(&q) {
+                    found = pick_best_must_have(&mh.query, page.results);
+                }
+            }
+            let reason = if mh.reason.is_empty() {
+                "Must-have".into()
+            } else {
+                mh.reason.clone()
+            };
+            (idx, mh.query.clone(), reason, found)
+        })
+        .collect();
+
+    for (_idx, query, reason, found) in must_results {
         if mods.len() >= target {
             break;
         }
-        let label = mh
-            .slug_hint
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(mh.query.as_str());
         report(
             &mut on_progress,
-            "search",
+            "catalog",
             done_units,
             work_units.max(1),
-            label,
+            &query,
         );
-
-        let mut found = None;
-        if let Some(hint) = mh.slug_hint.as_deref().filter(|s| !s.trim().is_empty()) {
-            if let Ok(p) = searcher.get_project(hint.trim()) {
-                found = Some(p);
-            }
-        }
-        if found.is_none() {
-            let mut q = base_query(brief, Some(mh.query.clone()), None);
-            q.limit = Some(page_size.min(25));
-            q.offset = Some(0);
-            q.sort = Some("relevance".into());
-            let page = searcher.search(&q)?;
-            found = pick_best_must_have(&mh.query, page.results);
-        }
-        // Fallback: downloads sort if relevance missed.
-        if found.is_none() {
-            let mut q = base_query(brief, Some(mh.query.clone()), None);
-            q.limit = Some(page_size.min(25));
-            q.offset = Some(0);
-            q.sort = Some("downloads".into());
-            let page = searcher.search(&q)?;
-            found = pick_best_must_have(&mh.query, page.results);
-        }
-
-        let reason = if mh.reason.is_empty() {
-            "Must-have".into()
-        } else {
-            mh.reason.clone()
-        };
         match found {
             Some(p) => {
                 if !force_push_must_have(
@@ -1042,71 +1187,93 @@ pub fn assemble_pack_draft<S: ModSearch>(
                     reason,
                     &mut library_count,
                 ) {
-                    unresolved.push(mh.query.clone());
+                    unresolved.push(query);
                 }
             }
-            None => unresolved.push(mh.query.clone()),
+            None => unresolved.push(query),
         }
         done_units += 1;
     }
 
-    // 2) category budgets with multi-strategy search
+    // 2) Parallel category page fetches (first plan each), then sequential fill.
+    report(
+        &mut on_progress,
+        "catalog",
+        done_units,
+        work_units.max(1),
+        "Searching categories…",
+    );
+
+    let cat_hits: Vec<(usize, String, String, bool, Vec<ProjectInfo>)> = brief
+        .categories
+        .par_iter()
+        .enumerate()
+        .map(|(idx, cat)| {
+            let allow_lib = is_library_category_id(&cat.id);
+            let reason = if cat.reason.is_empty() {
+                format!("Category {}", cat.id)
+            } else {
+                cat.reason.clone()
+            };
+            let mut hits = Vec::new();
+            if cat.count > 0 {
+                for (query, facet, sort) in category_search_plans(cat) {
+                    let pages = max_pages + 1;
+                    if let Ok(page_hits) = search_pages(
+                        searcher,
+                        base_query(brief, query, facet),
+                        page_size,
+                        pages,
+                        sort,
+                    ) {
+                        hits.extend(page_hits);
+                    }
+                    if hits.len() >= (cat.count as usize).saturating_mul(3) {
+                        break;
+                    }
+                }
+            }
+            (idx, cat.id.clone(), reason, allow_lib, hits)
+        })
+        .collect();
+
     let mut shortfall = 0usize;
-    for cat in &brief.categories {
+    for (idx, cat_id, reason, allow_lib, hits) in cat_hits {
         if mods.len() >= target {
             break;
         }
+        let cat = &brief.categories[idx];
         if cat.count == 0 {
             done_units += 1;
             continue;
         }
         report(
             &mut on_progress,
-            "search",
+            "catalog",
             done_units,
             work_units.max(1),
             &cat.query,
         );
         let want = cat.count.max(1) as usize;
         let mut taken = 0usize;
-        let allow_lib = is_library_category_id(&cat.id);
-        let reason = if cat.reason.is_empty() {
-            format!("Category {}", cat.id)
-        } else {
-            cat.reason.clone()
-        };
-
-        for (query, facet, sort) in category_search_plans(cat) {
+        for p in hits {
             if mods.len() >= target || taken >= want {
                 break;
             }
-            let pages = max_pages + if taken == 0 { 1 } else { 0 };
-            let hits = search_pages(
-                searcher,
-                base_query(brief, query, facet),
-                page_size,
-                pages,
-                sort,
-            )?;
-            for p in hits {
-                if mods.len() >= target || taken >= want {
-                    break;
-                }
-                let allow = allow_lib || library_count < library_cap;
-                if try_add_mod(
-                    &mut mods,
-                    &mut seen,
-                    &exclude,
-                    p,
-                    reason.clone(),
-                    cat.id.clone(),
-                    target,
-                    library_cap,
-                    &mut library_count,
-                    allow,
-                ) {
-                    taken += 1;
-                }
+            let allow = allow_lib || library_count < library_cap;
+            if try_add_mod(
+                &mut mods,
+                &mut seen,
+                &exclude,
+                p,
+                reason.clone(),
+                cat_id.clone(),
+                target,
+                library_cap,
+                &mut library_count,
+                allow,
+            ) {
+                taken += 1;
             }
         }
         if taken < want {
@@ -1119,7 +1286,7 @@ pub fn assemble_pack_draft<S: ModSearch>(
     if mods.len() < target {
         report(
             &mut on_progress,
-            "search",
+            "catalog",
             done_units,
             work_units.max(1),
             "diverse fill",
@@ -1140,7 +1307,6 @@ pub fn assemble_pack_draft<S: ModSearch>(
                 if mods.len() >= target {
                     break;
                 }
-                // Prefer non-libraries during fill.
                 let allow_lib = library_count < library_cap / 2;
                 try_add_mod(
                     &mut mods,
@@ -1164,7 +1330,7 @@ pub fn assemble_pack_draft<S: ModSearch>(
 
     report(
         &mut on_progress,
-        "search",
+        "catalog",
         work_units.max(1),
         work_units.max(1),
         "done",
@@ -1302,11 +1468,7 @@ mod tests {
     impl ModSearch for MockSearch {
         fn search(&self, query: &ProviderSearchQuery) -> Result<SearchPage, String> {
             let q = query.query.clone().unwrap_or_default().to_ascii_lowercase();
-            let facet = query
-                .category
-                .as_deref()
-                .unwrap_or("")
-                .to_ascii_lowercase();
+            let facet = query.category.as_deref().unwrap_or("").to_ascii_lowercase();
             // Prefer exact query key; empty query matches fill/"", optionally filtered by facet tag in key "facet:utility".
             for (key, hits) in &self.by_query {
                 let key_l = key.to_ascii_lowercase();
@@ -1322,9 +1484,7 @@ mod tests {
                     let mut filtered = hits.clone();
                     if !facet.is_empty() {
                         filtered.retain(|p| {
-                            p.categories
-                                .iter()
-                                .any(|c| c.eq_ignore_ascii_case(&facet))
+                            p.categories.iter().any(|c| c.eq_ignore_ascii_case(&facet))
                                 || p.categories.is_empty()
                         });
                     }
@@ -1377,6 +1537,9 @@ mod tests {
             license: None,
             client_side: None,
             server_side: None,
+            issues_url: None,
+            source_url: None,
+            date_created: None,
         }
     }
 
@@ -1386,6 +1549,37 @@ mod tests {
             CREATE_MODE_SYSTEM_PROMPT.contains("same language as the user's latest message"),
             "Create Mode must pin reply language to the user message"
         );
+    }
+
+    #[test]
+    fn validate_pack_brief_rejects_bad_loader_and_version() {
+        let ok = CreateModeBrief {
+            title: "Industrial".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            target_count: 80,
+            must_have: vec![MustHaveSpec {
+                query: "create".into(),
+                slug_hint: None,
+                reason: "".into(),
+            }],
+            categories: vec![],
+            exclude: vec![],
+        };
+        assert!(validate_pack_brief(&ok).is_ok());
+
+        let mut bad = ok.clone();
+        bad.loader = "spigot".into();
+        assert!(validate_pack_brief(&bad).is_err());
+
+        bad = ok.clone();
+        bad.mc_version = "twenty".into();
+        assert!(validate_pack_brief(&bad).is_err());
+
+        bad = ok.clone();
+        bad.must_have.clear();
+        bad.categories.clear();
+        assert!(validate_pack_brief(&bad).is_err());
     }
 
     #[test]
@@ -1429,12 +1623,7 @@ mod tests {
 
     #[test]
     fn brief_from_prompt_picks_must_haves() {
-        let b = brief_from_prompt(
-            "tech with Create and JEI",
-            "1.20.1",
-            "fabric",
-            80,
-        );
+        let b = brief_from_prompt("tech with Create and JEI", "1.20.1", "fabric", 80);
         assert!(!b.categories.is_empty());
         assert_eq!(b.mc_version, "1.20.1");
         assert_eq!(b.loader, "fabric");
@@ -1466,7 +1655,7 @@ mod tests {
             projects: vec![hits[0].clone()],
         };
 
-        let brief = PackBrief {
+        let brief = CreateModeBrief {
             title: "Test".into(),
             mc_version: "1.20.1".into(),
             loader: "fabric".into(),
@@ -1508,7 +1697,7 @@ mod tests {
 
     #[test]
     fn must_have_picks_best_name_match() {
-        let brief = PackBrief {
+        let brief = CreateModeBrief {
             title: "T".into(),
             mc_version: "1.20.1".into(),
             loader: "fabric".into(),
@@ -1598,7 +1787,7 @@ mod tests {
             ],
             projects: vec![],
         };
-        let brief = PackBrief {
+        let brief = CreateModeBrief {
             title: "T".into(),
             mc_version: "1.20.1".into(),
             loader: "fabric".into(),
@@ -1624,7 +1813,15 @@ mod tests {
         };
         // normalize soft-caps library
         let brief = normalize_brief(brief);
-        assert!(brief.categories.iter().find(|c| c.id == "library").unwrap().count <= 5);
+        assert!(
+            brief
+                .categories
+                .iter()
+                .find(|c| c.id == "library")
+                .unwrap()
+                .count
+                <= 5
+        );
 
         let draft = assemble_pack_draft(
             &searcher,
@@ -1652,7 +1849,7 @@ mod tests {
     #[test]
     fn empty_draft_install_guard() {
         let draft = PackDraft {
-            brief: PackBrief {
+            brief: CreateModeBrief {
                 title: "x".into(),
                 mc_version: "1.20.1".into(),
                 loader: "fabric".into(),
@@ -1685,7 +1882,9 @@ mod pack_theme_tests {
     #[test]
     fn pack_themes_are_nonempty_offline() {
         let cats = crate::modpack_index::list_pack_theme_categories();
-        assert!(cats.iter().any(|c| c.slug == "sci-fi" || c.kind == "modpack"));
+        assert!(cats
+            .iter()
+            .any(|c| c.slug == "sci-fi" || c.kind == "modpack"));
         assert!(cats.len() >= 5);
     }
 }

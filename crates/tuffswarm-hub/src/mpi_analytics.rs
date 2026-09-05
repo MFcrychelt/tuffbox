@@ -26,7 +26,10 @@ pub struct SupabaseCreds {
 
 pub fn creds_from_env() -> Option<SupabaseCreds> {
     let url = std::env::var("SUPABASE_URL").ok()?.trim().to_string();
-    let key = std::env::var("SUPABASE_SERVICE_ROLE_KEY").ok()?.trim().to_string();
+    let key = std::env::var("SUPABASE_SERVICE_ROLE_KEY")
+        .ok()?
+        .trim()
+        .to_string();
     if url.is_empty() || key.is_empty() {
         return None;
     }
@@ -37,9 +40,11 @@ pub fn creds_from_env() -> Option<SupabaseCreds> {
 }
 
 fn pack_id(hit: &Value) -> Option<u64> {
-    hit.get("id")
-        .and_then(|v| v.as_u64())
-        .or_else(|| hit.get("id").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()))
+    hit.get("id").and_then(|v| v.as_u64()).or_else(|| {
+        hit.get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok())
+    })
 }
 
 fn pack_downloads(hit: &Value) -> u64 {
@@ -148,8 +153,7 @@ async fn sync_by_categories(creds: &SupabaseCreds, packs_per_category: u32) -> R
     let themes = tuffbox_core::modpack_index::PACK_THEMES;
     info!(
         themes = themes.len(),
-        packs_per_category,
-        "MPI category crawl starting"
+        packs_per_category, "MPI category crawl starting"
     );
 
     for theme in themes {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { fade, fly, scale, slide } from "svelte/transition";
-  import { quintOut, backOut } from "svelte/easing";
+  import { fade, fly, slide } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
   import {
     Plus,
     Folder,
@@ -11,7 +11,6 @@
     RefreshCw,
     Play,
     Square,
-    Pencil,
     Tags,
     Share2,
     Copy,
@@ -22,7 +21,11 @@
     Package,
     Wrench,
     Minus,
-  } from "lucide-svelte";
+    ImageIcon,
+    Eraser,
+    Search,
+    X,
+  } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
   import { open as openShell } from "@tauri-apps/plugin-shell";
@@ -31,17 +34,22 @@
     projectPath,
     projectInfo,
     ideStageRequest,
-    newProjectOpen,
+    openAddInstance,
     runningInstances,
     isProjectRunning,
     formatPlaytime,
     authState,
     skinPath,
     loginTypeLabel,
+    loginModalOpen,
+    uiScalePercentLive,
     type RecentProject,
   } from "../lib/store";
+  import { homeIcons, homeStats } from "../lib/homeBootstrap";
   import { toasts } from "../lib/toast";
-  import { api } from "../lib/api";
+  import { listen } from "@tauri-apps/api/event";
+  import { api, githubInspectMeta } from "../lib/api";
+  import { copyText } from "../lib/clipboard";
   import { launchWithFeedback, killWithFeedback } from "../lib/launch";
   import {
     DEFAULT_GROUP,
@@ -54,66 +62,88 @@
     folderFromDrop,
     type GroupMap,
   } from "../lib/libraryGroups";
+  import {
+    isValidSortMode,
+    matchesInstanceFilter,
+    sortInstances,
+    type SortMode,
+  } from "../lib/librarySort";
+  import { portal } from "../lib/portal";
   import PromptDialog from "./PromptDialog.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
+  import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
 
-  export let currentView:
-    | "dashboard"
-    | "ide"
-    | "mods"
-    | "graph"
-    | "diagnostics"
-    | "snapshots"
-    | "configs"
-    | "settings"
-    | "project-settings"
-    | "ore-gen"
-    | "recipes"
-    | "quests"
-    | "library"
-    | "chats"
-    | "me"
-    | "world";
+  let {
+    currentView = $bindable(),
+    toolbarLeading,
+  }: {
+    currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world";
+    /** Optional leading toolbar slot (Library tabs render here). */
+    toolbarLeading?: import("svelte").Snippet;
+  } = $props();
 
   const LONG_PRESS_MS = 420;
   const MOVE_CANCEL_PX = 10;
 
-  let selectedPath: string | null = $projectPath;
-  let launching: string | null = null;
-  let actionBusy = false;
-  let exportMenuOpen = false;
-  let addMenuOpen = false;
-  let foldersMenuOpen = false;
-  let groupMap: GroupMap = loadGroupMap();
-  let collapsed = loadCollapsedGroups();
-  let projectStats: Record<string, { playtime: number }> = {};
-  let refreshing = false;
+  let selectedPath = $state<string | null>($projectPath);
+  let launching = $state<string | null>(null);
+  let actionBusy = $state(false);
+  let exportMenuOpen = $state(false);
+  let addMenuOpen = $state(false);
+  let moreMenuOpen = $state(false);
+  let githubImportOpen = $state(false);
+  let githubConfirmOpen = $state(false);
+  let githubInstallActive = $state(false);
+  let githubPendingSource = $state("");
+  let githubInspectSummary = $state("");
+  let foldersMenuOpen = $state(false);
+  let instanceFilter = $state("");
+  /** Library sort mode; persisted in localStorage. */
+  const SORT_KEY = "tuffbox.library.sort";
+  let sortMode = $state<SortMode>(
+    ((): SortMode => {
+      try {
+        const v = localStorage.getItem(SORT_KEY);
+        return isValidSortMode(v) ? v : "recent";
+      } catch {
+        return "recent";
+      }
+    })(),
+  );
+  function setSortMode(m: SortMode) {
+    sortMode = m;
+    try {
+      localStorage.setItem(SORT_KEY, m);
+    } catch {
+      /* ignore */
+    }
+  }
+  let groupMap = $state<GroupMap>(loadGroupMap());
+  let collapsed = $state(loadCollapsedGroups());
+  let projectStats = $state<Record<string, { playtime: number }>>({});
+  let refreshing = $state(false);
 
-  let showClonePrompt = false;
-  let cloneTarget: RecentProject | null = null;
-  let clonePromptName = "";
+  let showClonePrompt = $state(false);
+  let cloneTarget = $state<RecentProject | null>(null);
+  let clonePromptName = $state("");
 
-  let showGroupPrompt = false;
-  let groupTarget: RecentProject | null = null;
-  let groupPromptName = DEFAULT_GROUP;
+  let showGroupPrompt = $state(false);
+  let groupTarget = $state<RecentProject | null>(null);
+  let groupPromptName = $state(DEFAULT_GROUP);
 
-  let ctxMenu: { x: number; y: number; project: RecentProject } | null = null;
+  let ctxMenu = $state<{ x: number; y: number; project: RecentProject } | null>(null);
 
   /** Android-style long-press → drag onto another tile to make a folder. */
-  let dragSource: RecentProject | null = null;
-  let dropTargetPath: string | null = null;
-  let dropTargetGroup: string | null = null;
-  let dragGhost: { x: number; y: number; letter: string; colorA: string; colorB: string } | null =
-    null;
-  let suppressNextClick = false;
-  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-  let pressOrigin: { x: number; y: number; project: RecentProject } | null = null;
-  let dragging = false;
-  /** Path that just received a folder merge — brief celebrate pulse. */
-  let celebratePath: string | null = null;
-  let celebrateGroup: string | null = null;
-  let celebrateTimer: ReturnType<typeof setTimeout> | null = null;
-  let holdingPath: string | null = null;
+  let dragSource = $state<RecentProject | null>(null);
+  let dropTargetPath = $state<string | null>(null);
+  let dropTargetGroup = $state<string | null>(null);
+  let dragGhost = $state<{ x: number; y: number; letter: string; colorA: string; colorB: string } | null>(null);
+  let suppressNextClick = $state(false);
+  let longPressTimer = $state<ReturnType<typeof setTimeout> | null>(null);
+  let pressOrigin = $state<{ x: number; y: number; project: RecentProject } | null>(null);
+  let dragging = $state(false);
+  let holdingPath = $state<string | null>(null);
 
   function prefersReducedMotion(): boolean {
     if (typeof document === "undefined") return true;
@@ -121,76 +151,115 @@
     return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   }
 
-  function tileIntro(node: Element, params: { i?: number }) {
+  function tileIntro(node: Element) {
     if (prefersReducedMotion()) return { duration: 0 };
-    const i = params.i ?? 0;
-    return scale(node, {
-      start: 0.86,
-      duration: 380,
-      delay: Math.min(i, 14) * 42,
-      opacity: 0,
-      easing: backOut,
-    });
+    return fade(node, { duration: 160 });
   }
 
   function sideIntro(node: Element) {
     if (prefersReducedMotion()) return { duration: 0 };
-    return fly(node, { x: 18, duration: 280, opacity: 0, easing: quintOut });
+    return fly(node, { x: 12, duration: 200, opacity: 0, easing: quintOut });
   }
 
   function groupBodyIntro(node: Element) {
     if (prefersReducedMotion()) return { duration: 0 };
-    return slide(node, { duration: 260, easing: quintOut });
+    return slide(node, { duration: 200, easing: quintOut });
   }
 
-  function pulseCelebrate(path: string | null, groupName: string) {
-    if (celebrateTimer) clearTimeout(celebrateTimer);
-    celebratePath = path;
-    celebrateGroup = groupName;
-    celebrateTimer = setTimeout(() => {
-      celebratePath = null;
-      celebrateGroup = null;
-      celebrateTimer = null;
-    }, 900);
-  }
+  const selected = $derived($recentProjects.find((p) => p.path === selectedPath) ?? null);
+  const selectedRunning = $derived(
+    isProjectRunning(selectedPath, $runningInstances),
+  );
+  /** Multiplier from the Settings UI-scale (Auto mode derives it from screen size). */
+  const sideScale = $derived(($uiScalePercentLive ?? 100) / 100);
+  let selectingPath = false;
+  $effect(() => {
+    const recent = $recentProjects;
+    const current = $projectPath;
+    if (selectingPath) return;
+    if (selectedPath && !recent.some((p) => p.path === selectedPath)) {
+      selectedPath = recent[0]?.path ?? null;
+      return;
+    }
+    if (!selectedPath && recent.length) {
+      selectedPath =
+        current && recent.some((p) => p.path === current) ? current : recent[0].path;
+    }
+  });
 
-  $: selected = $recentProjects.find((p) => p.path === selectedPath) ?? null;
-  $: selectedRunning = isProjectRunning(selectedPath, $runningInstances);
-  $: if (selectedPath && !$recentProjects.some((p) => p.path === selectedPath)) {
-    selectedPath = $recentProjects[0]?.path ?? null;
-  }
-  $: if (!selectedPath && $recentProjects.length) {
-    selectedPath = $projectPath && $recentProjects.some((p) => p.path === $projectPath)
-      ? $projectPath
-      : $recentProjects[0].path;
-  }
-
-  $: grouped = (() => {
+  const grouped = $derived((() => {
     const byGroup = new Map<string, RecentProject[]>();
+    let total = 0;
     for (const p of $recentProjects) {
+      if (!matchesInstanceFilter(p, instanceFilter)) continue;
+      total++;
       const g = getGroup(groupMap, p.path);
       const list = byGroup.get(g) ?? [];
       list.push(p);
       byGroup.set(g, list);
     }
+    const q = instanceFilter.trim().length > 0;
     const names = listGroupNames(
       groupMap,
       $recentProjects.map((p) => p.path),
     ).filter((n) => byGroup.has(n));
-    return names.map((name) => ({
+    return { groups: names.map((name) => ({
       name,
-      projects: byGroup.get(name) ?? [],
-      collapsed: collapsed.has(name),
-    }));
-  })();
+      projects: sortInstances(byGroup.get(name) ?? [], sortMode, $homeStats),
+      collapsed: q ? false : collapsed.has(name),
+    })), total, filtered: q };
+  })());
+  const visibleCount = $derived(grouped.total);
 
-  $: existingGroups = listGroupNames(
+  const existingGroups = $derived(listGroupNames(
     groupMap,
     $recentProjects.map((p) => p.path),
-  );
+  ));
+
+  /** Instance icon data URLs (from listing iconPath), keyed by project path. */
+  const instanceIcons = $derived($homeIcons);
+  const iconRequested = new Set<string>();
+
+  /** Load a single instance's listing icon into the shared homeIcons store. */
+  async function loadInstanceIcon(path: string) {
+    try {
+      const listing = await api.project.getListing(path);
+      const rel = listing.iconPath;
+      if (!rel) {
+        homeIcons.update((m) => ({ ...m, [path]: null }));
+        return;
+      }
+      const data = await api.project.readListingAsset(rel, path);
+      homeIcons.update((m) => ({ ...m, [path]: data }));
+    } catch {
+      homeIcons.update((m) => ({ ...m, [path]: null }));
+    }
+  }
+
+  // Batch-fetch icons for instances that have none cached yet.
+  $effect(() => {
+    const missing = $recentProjects
+      .map((p) => p.path)
+      .filter((path) => !iconRequested.has(path) && instanceIcons[path] === undefined);
+    if (!missing.length) return;
+    for (const path of missing) iconRequested.add(path);
+    void api.home
+      .projectBriefs(missing)
+      .then((briefs) => {
+        const icons: Record<string, string | null> = {};
+        for (const b of briefs) icons[b.path] = b.iconDataUrl ?? null;
+        homeIcons.update((prev) => ({ ...prev, ...icons }));
+        for (const path of missing) {
+          if (icons[path] === undefined) void loadInstanceIcon(path);
+        }
+      })
+      .catch(() => {
+        for (const path of missing) void loadInstanceIcon(path);
+      });
+  });
 
   function gradientFrom(name: string) {
-    const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
+    const colors = ["var(--accent-primary)", "var(--accent-secondary)", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
@@ -214,40 +283,110 @@
     }
   }
 
-  $: ensureStats($recentProjects.map((p) => p.path));
+  $effect(() => {
+    ensureStats($recentProjects.map((p) => p.path));
+  });
 
-  function selectInstance(project: RecentProject) {
+  async function selectInstance(
+    project: RecentProject,
+    opts?: { keepMenus?: boolean },
+  ): Promise<string> {
+    if (!opts?.keepMenus) closeMenus();
+    selectingPath = true;
+    // Optimistic select so tiles feel clickable even while validate runs.
     selectedPath = project.path;
-    projectPath.set(project.path);
-    projectInfo.set(project.info);
-    closeMenus();
+    try {
+      const info = (await invoke("validate_project", {
+        path: project.path,
+      })) as RecentProject["info"] & { manifestPath?: string };
+      const manifestPath = info.manifestPath || project.path;
+      recentProjects.add(
+        { path: manifestPath, info },
+        {
+          reorder: false,
+          ...(manifestPath !== project.path
+            ? { replacePath: project.path }
+            : {}),
+        },
+      );
+      selectedPath = manifestPath;
+      projectPath.set(manifestPath);
+      projectInfo.set(info);
+      return manifestPath;
+    } catch {
+      selectedPath = project.path;
+      projectPath.set(project.path);
+      projectInfo.set(project.info);
+      return project.path;
+    } finally {
+      selectingPath = false;
+    }
   }
 
   function openInIde(project: RecentProject) {
-    selectInstance(project);
+    void selectInstance(project);
     ideStageRequest.set("content");
     currentView = "ide";
   }
 
   function openEdit(project: RecentProject) {
-    selectInstance(project);
-    currentView = "project-settings";
+    // Edit = open the pack in IDE Content (mods), not Setup.
+    openInIde(project);
   }
 
   async function launchInstance(project: RecentProject) {
     closeMenus();
-    if (isProjectRunning(project.path, $runningInstances)) {
-      await killWithFeedback(project.path);
+    if (
+      isProjectRunning(project.path, $runningInstances)
+    ) {
       return;
     }
     launching = project.path;
     try {
-      await invoke("set_last_opened_project", { path: project.path });
-      selectInstance(project);
-      await launchWithFeedback({ path: project.path, profile: "client" });
+      const path = await selectInstance(project);
+      if (
+        isProjectRunning(path, $runningInstances) ||
+        isProjectRunning(project.path, $runningInstances)
+      ) {
+        return;
+      }
+      await invoke("set_last_opened_project", { path });
+      // launchWithFeedback returns as soon as the JVM is spawned; keep the
+      // spinner honest by clearing on process-exited for this instance
+      // (same lifecycle as Dashboard.launch), not synchronously in finally.
+      let exited = false;
+      let unlisten: () => void = () => {};
+      const onExited = (event: { payload?: { id?: string } }) => {
+        if (event.payload?.id === path) {
+          exited = true;
+          unlisten();
+        }
+      };
+      listen<{ id: string; code?: number | null }>("process-exited", onExited).then((fn) => {
+        if (exited) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      });
+      try {
+        await launchWithFeedback({ path, profile: "client" });
+        // Fallback: if no exit event arrives (e.g. instance already counted
+        // as running elsewhere), clear after a generous grace period.
+        setTimeout(() => {
+          if (!exited) {
+            unlisten();
+            launching = null;
+          }
+        }, 15000);
+        return;
+      } catch (e) {
+        toasts.error(`Launch failed: ${e}`);
+      } finally {
+        unlisten();
+      }
     } finally {
-      launching = null;
-      void loadStats(project.path);
+      void loadStats(selectedPath ?? project.path);
     }
   }
 
@@ -262,6 +401,7 @@
     exportMenuOpen = false;
     addMenuOpen = false;
     foldersMenuOpen = false;
+    moreMenuOpen = false;
   }
 
   function clearLongPressTimer() {
@@ -293,7 +433,7 @@
     holdingPath = null;
     dragSource = project;
     closeMenus();
-    selectInstance(project);
+    void selectInstance(project);
     dragGhost = {
       x,
       y,
@@ -318,22 +458,30 @@
   function hitTestDrop(clientX: number, clientY: number) {
     dropTargetPath = null;
     dropTargetGroup = null;
-    const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
-    if (!el || !dragSource) return;
-    const tile = el.closest?.(".inst-tile") as HTMLElement | null;
-    if (tile) {
+    if (!dragSource) return;
+
+    // Prefer rect hit-testing over elementFromPoint — CSS `zoom` on `.app-shell`
+    // can desync the latter from the visual cursor in Chromium/Electron.
+    const tiles = document.querySelectorAll<HTMLElement>(".prism-lib .inst-tile[data-path]");
+    for (const tile of tiles) {
+      const r = tile.getBoundingClientRect();
+      if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
       const path = tile.dataset.path ?? null;
       if (path && path !== dragSource.path) {
         dropTargetPath = path;
         return;
       }
     }
-    const header = el.closest?.(".group-header") as HTMLElement | null;
-    if (header) {
+
+    const headers = document.querySelectorAll<HTMLElement>(".prism-lib .group-header[data-group]");
+    for (const header of headers) {
+      const r = header.getBoundingClientRect();
+      if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
       const name = header.dataset.group ?? null;
       if (name && name !== getGroup(groupMap, dragSource.path)) {
         dropTargetGroup = name;
       }
+      return;
     }
   }
 
@@ -354,7 +502,6 @@
       if (collapsed.has(result.groupName)) {
         collapsed = toggleCollapsed(collapsed, result.groupName);
       }
-      pulseCelebrate(target.path, result.groupName);
       toasts.success(
         result.created
           ? `Folder “${result.groupName}” created`
@@ -368,7 +515,6 @@
       if (collapsed.has(name)) {
         collapsed = toggleCollapsed(collapsed, name);
       }
-      pulseCelebrate(null, name);
       toasts.success(
         name === DEFAULT_GROUP ? "Removed from folder" : `Moved into “${name}”`,
       );
@@ -439,7 +585,7 @@
       suppressNextClick = false;
       return;
     }
-    selectInstance(project);
+    void selectInstance(project);
   }
 
   function openCtxMenu(e: MouseEvent, project: RecentProject) {
@@ -449,14 +595,15 @@
     }
     e.preventDefault();
     e.stopPropagation();
-    selectInstance(project);
     const pad = 8;
     const menuW = 230;
     const menuH = 420;
+    // Zoom is on <html> — clientX/Y and position:fixed share one frame.
     let x = e.clientX;
     let y = e.clientY;
     if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad;
     if (y + menuH > window.innerHeight - pad) y = window.innerHeight - menuH - pad;
+    void selectInstance(project, { keepMenus: true });
     ctxMenu = { x: Math.max(pad, x), y: Math.max(pad, y), project };
   }
 
@@ -465,6 +612,7 @@
     if (addMenuOpen && !t?.closest?.(".tb-add-wrap")) addMenuOpen = false;
     if (foldersMenuOpen && !t?.closest?.(".tb-folders-wrap")) foldersMenuOpen = false;
     if (exportMenuOpen && !t?.closest?.(".tb-export-wrap")) exportMenuOpen = false;
+    if (moreMenuOpen && !t?.closest?.(".side-more-wrap")) moreMenuOpen = false;
     if (!ctxMenu || e.button === 2) return;
     if (t?.closest?.(".pack-ctx-menu")) return;
     ctxMenu = null;
@@ -566,6 +714,45 @@
     await importFromSource(selected);
   }
 
+  async function importGithubRepo() {
+    addMenuOpen = false;
+    githubImportOpen = true;
+  }
+
+  async function confirmGithubImport(source: string) {
+    githubImportOpen = false;
+    const trimmed = source.trim();
+    if (!trimmed) return;
+    try {
+      const info = await api.transport.github.inspectSource(trimmed);
+      if (info.status === "publishing") {
+        toasts.error("This pack is still publishing oversized assets. Try again when the author finishes.");
+        return;
+      }
+      githubPendingSource = trimmed;
+      const version = info.packVersion ? ` v${info.packVersion}` : "";
+      const ready = info.ready
+        ? "ready"
+        : info.status
+          ? String(info.status)
+          : "packwiz pack";
+      const meta = githubInspectMeta(info);
+      githubInspectSummary = `${info.fullName || trimmed}${version} · ${ready}${
+        meta ? ` (${meta})` : ""
+      }. Install anonymously?`;
+      githubConfirmOpen = true;
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
+  async function confirmGithubInstall() {
+    githubConfirmOpen = false;
+    const source = githubPendingSource;
+    githubPendingSource = "";
+    if (source) await importFromSource(source);
+  }
+
   async function resolveImportTargetDir(): Promise<string> {
     try {
       const info = await api.launcher.instancesPathInfo();
@@ -581,6 +768,8 @@
 
   async function importFromSource(source: string) {
     actionBusy = true;
+    const isGithub = /^(gh:|https:\/\/github\.com\/|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$)/.test(source.trim()) && !/\.(mrpack|zip)$/i.test(source.trim());
+    if (isGithub) githubInstallActive = true;
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
@@ -598,12 +787,13 @@
       };
       const manifestPath = info.manifestPath || path;
       recentProjects.add({ path: manifestPath, info: info as RecentProject["info"] });
-      selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
+      void selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
       toasts.success(`Imported "${result.name ?? info.name ?? "pack"}"`);
     } catch (e) {
       toasts.error(String(e));
     } finally {
       actionBusy = false;
+      githubInstallActive = false;
     }
   }
 
@@ -627,12 +817,22 @@
       case "folder":
         await openSelectedFolder(project);
         break;
+      case "change-icon":
+        await changeInstanceIcon(project);
+        break;
+      case "clear-icon":
+        await clearInstanceIcon(project);
+        break;
       case "export-mrpack":
         actionBusy = true;
         try {
           const exported = await api.export.modrinthPack(null, project.path);
-          await navigator.clipboard.writeText(exported.path);
-          toasts.success(`Exported .mrpack: ${exported.path}`);
+          try {
+            await copyText(exported.path);
+            toasts.success(`Exported .mrpack — path copied: ${exported.path}`);
+          } catch {
+            toasts.success(`Exported .mrpack: ${exported.path}`);
+          }
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -643,8 +843,12 @@
         actionBusy = true;
         try {
           const exported = await api.export.prismInstance(null, project.path);
-          await navigator.clipboard.writeText(exported.path);
-          toasts.success(`Exported Prism zip: ${exported.path}`);
+          try {
+            await copyText(exported.path);
+            toasts.success(`Exported Prism zip — path copied: ${exported.path}`);
+          } catch {
+            toasts.success(`Exported Prism zip: ${exported.path}`);
+          }
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -660,7 +864,7 @@
         actionBusy = true;
         try {
           const path = await api.files.createDesktopShortcut(project.path);
-          toasts.success(`Shortcut created: ${path}`);
+          toasts.success(`Desktop shortcut created — double-click to launch: ${path}`);
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -672,8 +876,9 @@
         break;
       case "copy-path":
         try {
-          await navigator.clipboard.writeText(project.path);
-          toasts.success("Path copied");
+          const dir = await api.project.getDir(project.path);
+          await copyText(dir);
+          toasts.success("Instance folder path copied");
         } catch (e) {
           toasts.error(String(e));
         }
@@ -687,11 +892,37 @@
           );
           const downloaded = report.downloaded?.length ?? 0;
           const failed = report.failed?.length ?? 0;
-          toasts.success(
+
+          // Extended repair sweep: duplicates + wrong-loader jars, so the user
+          // gets a full health picture in one action instead of hunting
+          // through Diagnostics.
+          const dupes = (await api.mods.detectDuplicateModJars(project.path)) as Array<{
+            modId: string;
+            keepCandidate: string;
+            jars: unknown[];
+          }>;
+          const wrongLoader =
+            ((await api.mods.detectWrongLoader(project.path)) as Array<Record<string, unknown>>) ??
+            [];
+
+          const parts: string[] = [];
+          parts.push(
             downloaded === 0 && failed === 0
               ? "All mod files present and valid."
-              : `Repaired: ${downloaded} file(s) re-downloaded${failed ? `, ${failed} failed` : ""}.`,
+              : `Re-downloaded ${downloaded} file(s)${failed ? `, ${failed} failed` : ""}.`,
           );
+          if (dupes.length > 0) {
+            parts.push(`${dupes.length} duplicate group${dupes.length > 1 ? "s" : ""} — resolve in Mods → Duplicates.`);
+          }
+          if (wrongLoader.length > 0) {
+            parts.push(`${wrongLoader.length} wrong-loader jar(s) — disable in Mods → Wrong loader.`);
+          }
+          if (dupes.length === 0 && wrongLoader.length === 0) {
+            toasts.success(parts.join(" "));
+          } else {
+            // Problems found: warn instead of success so it draws the eye.
+            toasts.warning(`Repair finished with findings. ${parts.join(" ")}`, 10000);
+          }
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -730,6 +961,41 @@
     }
   }
 
+  /** Pick a PNG and apply it as the instance's listing icon (shared homeIcons store). */
+  async function changeInstanceIcon(project: RecentProject) {
+    const selected = await openDialog({
+      multiple: false,
+      title: `Choose icon for "${project.info.name}"`,
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (typeof selected !== "string" || !selected) return;
+    actionBusy = true;
+    try {
+      await api.project.setListingIcon(selected, project.path);
+      iconRequested.delete(project.path);
+      await loadInstanceIcon(project.path);
+      toasts.success(`Icon updated for "${project.info.name}"`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  /** Remove the custom listing icon and fall back to the gradient letter tile. */
+  async function clearInstanceIcon(project: RecentProject) {
+    actionBusy = true;
+    try {
+      await api.project.clearListingIcon(project.path);
+      homeIcons.update((prev) => ({ ...prev, [project.path]: null }));
+      toasts.info(`Icon cleared for "${project.info.name}"`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      actionBusy = false;
+    }
+  }
+
   async function confirmClone(newName: string) {
     showClonePrompt = false;
     if (!cloneTarget || !newName.trim()) return;
@@ -744,7 +1010,7 @@
       };
       const manifestPath = info.manifestPath || clonedPath;
       recentProjects.add({ path: manifestPath, info: info as RecentProject["info"] });
-      selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
+      void selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
       toasts.success(`Copied to: ${manifestPath}`);
     } catch (e) {
       toasts.error(String(e));
@@ -776,20 +1042,22 @@
 
   onDestroy(() => {
     clearLongPressTimer();
-    if (celebrateTimer) clearTimeout(celebrateTimer);
     endDrag();
   });
 </script>
 
-<div class="prism-lib lib-motion" class:drag-mode={dragging}>
+<div class="prism-lib" class:drag-mode={dragging}>
   <div class="prism-toolbar lib-toolbar-enter">
     <div class="tb-left">
+      {#if toolbarLeading}
+        <div class="tb-leading">{@render toolbarLeading()}</div>
+      {/if}
       <div class="tb-add-wrap">
         <button
           type="button"
           class="tb-btn primary"
           title="Add instance"
-          on:click|stopPropagation={() => (addMenuOpen = !addMenuOpen)}
+          onclick={(e) => { e.stopPropagation(); (addMenuOpen = !addMenuOpen);  }}
         >
           <Plus size={16} />
           <span>Add Instance</span>
@@ -797,36 +1065,72 @@
         </button>
         {#if addMenuOpen}
           <div class="tb-menu" role="menu">
-            <button type="button" role="menuitem" on:click={() => { addMenuOpen = false; newProjectOpen.set(true); }}>
+            <button type="button" role="menuitem" onclick={() => { addMenuOpen = false; openAddInstance("blank"); }}>
               <Plus size={14} /> Create new…
             </button>
-            <button type="button" role="menuitem" on:click={importPackFile} disabled={actionBusy}>
+            <button type="button" role="menuitem" onclick={importPackFile} disabled={actionBusy}>
               <FolderOpen size={14} /> Import file (.mrpack / .zip)
             </button>
-            <button type="button" role="menuitem" on:click={importInstanceFolder} disabled={actionBusy}>
+            <button type="button" role="menuitem" onclick={importInstanceFolder} disabled={actionBusy}>
               <Folder size={14} /> Import instance folder
+            </button>
+            <button type="button" role="menuitem" onclick={importGithubRepo} disabled={actionBusy}>
+              <Link2 size={14} /> Import GitHub repository
             </button>
           </div>
         {/if}
       </div>
+
+      <div class="tb-search" role="search">
+        <Search size={15} class="tb-search-icon" />
+        <input
+          type="text"
+          placeholder="Filter instances…"
+          aria-label="Filter instances"
+          spellcheck="false"
+          bind:value={instanceFilter}
+        />
+        {#if instanceFilter}
+          <button
+            type="button"
+            class="tb-search-clear"
+            aria-label="Clear filter"
+            onclick={() => (instanceFilter = "")}
+          >
+            <X size={13} />
+          </button>
+        {/if}
+      </div>
+
+      <select
+        class="tb-sort"
+        aria-label="Sort instances"
+        title="Sort instances"
+        value={sortMode}
+        onchange={(e) => setSortMode((e.currentTarget as HTMLSelectElement).value as SortMode)}
+      >
+        <option value="recent">Last played</option>
+        <option value="name">Name</option>
+        <option value="playtime">Most played</option>
+      </select>
 
       <div class="tb-folders-wrap">
         <button
           type="button"
           class="tb-btn"
           title="Folders"
-          on:click|stopPropagation={() => (foldersMenuOpen = !foldersMenuOpen)}
+          onclick={(e) => { e.stopPropagation(); (foldersMenuOpen = !foldersMenuOpen);  }}
         >
           <Folder size={16} />
           <span>Folders</span>
         </button>
         {#if foldersMenuOpen}
           <div class="tb-menu" role="menu">
-            <button type="button" role="menuitem" on:click={openInstancesFolder}>
+            <button type="button" role="menuitem" onclick={openInstancesFolder}>
               <FolderOpen size={14} /> Instances folder
             </button>
             {#if selected}
-              <button type="button" role="menuitem" on:click={() => { foldersMenuOpen = false; void openSelectedFolder(selected); }}>
+              <button type="button" role="menuitem" onclick={() => { foldersMenuOpen = false; void openSelectedFolder(selected); }}>
                 <Folder size={14} /> Selected instance
               </button>
             {/if}
@@ -834,7 +1138,7 @@
         {/if}
       </div>
 
-      <button type="button" class="tb-btn" title="Settings" on:click={() => (currentView = "settings")}>
+      <button type="button" class="tb-btn" title="Settings" onclick={() => (currentView = "settings")}>
         <Settings size={16} />
         <span>Settings</span>
       </button>
@@ -842,7 +1146,7 @@
         type="button"
         class="tb-btn"
         title="Help"
-        on:click={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
+        onclick={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
       >
         <HelpCircle size={16} />
         <span>Help</span>
@@ -852,7 +1156,7 @@
         class="tb-btn"
         title="Refresh"
         disabled={refreshing}
-        on:click={() => void refreshAll()}
+        onclick={() => void refreshAll()}
       >
         <span class:spinning={refreshing}><RefreshCw size={16} /></span>
         <span>Update</span>
@@ -865,7 +1169,7 @@
           type="button"
           class="tb-account"
           title="Account"
-          on:click={() => (currentView = "me")}
+          onclick={() => (currentView = "me")}
         >
           <HeadAvatar skinSrc={$skinPath} size={28} alt={$authState.profile.name} />
           <span class="tb-account-name">{$authState.profile.name}</span>
@@ -877,39 +1181,43 @@
           </span>
         </button>
       {:else}
-        <button type="button" class="tb-btn" on:click={() => (currentView = "me")}>
-          Account
+        <button type="button" class="tb-btn" onclick={() => loginModalOpen.set(true)}>
+          Sign in
         </button>
       {/if}
     </div>
   </div>
 
-  <div class="prism-body" class:is-dragging={dragging}>
+  <div class="prism-body" class:is-dragging={dragging} style={`--side-scale: ${sideScale}`}>
     <div class="prism-grid-pane">
       {#if $recentProjects.length === 0}
         <div class="empty-state">
           <h3>No instances yet</h3>
           <p>Create or import a pack to build your library.</p>
-          <button type="button" class="empty-cta" on:click={() => newProjectOpen.set(true)}>
+          <button type="button" class="empty-cta" onclick={() => openAddInstance("blank")}>
             <Plus size={16} /> Add Instance
+          </button>
+        </div>
+      {:else if visibleCount === 0}
+        <div class="empty-state">
+          <h3>No matches</h3>
+          <p>Nothing matches “{instanceFilter}”. Try another name, version or loader.</p>
+          <button type="button" class="empty-cta" onclick={() => (instanceFilter = "")}>
+            <X size={16} /> Clear filter
           </button>
         </div>
       {:else}
         <p class="drag-hint" class:visible={dragging}>
           Drop on another instance to make a folder
         </p>
-        {#each grouped as group, gi (group.name)}
-          <section
-            class="inst-group"
-            class:celebrate={celebrateGroup === group.name}
-            style={`--gi: ${gi}`}
-          >
+        {#each grouped.groups as group (group.name)}
+          <section class="inst-group">
             <button
               type="button"
               class="group-header"
               class:drop-target={dragging && dropTargetGroup === group.name}
               data-group={group.name}
-              on:click={() => toggleGroup(group.name)}
+              onclick={() => toggleGroup(group.name)}
               aria-expanded={!group.collapsed}
             >
               {#if group.collapsed}
@@ -922,7 +1230,7 @@
             </button>
             {#if !group.collapsed}
               <div class="inst-grid" transition:groupBodyIntro>
-                {#each group.projects as project, pi (project.path)}
+                {#each group.projects as project (project.path)}
                   <div
                     class="inst-tile"
                     class:selected={selectedPath === project.path}
@@ -930,30 +1238,40 @@
                     class:dragging={dragSource?.path === project.path}
                     class:drop-target={dropTargetPath === project.path}
                     class:holding={holdingPath === project.path && !dragging}
-                    class:celebrate={celebratePath === project.path || (celebrateGroup === group.name && !celebratePath)}
-                    class:jiggle={dragging && dragSource?.path !== project.path}
                     data-path={project.path}
-                    style={`--i: ${pi}; --jiggle-delay: ${pi * 40}ms`}
                     role="button"
                     tabindex="0"
-                    title="Hold and drag onto another instance to create a folder"
-                    in:tileIntro={{ i: pi }}
-                    on:click={() => onTileClick(project)}
-                    on:dblclick={() => !dragging && void launchInstance(project)}
-                    on:keydown={(e) => e.key === "Enter" && selectInstance(project)}
-                    on:contextmenu={(e) => openCtxMenu(e, project)}
-                    on:pointerdown={(e) => onTilePointerDown(e, project)}
-                    on:pointermove={onTilePointerMove}
-                    on:pointerup={onTilePointerUp}
-                    on:pointercancel={onTilePointerCancel}
+                    aria-label={`${project.info.name}. Hold and drag onto another instance to create a folder`}
+                    in:tileIntro
+                    onclick={() => onTileClick(project)}
+                    ondblclick={() => !dragging && void launchInstance(project)}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        selectInstance(project);
+                      }
+                    }}
+                    oncontextmenu={(e) => openCtxMenu(e, project)}
+                    onpointerdown={(e) => onTilePointerDown(e, project)}
+                    onpointermove={onTilePointerMove}
+                    onpointerup={onTilePointerUp}
+                    onpointercancel={onTilePointerCancel}
                   >
                     <div class="hold-ring" aria-hidden="true"></div>
                     <div
                       class="inst-icon"
+                      class:has-image={!!instanceIcons[project.path]}
                       class:folder-preview={dropTargetPath === project.path}
                       style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}
                     >
-                      {#if dropTargetPath === project.path && dragSource}
+                      {#if instanceIcons[project.path]}
+                        <img
+                          class="inst-icon-img"
+                          src={instanceIcons[project.path]!}
+                          alt=""
+                          draggable="false"
+                        />
+                      {:else if dropTargetPath === project.path && dragSource}
                         <span class="folder-stack" aria-hidden="true">
                           <span class="stack-a">{dragSource.info.name[0]?.toUpperCase()}</span>
                           <span class="stack-b">{project.info.name[0]?.toUpperCase()}</span>
@@ -962,7 +1280,10 @@
                         {project.info.name[0]?.toUpperCase() ?? "?"}
                       {/if}
                     </div>
-                    <span class="inst-name tb-truncate" title={project.info.name}>{project.info.name}</span>
+                    <span
+                      class="inst-name"
+                      title={project.info.name}
+                    >{project.info.name}</span>
                   </div>
                 {/each}
               </div>
@@ -970,6 +1291,23 @@
           </section>
         {/each}
       {/if}
+      <div class="lib-footer" aria-live="polite">
+        <span>
+          {#if selected}
+            Minecraft {selected.info.minecraftVersion} · {selected.info.loaderKind}
+            {#if projectStats[selected.path]?.playtime}
+              · {formatPlaytime(projectStats[selected.path].playtime)} played
+            {/if}
+          {:else}
+            —
+          {/if}
+        </span>
+        <span>
+          Total playtime: {formatPlaytime(
+            Object.values(projectStats).reduce((s, p) => s + (p?.playtime ?? 0), 0),
+          )}
+        </span>
+      </div>
     </div>
 
     <aside class="prism-side lib-side-enter" aria-label="Instance actions">
@@ -979,11 +1317,21 @@
             <div class="side-hero">
               <div
                 class="side-icon"
+                class:has-image={!!instanceIcons[selected.path]}
                 style={`background: linear-gradient(135deg, ${gradientFrom(selected.info.name)}, ${gradientFrom(selected.info.id)})`}
               >
-                {selected.info.name[0]?.toUpperCase() ?? "?"}
+                {#if instanceIcons[selected.path]}
+                  <img
+                    class="side-icon-img"
+                    src={instanceIcons[selected.path]!}
+                    alt=""
+                    draggable="false"
+                  />
+                {:else}
+                  {selected.info.name[0]?.toUpperCase() ?? "?"}
+                {/if}
               </div>
-              <div class="side-title tb-truncate-2" title={selected.info.name}>{selected.info.name}</div>
+              <div class="side-title" title={selected.info.name}>{selected.info.name}</div>
               <div class="side-meta">
                 {selected.info.minecraftVersion} · {selected.info.loaderKind}
               </div>
@@ -992,89 +1340,105 @@
             <div class="side-actions">
               <button
                 type="button"
-                class="side-btn launch"
-                disabled={actionBusy || launching === selected.path || selectedRunning}
-                on:click={() => void runAction("launch", selected)}
+                class={["side-btn", "launch", { stop: selectedRunning }]}
+                disabled={actionBusy || launching === selected.path}
+                onclick={() => void runAction(selectedRunning ? "stop" : "launch", selected)}
               >
                 {#if launching === selected.path}
                   <span class="mini-spinner"></span> Launching…
+                {:else if selectedRunning}
+                  <Square size={14} /> Stop
                 {:else}
-                  <Play size={16} fill="currentColor" /> Launch
+                  <Play size={16} fill="currentColor" /> Play
                 {/if}
               </button>
-              <button
-                type="button"
-                class="side-btn"
-                disabled={!selectedRunning || actionBusy}
-                on:click={() => void runAction("stop", selected)}
-              >
-                <Square size={14} /> Stop
-              </button>
-              <button type="button" class="side-btn" disabled={actionBusy} on:click={() => runAction("edit", selected)}>
-                <Pencil size={14} /> Edit
+              <div class="side-sep" aria-hidden="true"></div>
+              <button type="button" class="side-btn" disabled={actionBusy} onclick={() => runAction("open-ide", selected)}>
+                <Package size={14} /> Open IDE
               </button>
               <button
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                on:click={() => void runAction("change-group", selected)}
-              >
-                <Tags size={14} /> Change Group
-              </button>
-              <button
-                type="button"
-                class="side-btn"
-                disabled={actionBusy}
-                on:click={() => void runAction("folder", selected)}
+                onclick={() => void runAction("folder", selected)}
               >
                 <Folder size={14} /> Folder
               </button>
+              <button
+                type="button"
+                class="side-btn"
+                disabled={actionBusy}
+                onclick={() => void runAction("change-icon", selected)}
+              >
+                <ImageIcon size={14} /> Change icon…
+              </button>
+              {#if instanceIcons[selected.path]}
+                <button
+                  type="button"
+                  class="side-btn"
+                  disabled={actionBusy}
+                  onclick={() => void runAction("clear-icon", selected)}
+                >
+                  <Eraser size={14} /> Clear icon
+                </button>
+              {/if}
 
               <div class="tb-export-wrap">
                 <button
                   type="button"
                   class="side-btn"
                   disabled={actionBusy}
-                  on:click|stopPropagation={() => (exportMenuOpen = !exportMenuOpen)}
+                  onclick={(e) => { e.stopPropagation(); (exportMenuOpen = !exportMenuOpen);  }}
                 >
                   <Share2 size={14} /> Export <ChevronDown size={12} />
                 </button>
                 {#if exportMenuOpen}
                   <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
-                    <button type="button" role="menuitem" on:click={() => void runAction("export-mrpack", selected)}>
+                    <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", selected)}>
                       Export .mrpack
                     </button>
-                    <button type="button" role="menuitem" on:click={() => void runAction("export-prism", selected)}>
+                    <button type="button" role="menuitem" onclick={() => void runAction("export-prism", selected)}>
                       Export Prism zip
                     </button>
                   </div>
                 {/if}
               </div>
 
-              <button
-                type="button"
-                class="side-btn"
-                disabled={actionBusy}
-                on:click={() => void runAction("copy", selected)}
-              >
-                <Copy size={14} /> Copy
-              </button>
-              <button
-                type="button"
-                class="side-btn danger"
-                disabled={actionBusy}
-                on:click={() => void runAction("delete", selected)}
-              >
-                <Trash2 size={14} /> Delete
-              </button>
-              <button
-                type="button"
-                class="side-btn"
-                disabled={actionBusy}
-                on:click={() => void runAction("shortcut", selected)}
-              >
-                <Link2 size={14} /> Create Shortcut
-              </button>
+              <div class="side-more-wrap">
+                <button
+                  type="button"
+                  class="side-btn"
+                  onclick={(e) => { e.stopPropagation(); (moreMenuOpen = !moreMenuOpen); }}
+                >
+                  <Settings size={14} /> More <ChevronDown size={12} />
+                </button>
+                {#if moreMenuOpen}
+                  <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-group", selected); }}>
+                      <Tags size={14} /> Change Group
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy", selected); }}>
+                      <Copy size={14} /> Copy instance
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("shortcut", selected); }}>
+                      <Link2 size={14} /> Create Shortcut
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("repair", selected); }} disabled={actionBusy}>
+                      <Wrench size={14} /> Repair
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy-path", selected); }}>
+                      <Copy size={14} /> Copy path
+                    </button>
+                    <div class="menu-sep"></div>
+                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("remove", selected); }}>
+                      <Minus size={14} /> Remove from library
+                    </button>
+                    <button type="button" role="menuitem" class="danger" onclick={() => { moreMenuOpen = false; void runAction("delete", selected); }}>
+                      <Trash2 size={14} /> Delete from disk
+                    </button>
+                  </div>
+                {/if}
+              </div>
             </div>
           </div>
         {/key}
@@ -1083,29 +1447,13 @@
       {/if}
     </aside>
   </div>
-
-  <div class="prism-status">
-    <span>
-      {#if selected}
-        Minecraft {selected.info.minecraftVersion}
-      {:else}
-        —
-      {/if}
-    </span>
-    <span>
-      {#if selected}
-        Total playtime: {formatPlaytime(projectStats[selected.path]?.playtime ?? 0)}
-      {:else}
-        Total playtime: —
-      {/if}
-    </span>
-  </div>
 </div>
 
 {#if dragGhost}
   <div
     class="drag-ghost"
-    style={`left:${dragGhost.x}px; top:${dragGhost.y}px; background: linear-gradient(135deg, ${dragGhost.colorA}, ${dragGhost.colorB})`}
+    use:portal
+    style={`position:fixed; left:${dragGhost.x}px; top:${dragGhost.y}px; z-index:10000; background: linear-gradient(135deg, ${dragGhost.colorA}, ${dragGhost.colorB})`}
     aria-hidden="true"
   >
     <span class="ghost-letter">{dragGhost.letter}</span>
@@ -1115,44 +1463,63 @@
 
 {#if ctxMenu}
   {@const menuProject = ctxMenu.project}
-  <div class="pack-ctx-menu" style={`left:${ctxMenu.x}px; top:${ctxMenu.y}px`} role="menu">
-    <button type="button" role="menuitem" on:click={() => void runAction("launch", menuProject)} disabled={actionBusy}>
+  <div
+    class="pack-ctx-menu"
+    use:portal
+    style={`position:fixed; left:${ctxMenu.x}px; top:${ctxMenu.y}px; z-index:10000`}
+    role="menu"
+  >
+    <button
+      type="button"
+      role="menuitem"
+      onclick={() =>
+        void runAction(
+          isProjectRunning(menuProject.path, $runningInstances) ? "stop" : "launch",
+          menuProject,
+        )}
+      disabled={actionBusy}
+    >
       {#if isProjectRunning(menuProject.path, $runningInstances)}
         <Square size={14} /> Stop
       {:else}
-        <Play size={14} /> Launch
+        <Play size={14} /> Play
       {/if}
     </button>
-    <button type="button" role="menuitem" on:click={() => runAction("edit", menuProject)}>
-      <Pencil size={14} /> Edit
+    <button type="button" role="menuitem" onclick={() => runAction("open-ide", menuProject)}>
+      <Package size={14} /> Open IDE
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("change-group", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("change-group", menuProject)}>
       <Tags size={14} /> Change Group
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("folder", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("folder", menuProject)}>
       <Folder size={14} /> Folder
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("copy", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("change-icon", menuProject)} disabled={actionBusy}>
+      <ImageIcon size={14} /> Change icon…
+    </button>
+    {#if instanceIcons[menuProject.path]}
+      <button type="button" role="menuitem" onclick={() => void runAction("clear-icon", menuProject)} disabled={actionBusy}>
+        <Eraser size={14} /> Clear icon
+      </button>
+    {/if}
+    <button type="button" role="menuitem" onclick={() => void runAction("copy", menuProject)}>
       <Copy size={14} /> Copy
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("shortcut", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("shortcut", menuProject)}>
       <Link2 size={14} /> Create Shortcut
     </button>
     <div class="menu-sep"></div>
-    <button type="button" role="menuitem" on:click={() => runAction("open-ide", menuProject)}>
-      <Package size={14} /> Open in IDE → Mods
-    </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("copy-path", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("copy-path", menuProject)}>
       <Copy size={14} /> Copy path
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("repair", menuProject)} disabled={actionBusy}>
+    <button type="button" role="menuitem" onclick={() => void runAction("repair", menuProject)} disabled={actionBusy}>
       <Wrench size={14} /> Repair
     </button>
     <div class="menu-sep"></div>
-    <button type="button" role="menuitem" on:click={() => void runAction("remove", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("remove", menuProject)}>
       <Minus size={14} /> Remove from library
     </button>
-    <button type="button" role="menuitem" class="danger" on:click={() => void runAction("delete", menuProject)}>
+    <button type="button" role="menuitem" class="danger" onclick={() => void runAction("delete", menuProject)}>
       <Trash2 size={14} /> Delete from disk
     </button>
   </div>
@@ -1165,72 +1532,93 @@
     mode="text"
     defaultValue={clonePromptName}
     confirmLabel="Copy"
-    on:confirm={(e) => confirmClone(e.detail)}
-    on:cancel={() => {
+    onconfirm={(v) => confirmClone(v)}
+    oncancel={() => {
       showClonePrompt = false;
       cloneTarget = null;
     }}
   />
 {/if}
 
+{#if githubImportOpen}
+  <PromptDialog
+    title="Import from GitHub"
+    message="Public repo only. Paste owner/repo or a github.com URL. No login needed."
+    mode="text"
+    defaultValue=""
+    confirmLabel="Preview"
+    onconfirm={(v) => void confirmGithubImport(v)}
+    oncancel={() => (githubImportOpen = false)}
+  />
+{/if}
+
+{#if githubConfirmOpen}
+  <ConfirmDialog
+    title="Install GitHub pack"
+    message={githubInspectSummary}
+    confirmLabel="Install"
+    onconfirm={() => void confirmGithubInstall()}
+    oncancel={() => (githubConfirmOpen = false)}
+  />
+{/if}
+
+<GithubPackInstallProgress active={githubInstallActive} onclose={() => (githubInstallActive = false)} />
+
 {#if showGroupPrompt && groupTarget}
-  <div class="group-dialog-backdrop" role="presentation" on:click={() => { showGroupPrompt = false; groupTarget = null; }}>
+  <div
+    class="group-dialog-backdrop"
+    use:portal
+    style="position:fixed; inset:0; z-index:10000;"
+    role="presentation"
+    onclick={() => { showGroupPrompt = false; groupTarget = null; }}
+  >
     <div
       class="group-dialog"
       role="dialog"
       aria-labelledby="group-dlg-title"
-      on:click|stopPropagation
-      on:keydown|stopPropagation
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
     >
       <h3 id="group-dlg-title">Change Group</h3>
       <p>Move “{groupTarget.info.name}” into a group.</p>
       <div class="group-chips">
         {#each existingGroups as g (g)}
-          <button type="button" class="chip" class:active={groupPromptName === g} on:click={() => applyExistingGroup(g)}>
+          <button type="button" class="chip" class:active={groupPromptName === g} onclick={() => applyExistingGroup(g)}>
             {g}
           </button>
         {/each}
       </div>
       <label class="group-new-label" for="group-new-input">Or type a new name</label>
-      <input id="group-new-input" bind:value={groupPromptName} on:keydown={(e) => e.key === "Enter" && confirmGroup(groupPromptName)} />
+      <input id="group-new-input" bind:value={groupPromptName} onkeydown={(e) => e.key === "Enter" && confirmGroup(groupPromptName)} />
       <div class="group-dlg-actions">
-        <button type="button" class="ghost" on:click={() => { showGroupPrompt = false; groupTarget = null; }}>Cancel</button>
-        <button type="button" class="accent" on:click={() => confirmGroup(groupPromptName)}>Apply</button>
+        <button type="button" class="ghost" onclick={() => { showGroupPrompt = false; groupTarget = null; }}>Cancel</button>
+        <button type="button" class="accent" onclick={() => confirmGroup(groupPromptName)}>Apply</button>
       </div>
     </div>
   </div>
 {/if}
 
-<svelte:window on:mousedown={onGlobalPointerDown} on:keydown={onGlobalKeydown} />
+<svelte:window onmousedown={onGlobalPointerDown} onkeydown={onGlobalKeydown} />
 
 <style>
   .prism-lib {
     display: flex;
     flex-direction: column;
-    min-height: min(70vh, 640px);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    background: var(--bg-secondary);
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    background: transparent;
     overflow: hidden;
     position: relative;
   }
-  .prism-lib.lib-motion::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background:
-      radial-gradient(ellipse 80% 40% at 20% -10%, rgba(27, 217, 106, 0.08), transparent 55%),
-      radial-gradient(ellipse 60% 30% at 100% 0%, rgba(139, 92, 246, 0.06), transparent 50%);
-    opacity: 0;
-    animation: lib-ambient-in var(--motion-enter) var(--ease-out) 80ms both;
-  }
-
   .lib-toolbar-enter {
-    animation: lib-toolbar-in var(--motion-enter) var(--ease-spring) both;
+    animation: lib-toolbar-in 160ms var(--ease-out) both;
   }
   .lib-side-enter {
-    animation: lib-side-in var(--motion-enter) var(--ease-spring) 60ms both;
+    animation: lib-side-in 160ms var(--ease-out) both;
   }
 
   .prism-toolbar {
@@ -1238,7 +1626,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 8px 10px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     flex-wrap: wrap;
@@ -1251,47 +1639,137 @@
     gap: 6px;
     flex-wrap: wrap;
   }
+  /* Library tabs (Your packs / Discover / Create) rendered inside the toolbar. */
+  .tb-leading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 10px;
+    margin-right: 4px;
+    border-right: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
   .tb-right { margin-left: auto; }
+  /* Instance filter — live search over name / version / loader. */
+  .tb-search {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 180px;
+    max-width: 260px;
+    padding: 5px 8px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    transition: border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out);
+  }
+  .tb-search:focus-within {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  }
+  .tb-search :global(.tb-search-icon) {
+    flex-shrink: 0;
+    pointer-events: none;
+  }
+  .tb-search input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    outline: none;
+  }
+  .tb-search input::placeholder { color: var(--text-muted); }
+  .tb-search-clear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    border: none;
+    border-radius: var(--border-radius-sm, 6px);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .tb-search-clear:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+  /* Sort selector — compact, matches toolbar buttons. */
+  .tb-sort {
+    padding: 7px 24px 7px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+      linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+    background-position: calc(100% - 14px) 55%, calc(100% - 9px) 55%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+    transition: border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out);
+  }
+  .tb-sort:hover { border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color)); color: var(--text-primary); }
+  .tb-sort:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+
+
   .tb-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 7px 10px;
-    border-radius: var(--border-radius-sm);
-    border: 1px solid transparent;
-    background: transparent;
+    padding: 7px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
     color: var(--text-secondary);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition:
-      transform var(--motion-fast) var(--ease-spring),
-      background var(--motion-fast) var(--ease-out),
-      border-color var(--motion-fast) var(--ease-out),
-      color var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-fast) var(--ease-out);
+      background var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease),
+      color var(--motion-fast) var(--motion-ease);
   }
   .tb-btn:hover {
-    background: var(--bg-hover);
+    background: var(--bg-tertiary);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
     color: var(--text-primary);
   }
   .tb-btn:active:not(:disabled) {
-    transform: scale(0.94);
+    background: var(--bg-active);
   }
+  /* Task: Ore UI treatment for the primary toolbar key (Add Instance). */
   .tb-btn.primary {
-    background: rgba(27, 217, 106, 0.14);
-    border-color: rgba(27, 217, 106, 0.35);
-    color: var(--accent-primary);
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 60%, #000);
+    color: var(--on-accent);
+    font-weight: 700;
   }
   .tb-btn.primary:hover {
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.25), 0 6px 16px rgba(27, 217, 106, 0.12);
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 50%, #000);
+    color: var(--on-accent);
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-primary) 28%, transparent);
+  }
+  .tb-btn.primary:active:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 85%, #000);
   }
   .tb-btn:disabled { opacity: 0.5; cursor: default; }
   .tb-add-wrap,
-  .tb-folders-wrap,
-  .tb-export-wrap {
-    position: relative;
-  }
+    .tb-folders-wrap,
+    .tb-export-wrap,
+    .side-more-wrap {
+      position: relative;
+    }
   .tb-menu {
     position: absolute;
     top: calc(100% + 4px);
@@ -1299,7 +1777,7 @@
     z-index: 40;
     min-width: 220px;
     padding: 6px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated, #1a1f28);
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
@@ -1308,6 +1786,11 @@
     gap: 2px;
   }
   .tb-menu.side-menu { left: auto; right: 0; }
+  .tb-menu .menu-sep {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 2px;
+  }
   .tb-menu button {
     display: inline-flex;
     align-items: center;
@@ -1324,7 +1807,7 @@
     cursor: pointer;
   }
   .tb-menu button:hover {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
   .tb-account {
@@ -1348,7 +1831,7 @@
 
   .prism-body {
     display: grid;
-    grid-template-columns: 1fr 220px;
+    grid-template-columns: minmax(0, 1fr) calc(clamp(300px, 26vw, 460px) * var(--side-scale, 1));
     flex: 1;
     min-height: 0;
   }
@@ -1365,9 +1848,22 @@
   }
 
   .prism-grid-pane {
-    padding: 12px 14px 16px;
+    padding: 8px 10px 12px;
     overflow: auto;
-    min-height: 280px;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .lib-footer {
+    margin-top: auto;
+    padding-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--text-muted);
   }
   .drag-hint {
     margin: 0 0 10px;
@@ -1385,11 +1881,6 @@
   }
   .inst-group {
     margin-bottom: 14px;
-    animation: lib-group-in var(--motion-enter) var(--ease-spring) both;
-    animation-delay: calc(var(--gi, 0) * 50ms);
-  }
-  .inst-group.celebrate {
-    animation: lib-group-celebrate 700ms var(--ease-spring);
   }
   .group-header {
     display: inline-flex;
@@ -1407,15 +1898,13 @@
     transition:
       color var(--motion-fast) var(--ease-out),
       background var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-fast) var(--ease-out),
-      transform var(--motion-fast) var(--ease-spring);
+      box-shadow var(--motion-fast) var(--ease-out);
   }
-  .group-header:hover { color: var(--text-primary); transform: translateX(2px); }
+  .group-header:hover { color: var(--text-primary); }
   .group-header.drop-target {
-    background: rgba(27, 217, 106, 0.18);
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
     color: var(--accent-primary);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.4);
-    animation: lib-drop-pulse 0.9s ease-in-out infinite;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 40%, transparent);
   }
   .group-count {
     font-size: 11px;
@@ -1439,61 +1928,75 @@
     cursor: pointer;
     text-align: center;
     outline: none;
-    touch-action: none;
+    touch-action: manipulation;
     position: relative;
     transition:
-      transform var(--motion-med) var(--ease-spring),
+      transform var(--motion-fast) var(--ease-out),
       background var(--motion-fast) var(--ease-out),
       border-color var(--motion-fast) var(--ease-out),
       opacity var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-med) var(--ease-out);
+      box-shadow var(--motion-fast) var(--ease-out);
   }
-  .inst-tile:hover { background: var(--bg-hover); transform: translateY(-3px); }
   .inst-tile:hover .inst-icon {
-    transform: translateY(-2px) scale(1.06);
-    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.35);
+    transform: translateY(-1px);
+    filter: brightness(1.04);
   }
-  .inst-tile.selected {
-    background: rgba(27, 217, 106, 0.16);
-    border-color: rgba(27, 217, 106, 0.35);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.18);
+  .inst-tile:hover:not(.selected) .inst-name {
+    background: color-mix(in srgb, var(--bg-hover) 90%, transparent);
   }
   .inst-tile.selected .inst-icon {
-    animation: lib-select-ring 1.8s var(--ease-out) infinite;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+  }
+  .inst-tile.selected .inst-name {
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    color: var(--accent-primary);
   }
   .inst-tile.running .inst-icon {
-    box-shadow: 0 0 0 2px rgba(27, 217, 106, 0.55);
-    animation: lib-running-glow 2.2s ease-in-out infinite;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+  }
+  .inst-tile.running::after {
+    content: "";
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--bg-primary, transparent);
+    z-index: 3;
   }
   .inst-tile.dragging {
     opacity: 0.28;
-    transform: scale(0.88);
     filter: saturate(0.7);
   }
+  .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+    opacity: 0.7;
+  }
   .inst-tile.drop-target {
-    background: rgba(27, 217, 106, 0.22);
-    border-color: rgba(27, 217, 106, 0.55);
-    transform: scale(1.08);
+    background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
     z-index: 2;
-    animation: lib-drop-pulse 0.85s ease-in-out infinite;
   }
   .inst-tile.holding .inst-icon {
-    transform: scale(0.94);
+    filter: brightness(0.96);
   }
   .inst-tile.holding .hold-ring {
     opacity: 1;
     animation: lib-hold-ring 420ms linear forwards;
   }
-  .inst-tile.jiggle {
-    animation: lib-jiggle 0.55s ease-in-out infinite;
-    animation-delay: var(--jiggle-delay, 0ms);
-  }
-  .inst-tile.celebrate {
-    animation: lib-tile-celebrate 720ms var(--ease-spring);
-  }
   .inst-tile:focus-visible {
-    outline: 2px solid var(--accent-primary);
-    outline-offset: 2px;
+    outline: none;
+  }
+  .inst-tile:focus-visible .inst-icon {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--accent-primary) 70%, transparent),
+      0 0 0 4px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  }
+  .inst-tile:focus-visible .inst-name {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    outline-offset: 1px;
   }
 
   .hold-ring {
@@ -1512,19 +2015,19 @@
       var(--accent-primary) var(--hold),
       transparent 0
     );
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
     z-index: 1;
   }
 
   .inst-icon {
-    width: 72px;
-    height: 72px;
-    border-radius: 50%;
+    width: 76px;
+    height: 76px;
+    border-radius: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 28px;
+    font-size: 30px;
     font-weight: 900;
     color: #fff;
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -1532,14 +2035,30 @@
     position: relative;
     z-index: 2;
     transition:
-      transform var(--motion-med) var(--ease-spring),
-      border-radius var(--motion-med) var(--ease-spring),
-      box-shadow var(--motion-med) var(--ease-out);
+      transform var(--motion-fast) var(--ease-out),
+      border-radius var(--motion-fast) var(--ease-out),
+      box-shadow var(--motion-fast) var(--ease-out),
+      filter var(--motion-fast) var(--ease-out);
+  }
+  .inst-tile:hover .inst-icon,
+  .inst-tile.selected .inst-icon,
+  .inst-tile.running .inst-icon,
+  .inst-tile:focus-visible .inst-icon {
+    border-radius: var(--border-radius-lg);
   }
   .inst-icon.folder-preview {
-    border-radius: 18px;
-    animation: lib-folder-morph 380ms var(--ease-spring) both;
+    border-radius: var(--border-radius-lg);
   }
+
+  /* Instance listing icon: cover the whole tile face with crisp pixel art. */
+  .inst-icon-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    image-rendering: pixelated;
+    border-radius: inherit;
+  }
+
   .folder-stack {
     position: relative;
     width: 100%;
@@ -1550,24 +2069,33 @@
     position: absolute;
     width: 34px;
     height: 34px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-sm);
     background: rgba(0, 0, 0, 0.28);
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 16px;
     font-weight: 800;
-    animation: lib-stack-pop 320ms var(--ease-spring) both;
   }
   .folder-stack .stack-a { top: 10px; left: 10px; }
-  .folder-stack .stack-b { bottom: 10px; right: 10px; animation-delay: 60ms; }
+  .folder-stack .stack-b { bottom: 10px; right: 10px; }
   .inst-name {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
     max-width: 100%;
-    line-height: 1.3;
-    transition: color var(--motion-fast) var(--ease-out);
+    width: fit-content;
+    line-height: 1.35;
+    white-space: normal;
+    word-break: break-word;
+    padding: 2px 8px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid transparent;
+    box-sizing: border-box;
+    transition:
+      color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out),
+      border-color var(--motion-fast) var(--ease-out);
   }
   .inst-tile.drop-target .inst-name { color: var(--accent-primary); }
 
@@ -1585,114 +2113,109 @@
     font-weight: 900;
     color: #fff;
     pointer-events: none;
-    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(27, 217, 106, 0.35);
-    animation: lib-ghost-in 220ms var(--ease-spring) both;
-    will-change: transform, left, top;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+    opacity: 0.95;
+    will-change: left, top;
   }
   .ghost-letter { position: relative; z-index: 1; }
   .ghost-ring {
     position: absolute;
-    inset: -6px;
+    inset: -5px;
     border-radius: 50%;
-    border: 2px solid rgba(27, 217, 106, 0.45);
-    animation: lib-ghost-ring 1s ease-out infinite;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    opacity: 0.7;
   }
 
   .prism-side {
     border-left: 1px solid var(--border-color);
     background: var(--bg-tertiary);
-    padding: 14px 12px;
+    padding: 20px 18px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 16px;
     overflow: auto;
   }
-  .side-panel { display: flex; flex-direction: column; gap: 12px; }
-  .side-hero { text-align: center; }
+  .side-panel { display: flex; flex-direction: column; gap: 16px; }
+  .side-hero { text-align: center; min-width: 0; }
   .side-icon {
-    width: 64px;
-    height: 64px;
-    margin: 0 auto 10px;
-    border-radius: 50%;
+    width: 104px;
+    height: 104px;
+    margin: 0 auto 12px;
+    border-radius: var(--border-radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 24px;
+    overflow: hidden;
+    font-size: 40px;
     font-weight: 900;
     color: #fff;
-    animation: lib-side-icon-in 420ms var(--ease-spring) both;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
+  }
+  .side-icon-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    image-rendering: pixelated;
   }
   .side-title {
-    font-size: 13px;
+    font-size: 18px;
     font-weight: 700;
     color: var(--text-primary);
     margin-bottom: 4px;
-    animation: lib-fade-up 280ms var(--ease-out) 40ms both;
+    line-height: 1.3;
+    word-break: break-word;
   }
   .side-meta {
-    font-size: 11px;
+    font-size: 13px;
     color: var(--text-muted);
     text-transform: capitalize;
-    animation: lib-fade-up 280ms var(--ease-out) 80ms both;
   }
   .side-actions {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
   }
-  .side-actions .side-btn {
-    animation: lib-fade-up 260ms var(--ease-out) both;
-    animation-delay: calc(100ms + var(--bi, 0) * 28ms);
-  }
-  .side-actions .side-btn:nth-child(1) { --bi: 0; }
-  .side-actions .side-btn:nth-child(2) { --bi: 1; }
-  .side-actions .side-btn:nth-child(3) { --bi: 2; }
-  .side-actions .side-btn:nth-child(4) { --bi: 3; }
-  .side-actions .side-btn:nth-child(5) { --bi: 4; }
-  .side-actions .side-btn:nth-child(6) { --bi: 5; }
-  .side-actions .side-btn:nth-child(7) { --bi: 6; }
-  .side-actions .side-btn:nth-child(8) { --bi: 7; }
-  .side-actions .side-btn:nth-child(9) { --bi: 8; }
   .side-btn {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     width: 100%;
-    padding: 8px 10px;
+    padding: 12px 14px;
     border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
     background: transparent;
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: 15px;
     font-weight: 600;
     cursor: pointer;
     text-align: left;
     transition:
-      transform var(--motion-fast) var(--ease-spring),
       background var(--motion-fast) var(--ease-out),
       color var(--motion-fast) var(--ease-out),
       border-color var(--motion-fast) var(--ease-out);
   }
   .side-btn:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--accent-primary);
-    transform: translateX(3px);
   }
-  .side-btn:active:not(:disabled) { transform: scale(0.97) translateX(2px); }
+  .side-btn:active:not(:disabled) { opacity: 0.9; }
   .side-btn:disabled { opacity: 0.4; cursor: default; }
   .side-btn.launch {
-    background: rgba(27, 217, 106, 0.16);
-    border-color: rgba(27, 217, 106, 0.3);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
     color: var(--accent-primary);
     margin-bottom: 4px;
   }
   .side-btn.launch:hover:not(:disabled) {
-    box-shadow: 0 6px 16px rgba(27, 217, 106, 0.18);
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-primary) 18%, transparent);
   }
-  .side-btn.danger:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.12);
-    color: #f87171;
+  .side-btn.launch.stop {
+    background: color-mix(in srgb, var(--accent-danger, #ef4444) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger, #ef4444) 30%, transparent);
+    color: var(--accent-danger, #f87171);
+  }
+  .side-btn.launch.stop:hover:not(:disabled) {
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-danger, #ef4444) 18%, transparent);
   }
   .side-empty {
     padding: 24px 8px;
@@ -1701,16 +2224,10 @@
     font-size: 13px;
   }
 
-  .prism-status {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 6px 12px;
-    border-top: 1px solid var(--border-color);
-    background: var(--bg-elevated, #141820);
-    font-size: 11px;
-    color: var(--text-muted);
-    animation: lib-status-in var(--motion-enter) var(--ease-spring) 100ms both;
+  .side-sep {
+    height: 1px;
+    margin: 4px 2px;
+    background: var(--border-color);
   }
 
   .empty-state {
@@ -1731,9 +2248,9 @@
     gap: 6px;
     padding: 10px 14px;
     border: none;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent);
     font-weight: 700;
     font-size: 13px;
     cursor: pointer;
@@ -1741,10 +2258,10 @@
 
   .pack-ctx-menu {
     position: fixed;
-    z-index: 90;
+    z-index: 200;
     min-width: 210px;
     padding: 6px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated, #1a1f28);
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
@@ -1768,7 +2285,7 @@
     text-align: left;
   }
   .pack-ctx-menu button:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
   .pack-ctx-menu button:disabled { opacity: 0.45; cursor: default; }
@@ -1820,9 +2337,9 @@
   }
   .chip.active,
   .chip:hover {
-    border-color: rgba(27, 217, 106, 0.4);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
   .group-new-label {
     display: block;
@@ -1835,7 +2352,7 @@
     width: 100%;
     height: 40px;
     padding: 0 12px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-primary);
@@ -1863,7 +2380,7 @@
     border-radius: var(--border-radius-sm);
     border: none;
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent);
     cursor: pointer;
     font-weight: 700;
     font-size: 12px;
@@ -1872,7 +2389,7 @@
   .mini-spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid rgba(27, 217, 106, 0.25);
+    border: 2px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
     border-top-color: var(--accent-primary);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -1898,129 +2415,44 @@
     from { --hold: 0deg; opacity: 1; }
     to { --hold: 360deg; opacity: 1; }
   }
-  @keyframes lib-ambient-in {
+  @keyframes lib-toolbar-in {
     from { opacity: 0; }
     to { opacity: 1; }
   }
-  @keyframes lib-toolbar-in {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: none; }
-  }
   @keyframes lib-side-in {
-    from { opacity: 0; transform: translateX(16px); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-status-in {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-group-in {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-group-celebrate {
-    0% { box-shadow: inset 0 0 0 0 rgba(27, 217, 106, 0); }
-    35% { box-shadow: inset 0 0 0 2px rgba(27, 217, 106, 0.35); }
-    100% { box-shadow: inset 0 0 0 0 rgba(27, 217, 106, 0); }
-  }
-  @keyframes lib-jiggle {
-    0%, 100% { transform: rotate(-1.4deg); }
-    50% { transform: rotate(1.4deg); }
-  }
-  @keyframes lib-drop-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(27, 217, 106, 0.35); }
-    50% { box-shadow: 0 0 0 8px rgba(27, 217, 106, 0); }
-  }
-  @keyframes lib-select-ring {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(27, 217, 106, 0.35); }
-    50% { box-shadow: 0 0 0 6px rgba(27, 217, 106, 0); }
-  }
-  @keyframes lib-running-glow {
-    0%, 100% { filter: brightness(1); box-shadow: 0 0 0 2px rgba(27, 217, 106, 0.45); }
-    50% { filter: brightness(1.08); box-shadow: 0 0 12px 2px rgba(27, 217, 106, 0.55); }
-  }
-  @keyframes lib-tile-celebrate {
-    0% { transform: scale(1); }
-    35% { transform: scale(1.12); }
-    70% { transform: scale(0.96); }
-    100% { transform: scale(1); }
-  }
-  @keyframes lib-folder-morph {
-    from { border-radius: 50%; transform: scale(0.9); }
-    to { border-radius: 18px; transform: scale(1); }
-  }
-  @keyframes lib-stack-pop {
-    from { opacity: 0; transform: scale(0.6); }
-    to { opacity: 1; transform: scale(1); }
-  }
-  @keyframes lib-ghost-in {
-    from { opacity: 0; transform: scale(0.7) rotate(-8deg); }
-    to { opacity: 0.95; transform: scale(1.05) rotate(0deg); }
-  }
-  @keyframes lib-ghost-ring {
-    from { transform: scale(1); opacity: 0.8; }
-    to { transform: scale(1.45); opacity: 0; }
-  }
-  @keyframes lib-side-icon-in {
-    from { opacity: 0; transform: scale(0.7) rotate(-12deg); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-fade-up {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: none; }
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   .drag-mode .prism-grid-pane {
-    background: radial-gradient(ellipse at center, rgba(27, 217, 106, 0.04), transparent 70%);
+    background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent-primary) 3%, transparent), transparent 70%);
   }
 
-  :global(.potato-pc) .lib-motion::before,
   :global(.potato-pc) .lib-toolbar-enter,
   :global(.potato-pc) .lib-side-enter,
-  :global(.potato-pc) .inst-group,
-  :global(.potato-pc) .inst-tile.jiggle,
-  :global(.potato-pc) .inst-tile.selected .inst-icon,
-  :global(.potato-pc) .inst-tile.running .inst-icon,
-  :global(.potato-pc) .drag-ghost,
-  :global(.potato-pc) .ghost-ring,
-  :global(.potato-pc) .side-icon,
-  :global(.potato-pc) .side-title,
-  :global(.potato-pc) .side-meta,
-  :global(.potato-pc) .side-actions .side-btn,
-  :global(.potato-pc) .prism-status {
+  :global(.potato-pc) .hold-ring {
     animation: none !important;
   }
-  :global(.potato-pc) .inst-tile:hover,
-  :global(.potato-pc) .inst-tile:hover .inst-icon,
-  :global(.potato-pc) .side-btn:hover:not(:disabled) {
+  :global(.potato-pc) .inst-tile:hover .inst-icon {
     transform: none !important;
+    filter: none !important;
+  }
+  :global(.potato-pc) .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+    opacity: 1;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .lib-motion::before,
     .lib-toolbar-enter,
     .lib-side-enter,
-    .inst-group,
-    .inst-tile.jiggle,
-    .inst-tile.selected .inst-icon,
-    .inst-tile.running .inst-icon,
-    .inst-tile.celebrate,
-    .inst-tile.drop-target,
-    .group-header.drop-target,
-    .drag-ghost,
-    .ghost-ring,
-    .side-icon,
-    .side-title,
-    .side-meta,
-    .side-actions .side-btn,
-    .prism-status,
     .hold-ring {
       animation: none !important;
     }
-    .inst-tile:hover,
-    .inst-tile:hover .inst-icon,
-    .side-btn:hover:not(:disabled) {
+    .inst-tile:hover .inst-icon {
       transform: none !important;
+      filter: none !important;
+    }
+    .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+      opacity: 1;
     }
   }
 </style>

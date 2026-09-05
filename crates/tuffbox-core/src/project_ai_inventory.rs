@@ -153,10 +153,7 @@ fn collect_datapacks(project_dir: &Path) -> Vec<InventoryPack> {
             for world in rd.flatten() {
                 let dp = world.path().join("datapacks");
                 if dp.is_dir() {
-                    let loc = format!(
-                        "saves/{}/datapacks",
-                        world.file_name().to_string_lossy()
-                    );
+                    let loc = format!("saves/{}/datapacks", world.file_name().to_string_lossy());
                     if let Ok(entries) = fs::read_dir(&dp) {
                         for e in entries.flatten() {
                             let path = e.path();
@@ -358,7 +355,12 @@ pub fn format_inventory_for_prompt(inv: &ProjectAiInventory, max_chars: usize) -
         p.push_str(&line);
     }
 
-    fn pack_section(p: &mut String, title: &str, packs: &[InventoryPack], max_chars: usize) -> bool {
+    fn pack_section(
+        p: &mut String,
+        title: &str,
+        packs: &[InventoryPack],
+        max_chars: usize,
+    ) -> bool {
         p.push_str(&format!("\n### {title}\n"));
         if packs.is_empty() {
             p.push_str("(none)\n");

@@ -2,14 +2,17 @@ name: Build Windows EXE
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "feat/svelte-5-migration" ]
   pull_request:
     branches: [ "master" ]
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTC_WRAPPER: sccache
+  # GHA cache backend (SCCACHE_GHA_ENABLED) proved flaky: Azure outages 400 at
+  # server startup, which kills every rustc invocation (RUSTC_WRAPPER) and the
+  # whole build. Plain sccache + actions/cache disk store is slower to warm
+  # but can never fail the build.
   SCCACHE_GHA_ENABLED: "false"
   SCCACHE_DIR: ${{ github.workspace }}/.sccache
   SCCACHE_CACHE_SIZE: "2G"
@@ -44,6 +47,13 @@ jobs:
 
     - name: Run sccache
       uses: mozilla-actions/sccache-action@v0.0.6
+      continue-on-error: true
+
+    # Fallback: if the GHA backend is unavailable (Azure hiccups produce
+    # "Our services aren't available right now" on the cache API), sccache
+    # falls back to a plain local disk store so the build still proceeds.
+    - name: Configure sccache fallback storage
+      run: 'echo "SCCACHE_ERROR_LOG=$(Join-Path $env:GITHUB_WORKSPACE ''sccache-error.log'')" | Out-File -FilePath $env:GITHUB_ENV -Append'
 
     - name: Cache cargo registry
       uses: actions/cache@v4
@@ -62,6 +72,11 @@ jobs:
         key: ${{ runner.os }}-sccache-${{ hashFiles('Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-sccache-
+
+    - name: Show sccache stats after build
+      if: always()
+      shell: pwsh
+      run: sccache --show-stats 2>$null; if (Test-Path sccache-error.log) { Get-Content sccache-error.log -Tail 20 }
 
     - name: Cache Gradle
       uses: actions/cache@v4
@@ -87,6 +102,10 @@ jobs:
     - name: Frontend perf/style regression guards
       working-directory: apps/tuffbox-desktop
       run: npm run lint:perf
+
+    - name: Bridge parity check (TS invoke ↔ Rust generate_handler)
+      working-directory: apps/tuffbox-desktop
+      run: npm run check:bridge
 
     - name: Build JEI runtime bridges
       working-directory: bridges/jei-runtime
@@ -122,21 +141,31 @@ jobs:
         $candidates = @(
           "target/release/tuffbox-desktop.exe",
           "target/x86_64-pc-windows-msvc/release/tuffbox-desktop.exe",
+          "apps/tuffbox-desktop/src-tauri/target/release/tuffbox-desktop.exe",
+          "apps/tuffbox-desktop/src-tauri/target/x86_64-pc-windows-msvc/release/tuffbox-desktop.exe",
           "target/debug/tuffbox-desktop.exe",
           "target/x86_64-pc-windows-msvc/debug/tuffbox-desktop.exe"
         )
         $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
         if (-not $exe) {
+          Write-Host "===== searching for any tuffbox-desktop.exe ====="
+          Get-ChildItem -Recurse -Filter "tuffbox-desktop.exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 20 FullName, Length | Format-Table -AutoSize
           Write-Error "tuffbox-desktop.exe not found in any expected target dir"
           exit 1
         }
-        Write-Host "Found exe at: $exe"
-        "EXE_PATH=$exe" | Out-File -Append -FilePath $env:GITHUB_ENV
+        Write-Host "Found exe at: $exe ($((Get-Item $exe).Length) bytes)"
+        New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+        Copy-Item -Force $exe "artifacts/tuffbox-desktop.exe"
+        if (-not (Test-Path "artifacts/tuffbox-desktop.exe")) {
+          Write-Error "failed to copy exe into artifacts/"
+          exit 1
+        }
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: tuffbox-desktop-windows
-        path: |
-          ${{ env.EXE_PATH }}
-        if-no-files-found: warn
+        name: tuffbox-desktop-windows-${{ github.sha }}
+        path: artifacts/tuffbox-desktop.exe
+        if-no-files-found: error
+        retention-days: 14

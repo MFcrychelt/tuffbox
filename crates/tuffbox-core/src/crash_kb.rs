@@ -67,7 +67,10 @@ pub struct SimilarCaseHit {
 }
 
 pub fn user_kb_path(project_dir: &Path) -> PathBuf {
-    project_dir.join(".tuffbox").join("crash_kb").join("cases.jsonl")
+    project_dir
+        .join(".tuffbox")
+        .join("crash_kb")
+        .join("cases.jsonl")
 }
 
 pub fn author_export_dir(project_dir: &Path) -> PathBuf {
@@ -136,11 +139,11 @@ pub fn fingerprint_from_text_with_blame(
     let key = format!(
         "{}|{}|{}|{}|{}|{}",
         normalize_token(&exception),
-        frames.first().map(|s| normalize_token(s)).unwrap_or_default(),
-        mod_file
-            .as_deref()
-            .map(normalize_token)
+        frames
+            .first()
+            .map(|s| normalize_token(s))
             .unwrap_or_default(),
+        mod_file.as_deref().map(normalize_token).unwrap_or_default(),
         mc_major,
         loader,
         blame_part
@@ -194,7 +197,12 @@ fn scrub_windows_users(text: &str) -> String {
                 let mut name_end = name_start;
                 while name_end < bytes.len() {
                     let c = bytes[name_end];
-                    if c == b'\\' || c == b'/' || c == b' ' || c == b'\t' || c == b'\n' || c == b'\r'
+                    if c == b'\\'
+                        || c == b'/'
+                        || c == b' '
+                        || c == b'\t'
+                        || c == b'\n'
+                        || c == b'\r'
                     {
                         break;
                     }
@@ -455,7 +463,10 @@ pub fn upsert_user_case(project_dir: &Path, case: &CrashCase) -> Result<PathBuf,
     } else {
         Vec::new()
     };
-    if let Some(slot) = existing.iter_mut().find(|c| c.fingerprint.key == case.fingerprint.key) {
+    if let Some(slot) = existing
+        .iter_mut()
+        .find(|c| c.fingerprint.key == case.fingerprint.key)
+    {
         slot.success_count = slot.success_count.saturating_add(case.success_count);
         slot.fail_count = slot.fail_count.saturating_add(case.fail_count);
         if !case.solution.is_empty() {
@@ -501,7 +512,10 @@ pub fn record_feedback(
     suspected_mods: &[String],
 ) -> Result<PathBuf, String> {
     let mut case = CrashCase {
-        id: format!("user-{}", fingerprint.key.chars().take(24).collect::<String>()),
+        id: format!(
+            "user-{}",
+            fingerprint.key.chars().take(24).collect::<String>()
+        ),
         fingerprint: fingerprint.clone(),
         symptoms: Vec::new(),
         suspected_mods: suspected_mods.to_vec(),
@@ -837,8 +851,14 @@ fn score_case(case: &CrashCase, fp: &CrashFingerprint, hay: &str) -> f64 {
 }
 
 fn jaccard_tokens(a: &str, b: &str) -> f64 {
-    let ta: HashSet<&str> = a.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| t.len() > 2).collect();
-    let tb: HashSet<&str> = b.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| t.len() > 2).collect();
+    let ta: HashSet<&str> = a
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| t.len() > 2)
+        .collect();
+    let tb: HashSet<&str> = b
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| t.len() > 2)
+        .collect();
     if ta.is_empty() || tb.is_empty() {
         return 0.0;
     }
@@ -854,7 +874,13 @@ fn jaccard_tokens(a: &str, b: &str) -> f64 {
 fn normalize_token(s: &str) -> String {
     s.to_ascii_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '/' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '/' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .trim_matches('_')
         .to_string()
@@ -908,12 +934,7 @@ fn extract_top_frames(text: &str, n: usize) -> Vec<String> {
         if t.starts_with("at ") {
             let frame = t.trim_start_matches("at ").trim();
             // Drop line numbers: Foo.bar(Foo.java:12) → Foo.bar
-            let cleaned = frame
-                .split('(')
-                .next()
-                .unwrap_or(frame)
-                .trim()
-                .to_string();
+            let cleaned = frame.split('(').next().unwrap_or(frame).trim().to_string();
             if !cleaned.is_empty() {
                 frames.push(cleaned);
             }
@@ -947,7 +968,9 @@ fn extract_mod_file(text: &str) -> Option<String> {
 fn extract_mixin(text: &str) -> Option<String> {
     for line in text.lines() {
         let lower = line.to_ascii_lowercase();
-        if lower.contains("mixin") && (lower.contains("apply") || lower.contains("failed") || lower.contains("@mixin")) {
+        if lower.contains("mixin")
+            && (lower.contains("apply") || lower.contains("failed") || lower.contains("@mixin"))
+        {
             return Some(line.trim().chars().take(200).collect());
         }
     }
@@ -980,7 +1003,10 @@ pub fn smart_excerpt(text: &str, max_len: usize) -> String {
     if chunk.len() <= max_len {
         return chunk;
     }
-    format!("{}... (truncated)", truncate_at_char_boundary(&chunk, max_len))
+    format!(
+        "{}... (truncated)",
+        truncate_at_char_boundary(&chunk, max_len)
+    )
 }
 
 /// Truncate to at most `max_len` bytes without splitting a UTF-8 codepoint.
@@ -1019,7 +1045,10 @@ mod tests {
     fn fingerprints_exception() {
         let text = "Description: Unexpected error\njava.lang.NoClassDefFoundError: com/example/Foo\n\tat com.example.Bar.run(Bar.java:10)\nMod File: sodium.jar\n";
         let fp = fingerprint_from_text(text, "1.20.1", "fabric");
-        assert!(fp.exception.to_lowercase().contains("noclassdef") || fp.exception.contains("Unexpected"));
+        assert!(
+            fp.exception.to_lowercase().contains("noclassdef")
+                || fp.exception.contains("Unexpected")
+        );
         assert!(!fp.frames.is_empty());
         assert_eq!(fp.mc_major, "1.20");
     }
@@ -1034,7 +1063,10 @@ mod tests {
         );
         let hits = search_similar(&cases, &fp, "java heap space oom", 3);
         assert!(!hits.is_empty());
-        assert!(hits[0].solution.to_lowercase().contains("ram") || hits[0].solution.to_lowercase().contains("memory"));
+        assert!(
+            hits[0].solution.to_lowercase().contains("ram")
+                || hits[0].solution.to_lowercase().contains("memory")
+        );
     }
 
     #[test]

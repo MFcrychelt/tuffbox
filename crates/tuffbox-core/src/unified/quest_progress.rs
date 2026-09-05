@@ -6,7 +6,7 @@
 //! We only surface completion / started / locked for the canvas overlay —
 //! no write-back in Phase C.
 
-use crate::unified::quest_book::{QuestBook, Quest};
+use crate::unified::quest_book::{Quest, QuestBook};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -136,19 +136,29 @@ pub fn load_progress_for_book(
         .unwrap_or_default();
 
     let completed_keys = collect_id_keys(raw.get("completed"));
-    let task_keys = collect_id_keys(
-        raw
-            .get("task_progress")
-            .or_else(|| raw.get("taskProgress")),
-    );
+    let task_keys = collect_id_keys(raw.get("task_progress").or_else(|| raw.get("taskProgress")));
 
+    let mut snap = build_progress_snapshot(book, &completed_keys, &task_keys);
+    snap.world = world;
+    snap.team_id = team_id;
+    snap.name = name;
+    Ok(snap)
+}
+
+/// Classify quest statuses from in-memory completed / task-progress id sets.
+/// Does not touch the filesystem.
+pub fn build_progress_snapshot(
+    book: &QuestBook,
+    completed: &HashSet<String>,
+    task_progress: &HashSet<String>,
+) -> QuestProgressSnapshot {
     let mut statuses = HashMap::new();
     let mut completed_count = 0usize;
     let mut started_count = 0usize;
 
     for ch in &book.chapters {
         for q in &ch.quests {
-            let status = classify_quest(q, book, &completed_keys, &task_keys);
+            let status = classify_quest(q, book, completed, task_progress);
             match status {
                 QuestProgressStatus::Completed => completed_count += 1,
                 QuestProgressStatus::Started => started_count += 1,
@@ -158,14 +168,14 @@ pub fn load_progress_for_book(
         }
     }
 
-    Ok(QuestProgressSnapshot {
-        world,
-        team_id,
-        name,
+    QuestProgressSnapshot {
+        world: String::new(),
+        team_id: "simulate".into(),
+        name: "Simulate".into(),
         statuses,
         completed_count,
         started_count,
-    })
+    }
 }
 
 fn classify_quest(
@@ -209,7 +219,11 @@ fn id_matches_any(id: &str, keys: &HashSet<String>) -> bool {
 }
 
 fn id_key_variants(id: &str) -> Vec<String> {
-    let mut out = vec![id.to_string(), id.to_ascii_lowercase(), id.to_ascii_uppercase()];
+    let mut out = vec![
+        id.to_string(),
+        id.to_ascii_lowercase(),
+        id.to_ascii_uppercase(),
+    ];
     let hex = id.trim_start_matches("0x");
     if let Ok(n) = u64::from_str_radix(hex, 16) {
         out.push(n.to_string());
@@ -237,9 +251,11 @@ fn collect_id_keys(v: Option<&serde_json::Value>) -> HashSet<String> {
         for (k, val) in obj {
             let active = match val {
                 serde_json::Value::Bool(b) => *b,
-                serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) != 0
-                    || n.as_u64().unwrap_or(0) != 0
-                    || n.as_f64().unwrap_or(0.0) != 0.0,
+                serde_json::Value::Number(n) => {
+                    n.as_i64().unwrap_or(0) != 0
+                        || n.as_u64().unwrap_or(0) != 0
+                        || n.as_f64().unwrap_or(0.0) != 0.0
+                }
                 serde_json::Value::String(s) => !s.is_empty() && s != "0",
                 serde_json::Value::Null => false,
                 _ => true,
@@ -263,9 +279,10 @@ fn peek_team_name(path: &Path) -> Option<String> {
 }
 
 fn short_uuid(id: &str) -> String {
-    let clean = id.replace('-', "");
-    if clean.len() >= 8 {
-        format!("{}…", &clean[..8])
+    let clean: String = id.chars().filter(|c| *c != '-').collect();
+    if clean.chars().count() >= 8 {
+        let truncated: String = clean.chars().take(8).collect();
+        format!("{truncated}…")
     } else {
         id.to_string()
     }
@@ -288,63 +305,74 @@ fn parse_progress_file(path: &Path) -> Result<serde_json::Value, String> {
 
 fn strip_json5ish(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0;
+    let mut chars = input.chars().peekable();
     let mut in_str = false;
-    let mut str_ch = b'"';
-    while i < bytes.len() {
-        let c = bytes[i];
+    let mut str_ch = '"';
+    while let Some(c) = chars.next() {
         if in_str {
-            out.push(c as char);
-            if c == b'\\' && i + 1 < bytes.len() {
-                out.push(bytes[i + 1] as char);
-                i += 2;
-                continue;
-            }
-            if c == str_ch {
+            out.push(c);
+            if c == '\\' {
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            } else if c == str_ch {
                 in_str = false;
             }
-            i += 1;
             continue;
         }
         // line comment
-        if c == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
+        if c == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            for c in chars.by_ref() {
+                if c == '\n' {
+                    out.push(c);
+                    break;
+                }
             }
             continue;
         }
         // block comment
-        if c == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
+        if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut prev = '\0';
+            for c in chars.by_ref() {
+                if prev == '*' && c == '/' {
+                    break;
+                }
+                prev = c;
             }
-            i = (i + 2).min(bytes.len());
             continue;
         }
-        if c == b'"' || c == b'\'' {
+        if c == '"' || c == '\'' {
             in_str = true;
             str_ch = c;
             // normalize to double quotes for JSON
             out.push('"');
-            i += 1;
             continue;
         }
         // trailing comma before } or ]
-        if c == b',' {
-            let mut j = i + 1;
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            if j < bytes.len() && (bytes[j] == b'}' || bytes[j] == b']') {
-                i += 1;
+        if c == ',' {
+            let peek = chars.peek().copied();
+            if matches!(peek, Some('}') | Some(']')) {
                 continue;
             }
+            // also skip whitespace between , and }/]
+            if let Some(ch) = peek {
+                if ch.is_ascii_whitespace() {
+                    chars.next();
+                    let next = chars.peek().copied();
+                    if matches!(next, Some('}') | Some(']')) {
+                        continue;
+                    }
+                    // wasn't }/], push consumed whitespace back
+                    out.push(ch);
+                    if let Some(n) = next {
+                        out.push(n);
+                    }
+                }
+            }
         }
-        // unquoted keys: copy as-is if already JSON-like; leave numbers/idents
-        out.push(c as char);
-        i += 1;
+        out.push(c);
     }
     out
 }
@@ -360,8 +388,11 @@ mod tests {
         let mk = |id: &str, deps: &[&str]| Quest {
             id: id.into(),
             title: id.into(),
+            title_from_snbt: true,
             subtitle: None,
+            subtitle_from_snbt: false,
             description: vec![],
+            description_from_snbt: false,
             x: 0.0,
             y: 0.0,
             icon: None,
@@ -370,6 +401,7 @@ mod tests {
                 id: format!("t_{id}"),
                 task_type: "checkmark".into(),
                 title: None,
+                title_from_snbt: false,
                 value: None,
                 properties: Default::default(),
             }],
@@ -390,8 +422,13 @@ mod tests {
             chapters: vec![Chapter {
                 id: "c".into(),
                 title: "C".into(),
+                title_from_snbt: true,
                 icon: None,
-                quests: vec![mk("AAAA", &[]), mk("BBBB", &["AAAA"]), mk("CCCC", &["BBBB"])],
+                quests: vec![
+                    mk("AAAA", &[]),
+                    mk("BBBB", &["AAAA"]),
+                    mk("CCCC", &["BBBB"]),
+                ],
                 group: None,
                 order_index: None,
                 filename: None,
@@ -405,6 +442,9 @@ mod tests {
             chapter_groups: vec![],
             reward_tables: vec![],
             book_settings: Default::default(),
+            locales: Default::default(),
+            active_locale: None,
+            load_warnings: vec![],
         }
     }
 
@@ -441,6 +481,38 @@ mod tests {
             snap.statuses.get("CCCC"),
             Some(&QuestProgressStatus::Locked)
         );
+    }
+
+    #[test]
+    fn simulate_marks_dependent_available() {
+        let book = sample_book();
+        let empty = HashSet::new();
+        let snap0 = build_progress_snapshot(&book, &empty, &empty);
+        assert_eq!(
+            snap0.statuses.get("AAAA"),
+            Some(&QuestProgressStatus::Available)
+        );
+        assert_eq!(
+            snap0.statuses.get("BBBB"),
+            Some(&QuestProgressStatus::Locked)
+        );
+
+        let mut completed = HashSet::new();
+        completed.insert("AAAA".into());
+        let snap1 = build_progress_snapshot(&book, &completed, &empty);
+        assert_eq!(
+            snap1.statuses.get("AAAA"),
+            Some(&QuestProgressStatus::Completed)
+        );
+        assert_eq!(
+            snap1.statuses.get("BBBB"),
+            Some(&QuestProgressStatus::Available)
+        );
+        assert_eq!(
+            snap1.statuses.get("CCCC"),
+            Some(&QuestProgressStatus::Locked)
+        );
+        assert_eq!(snap1.completed_count, 1);
     }
 
     fn tempfile_dir() -> PathBuf {

@@ -8,27 +8,44 @@
     Gamepad2,
     Monitor,
     Tag,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
+  import { sanitizeHtml } from "../lib/sanitizeHtml";
 
-  export let style: "modrinth" | "curseforge" = "modrinth";
-  export let name = "Untitled pack";
-  export let summary = "";
-  export let categories: string[] = [];
-  export let iconUrl: string | null = null;
-  export let minecraftVersion: string | null = null;
-  export let loaderKind: string | null = null;
-  export let version: string | null = null;
-  /** Optional gallery hero for page-style preview */
-  export let galleryUrl: string | null = null;
-  export let bodyHtml: string | null = null;
-  export let variant: "card" | "page" = "card";
-  export let author: string | null = null;
+  let {
+    style = "modrinth",
+    name = "Untitled pack",
+    summary = "",
+    categories = [],
+    iconUrl = null,
+    minecraftVersion = null,
+    loaderKind = null,
+    version = null,
+    galleryUrl = null,
+    bodyHtml = null,
+    variant = "card",
+    author = null,
+  }: {
+    style?: "modrinth" | "curseforge";
+    name?: string;
+    summary?: string;
+    categories?: string[];
+    iconUrl?: string | null;
+    minecraftVersion?: string | null;
+    loaderKind?: string | null;
+    version?: string | null;
+    galleryUrl?: string | null;
+    bodyHtml?: string | null;
+    variant?: "card" | "page";
+    author?: string | null;
+  } = $props();
 
-  $: catChips = categories.filter(Boolean).slice(0, 8);
-  $: loaderLabel = (loaderKind || "").replace(/_/g, " ");
-  $: authorLabel = author || name || "Author";
-  $: cfExtraCats = Math.max(0, catChips.length - 1);
-  $: cfGameMeta = [minecraftVersion, loaderLabel].filter(Boolean).join(" ");
+  const safeBodyHtml = $derived(bodyHtml ? sanitizeHtml(bodyHtml) : null);
+
+  const catChips = $derived(categories.filter(Boolean).slice(0, 8));
+  const loaderLabel = $derived((loaderKind || "").replace(/_/g, " "));
+  const authorLabel = $derived(author || name || "Author");
+  const cfExtraCats = $derived(Math.max(0, catChips.length - 1));
+  const cfGameMeta = $derived([minecraftVersion, loaderLabel].filter(Boolean).join(" "));
 
   function prettyCat(c: string) {
     return c
@@ -77,8 +94,8 @@
         </div>
       {/if}
       <div class="mr-page-body prose">
-        {#if bodyHtml}
-          {@html bodyHtml}
+        {#if safeBodyHtml}
+          {@html safeBodyHtml}
         {:else}
           <p class="muted">Long description preview appears here.</p>
         {/if}
@@ -171,8 +188,8 @@
         </div>
       {/if}
       <div class="cf-page-body prose">
-        {#if bodyHtml}
-          {@html bodyHtml}
+        {#if safeBodyHtml}
+          {@html safeBodyHtml}
         {:else}
           <p class="muted">Long description preview appears here.</p>
         {/if}
@@ -345,8 +362,8 @@
     font-size: 13px;
     cursor: default;
     pointer-events: none;
-    background: #1bd96a;
-    color: #04140a;
+    background: var(--accent-primary);
+    color: var(--on-accent);
   }
 
   .mr-dl-btn.card-dl {
@@ -680,7 +697,7 @@
   }
 
   .prose :global(a) {
-    color: #1bd96a;
+    color: var(--accent-primary);
   }
 
   .cf-page .prose :global(a) {

@@ -15,6 +15,17 @@
  * Budgets have ~35-70% headroom over the current baseline (~163 KB JS /
  * ~17 KB CSS gzipped) for normal growth; run `npm run build` locally and
  * bump these deliberately (with a note why) if a real feature needs it.
+ *
+ * 2026-08 bump: CSS 30 -> 31 KB for the github-pack-transport line, which
+ * legitimately grew the startup stylesheet with the steel-graphite dark theme
+ * redesign, the light-theme Home (quartz backdrop + dark content islands), and
+ * the quest-editor design-system aliases. Current startup CSS is ~30.0 KB
+ * gzipped; 31 KB keeps ~1 KB headroom while still catching accidental bloat.
+ *
+ * 2026-08 second bump: CSS 31 -> 32 KB — the toggleable home quartz backdrop
+ * (theme tokens in styles.css + per-theme overrides in themes.css, home-only
+ * Settings toggle) added ~0.2 KB gzipped, landing at 31.2 KB. 32 KB restores
+ * headroom while still catching accidental startup-CSS bloat.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -27,7 +38,14 @@ const indexHtmlPath = path.join(distDir, "index.html");
 
 const BUDGETS_GZIP_BYTES = {
   ".js": 230 * 1024,
-  ".css": 30 * 1024,
+  // 2026-08 (layout-lib): Tailwind v4 theme vars + on-demand utilities for
+  // @tuffbox/layout-lib add ~3.3 KB gz; baseline was already ~32.4 KB.
+  // 2026-08 second bump (36 -> 40): layout-lib is now actually used by
+  // Library (Grid/Stack) and more screens migrate onto it; keep headroom
+  // so each migration doesn't require a gate edit.
+  // 2026-08 third bump (40 -> 44): Snapshots/Quests/TestRuns Tailwind
+  // migrations add per-screen utility sets.
+  ".css": 44 * 1024,
 };
 
 if (!existsSync(indexHtmlPath)) {

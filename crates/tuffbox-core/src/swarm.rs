@@ -6,7 +6,7 @@
 use crate::action_plan::{
     parse_action_plan, validate_action_plan, ActionPlan, LauncherAction, ACTION_PLAN_SCHEMA_VERSION,
 };
-use crate::crash_kb::{CrashFingerprint, public_case_for_export, CrashCase};
+use crate::crash_kb::{public_case_for_export, CrashCase, CrashFingerprint};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,9 +25,12 @@ pub const MAX_CAPSULE_GOSSIP_BYTES: usize = 64 * 1024;
 /// Built-in TuffSwarm Supabase project (community inbox). Publishable/anon key is
 /// public by design (RLS + Edge Function); never ship the service role.
 pub const BUILTIN_SUPABASE_URL: &str = "https://vsoqnwknpueuubiovyjd.supabase.co";
-/// Publishable key (`sb_publishable_…` / legacy anon). Safe to embed in the client.
-pub const BUILTIN_SUPABASE_ANON_KEY: &str =
-    "sb_publishable_b0ICBMz_HvyRa8GioadWcg_Co5Vjljr";
+/// Publishable key for PostgREST (`rest/v1/*`). Safe to embed in the client.
+pub const BUILTIN_SUPABASE_ANON_KEY: &str = "sb_publishable_b0ICBMz_HvyRa8GioadWcg_Co5Vjljr";
+/// Legacy JWT anon (`role=anon`) for Edge Functions gateway (`functions/v1/*`).
+/// Prefer over publishable `sb_publishable_…` — gateway accepts JWT reliably.
+pub const BUILTIN_SUPABASE_EDGE_ANON_KEY: &str =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzb3Fud2tucHVldXViaW92eWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MTEwMDYsImV4cCI6MjEwMDM4NzAwNn0.E9L11ipWyNiSchUx6pxT3HOVxu_vHtYDUOnNTixqJaI";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +58,21 @@ pub struct SwarmSettings {
     /// Local control URL of tuffswarm-node (default http://127.0.0.1:8790).
     #[serde(default = "default_p2p_control_url")]
     pub p2p_control_url: String,
+    /// Optional peer multiaddr for `--bootstrap` when mDNS fails (`/ip4/…/tcp/…/p2p/…`).
+    #[serde(default)]
+    pub p2p_bootstrap: String,
+    /// Opt-in: accept Circuit Relay v2 reservations (`--relay-server`; public IP / VPS).
+    #[serde(default)]
+    pub p2p_relay_server: bool,
+    /// Opt-in: accept Fog diagnose jobs (local Ollama) for other players.
+    #[serde(default)]
+    pub volunteer_diagnose: bool,
+    /// Opt-in: accept Creation Marketplace jobs (scaffold / GPU later) for peers.
+    #[serde(default)]
+    pub creation_worker: bool,
+    /// Stub advertised VRAM (MB) for Creation routing (`--vram-mb`). Not measured.
+    #[serde(default)]
+    pub advertised_vram_mb: u32,
 }
 
 fn default_true() -> bool {
@@ -75,6 +93,11 @@ impl Default for SwarmSettings {
             hub_url: String::new(),
             p2p_enabled: false,
             p2p_control_url: default_p2p_control_url(),
+            p2p_bootstrap: String::new(),
+            p2p_relay_server: false,
+            volunteer_diagnose: false,
+            creation_worker: false,
+            advertised_vram_mb: 0,
         }
     }
 }
@@ -203,8 +226,7 @@ impl ExperienceCapsule {
 
     /// Canonical bytes for content addressing (no volatile id/timestamps/signatures).
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        let actions_json =
-            serde_json::to_string(&self.actions).unwrap_or_else(|_| "[]".into());
+        let actions_json = serde_json::to_string(&self.actions).unwrap_or_else(|_| "[]".into());
         let mut out = Vec::new();
         out.extend_from_slice(self.fingerprint.key.as_bytes());
         out.push(b'\n');
@@ -223,7 +245,9 @@ impl ExperienceCapsule {
     pub fn ensure_content_hash(&mut self) {
         let hash = self.compute_content_hash();
         self.content_hash = Some(hash.clone());
-        if self.id.trim().is_empty() || self.id.starts_with("capsule-") || self.id.starts_with("remote-")
+        if self.id.trim().is_empty()
+            || self.id.starts_with("capsule-")
+            || self.id.starts_with("remote-")
         {
             self.id = format!("cap-{}", &hash[..hash.len().min(32)]);
         }
@@ -274,22 +298,16 @@ impl ExperienceCapsule {
         if hash != &expected {
             return Err("content_hash does not match canonical payload".into());
         }
-        let pk_bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            pk_b64,
-        )
-        .map_err(|e| format!("bad signerPublicKey: {e}"))?;
+        let pk_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, pk_b64)
+            .map_err(|e| format!("bad signerPublicKey: {e}"))?;
         let pk_arr: [u8; 32] = pk_bytes
             .as_slice()
             .try_into()
             .map_err(|_| "signerPublicKey must be 32 bytes".to_string())?;
-        let verifying = VerifyingKey::from_bytes(&pk_arr)
-            .map_err(|e| format!("invalid verifying key: {e}"))?;
-        let sig_bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            sig_b64,
-        )
-        .map_err(|e| format!("bad signature: {e}"))?;
+        let verifying =
+            VerifyingKey::from_bytes(&pk_arr).map_err(|e| format!("invalid verifying key: {e}"))?;
+        let sig_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, sig_b64)
+            .map_err(|e| format!("bad signature: {e}"))?;
         let sig_arr: [u8; 64] = sig_bytes
             .as_slice()
             .try_into()
@@ -547,10 +565,12 @@ impl CapsuleLibrary {
         }
         let tmp = self.path.with_extension("jsonl.tmp");
         fs::write(&tmp, body).map_err(|e| e.to_string())?;
-        fs::rename(&tmp, &self.path).or_else(|_| {
-            fs::remove_file(&self.path).ok();
-            fs::rename(&tmp, &self.path)
-        }).map_err(|e| e.to_string())
+        fs::rename(&tmp, &self.path)
+            .or_else(|_| {
+                fs::remove_file(&self.path).ok();
+                fs::rename(&tmp, &self.path)
+            })
+            .map_err(|e| e.to_string())
     }
 
     pub fn lookup(
@@ -561,37 +581,38 @@ impl CapsuleLibrary {
     ) -> Vec<crate::crash_remote::CrashLookupHit> {
         let capsules = self.load_all();
         let cases: Vec<CrashCase> = capsules.iter().map(|c| c.to_crash_case()).collect();
-        let mut hits: Vec<_> = crate::crash_kb::search_similar(&cases, fingerprint, haystack, limit * 2)
-            .into_iter()
-            .map(|h| {
-                let capsule = capsules.iter().find(|c| c.id == h.id);
-                let actions = capsule
-                    .map(|c| c.actions.clone())
-                    .or_else(|| {
-                        cases
-                            .iter()
-                            .find(|c| c.id == h.id)
-                            .map(|c| c.launcher_actions.clone())
-                    })
-                    .unwrap_or_default();
-                // Soft ranking: boost by success_count; unsigned hub legacy slightly demoted.
-                let success_boost = capsule
-                    .map(|c| (c.success_count as f64).ln_1p() * 0.05)
-                    .unwrap_or(0.0);
-                let signed_boost = capsule
-                    .and_then(|c| c.verify_signature().ok())
-                    .map(|ok| if ok { 0.05 } else { -0.02 })
-                    .unwrap_or(-0.02);
-                crate::crash_remote::CrashLookupHit {
-                    id: h.id,
-                    score: (h.score + success_boost + signed_boost).clamp(0.0, 1.0),
-                    solution: h.solution,
-                    suspected_mods: h.suspected_mods,
-                    actions,
-                    fingerprint_key: h.fingerprint_key,
-                }
-            })
-            .collect();
+        let mut hits: Vec<_> =
+            crate::crash_kb::search_similar(&cases, fingerprint, haystack, limit * 2)
+                .into_iter()
+                .map(|h| {
+                    let capsule = capsules.iter().find(|c| c.id == h.id);
+                    let actions = capsule
+                        .map(|c| c.actions.clone())
+                        .or_else(|| {
+                            cases
+                                .iter()
+                                .find(|c| c.id == h.id)
+                                .map(|c| c.launcher_actions.clone())
+                        })
+                        .unwrap_or_default();
+                    // Soft ranking: boost by success_count; unsigned hub legacy slightly demoted.
+                    let success_boost = capsule
+                        .map(|c| (c.success_count as f64).ln_1p() * 0.05)
+                        .unwrap_or(0.0);
+                    let signed_boost = capsule
+                        .and_then(|c| c.verify_signature().ok())
+                        .map(|ok| if ok { 0.05 } else { -0.02 })
+                        .unwrap_or(-0.02);
+                    crate::crash_remote::CrashLookupHit {
+                        id: h.id,
+                        score: (h.score + success_boost + signed_boost).clamp(0.0, 1.0),
+                        solution: h.solution,
+                        suspected_mods: h.suspected_mods,
+                        actions,
+                        fingerprint_key: h.fingerprint_key,
+                    }
+                })
+                .collect();
         hits.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -633,9 +654,7 @@ pub fn resolve_swarm_network_base(hub_url: &str, crash_kb_endpoint: &str) -> Opt
 
 /// Directory for machine-wide swarm state (capsules, device signing key).
 pub fn global_swarm_dir() -> PathBuf {
-    dirs_next_config()
-        .join("TuffBox")
-        .join("swarm")
+    dirs_next_config().join("TuffBox").join("swarm")
 }
 
 fn dirs_next_config() -> PathBuf {
@@ -700,13 +719,25 @@ pub fn sign_capsule_with_device_key(capsule: &mut ExperienceCapsule) -> Result<S
     Ok(device_id)
 }
 
+/// Base64 (standard) Ed25519 public key for this device — matches capsule `signerPublicKey`.
+pub fn device_signer_public_key_b64() -> Result<String, String> {
+    let (sk, _) = load_or_create_device_signing_key()?;
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        sk.verifying_key().as_bytes(),
+    ))
+}
+
 /// Canonical vote message — must match Edge Function `vote-capsule`.
 pub fn capsule_vote_message(vote: &str, content_hash: &str) -> String {
     format!("tuffswarm-vote:v1:{vote}:{content_hash}")
 }
 
 /// Sign a confirm/reject vote. Returns (signer_public_key_b64, signature_b64, device_id).
-pub fn sign_capsule_vote(vote: &str, content_hash: &str) -> Result<(String, String, String), String> {
+pub fn sign_capsule_vote(
+    vote: &str,
+    content_hash: &str,
+) -> Result<(String, String, String), String> {
     let vote = vote.trim().to_ascii_lowercase();
     if vote != "confirm" && vote != "reject" {
         return Err("vote must be confirm or reject".into());
@@ -722,10 +753,8 @@ pub fn sign_capsule_vote(vote: &str, content_hash: &str) -> Result<(String, Stri
         &base64::engine::general_purpose::STANDARD,
         sk.verifying_key().as_bytes(),
     );
-    let sig_b64 = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        sig.to_bytes(),
-    );
+    let sig_b64 =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, sig.to_bytes());
     Ok((pk_b64, sig_b64, device_id))
 }
 
@@ -863,10 +892,7 @@ pub fn pack_mod_ids(manifest: &crate::manifest::ProjectManifest) -> Vec<String> 
             if !m.id.trim().is_empty() {
                 m.id.clone()
             } else {
-                m.source
-                    .project_id
-                    .clone()
-                    .unwrap_or_default()
+                m.source.project_id.clone().unwrap_or_default()
             }
         })
         .collect();
@@ -957,7 +983,8 @@ pub fn mark_pack_observation(
     let prev = load_pack_observation_marker(project_dir);
     let marker = PackObservationMarker {
         fingerprint: fingerprint.to_string(),
-        network_uploaded: network_uploaded || (prev.fingerprint == fingerprint && prev.network_uploaded),
+        network_uploaded: network_uploaded
+            || (prev.fingerprint == fingerprint && prev.network_uploaded),
         at: crate::time_util::rfc3339_now(),
     };
     save_pack_observation_marker(project_dir, &marker)
@@ -1072,7 +1099,10 @@ fn pair_adjacency(pairs: &[ModPairStat]) -> HashMap<String, HashMap<String, u64>
         if a.is_empty() || b.is_empty() || a == b {
             continue;
         }
-        *adj.entry(a.clone()).or_default().entry(b.clone()).or_insert(0) += p.count.max(1);
+        *adj.entry(a.clone())
+            .or_default()
+            .entry(b.clone())
+            .or_insert(0) += p.count.max(1);
         *adj.entry(b).or_default().entry(a).or_insert(0) += p.count.max(1);
     }
     adj
@@ -1166,7 +1196,11 @@ pub fn suggest_by_group_affinity(
         .filter(|(_, support, _)| *support >= 2)
         .cloned()
         .collect();
-    let mut out: Vec<String> = multi.iter().map(|(id, _, _)| id.clone()).take(limit).collect();
+    let mut out: Vec<String> = multi
+        .iter()
+        .map(|(id, _, _)| id.clone())
+        .take(limit)
+        .collect();
     if out.len() >= limit {
         return out;
     }
@@ -1441,7 +1475,9 @@ mod tests {
             success_count: 1,
             fail_count: 0,
         };
-        let published = lib.publish(&ExperienceCapsule::from_crash_case(&case)).unwrap();
+        let published = lib
+            .publish(&ExperienceCapsule::from_crash_case(&case))
+            .unwrap();
         assert!(!published.privacy.raw_logs);
         let hits = lib.lookup(&case.fingerprint, "mixin create flywheel", 5);
         assert!(!hits.is_empty());

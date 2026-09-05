@@ -189,14 +189,15 @@ pub fn install_game(
     // an exact `.find()` against the version manifest and fail with the
     // cryptic "Minecraft latest not found in manifest". Concrete versions
     // pass through untouched and make no network call.
-    let resolved = crate::versions::resolve_minecraft_version_alias_offline(mc_version_raw, launcher_dir)
-        .map_err(|e| {
-            InstallError::MissingDownload(format!(
-                "could not resolve Minecraft version '{}': {e}. \
+    let resolved =
+        crate::versions::resolve_minecraft_version_alias_offline(mc_version_raw, launcher_dir)
+            .map_err(|e| {
+                InstallError::MissingDownload(format!(
+                    "could not resolve Minecraft version '{}': {e}. \
                  Pin a concrete version (e.g. 1.20.1) or check your network connection.",
-                mc_version_raw
-            ))
-        })?;
+                    mc_version_raw
+                ))
+            })?;
     let mc_version: &str = &resolved;
     if mc_version != mc_version_raw {
         progress.log(&format!(
@@ -811,6 +812,17 @@ pub fn download_with_sha1(
         }
     }
 
+    // Dedup store (docs/17, Part 1): Mojang-manifest downloads (client jar,
+    // libraries, natives, assets) all carry a known sha1 — if the exact bytes
+    // already live in the shared object store, hard-link them instead of
+    // downloading again. Requires a known sha1; any store miss/failure falls
+    // through to the network path (dedup is an optimization, never a gate).
+    if let Some(sha1) = expected_sha1 {
+        if crate::mod_store::try_hardlink(path, sha1) {
+            return Ok(());
+        }
+    }
+
     crate::http::download_streaming(
         url,
         path,
@@ -818,6 +830,12 @@ pub fn download_with_sha1(
         None::<Box<dyn FnMut(u64, u64) + Send>>,
     )
     .map_err(|e| InstallError::MissingDownload(format!("{} (url: {})", e, url)))?;
+
+    // Feed the store so other instances (same file, another version group)
+    // get these bytes for free.
+    if let Some(sha1) = expected_sha1 {
+        crate::mod_store::record(path, sha1);
+    }
 
     Ok(())
 }
