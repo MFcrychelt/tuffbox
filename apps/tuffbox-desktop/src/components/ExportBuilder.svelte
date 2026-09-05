@@ -349,7 +349,7 @@
   });
 </script>
 
-<div class="export-builder w-full">
+<div class="export-builder w-full bg-black/30 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] p-6">
   <div class="eb-cap">
   <div class="toolbar">
     <div class="title"><UploadCloud size={18} /> Export</div>
@@ -395,14 +395,14 @@
   {#if !$projectPath}
     <EmptyState icon={PackageOpen} title="No project selected" description="Open a project to export a modpack." />
   {:else}
-    <section class="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[length:var(--border-radius-lg)] p-3.5 grid gap-3">
+    <section class="bg-white/[0.03] border border-white/[0.08] rounded-[length:var(--border-radius-lg)] p-3.5 grid gap-3 shadow-xl backdrop-blur-md">
       <div class="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" role="listbox" aria-label="Export format">
         {#each FORMATS as fmt (fmt.id)}
           {@const errs = formatErrors(fmt.id)}
           {@const warns = formatWarns(fmt.id)}
           <button
             type="button"
-            class="format-card grid grid-cols-[auto_minmax(0,1fr)] grid-rows-[auto_auto] gap-x-2 gap-y-0.5 items-start text-left px-2.5 py-2 rounded-[length:var(--border-radius-md)] bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[color:var(--text-secondary)] cursor-pointer min-w-0 overflow-hidden hover:border-[color-mix(in_srgb,var(--accent-primary)_35%,var(--border-color))]"
+            class="format-card grid grid-cols-[auto_minmax(0,1fr)] grid-rows-[auto_auto] gap-x-2 gap-y-0.5 items-start text-left px-2.5 py-2 rounded-[length:var(--border-radius-md)] bg-white/[0.04] border border-white/[0.08] text-[color:var(--text-secondary)] cursor-pointer min-w-0 overflow-hidden hover:border-[color:color-mix(in_srgb,#10b981_40%,transparent)] hover:bg-white/[0.07]"
             class:active={exportMode === fmt.id}
             class:has-error={errs > 0}
             role="option"
@@ -410,7 +410,7 @@
             title="{fmt.title} {fmt.badge} — {fmt.blurb}"
             onclick={() => (exportMode = fmt.id)}
           >
-            <span class="row-span-2 flex items-center justify-center w-7 h-7 rounded-md bg-[color-mix(in_srgb,var(--bg-secondary)_70%,transparent)] text-[color:var(--accent-primary)] mt-px" aria-hidden="true">
+            <span class="row-span-2 flex items-center justify-center w-7 h-7 rounded-md bg-white/[0.06] text-[color:var(--accent-primary)] mt-px" aria-hidden="true">
               {#if fmt.id === "mrpack"}<PackageOpen size={16} />
               {:else if fmt.id === "curseforge"}<FileArchive size={16} />
               {:else if fmt.id === "prism"}<Box size={16} />
@@ -431,7 +431,7 @@
         {/each}
       </div>
 
-      <div class="grid gap-2.5 p-3 border border-[var(--border-color)] rounded-[length:var(--border-radius-md)] bg-[var(--bg-tertiary)]">
+      <div class="grid gap-2.5 p-3 border border-white/[0.08] rounded-[length:var(--border-radius-md)] bg-black/40">
         <div>
           <h2 class="m-0 mb-1 text-sm font-bold text-[color:var(--text-primary)]">{activeFormat.title}</h2>
           <p class="m-0 text-xs text-[color:var(--text-muted)] leading-snug">{activeFormat.detail}</p>
@@ -441,7 +441,7 @@
           {activeFormat.pathKind === "dir" ? "Output folder" : "Output file"}
           <div class="flex gap-1.5 items-stretch flex-wrap sm:flex-nowrap">
             <input
-              class="flex-1 min-w-0 text-xs px-2.5 py-[7px]"
+              class="flex-1 min-w-0 text-xs px-2.5 py-[7px] bg-black/40 border-white/10 focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30 font-mono"
               value={activePath}
               oninput={(e) => setActivePath(e.currentTarget.value)}
               placeholder={activeFormat.pathKind === "dir" ? ".../pack-packwiz" : ".../pack.zip"}
@@ -469,7 +469,7 @@
             </div>
 
             {#each errorGroups as g (g.code)}
-              <div class="grid gap-0.5 p-2 rounded-md bg-[var(--bg-secondary)] border border-[rgba(239,68,68,0.35)] text-[11px]">
+              <div class="grid gap-0.5 p-2 rounded-md bg-red-500/10 border border-red-500/30 text-[11px] backdrop-blur-sm">
                 <div class="flex items-baseline gap-2 flex-wrap">
                   <strong class="text-[#fecaca]">{g.code}{#if g.count > 1}&nbsp;× {g.count}{/if}</strong>
                   <span class="text-[color:var(--text-muted)] break-words">{g.message}</span>
@@ -486,14 +486,14 @@
             {/each}
 
             {#each warningGroups as g (g.code)}
-              <div class="rounded-md bg-[var(--bg-secondary)] border border-[rgba(245,158,11,0.35)] text-[11px]">
+              <div class="rounded-md bg-amber-500/10 border border-amber-500/30 backdrop-blur-sm text-[11px]">
                 <button
                   type="button"
-                  class="w-full flex items-center gap-2 px-2 py-2 text-left cursor-pointer hover:bg-[var(--bg-hover,var(--ftbq-btn-hover-top))] rounded-md"
+                  class="w-full flex items-center gap-2 px-2 py-2 text-left cursor-pointer hover:bg-amber-500/10 rounded-md"
                   onclick={() => toggleGroup(g.code)}
                   aria-expanded={expandedGroups.has(g.code)}
                 >
-                  <strong class="text-[#fbbf24] shrink-0">{g.code}{#if g.count > 1}&nbsp;× {g.count}{/if}</strong>
+                  <strong class="text-amber-300 shrink-0">{g.code}{#if g.count > 1}&nbsp;× {g.count}{/if}</strong>
                   <span class="text-[color:var(--text-muted)] truncate">{g.message}</span>
                   <span class="ml-auto text-[10px] text-[color:var(--text-muted)] shrink-0">{expandedGroups.has(g.code) ? "▲" : "▼"}</span>
                 </button>
@@ -616,25 +616,22 @@
     gap: 6px;
     padding: 9px 18px;
     border-radius: 999px;
-    border: 1px solid var(--accent-primary);
-    border-bottom-color: color-mix(in srgb, var(--accent-primary) 55%, #000);
-    background: var(--accent-primary);
-    color: var(--on-accent);
+    border: none;
+    background: #059669;
+    color: #fff;
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;
     transition:
       background var(--motion-fast) var(--motion-ease),
-      border-color var(--motion-fast) var(--motion-ease),
       box-shadow var(--motion-fast) var(--motion-ease);
   }
   .eb-export-btn:hover:not(:disabled) {
-    background: var(--accent-hover);
-    border-color: var(--accent-hover);
-    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-primary) 28%, transparent);
+    background: #10b981;
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
   }
   .eb-export-btn:active:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-primary) 85%, #000);
+    background: #047857;
   }
   .eb-export-btn:disabled {
     opacity: 0.5;
@@ -643,9 +640,9 @@
 
   .format-card.active {
     color: var(--text-primary);
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
-    background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-tertiary));
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    border-color: rgba(16, 185, 129, 0.5);
+    background: rgba(16, 185, 129, 0.1);
+    box-shadow: 0 0 15px rgba(16, 185, 129, 0.15);
   }
   .format-card.has-error:not(.active) {
     border-color: rgba(239, 68, 68, 0.35);

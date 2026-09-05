@@ -529,7 +529,7 @@
   });
 </script>
 
-<div class="snapshots flex flex-col gap-3.5 h-full min-h-0 w-full max-w-[1440px] mx-auto box-border">
+<div class="snapshots flex flex-col gap-3.5 h-full min-h-0 w-full max-w-[1440px] mx-auto box-border bg-black/30 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] p-6">
   <!-- ── Toolbar ─────────────────────────────────────────────── -->
   <div class="flex justify-between items-center gap-4 flex-wrap shrink-0">
     <div class="grid gap-1">
@@ -570,38 +570,22 @@
   {:else}
     <!-- ── Kind filter cards ───────────────────────────────────── -->
     <div class="grid grid-cols-4 max-[900px]:grid-cols-2 gap-2.5 shrink-0" role="group" aria-label="Filter snapshots">
-      <button
-        type="button"
-        class="filter-card {filterKind === "all" ? "active" : ""}"
-        onclick={() => (filterKind = "all")}
-      >
+      <button type="button" class="filter-card {filterKind === "all" ? "active" : ""}" onclick={() => (filterKind = "all")}>
         <Database size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.all }</span>
         <span>All</span>
       </button>
-      <button
-        type="button"
-        class="filter-card {filterKind === "auto" ? "active" : ""}"
-        onclick={() => (filterKind = "auto")}
-      >
+      <button type="button" class="filter-card {filterKind === "auto" ? "active" : ""}" onclick={() => (filterKind = "auto")}>
         <Zap size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.auto }</span>
         <span>Auto</span>
       </button>
-      <button
-        type="button"
-        class="filter-card {filterKind === "manual" ? "active" : ""}"
-        onclick={() => (filterKind = "manual")}
-      >
+      <button type="button" class="filter-card {filterKind === "manual" ? "active" : ""}" onclick={() => (filterKind = "manual")}>
         <Hand size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.manual }</span>
         <span>Manual</span>
       </button>
-      <button
-        type="button"
-        class="filter-card {filterKind === "crash" ? "active" : ""}"
-        onclick={() => (filterKind = "crash")}
-      >
+      <button type="button" class="filter-card {filterKind === "crash" ? "active" : ""}" onclick={() => (filterKind = "crash")}>
         <ShieldAlert size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.crash }</span>
         <span>Crash fix</span>
@@ -610,7 +594,7 @@
 
     <!-- ── Search ──────────────────────────────────────────────── -->
     <div class="flex gap-3 items-center shrink-0">
-      <div class="flex-1 min-w-[240px] flex items-center gap-2 bg-[var(--bg-elevated)] border border-[var(--border-color)] rounded-[var(--border-radius-md)] px-2.5 text-[var(--text-muted)]">
+      <div class="flex-1 min-w-[240px] flex items-center gap-2 bg-black/40 border border-white/10 rounded-[var(--border-radius-md)] px-2.5 text-[var(--text-muted)] focus-within:border-emerald-500/50 focus-within:ring-1 focus-within:ring-emerald-500/30">
         <Search size={15} />
         <input class="flex-1 border-0 bg-transparent text-[var(--text-primary)] py-2.5 outline-none min-w-0 text-[13px]" bind:value={search} placeholder="Search name, actions, tags…" />
       </div>
@@ -619,7 +603,7 @@
 
     <!-- ── Master / detail ─────────────────────────────────────── -->
     <div class="grid grid-cols-[minmax(300px,380px)_minmax(0,1fr)] max-[900px]:grid-cols-1 gap-3.5 flex-1 min-h-0">
-      <aside class="overflow-auto min-h-0 p-2 flex flex-col gap-1.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable]">
+      <aside class="overflow-auto min-h-0 p-2 flex flex-col gap-1.5 bg-white/[0.03] border border-white/[0.08] backdrop-blur-md rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable]">
         {#each filtered as s (s.id)}
           {@const kind = kindOf(s)}
           <button
@@ -665,7 +649,7 @@
         {/each}
       </aside>
 
-      <section class="p-[18px] overflow-auto min-h-0 flex flex-col gap-3.5 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable]">
+      <section class="p-[18px] overflow-auto min-h-0 flex flex-col gap-3.5 bg-white/[0.02] border border-white/[0.08] backdrop-blur-2xl rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable] shadow-xl">
         {#if detailLoading}
           <div class="flex flex-col gap-3">
             <span class="skeleton" style="width: 44%; height: 26px"></span>
@@ -1092,31 +1076,32 @@
     opacity: 0.55;
   }
 
-  /* Kind filter cards: flat quiet tiles, accent fill when active — the bare
-     button here otherwise inherits the gray Ore skin (3px bottom edge). */
+  /* Kind filter cards: glass chips, emerald accent fill when active. */
   .filter-card {
     display: flex;
     align-items: center;
     gap: 10px;
     padding: 10px 14px;
-    border: 1px solid var(--border-color);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: var(--border-radius-md);
-    background: var(--bg-tertiary);
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(12px);
     color: var(--text-secondary);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease;
+    transition: all var(--motion-fast) ease;
   }
   .filter-card:hover:not(.active) {
-    background: var(--bg-elevated);
+    background: rgba(255, 255, 255, 0.06);
     color: var(--text-primary);
-    border-color: color-mix(in srgb, var(--accent-primary) 25%, var(--border-color));
+    border-color: rgba(16, 185, 129, 0.35);
   }
   .filter-card.active {
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
-    color: var(--on-accent, #fff);
+    color: #34d399;
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.45);
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.3);
   }
 
   /* Rollback / Delete detail actions: soft tinted pills, not gray blocks. */
