@@ -853,26 +853,26 @@
 
 <style>
   .canvas-wrap {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    height: 100%;
-    background: var(--ftbq-bg-canvas);
-    border: none;
-    border-left: 1px solid var(--ftbq-frame);
-    border-right: 1px solid var(--ftbq-frame);
-    overflow: hidden;
-  }
-  .canvas-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 8px;
-    border-bottom: 1px solid var(--ftbq-frame);
-    background: var(--ftbq-bg-panel);
-    flex-shrink: 0;
-    flex-wrap: wrap;
-  }
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.18);
+      border: none;
+      border-left: 1px solid rgba(255, 255, 255, 0.06);
+      border-right: 1px solid rgba(255, 255, 255, 0.06);
+      overflow: hidden;
+    }
+    .canvas-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.02);
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
   .tb-filter {
     min-width: 120px;
     flex: 1;

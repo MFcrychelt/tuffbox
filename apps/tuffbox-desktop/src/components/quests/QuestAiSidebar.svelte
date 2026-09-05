@@ -920,9 +920,9 @@
     width: 360px;
     min-width: 300px;
     max-width: 440px;
-    border-left: 1px solid var(--ftbq-frame);
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
     box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.05);
-    background: var(--ftbq-bg-panel);
+    background: rgba(255, 255, 255, 0.02);
     color: var(--ftbq-text);
     min-height: 0;
     height: 100%;
