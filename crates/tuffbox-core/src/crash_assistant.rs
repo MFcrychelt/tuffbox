@@ -2469,7 +2469,106 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         ));
     }
 
+    // --- Fabric HARD_DEP on a specific Java major ("depends java @ [>=N]" /
+    //     "requires version N or later of 'Java ...'") ---
+    // This is THE most common reason a modern pack refuses to start: the
+    // project was assigned an old JRE (often Java 8) while dozens of mods
+    // (fabric-api, c2me, lambdynlights, …) require Java 25+. Without this
+    // handling the crash used to fall through all the way to the remote
+    // AI-diagnose cascade (slow network round-trip) for what is a
+    // deterministic, one-action fix.
+    {
+        // Detect a Fabric-style Java requirement line.
+        let req = java_major_required(combined);
+        if let Some(req_major) = req {
+            let have = parse_java_major(&ctx.java_version);
+            let need_newer = match have {
+                Some(h) => req_major > h,
+                None => true, // unknown runtime → still want the prompt
+            };
+            if need_newer {
+                let demand = format!(
+                    "This project needs Java {req_major}+, but the assigned runtime is Java {}.",
+                    if have.is_some() {
+                        ctx.java_version.clone()
+                    } else {
+                        "unknown (looks old)".into()
+                    }
+                );
+                out.push(fx(
+                    "critical",
+                    "WRONG_JAVA_VERSION",
+                    "Selected Java is too old for the mods",
+                    format!(
+                        "The mods `depends java @ [>={req_major}]` — Fabric refuses to start until the project uses Java {req_major} or newer. {demand} Set the project's Java major to {req_major} (Settings → Java) and relaunch."
+                    )
+                    .as_str(),
+                    Some(
+                        &format!(
+                            "Switch the project to Java {req_major}+ in Settings → Java, then relaunch the pack."
+                        ),
+                    ),
+                    &["https://minefixtools.com/fixes/how-to-read-fabric-crash-reports"],
+                    vec![fix_action(
+                        "selectJava",
+                        &format!("Use Java {req_major}+ ({demand})"),
+                        None,
+                    )],
+                    first_evidence_line(
+                        combined,
+                        &["depends java", "requires version", "Java HotSpot"],
+                    )
+                    .map(truncate_evidence),
+                ));
+            }
+        }
+    }
+
     out
+}
+
+/// Extract the highest required Java major from a Fabric hard-dependency error
+/// ("HARD_DEP ... depends java @ [>=25]" or "requires version 25 or later of
+/// 'Java ...'"). Returns the first found bound; callers compare it to the
+/// runtime major.
+fn java_major_required(combined: &str) -> Option<u32> {
+    let lower = combined.to_lowercase();
+    // Pattern 1: "depends java @ [>=25]" / "[>=21]" etc.
+    if let Some(idx) = lower.find("depends java") {
+        let tail = &lower[idx..];
+        if let Some(gt) = tail.find(">=") {
+            let after = tail[gt + 2..].trim_start();
+            let num: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !num.is_empty() {
+                if let Ok(m) = num.parse::<u32>() {
+                    return Some(m);
+                }
+            }
+        }
+    }
+    // Pattern 2: "requires version 25 or later of 'Java ...'"
+    if let Some(idx) = lower.find("requires version") {
+        let tail = &lower[idx + "requires version".len()..];
+        let num: String = tail.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !num.is_empty() {
+            if let Ok(m) = num.parse::<u32>() {
+                return Some(m);
+            }
+        }
+    }
+    None
+}
+
+fn parse_java_major(v: &str) -> Option<u32> {
+    // "8", "17", "21", "25", maybe "1.8.0_345" or "17.0.10".
+    let trimmed = v.trim();
+    if let Some(idx) = trimmed.find('.') {
+        return trimmed[..idx].parse::<u32>().ok();
+    }
+    trimmed.parse::<u32>().ok()
 }
 
 fn find_mcreator_mods(mods: &[String]) -> Vec<String> {
@@ -3084,5 +3183,45 @@ Caused by: java.io.FileNotFoundException: minecraft:shaders/core/rendertype_soli
             5,
         );
         assert!(names.iter().any(|n| n == "com.example.CoolClass"));
+    }
+
+    #[test]
+    fn java_major_required_parses_hard_dep_pattern() {
+        assert_eq!(java_major_required("HARD_DEP fabric-api 0.159.0 {depends java @ [>=25]}"), Some(25));
+        assert_eq!(java_major_required("depends java @ [>=21]"), Some(21));
+        assert_eq!(java_major_required("depends minecraft @ [1.20.1]"), None);
+        assert_eq!(java_major_required("no java mention here"), None);
+    }
+
+    #[test]
+    fn java_major_required_parses_fabric_localized_phrase() {
+        let s = "requires version 25 or later of 'Java HotSpot(TM) 64-Bit Server VM' (java)";
+        assert_eq!(java_major_required(s), Some(25));
+    }
+
+    #[test]
+    fn wrong_java_heuristic_fires_when_runtime_too_old() {
+        let mut c = ctx(); // java_version "17"
+        c.latest_log = "Mod resolution failed\nImmediate reason: [HARD_DEP_INCOMPATIBLE_PRESELECTED animatica {depends java @ [>=25]}]\n".into();
+        let hits = check_conflict_log_phrases(&c, &c.latest_log);
+        assert!(hits.iter().any(|f| f.code == "WRONG_JAVA_VERSION"));
+    }
+
+    #[test]
+    fn wrong_java_heuristic_stays_quiet_when_runtime_satisfies() {
+        let mut c = ctx();
+        c.java_version = "25".into();
+        c.latest_log = "Mod resolution failed\n[HARD_DEP fabric-api {depends java @ [>=25]}]\n".into();
+        let hits = check_conflict_log_phrases(&c, &c.latest_log);
+        assert!(!hits.iter().any(|f| f.code == "WRONG_JAVA_VERSION"));
+    }
+
+    #[test]
+    fn parse_java_major_variants() {
+        assert_eq!(parse_java_major("17"), Some(17));
+        assert_eq!(parse_java_major("17.0.10"), Some(17));
+        assert_eq!(parse_java_major("8"), Some(8));
+        assert_eq!(parse_java_major("1.8.0_345"), Some(1));
+        assert_eq!(parse_java_major("xyz"), None);
     }
 }
