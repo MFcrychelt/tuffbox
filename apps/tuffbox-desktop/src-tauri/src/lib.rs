@@ -55,6 +55,7 @@ static MODS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 /// Badge, counts and Pack Health could all miss the cache concurrently and
 /// rebuild the same graph three times.
 static DIAGNOSTICS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static PACK_HEALTH_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 use types::*;
 
@@ -10628,14 +10629,23 @@ async fn get_pack_health(path: String) -> Result<PackHealthReport, String> {
         return Ok(cached);
     }
 
-    let report = tokio::task::spawn_blocking(move || get_pack_health_impl(&path))
-        .await
-        .map_err(|e| e.to_string())??;
-    tuffbox_core::api_cache::put_with_ttl(
-        cache_key,
-        report.clone(),
-        std::time::Duration::from_secs(10),
-    );
+    let report = tokio::task::spawn_blocking(move || {
+        let _guard = PACK_HEALTH_IO_LOCK.lock().ok();
+        // Re-check after waiting so simultaneous badge/Diagnose requests
+        // share one cold scan instead of all running export/JAR/quest checks.
+        if let Some(cached) = tuffbox_core::api_cache::get::<PackHealthReport>(&cache_key) {
+            return Ok(cached);
+        }
+        let report = get_pack_health_impl(&path)?;
+        tuffbox_core::api_cache::put_with_ttl(
+            cache_key,
+            report.clone(),
+            std::time::Duration::from_secs(10),
+        );
+        Ok(report)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     Ok(report)
 }
 
