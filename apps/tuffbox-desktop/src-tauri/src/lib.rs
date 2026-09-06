@@ -10577,6 +10577,7 @@ async fn apply_resolve_action(
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let mut manifest = manifest_for_graph(&path)?;
+        let expected_fingerprint = tuffbox_core::manifest_fingerprint(&manifest);
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let Some(plan) = Resolver::create_fix_plan(&graph, &diagnostics) else {
@@ -10585,11 +10586,20 @@ async fn apply_resolve_action(
         let Some(action) = plan.actions.get(action_index).cloned() else {
             return Err(format!("action index {action_index} out of range"));
         };
+        let current = manifest_for_graph(&path)?;
+        if tuffbox_core::manifest_fingerprint(&current) != expected_fingerprint {
+            return Err("Project changed while diagnostics were running; refresh diagnostics and review the new plan.".into());
+        }
+
         if plan.requires_snapshot {
             auto_snapshot(&manifest_path, "apply-resolve-action").map_err(|e| e.to_string())?;
         }
         let mut applied = Vec::new();
         apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
+        let current = manifest_for_graph(&path)?;
+        if tuffbox_core::manifest_fingerprint(&current) != expected_fingerprint {
+            return Err("Project changed while applying the plan; no changes were written. Refresh diagnostics.".into());
+        }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         Ok(applied)
@@ -10606,17 +10616,27 @@ async fn apply_resolve_change_plan(
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let mut manifest = manifest_for_graph(&path)?;
+        let expected_fingerprint = tuffbox_core::manifest_fingerprint(&manifest);
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let Some(plan) = Resolver::create_fix_plan(&graph, &diagnostics) else {
             return Ok(Vec::new());
         };
+        let current = manifest_for_graph(&path)?;
+        if tuffbox_core::manifest_fingerprint(&current) != expected_fingerprint {
+            return Err("Project changed while diagnostics were running; refresh diagnostics and review the new plan.".into());
+        }
+
         if plan.requires_snapshot {
             auto_snapshot(&manifest_path, "apply-resolve-plan").map_err(|e| e.to_string())?;
         }
         let mut applied = Vec::new();
         for action in plan.actions {
             apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
+        }
+        let current = manifest_for_graph(&path)?;
+        if tuffbox_core::manifest_fingerprint(&current) != expected_fingerprint {
+            return Err("Project changed while applying the plan; no changes were written. Refresh diagnostics.".into());
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
