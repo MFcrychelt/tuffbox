@@ -213,6 +213,9 @@
   /** Radio choice for plans that carry `options` (conflict resolutions). */
   let selectedFixOption = $state<number | null>(null);
   let lastLoadedPath = $state<string | null>(null);
+  // Prevent the project-path effect, onMount and the open-diagnostics event
+  // from starting identical IPC pipelines at the same time.
+  let activeLoadPath: string | null = null;
 
   function onSourceChange(e: Event) {
     const el = e.currentTarget;
@@ -304,7 +307,10 @@
 
   async function load(force = false) {
     if (!$projectPath) return;
-    if (!force && lastLoadedPath === $projectPath && diagnosis) return;
+    const requestedPath = $projectPath;
+    if (activeLoadPath === requestedPath) return;
+    if (!force && lastLoadedPath === requestedPath && diagnosis) return;
+    activeLoadPath = requestedPath;
     loading = true;
     error = null;
     const requestedLatest = preferLatestLog;
@@ -315,7 +321,7 @@
           ? LAUNCHER_LOG_SOURCE
           : selectedReportId || null;
       const data: CrashDiagnosis = await invoke("get_crash_diagnosis", {
-        path: $projectPath,
+        path: requestedPath,
         reportId,
       });
       diagnosis = data;
@@ -352,7 +358,10 @@
     } catch (e) {
       error = String(e);
     } finally {
-      loading = false;
+      if (activeLoadPath === requestedPath) {
+        activeLoadPath = null;
+        loading = false;
+      }
     }
   }
 
