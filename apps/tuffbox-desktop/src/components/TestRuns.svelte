@@ -3,15 +3,16 @@
   import { open as openShell } from "@tauri-apps/plugin-shell";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
-    PlayCircle, RefreshCw, Terminal, TimerReset, XCircle,
-    Shield, Server, Square, Stethoscope, Zap,
-    Camera, FolderOpen,
+    PlayCircle, RefreshCw, TimerReset,
+    Square, Stethoscope, Activity,
   } from "@lucide/svelte";
-  import { onDestroy, onMount, tick } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { ideStageRequest, openLaunchLog, projectPath, projectInfo } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import TestHardwareCard from "./test/TestHardwareCard.svelte";
   import TestLoadChart from "./test/TestLoadChart.svelte";
+  import TestLabConsole from "./test/TestLabConsole.svelte";
+  import TestLabOptions from "./test/TestLabOptions.svelte";
   import { launchWithFeedback } from "../lib/launch";
   import type { TestRunRecord } from "../lib/api";
   import { gb1, peaksFromSamples, pushLoadSample, type LoadSample } from "../lib/testLoad";
@@ -70,13 +71,12 @@
 
   const CLIENT_4G_MEMORY_MB = 4096;
   const DEFAULT_TIMEOUT_S = 180;
-  const LOG_TAIL_LINES = 500;
 
   let documentVisible = $state(true);
 
   let profiles = $state<Profile[]>([]);
   let selectedProfile = $state("client");
-  let log = "";
+  let log = $state("");
   let running = $state(false);
   let watching = $state(false);
   let loading = $state(false);
@@ -90,7 +90,6 @@
   let validationLoading = $state(false);
   let validationError = $state<string | null>(null);
   let autoScroll = $state(true);
-  let logEl = $state<HTMLPreElement | null>(null);
   let live = $state<LiveDebugStats | null>(null);
   let killing = $state(false);
   let launchStats = $state<any>(null);
@@ -99,6 +98,15 @@
   let levelSeed = $state("");
   let onlineModeOff = $state(true);
   let timeoutSeconds = $state(DEFAULT_TIMEOUT_S);
+  /** Memory preset applied to the main run button (null = profile default). */
+  type MemPresetId = "auto" | "4g" | "8g" | "custom";
+  const MEM_PRESETS: Array<{ id: MemPresetId; label: string; mb: number | null }> = [
+    { id: "auto", label: "Profile default", mb: null },
+    { id: "4g", label: "4 GB", mb: 4096 },
+    { id: "8g", label: "8 GB", mb: 8192 },
+    { id: "custom", label: "Custom JVM", mb: null },
+  ];
+  let memPreset = $state<MemPresetId>("auto");
   let livePhase = $state<LivePhase>("idle");
   let verdictReason: string | null = null;
   let startupSeconds = $state<number | null>(null);
@@ -124,7 +132,7 @@
   let serverDir = $state("");
   let activeLogRoot = $state<string | null>(null);
 
-  let runs: TestRunRecord[] = [];
+  let runs = $state<TestRunRecord[]>([]);
   let capturedRunIds = $state<Record<string, boolean>>({});
 
   let loadSamples = $state<LoadSample[]>([]);
@@ -133,6 +141,8 @@
     && document.documentElement.classList.contains("potato-pc");
 
   const selected = $derived(profiles.find((p) => p.id === selectedProfile));
+  /** Resolved memory for the main run button (null = profile default). */
+  const mainRunMb = $derived(MEM_PRESETS.find((m) => m.id === memPreset)?.mb ?? null);
   const elapsed = $derived(startedAt ? Math.floor((now - startedAt) / 1000) : 0);
   const validationCritical = $derived(!!validationReport && (
     !validationReport.passed
@@ -183,16 +193,10 @@
   $effect(() => {
     if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
   });
-  const displayLog = $derived(tailLogLines(log, LOG_TAIL_LINES));
-  const logLineCount = $derived(log ? log.split("\n").length : 0);
-  const logTruncated = $derived(logLineCount > LOG_TAIL_LINES);
 
-  function tailLogLines(text: string, maxLines: number): string {
-    if (!text) return "";
-    const lines = text.split("\n");
-    if (lines.length <= maxLines) return text;
-    const omitted = lines.length - maxLines;
-    return `… (${omitted} earlier lines omitted)\n${lines.slice(-maxLines).join("\n")}`;
+  function formatRam(mb?: number | null): string {
+    const v = mb ?? 4096;
+    return v >= 1024 ? `${(v / 1024).toFixed(v % 1024 ? 1 : 0)} GB` : `${v} MB`;
   }
 
   function normalizeStatus(s: string) {
@@ -492,6 +496,31 @@
     await beginRun({ profile: selectedProfile, label: "Smoke client", openServerConsole: false });
   }
 
+  /** Main run button: launch the selected target with the active memory preset. */
+  async function runFromBar() {
+    const isServerTarget = String(selected?.side ?? "").toLowerCase() === "server" || selectedProfile === "server";
+    if (isServerTarget) {
+      const dir = await ensureServerDir();
+      if (!dir) return;
+      await beginRun({
+        profile: selectedProfile,
+        label: "Run server",
+        prepareServer: true,
+        serverDir: dir,
+        openServerConsole: true,
+        memoryMbOverride: mainRunMb,
+      });
+      return;
+    }
+    activeLogRoot = $projectPath;
+    await beginRun({
+      profile: selectedProfile,
+      label: "Run test",
+      openServerConsole: false,
+      memoryMbOverride: mainRunMb,
+    });
+  }
+
   async function runServer() {
     const dir = await ensureServerDir();
     if (!dir) {
@@ -642,10 +671,6 @@
     if (!$projectPath) return;
     try {
       log = await invoke("get_launch_log", { path: activeLogRoot || $projectPath });
-      if (autoScroll && logEl) {
-        await tick();
-        logEl.scrollTop = logEl.scrollHeight;
-      }
       await evaluateLogAndLifecycle();
     } catch {
       // latest.log may not exist before first run.
@@ -905,43 +930,78 @@
   {:else}
     <div class="flex-1 min-h-0 flex flex-col overflow-hidden gap-4">
 
-      <!-- ── Launch bar: status + profile + actions ─────────────── -->
-      <div class="shrink-0 flex flex-wrap items-center gap-3 px-4 py-3 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
-        <div class="flex items-center gap-2 font-semibold rounded-[var(--border-radius-md)] px-3.5 py-2 transition-colors duration-150 status-chip {
-          livePhase === "pass"
-            ? "pass"
-            : (livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut")
-              ? "fail"
-              : "idle"
-        }">
-          <TimerReset size={16} />
-          {statusLabel}
+      <!-- ── Launch toolbar: status + target + preset + run/kill ─── -->
+      <div class="launch-bar glass-card shrink-0">
+        <div class="flex items-center gap-3 flex-wrap">
+          <div class="flex items-center gap-2 font-semibold rounded-lg px-3.5 py-2 transition-colors duration-150 status-chip {
+            livePhase === "pass"
+              ? "pass"
+              : (livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut")
+                ? "fail"
+                : (livePhase === "launching" || livePhase === "bootstrapping")
+                  ? "running"
+                  : "idle"
+          }">
+            <TimerReset size={16} />
+            <span>{statusLabel}</span>
+            {#if live?.instance}
+              <span class="chip-pid">PID {live.instance.pid}</span>
+            {/if}
+          </div>
+          <label class="field">
+            <span class="field-label">Target</span>
+            <select bind:value={selectedProfile} disabled={running || matrixRunning} class="min-w-[180px]">
+              {#each profiles as p (p.id)}
+                <option value={p.id}>
+                  {p.name} · {p.id === "server" ? "Dedicated Server" : "Client"}
+                </option>
+              {/each}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Memory</span>
+            <select bind:value={memPreset} disabled={running || matrixRunning} class="min-w-[150px]">
+              {#each MEM_PRESETS as m (m.id)}
+                <option value={m.id}>{m.label}</option>
+              {/each}
+            </select>
+          </label>
+
+          <button
+            class="run-main"
+            class:run={livePhase === "launching" || livePhase === "bootstrapping"}
+            disabled={running || matrixRunning || !selectedProfile}
+            onclick={() => void runFromBar()}
+            title="Launch the selected target with the active memory preset"
+          >
+            {#if livePhase === "launching" || livePhase === "bootstrapping"}
+              <span class="mini-spinner"></span>
+              {livePhase === "launching" ? "Launching…" : `Running… ${elapsed}s`}
+            {:else}
+              <PlayCircle size={17} /> Run test
+            {/if}
+          </button>
+
+          {#if running || live?.instance}
+            <button class="kill-btn" onclick={killInstance} disabled={killing} title="Kill game/server process">
+              <Square size={15} />
+              {killing ? "Stopping…" : "Stop"}
+            </button>
+          {/if}
         </div>
-        <label class="field">
-          <span class="field-label">Profile</span>
-          <select bind:value={selectedProfile} disabled={running || matrixRunning} class="min-w-[180px]">
-            {#each profiles as p (p.id)}
-              <option value={p.id}>{p.name} ({p.id})</option>
-            {/each}
-          </select>
-        </label>
-        <div class="flex flex-wrap gap-2 ml-auto">
-          <button class="preset primary" onclick={smokeClient} disabled={running || matrixRunning || !selectedProfile}>
-            <PlayCircle size={16} /> Smoke client
-          </button>
-          <button class="preset" onclick={runServer} disabled={running || matrixRunning} title="Stage both+server mods into a folder and open Server console">
-            <Server size={16} /> Run server
-          </button>
-          <button class="preset" onclick={runClient4Ram} disabled={running || matrixRunning} title={`Launch client with ${CLIENT_4G_MEMORY_MB} MB RAM`}>
-            <Zap size={16} /> Run client 4 RAM
-          </button>
+
+        <div class="flex items-center gap-3 mt-3 pt-3 border-t border-[color:var(--border-color)]">
+          <span class="launch-note text-[12.5px]">
+            {#if running}
+              Process active — watching <span class="font-mono text-[color:var(--text-muted)]">latest.log</span> for a pass/fail signal.
+            {:else}
+              Ready to launch. Pick a target and memory preset, then run.
+            {/if}
+          </span>
+          <span class="launch-note text-[12px] ml-auto text-[color:var(--text-muted)]">
+            {selected ? `${selected.name} · ${formatRam(selected.memoryMb)}` : ""}
+          </span>
         </div>
-        {#if live?.instance}
-          <button class="danger" onclick={killInstance} disabled={killing} title="Kill game/server process">
-            <Square size={16} />
-            {killing ? "Stopping…" : "Kill"}
-          </button>
-        {/if}
       </div>
 
       <!-- ── Main area: log column + right settings column ──────── -->
@@ -949,197 +1009,93 @@
 
         <!-- Left: load + log (vertical stack) -->
         <div class="min-w-0 min-h-0 flex flex-col gap-4">
-          <div class="shrink-0 flex flex-col overflow-hidden bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] px-4 py-3 gap-2.5">
-            <h3 class="m-0 text-[12px] font-bold text-[var(--text-secondary)] shrink-0">Load</h3>
+          <div class="shrink-0 flex flex-col overflow-hidden glass-card px-4 py-3 gap-2.5">
+            <h3 class="m-0 text-[12px] font-bold text-[color:var(--text-secondary)] shrink-0 flex items-center gap-2">
+              <Activity size={14} class="text-emerald-400" />
+              Load
+            </h3>
             <TestLoadChart samples={loadSamples} xmxMb={activeXmxMb} potato={potatoPc} />
             <TestHardwareCard samples={loadSamples} xmxMb={activeXmxMb} />
           </div>
-          <div class="flex-1 min-h-0 flex flex-col overflow-hidden bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
-            <div class="flex items-center justify-between gap-2.5 px-4 py-2.5 border-b border-[var(--border-color)] shrink-0">
-              <label class="flex items-center gap-1.5 text-[var(--text-muted)] text-[12px] cursor-pointer">
-                <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={autoScroll} /> Auto-scroll
-              </label>
-              <div class="flex items-center gap-1.5 flex-wrap">
-                {#if activeLogRoot && activeLogRoot !== $projectPath}
-                  <span class="text-[11px] text-[var(--text-muted)]">Server console</span>
-                  <button class="ghost mini" onclick={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}>
-                    <Terminal size={12} /> Open server console
-                  </button>
-                {/if}
-                {#if logTruncated}
-                  <span class="text-[11px] text-[var(--text-muted)]">Showing last {LOG_TAIL_LINES} of {logLineCount} lines</span>
-                {/if}
-                {#if !documentVisible && watching}
-                  <span class="text-[11px] text-[#fbbf24]">Poll paused (tab hidden)</span>
-                {/if}
-                <button class="ghost mini" onclick={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
-                {#if watching}
-                  <button class="ghost mini" onclick={stopWatching}>Stop watching</button>
-                {:else if running || live?.instance}
-                  <button class="ghost mini" onclick={startPolling}>Watch log</button>
-                {/if}
-              </div>
-            </div>
-            <pre class="flex-1 min-h-0 overflow-auto m-0 p-4 bg-[#09090b] text-[#d4d4d8] font-mono text-[12px] leading-[1.55] whitespace-pre-wrap" bind:this={logEl}>{displayLog || "latest.log will appear here after the first run."}</pre>
-          </div>
+          <TestLabConsole
+            bind:log
+            {running}
+            {watching}
+            bind:live
+            {elapsed}
+            bind:activeLogRoot
+            projectPath={$projectPath}
+            onclear={() => (log = "")}
+            onopenserver={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}
+            ondiagnose={openDiagnose}
+            onpause={stopWatching}
+            onwatch={startPolling}
+          />
         </div>
 
         <!-- Right: tabbed panel (Options / Matrix / History) -->
-        <div class="min-w-0 min-h-0 flex flex-col overflow-hidden bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
-          <div class="flex items-center gap-1 px-2.5 pt-2.5 border-b border-[var(--border-color)] shrink-0 flex-wrap" role="tablist">
-            {#each sideTabs as tab (tab.id)}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={sideTab === tab.id}
-                class="side-tab"
-                class:active={sideTab === tab.id}
-                onclick={() => (sideTab = tab.id)}
-              >
-                {tab.label}
-                {#if tab.id === "options" && validationBadge}
-                  <span class="side-tab-dot {validationBadge.ok ? "ok" : "bad"}"></span>
-                {/if}
-              </button>
-            {/each}
+        <div class="min-w-0 min-h-0 flex flex-col overflow-hidden glass-card">
+          <div class="flex items-center gap-1 px-2.5 pt-2.5 pb-2 shrink-0 flex-wrap" role="tablist">
+            <div class="seg-tabs" role="group">
+              {#each sideTabs as tab (tab.id)}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={sideTab === tab.id}
+                  class="seg-tab"
+                  class:active={sideTab === tab.id}
+                  onclick={() => (sideTab = tab.id)}
+                >
+                  {tab.label}
+                  {#if tab.id === "options" && validationBadge}
+                    <span class="side-tab-dot {validationBadge.ok ? "ok" : "bad"}"></span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
           </div>
 
-          <div class="flex-1 min-h-0 overflow-auto px-4 py-3.5">
+          <div class="flex-1 min-h-0 overflow-auto px-4 py-4">
             {#if sideTab === "options"}
-              <div class="grid gap-3">
-                <div class="flex flex-wrap items-center gap-3.5 text-[var(--text-muted)] text-[12px]">
-                  <button class="ghost" onclick={() => loadProfiles(true)} disabled={!$projectPath || loading}>
-                    <RefreshCw size={16} class={loading ? "spin" : ""} />
-                    Refresh
-                  </button>
-                  <button class="secondary" onclick={runValidation} disabled={!$projectPath || validationLoading}>
-                    <Shield size={16} />
-                    {validationLoading ? "Checking…" : "Validate"}
-                  </button>
-                  {#if validationBadge}
-                    <span class="text-[11px] font-bold px-2 py-1 rounded-full border {
-                      validationBadge.ok
-                        ? "text-[var(--accent-primary)] border-[color-mix(in_srgb,var(--accent-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)]"
-                        : "text-[#fca5a5] border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.08)]"
-                    }">
-                      {validationBadge.label}
-                    </span>
-                  {/if}
-                  <label class="inline-flex items-center gap-1.5 cursor-pointer" title="Allow launch even when validation has errors">
-                    <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={forceRun} /> Force run
-                  </label>
-                  <label class="inline-flex items-center gap-1.5 cursor-pointer" title="Create a snapshot before smoke / dry run">
-                    <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={autoSnapshot} />
-                    <Camera size={12} /> Auto-snapshot
-                  </label>
-                  <label class="inline-flex items-center gap-1.5">
-                    Timeout
-                    <input type="number" min="30" max="900" class="w-[72px]" bind:value={timeoutSeconds} /> s
-                  </label>
-                  {#if selected}
-                    <span class="text-[var(--text-secondary)]">
-                      {selected.name} · {selected.side} · {selected.memoryMb ?? 4096} MB
-                    </span>
-                  {/if}
-                  {#if startupSeconds != null && livePhase === "pass"}
-                    <span class="text-[var(--accent-primary)] font-bold">Startup {startupSeconds}s</span>
-                  {/if}
-                </div>
-
-                <div class="grid gap-2 px-3.5 py-3 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
-                  <span class="panel-section-title">Quick Play</span>
-                  <div class="flex flex-wrap items-end gap-3">
-                    <label class="field">
-                      <span class="field-label">World</span>
-                      <select class="min-w-[200px]" bind:value={quickPlayWorld}>
-                        {#if worlds.length === 0}
-                          <option value="">No worlds in saves/</option>
-                        {:else}
-                          {#each worlds as w (w.name)}
-                            <option value={w.name}>{w.name}</option>
-                          {/each}
-                        {/if}
-                      </select>
-                    </label>
-                    <button class="secondary" onclick={quickPlay} disabled={running || matrixRunning || !quickPlayWorld}>
-                      Launch Quick Play
-                    </button>
-                  </div>
-                </div>
-
-                <div class="grid gap-2 px-3.5 py-3 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)]">
-                  <span class="panel-section-title">Server staging</span>
-                  <div class="flex flex-wrap items-end gap-3">
-                    <label class="field flex-1 min-w-[220px]">
-                      <span class="field-label">Server folder</span>
-                      <input type="text" placeholder="Where the server instance will be staged" bind:value={serverDir} />
-                    </label>
-                    <button class="secondary" onclick={async () => { await ensureServerDir(); }} disabled={!$projectPath}>
-                      <FolderOpen size={14} /> Browse…
-                    </button>
-                    <button class="ghost" onclick={() => (serverDir = defaultServerDir())} disabled={!$projectPath}>
-                      Default
-                    </button>
-                  </div>
-                  <div class="flex flex-wrap items-end gap-3">
-                    <label class="field">
-                      <span class="field-label">level-seed</span>
-                      <input type="text" class="min-w-[160px]" placeholder="optional" bind:value={levelSeed} />
-                    </label>
-                    <label class="inline-flex items-center gap-1.5 cursor-pointer pb-2">
-                      <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={onlineModeOff} /> online-mode=false
-                    </label>
-                    <button class="ghost" onclick={async () => {
-                      try {
-                        const dir = serverDir.trim() || defaultServerDir();
-                        await invoke("generate_server_properties", {
-                          path: $projectPath,
-                          levelSeed: levelSeed.trim() || null,
-                          onlineMode: onlineModeOff ? false : true,
-                          targetDir: dir,
-                        });
-                        message = `server.properties written to ${dir}`;
-                      } catch (e) { error = String(e); }
-                    }}>Write server.properties</button>
-                  </div>
-                </div>
-
-                {#if validationReport && !validationReport.passed}
-                  <div class="bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] px-3 py-3">
-                    <div class="flex items-center justify-between mb-2.5 gap-2">
-                      <h3 class="flex items-center gap-2 text-[14px] text-[var(--text-primary)] m-0"><Shield size={16} /> Validation</h3>
-                      <span class="flex items-center gap-1.5 text-[#fca5a5] font-bold text-[12px]"><XCircle size={14} /> Issues — use Force run to launch</span>
-                    </div>
-                    <div class="grid grid-cols-3 gap-2 mb-2">
-                      <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
-                        validationReport.graphErrors > 0
-                          ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
-                          : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
-                      }">
-                        <strong class="text-[18px] { validationReport.graphErrors > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.graphErrors }</strong>
-                        <span class="text-[11px] text-[var(--text-muted)]">graph</span>
-                      </div>
-                      <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
-                        (validationReport.jsonErrors?.length ?? 0) > 0
-                          ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
-                          : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
-                      }">
-                        <strong class="text-[18px] { (validationReport.jsonErrors?.length ?? 0) > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.jsonErrors?.length ?? 0 }</strong>
-                        <span class="text-[11px] text-[var(--text-muted)]">JSON</span>
-                      </div>
-                      <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
-                        (validationReport.circularDeps?.length ?? 0) > 0
-                          ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
-                          : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
-                      }">
-                        <strong class="text-[18px] { (validationReport.circularDeps?.length ?? 0) > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.circularDeps?.length ?? 0 }</strong>
-                        <span class="text-[11px] text-[var(--text-muted)]">cycles</span>
-                      </div>
-                    </div>
-                    <button class="ghost" onclick={() => (validationReport = null)}>Hide</button>
-                  </div>
-                {/if}
-              </div>
+              <TestLabOptions
+              projectPath={$projectPath}
+              bind:profiles
+              bind:selectedProfile
+              {loading}
+              {running}
+              {matrixRunning}
+              {validationLoading}
+              bind:validationReport
+              {validationBadge}
+              bind:forceRun
+              bind:autoSnapshot
+              bind:timeoutSeconds
+              bind:worlds
+              bind:quickPlayWorld
+              bind:serverDir
+              bind:levelSeed
+              bind:onlineModeOff
+              bind:startupSeconds
+              bind:livePhase
+              {formatRam}
+              onrefresh={() => loadProfiles(true)}
+              onvalidate={runValidation}
+              onquickplay={quickPlay}
+              onbrowseserver={() => void ensureServerDir()}
+              ondefaultserver={() => (serverDir = defaultServerDir())}
+              onwriteserverprops={async () => {
+                try {
+                  const dir = serverDir.trim() || defaultServerDir();
+                  await invoke("generate_server_properties", {
+                    path: $projectPath,
+                    levelSeed: levelSeed.trim() || null,
+                    onlineMode: onlineModeOff ? false : true,
+                    targetDir: dir,
+                  });
+                  message = `server.properties written to ${dir}`;
+                } catch (e) { error = String(e); }
+              }}
+            />
             {:else if sideTab === "matrix"}
               <div class="grid gap-3.5">
                 <div class="flex items-center gap-3 flex-wrap">
@@ -1276,45 +1232,10 @@
 <style>
   /* Layout is Tailwind utilities; scoped styles only for things Tailwind
      cannot express: the shared .ghost/.secondary/.danger button skins
-     (defined app-wide) tweaks specific to this view, the Ore-style preset
-     buttons, verdict badges and the spin animation. */
+     (defined app-wide) tweaks specific to this view, verdict badges and the
+     spin animation. */
 
-  .preset { display: inline-flex; align-items: center; gap: 8px; }
-  /* Task #65: preset buttons get the Ore UI key treatment — flat fill,
-     darker bottom edge, theme-accent primary. Token-driven so light themes
-     don't inherit hardcoded dark-gray fills. */
-  .preset {
-    background: var(--bg-tertiary);
-    border-color: var(--border-color);
-    border-bottom-color: color-mix(in srgb, var(--border-color) 70%, #000);
-    color: var(--text-primary);
-    border-bottom-width: 3px;
-  }
-  .preset:hover:not(:disabled) {
-    background: var(--bg-elevated);
-    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
-    color: var(--text-primary);
-  }
-  .preset:active:not(:disabled) {
-    background: var(--bg-secondary);
-    border-bottom-width: 1px;
-    transform: translateY(1px);
-    filter: none;
-  }
-  .preset.primary {
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
-    border-bottom-color: color-mix(in srgb, var(--accent-primary) 60%, #000);
-    color: var(--on-accent, #fff);
-    font-weight: 700;
-  }
-  .preset.primary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-primary) 82%, #fff);
-    border-color: color-mix(in srgb, var(--accent-primary) 82%, #fff);
-    border-bottom-color: color-mix(in srgb, var(--accent-primary) 50%, #000);
-    color: var(--on-accent, #fff);
-  }
-  .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
+  .mini { padding: 5px 9px; font-size: 12px; justify-self: start; }
   .danger { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
   .danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
 
@@ -1326,22 +1247,10 @@
     gap: 5px;
     min-width: 0;
   }
-  .field-label,
-  .panel-section-title {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-muted);
-  }
-  .panel-section-title {
-    font-size: 11px;
-  }
-  .field select,
-  .field input[type="text"] {
+  .field select {
     width: 100%;
     min-height: 36px;
-    padding: 7px 30px 7px 12px; /* right padding leaves room for the native arrow */
+    padding: 7px 30px 7px 12px;
     font-size: 13px;
     line-height: 1.2;
     appearance: none;
@@ -1351,43 +1260,10 @@
     background-size: 5px 5px;
     background-repeat: no-repeat;
   }
-  /* Timeout number input: compact, keeps native spinners. */
-  input[type="number"].w-\[72px\] {
-    min-height: 36px;
-    padding: 7px 10px;
-    font-size: 13px;
-    line-height: 1.2;
-  }
-  .field select:focus,
-  .field input:focus {
+  .field select:focus {
     border-color: var(--accent-primary);
   }
 
-  /* Side panel tabs: underline-style, no accordion look. */
-  .side-tab {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 12px;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
-    color: var(--text-muted);
-    font-size: 12.5px;
-    font-weight: 600;
-    margin-bottom: -1px;
-  }
-  .side-tab:hover:not(:disabled) {
-    color: var(--text-primary);
-    background: transparent;
-    filter: none;
-  }
-  .side-tab.active {
-    color: var(--text-primary);
-    border-bottom-color: var(--accent-primary);
-  }
   .side-tab-dot {
     width: 6px;
     height: 6px;
@@ -1426,7 +1302,7 @@
     border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
 
-  .vbadge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border-color); }
+  .vbadge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-color); }
   .vbadge.pass, .vbadge.finished { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
   .vbadge.fail, .vbadge.failed { color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
   .vbadge.crashed { color: #fecaca; background: rgba(239, 68, 68, 0.12); }
@@ -1438,4 +1314,136 @@
 
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  .mini-spinner {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--on-accent) 30%, transparent);
+    border-top-color: var(--on-accent);
+    animation: spin 700ms linear infinite;
+    flex-shrink: 0;
+  }
+  .run-main {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    align-self: flex-end;
+    min-height: 36px;
+    padding: 0 18px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--accent-primary);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 60%, #000);
+    border-bottom-width: 3px;
+    background: var(--accent-primary);
+    color: var(--on-accent);
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  }
+  .run-main:hover:not(:disabled) {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 50%, #000);
+  }
+  .run-main:active:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 85%, #000);
+    border-bottom-width: 1px;
+    transform: translateY(2px);
+  }
+  .run-main:disabled { opacity: 0.5; cursor: default; }
+  .run-main.run {
+    background: color-mix(in srgb, var(--accent-primary) 70%, #000);
+    border-color: color-mix(in srgb, var(--accent-primary) 70%, #000);
+  }
+
+  /* ── Glassmorphism shell for panels ──────────────────────────── */
+  .glass-card {
+    background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--text-muted) 10%, transparent),
+      0 14px 44px rgba(3, 6, 10, 0.16);
+  }
+
+  .launch-bar {
+    padding: 14px 16px;
+  }
+  .launch-note {
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
+  .kill-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    height: 36px;
+    align-self: flex-end;
+    padding: 0 16px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid rgba(244, 63, 94, 0.4);
+    border-bottom-color: color-mix(in srgb, #e11d48 60%, #000);
+    border-bottom-width: 3px;
+    background: rgba(244, 63, 94, 0.16);
+    color: #fda4af;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--motion-fast, 160ms) ease;
+  }
+  .kill-btn:hover:not(:disabled) {
+    background: rgba(244, 63, 94, 0.28);
+  }
+
+  .chip-pid {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.3);
+    font-family: ui-monospace, monospace;
+  }
+
+  /* Status chip running (amber tint while bootstrapping). */
+  .status-chip.running {
+    color: #fcd34d;
+    background: rgba(245, 158, 11, 0.14);
+    border-color: rgba(245, 158, 11, 0.4);
+  }
+
+  /* Segmented tabs (right panel header). */
+  .seg-tabs {
+    display: inline-flex;
+    gap: 3px;
+    padding: 3px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+  }
+  .seg-tab {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    padding: 7px 13px;
+    border-radius: var(--border-radius-sm);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
+  }
+  .seg-tab.active {
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    color: var(--accent-primary);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  }
 </style>
