@@ -11040,6 +11040,18 @@ fn run_crash_assistant_analysis(
     project_dir: &Path,
     report_id: Option<&str>,
 ) -> Result<tuffbox_core::crash_assistant::CrashAnalysisReport, String> {
+    let cache_key = format!(
+        "crash-assistant-report:{}",
+        crash_diagnosis_cache_key(path, report_id)
+    );
+    if let Some(cached) =
+        tuffbox_core::api_cache::get::<tuffbox_core::crash_assistant::CrashAnalysisReport>(
+            &cache_key,
+        )
+    {
+        return Ok(cached);
+    }
+
     // Scope: selected crash report (or newest) + latest.log + current mods.
     // Do not dump every historical crash-report into the analyzer.
     // If latest.log is newer than the crash report (successful relaunch), skip
@@ -11113,8 +11125,17 @@ fn run_crash_assistant_analysis(
         win_events: Vec::new(),
         combined_lines: std::cell::OnceCell::new(),
     };
-    let _ = path;
-    Ok(tuffbox_core::crash_assistant::run_full_analysis(&ctx))
+    // get_crash_diagnosis and run_crash_assistant_full consume the same
+    // expensive rule-based report during one Diagnose refresh. Share it by
+    // the same input fingerprint so the second caller does not reopen every
+    // log and re-run all crash patterns.
+    let report = tuffbox_core::crash_assistant::run_full_analysis(&ctx);
+    tuffbox_core::api_cache::put_with_ttl(
+        cache_key,
+        report.clone(),
+        std::time::Duration::from_secs(30),
+    );
+    Ok(report)
 }
 
 #[tauri::command(rename_all = "camelCase")]
