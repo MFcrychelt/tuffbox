@@ -43,6 +43,7 @@
   import DiagnoseProblemsList from "./diagnostics/DiagnoseProblemsList.svelte";
   import DiagnoseStatusBar from "./diagnostics/DiagnoseStatusBar.svelte";
   import DiagnoseAdvancedToolbar from "./diagnostics/DiagnoseAdvancedToolbar.svelte";
+  import DiagnoseGroupTestPanel from "./diagnostics/DiagnoseGroupTestPanel.svelte";
   import { formatCascadeLabel } from "./diagnostics/cascadeLabel";
   import {
     buildUnifiedProblems,
@@ -3133,51 +3134,21 @@
           onOpenSnapshots={() => ideStageRequest.set("snapshots")}
         />
 
-        {#if groupTest}
-          <div class="notice warning group-test-panel">
-            <strong>Group test</strong>
-            <span>step {groupTest.step} · {groupTestStatus(groupTest)}</span>
-            <small>
-              Covering {groupTest.covering.length}
-              · clean {groupTest.knownClean.length}
-              {#if groupTest.testGroup.length}
-                · testing [{groupTest.testGroup.join(", ")}]
-              {/if}
-            </small>
-            {#if groupTest.defectives.length}
-              <small>Isolated: {groupTest.defectives.join(", ")}</small>
-            {/if}
-            {#if groupTestActive}
-              <label class="group-test-auto">
-                <input type="checkbox" bind:checked={groupTestAuto} />
-                Auto-launch next step
-              </label>
-              <div class="group-test-actions">
-                <button type="button" class="secondary small" disabled={launching || groupTestBusy} onclick={() => void runTest()}>
-                  Test launch
-                </button>
-                <button type="button" class="secondary small" disabled={groupTestBusy} onclick={() => void reportGroupTest("crash")}>
-                  Still crashed
-                </button>
-                <button type="button" class="secondary small" disabled={groupTestBusy} onclick={() => void reportGroupTest("healthy")}>
-                  Launched
-                </button>
-                <button type="button" class="ghost small" disabled={groupTestBusy} onclick={() => void cancelGroupTest()}>
-                  Cancel
-                </button>
-              </div>
-            {:else if groupTestPhaseKey(groupTest) === "done"}
-              <small>Verified covering. Share prompt can use these disables.</small>
-            {/if}
-          </div>
-        {:else}
-          <div class="notice warning">
-            Group test suspects: {bisectMods.length ? bisectMods.join(", ") : "recent + crash suspects"}
-            <button type="button" class="secondary small" disabled={groupTestBusy || !$projectPath} onclick={() => void startGroupTest()}>
-              Start group test
-            </button>
-          </div>
-        {/if}
+        <DiagnoseGroupTestPanel
+          session={groupTest}
+          suspects={bisectMods}
+          active={groupTestActive}
+          status={groupTestStatus(groupTest)}
+          phaseKey={groupTestPhaseKey(groupTest)}
+          busy={groupTestBusy}
+          bind:auto={groupTestAuto}
+          projectPath={$projectPath}
+          launching={launching}
+          onStart={() => void startGroupTest()}
+          onTest={() => void runTest()}
+          onReport={(outcome) => void reportGroupTest(outcome)}
+          onCancel={() => void cancelGroupTest()}
+        />
 
         <DiagnoseConflictsJars
           graphDiagnostics={graphDiagnostics}
