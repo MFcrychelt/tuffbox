@@ -11,7 +11,6 @@
     AlertTriangle,
     Info,
     History,
-    Wrench,
     Trash2,
     Database,
     ArrowDownToLine,
@@ -44,8 +43,7 @@
   import DiagnoseStatusBar from "./diagnostics/DiagnoseStatusBar.svelte";
   import DiagnoseAdvancedToolbar from "./diagnostics/DiagnoseAdvancedToolbar.svelte";
   import DiagnoseGroupTestPanel from "./diagnostics/DiagnoseGroupTestPanel.svelte";
-  import DiagnoseAuthorPanel from "./diagnostics/DiagnoseAuthorPanel.svelte";
-  import DiagnoseHeuristicPlan from "./diagnostics/DiagnoseHeuristicPlan.svelte";
+  import DiagnoseToolsResults from "./diagnostics/DiagnoseToolsResults.svelte";
   import { formatCascadeLabel } from "./diagnostics/cascadeLabel";
   import {
     buildUnifiedProblems,
@@ -3166,35 +3164,27 @@
           onRemoveWrongJar={removeWrongJar}
         />
 
-        {#if plan || oreFindings?.length || duplicateFindings?.length || unifyConfigResult || authorOpen || aiShowPrompt}
-          <section class="tools-results">
-            <h2><Wrench size={16} /> Tool results</h2>
-            {#if aiShowPrompt && aiPrompt}
-              <pre class="log-pre">{aiPrompt.slice(0, 20000)}</pre>
-            {/if}
-            <DiagnoseHeuristicPlan
-              plan={plan}
-              bind:selectedOption={selectedFixOption}
-              applying={applying}
-              onApply={() => void applyFix()}
-            />
-            <DiagnoseAuthorPanel
-              bind:open={authorOpen}
-              bind:authorId
-              bind:solution={authorSolution}
-              bind:symptoms={authorSymptoms}
-              bind:suspected={authorSuspected}
-              bind:actionsJson={authorActionsJson}
-              bind:notes={authorNotes}
-              busy={authorBusy}
-              exportPreview={authorExportPreview}
-              message={authorMsg}
-              onSave={() => void saveAuthorCase()}
-              onCopyExport={() => void copyAuthorExport()}
-              onOpenFolder={() => void openAuthorExportFolder()}
-            />
-          </section>
-        {/if}
+        <DiagnoseToolsResults
+          plan={plan}
+          aiPrompt={aiPrompt}
+          bind:aiShowPrompt
+          bind:selectedOption={selectedFixOption}
+          applying={applying}
+          onApplyPlan={() => void applyFix()}
+          bind:authorOpen
+          bind:authorId
+          bind:authorSolution
+          bind:authorSymptoms
+          bind:authorSuspected
+          bind:authorActionsJson
+          bind:authorNotes
+          authorBusy={authorBusy}
+          authorExportPreview={authorExportPreview}
+          authorMessage={authorMsg}
+          onSaveAuthor={() => void saveAuthorCase()}
+          onCopyAuthorExport={() => void copyAuthorExport()}
+          onOpenAuthorFolder={() => void openAuthorExportFolder()}
+        />
       </div>
     {/if}
   {:else}
