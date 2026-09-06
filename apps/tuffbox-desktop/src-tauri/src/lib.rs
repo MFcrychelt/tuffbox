@@ -10375,18 +10375,48 @@ fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), Strin
     Ok(())
 }
 
+fn diagnostics_cache_key(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> String {
+    format!(
+        "diagnostics:{}:{}",
+        tuffbox_core::manifest_fingerprint(manifest),
+        tuffbox_core::installed_jars_fingerprint(manifest_path)
+    )
+}
+
+fn diagnostics_for_path_cached(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> tuffbox_core::ClickPathDiagnostics {
+    let key = diagnostics_cache_key(manifest_path, manifest);
+    if let Some(cached) =
+        tuffbox_core::api_cache::get::<tuffbox_core::ClickPathDiagnostics>(&key)
+    {
+        return cached;
+    }
+    let result = tuffbox_core::diagnostics_for_click_path(manifest_path, manifest);
+    tuffbox_core::api_cache::put_with_ttl(
+        key,
+        result.clone(),
+        std::time::Duration::from_secs(5),
+    );
+    result
+}
+
 #[tauri::command]
 fn get_diagnostics(path: String) -> Result<Vec<tuffbox_core::Diagnostic>, String> {
     let manifest_path = PathBuf::from(&path);
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    Ok(tuffbox_core::diagnostics_for_click_path(&manifest_path, &manifest).diagnostics)
+    Ok(diagnostics_for_path_cached(&manifest_path, &manifest).diagnostics)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 fn get_diagnostic_counts(path: String) -> Result<tuffbox_core::DiagnosticCounts, String> {
     let manifest_path = PathBuf::from(&path);
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let result = tuffbox_core::diagnostics_for_click_path(&manifest_path, &manifest);
+    let result = diagnostics_for_path_cached(&manifest_path, &manifest);
     Ok(tuffbox_core::diagnostic_counts(
         &result.diagnostics,
         result.cached,
@@ -10455,8 +10485,7 @@ fn get_pack_health_impl(path: &str) -> Result<PackHealthReport, String> {
     let project_dir = manifest_parent(path)?;
 
     // Same core helper as get_diagnostics.
-    let diagnostics =
-        tuffbox_core::diagnostics_for_click_path(&manifest_path, &manifest).diagnostics;
+    let diagnostics = diagnostics_for_path_cached(&manifest_path, &manifest).diagnostics;
     let diag_errors = diagnostics
         .iter()
         .filter(|d| d.severity == tuffbox_core::DiagnosticSeverity::Error)
