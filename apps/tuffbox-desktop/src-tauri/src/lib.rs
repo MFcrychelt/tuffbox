@@ -5964,6 +5964,7 @@ fn run_crash_assistant_full_impl(
     diagnose_stage(app, "Running crash checks…");
     let report = run_crash_assistant_analysis(&path, &manifest, &project_dir, report_id.as_deref())?;
 
+    let class_finder_started = std::time::Instant::now();
     let mut class_finder = Vec::new();
     let mut combined = String::new();
     // Task #66: per-run memo plus the process-wide ClassFinderCache so repeat
@@ -6045,6 +6046,7 @@ fn run_crash_assistant_full_impl(
         }
     }
     class_finder.truncate(20);
+    diagnose_timing(Some(app), "class_finder", class_finder_started, false);
 
     Ok(serde_json::json!({
         "findings": report.findings.iter().map(|f| serde_json::json!({
@@ -10883,6 +10885,32 @@ fn diagnose_stage_or_task(app: Option<&tauri::AppHandle>, stage: &str) {
     }
 }
 
+/// Emits measurable phase data instead of relying on subjective spinner time.
+/// The event is intentionally additive: older frontends can ignore it while
+/// profiling builds can collect per-stage timings without changing results.
+fn diagnose_timing(
+    app: Option<&tauri::AppHandle>,
+    phase: &str,
+    started: std::time::Instant,
+    cache_hit: bool,
+) {
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if let Some(app) = app {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "diagnose-timing",
+            serde_json::json!({
+                "phase": phase,
+                "elapsedMs": elapsed_ms,
+                "cacheHit": cache_hit,
+            }),
+        );
+    }
+    // Keep a concise native trace for packaged builds where the webview event
+    // stream is not being observed.
+    eprintln!("[diagnose] phase={phase} elapsed_ms={elapsed_ms} cache_hit={cache_hit}");
+}
+
 fn diagnose_finish(app: &tauri::AppHandle, ok: bool, detail: &str) {
     if ok {
         tuffbox_core::task_progress::succeed(DIAGNOSE_TASK_ID, Some(detail.to_string()));
@@ -10896,6 +10924,7 @@ fn get_crash_diagnosis_impl(
     path: String,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::crash::CrashDiagnosis, String> {
+    let total_started = std::time::Instant::now();
     tuffbox_core::task_progress::start_task(DIAGNOSE_TASK_ID, "Crash diagnosis");
     if let Some(app) = app {
         diagnose_stage(app, "Reading logs and pack graph…");
@@ -10918,9 +10947,11 @@ fn get_crash_diagnosis_impl(
         } else {
             tuffbox_core::task_progress::succeed(DIAGNOSE_TASK_ID, Some("Loaded from cache".into()));
         }
+        diagnose_timing(app, "diagnosis_total", total_started, true);
         return Ok(cached);
     }
     let result = get_crash_diagnosis_uncached(app, &path, report_id.clone());
+    diagnose_timing(app, "diagnosis_total", total_started, false);
     let finish_detail = match &result {
         Ok(d) => format!("{} hint(s), {} suspect(s)", d.hints.len(), d.suspected_mods.len()),
         Err(e) => e.clone(),
@@ -11008,6 +11039,7 @@ fn get_crash_diagnosis_uncached(
     snapshots.reverse();
     snapshots.truncate(6);
     diagnose_stage_or_task(app, "Analyzing crash report and logs…");
+    let base_started = std::time::Instant::now();
     let mut diagnosis = tuffbox_core::crash::build_crash_diagnosis(
         &project_dir,
         &manifest,
@@ -11015,11 +11047,13 @@ fn get_crash_diagnosis_uncached(
         snapshots,
     )
     .map_err(|e| e.to_string())?;
+    diagnose_timing(app, "base_crash_diagnosis", base_started, false);
 
     // Merge Crash Assistant log-phrase findings into hints so each detect
     // gets one-by-one FixAction buttons in the Problems / Recommended panels.
     // Skip when the live session is healthy — those detectors often match
     // leftover ERROR lines from a previously fixed crash.
+    let assistant_started = std::time::Instant::now();
     if !diagnosis.session_healthy {
         diagnose_stage_or_task(app, "Scanning mod jars for suspects…");
         if let Ok(assistant) =
@@ -11059,6 +11093,7 @@ fn get_crash_diagnosis_uncached(
             }
         }
     }
+    diagnose_timing(app, "crash_assistant_rules", assistant_started, false);
 
     Ok(diagnosis)
 }

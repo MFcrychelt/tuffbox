@@ -73,6 +73,33 @@ Crash diagnosis, graph cache и Pack Health имеют разные cache keys �
 - Весь Advanced surface вынесен в `diagnostics/DiagnoseAdvanced.svelte`; основной `Diagnostics.svelte` теперь только передаёт state/callbacks для Advanced, без композиции его дочерних панелей.
 - Это создаёт границы для дальнейшего выделения Advanced tools и уменьшает связанность основной Diagnose view.
 
+## План конструктивного профилирования
+
+### Измеряемые фазы
+
+Backend теперь emits `diagnose-timing` и native trace с полями `phase`, `elapsedMs`, `cacheHit` для:
+
+- `base_crash_diagnosis` — построение базового отчёта;
+- `crash_assistant_rules` — rule-based Crash Assistant;
+- `class_finder` — поиск missing classes по JAR;
+- `diagnosis_total` — end-to-end с учётом cache.
+
+Профилировать нужно отдельно cold и warm run, а не сравнивать только время spinner:
+
+1. открыть Diagnose с очищенным cache;
+2. повторить открытие без изменения файлов;
+3. заменить один JAR и повторить;
+4. выбрать другой report без изменения проекта;
+5. включить AI отдельно и измерить network/Ollama phase.
+
+### Приоритеты по порогам
+
+- `diagnosis_total > 500 ms` на warm run — искать лишний IPC или cache miss;
+- `base_crash_diagnosis > 250 ms` — оптимизировать чтение/парсинг логов;
+- `crash_assistant_rules > 150 ms` — профилировать конкретные crash rules;
+- `class_finder > 300 ms` — использовать batch class index вместо открытия JAR на каждый класс;
+- AI latency анализировать отдельно и не смешивать с base health latency.
+
 ## Целевая реконструкция
 
 1. Вынести state machine в `diagnostics/store.ts`:
