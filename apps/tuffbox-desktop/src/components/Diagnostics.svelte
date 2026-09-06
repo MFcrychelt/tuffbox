@@ -36,14 +36,11 @@
   import DiagnoseTriagePanels from "./diagnostics/DiagnoseTriagePanels.svelte";
   import DiagnosePlanReviewModal from "./diagnostics/DiagnosePlanReviewModal.svelte";
   import DiagnoseLogViewer from "./diagnostics/DiagnoseLogViewer.svelte";
-  import DiagnoseConflictsJars from "./diagnostics/DiagnoseConflictsJars.svelte";
   import DiagnoseAnalysisTabs from "./diagnostics/DiagnoseAnalysisTabs.svelte";
   import DiagnoseVerdictHero from "./diagnostics/DiagnoseVerdictHero.svelte";
   import DiagnoseProblemsList from "./diagnostics/DiagnoseProblemsList.svelte";
   import DiagnoseStatusBar from "./diagnostics/DiagnoseStatusBar.svelte";
-  import DiagnoseAdvancedToolbar from "./diagnostics/DiagnoseAdvancedToolbar.svelte";
-  import DiagnoseGroupTestPanel from "./diagnostics/DiagnoseGroupTestPanel.svelte";
-  import DiagnoseToolsResults from "./diagnostics/DiagnoseToolsResults.svelte";
+  import DiagnoseAdvanced from "./diagnostics/DiagnoseAdvanced.svelte";
   import { formatCascadeLabel } from "./diagnostics/cascadeLabel";
   import {
     buildUnifiedProblems,
@@ -3064,128 +3061,98 @@
         onFeedback={sendAiFeedback}
       />
     {:else}
-      <div class="dx-advanced panel">
-        <DiagnoseAdvancedToolbar
-          projectPath={$projectPath}
-          aiLoading={aiLoading}
-          sessionOk={sessionOk}
-          sharingLog={sharingLog}
-          currentLogText={currentLogText}
-          supportBusy={supportBusy}
-          planning={planning}
-          oreLoading={oreLoading}
-          duplicateLoading={duplicateLoading}
-          unifyLoading={unifyLoading}
-          wrongLoaderLoading={wrongLoaderLoading}
-          duplicateJarLoading={duplicateJarLoading}
-          authorBusy={authorBusy}
-          aiPrompt={aiPrompt}
-          bind:aiShowPrompt
-          runAiExplain={() => void runAiExplain()}
-          shareCurrentLog={shareCurrentLog}
-          exportSupportPack={exportSupportPack}
-          copyCurrentLog={copyCurrentLog}
-          openFolder={openFolder}
-          openSubdir={openSubdir}
-          createFixPlan={() => void createFixPlan()}
-          scanOreGen={() => void scanOreGen()}
-          scanDuplicateItems={() => void scanDuplicateItems()}
-          generateUnify={() => void generateUnify()}
-          detectWrongLoaderMods={() => void detectWrongLoaderMods()}
-          detectDuplicateModJars={() => void detectDuplicateModJars()}
-          openAuthorForm={() => void openAuthorForm({ fromAnalysis: !!aiAnalysis })}
-          openAiSettings={() => (aiModalOpen = true)}
-        />
-
-        <DiagnoseTriagePanels
-          signalGroups={[]}
-          sections={[]}
-          suspected={suspected}
-          recentSnapshots={diagnosis.recentSnapshots ?? []}
-          mcreatorMods={crashMcreator}
-          classFinderResults={crashClassFinder}
-          bind:classQuery
-          classBusy={classBusy}
-          classResults={classResults}
-          dependentResults={dependentResults}
-          bind:toolsOpen={analysisToolsOpen}
-          disablingModId={disablingModId}
-          bisectMods={bisectMods}
-          worldCoords={null}
-          memoryHint={null}
-          cascadingBanner={null}
-          sourceHint=""
-          onJumpLine={() => void openEvidence()}
-          onDisableMod={fixDisableMod}
-          onUpdateMod={async (id) => {
-            if (!id) return;
-            try {
-              await applyFixBatchOrThrow([
-                { kind: "updateMod", label: `Update ${id}`, modId: id },
-              ]);
-              message = `Update requested for ${id}`;
-            } catch (err) {
-              error = String(err);
-            }
-          }}
-          onToggleBisect={toggleBisect}
-          onFindClass={runClassFinder}
-          onFindDependents={runFindDependents}
-          onOpenSnapshots={() => ideStageRequest.set("snapshots")}
-        />
-
-        <DiagnoseGroupTestPanel
-          session={groupTest}
-          suspects={bisectMods}
-          active={groupTestActive}
-          status={groupTestStatus(groupTest)}
-          phaseKey={groupTestPhaseKey(groupTest)}
-          busy={groupTestBusy}
-          bind:auto={groupTestAuto}
-          projectPath={$projectPath}
-          launching={launching}
-          onStart={() => void startGroupTest()}
-          onTest={() => void runTest()}
-          onReport={(outcome) => void reportGroupTest(outcome)}
-          onCancel={() => void cancelGroupTest()}
-        />
-
-        <DiagnoseConflictsJars
-          graphDiagnostics={graphDiagnostics}
-          duplicateJarGroups={duplicateJarGroups}
-          wrongLoaderJars={wrongLoaderJars}
-          fixingIdx={fixingIdx}
-          duplicateJarFixing={duplicateJarFixing}
-          wrongLoaderFixing={wrongLoaderFixing}
-          onFixMissingDependency={({ modId, idx }) => fixMissingDependency(modId, idx)}
-          onFixDeduplicate={fixDeduplicate}
-          onKeepOneDuplicateJar={({ modId, fileName }) => keepOneDuplicateJar(modId, fileName)}
-          onDisableWrongJar={disableWrongJar}
-          onRemoveWrongJar={removeWrongJar}
-        />
-
-        <DiagnoseToolsResults
-          plan={plan}
-          aiPrompt={aiPrompt}
-          bind:aiShowPrompt
-          bind:selectedOption={selectedFixOption}
-          applying={applying}
-          onApplyPlan={() => void applyFix()}
-          bind:authorOpen
-          bind:authorId
-          bind:authorSolution
-          bind:authorSymptoms
-          bind:authorSuspected
-          bind:authorActionsJson
-          bind:authorNotes
-          authorBusy={authorBusy}
-          authorExportPreview={authorExportPreview}
-          authorMessage={authorMsg}
-          onSaveAuthor={() => void saveAuthorCase()}
-          onCopyAuthorExport={() => void copyAuthorExport()}
-          onOpenAuthorFolder={() => void openAuthorExportFolder()}
-        />
-      </div>
+      <DiagnoseAdvanced
+        projectPath={$projectPath}
+        aiLoading={aiLoading}
+        sessionOk={sessionOk}
+        sharingLog={sharingLog}
+        currentLogText={currentLogText}
+        supportBusy={supportBusy}
+        planning={planning}
+        oreLoading={oreLoading}
+        duplicateLoading={duplicateLoading}
+        unifyLoading={unifyLoading}
+        wrongLoaderLoading={wrongLoaderLoading}
+        duplicateJarLoading={duplicateJarLoading}
+        authorBusy={authorBusy}
+        bind:aiPrompt
+        bind:aiShowPrompt
+        runAiExplain={() => void runAiExplain()}
+        shareCurrentLog={shareCurrentLog}
+        exportSupportPack={exportSupportPack}
+        copyCurrentLog={copyCurrentLog}
+        openFolder={openFolder}
+        openSubdir={openSubdir}
+        createFixPlan={() => void createFixPlan()}
+        scanOreGen={() => void scanOreGen()}
+        scanDuplicateItems={() => void scanDuplicateItems()}
+        generateUnify={() => void generateUnify()}
+        detectWrongLoaderMods={() => void detectWrongLoaderMods()}
+        detectDuplicateModJars={() => void detectDuplicateModJars()}
+        onOpenAuthorForm={() => void openAuthorForm({ fromAnalysis: !!aiAnalysis })}
+        onOpenAiSettings={() => (aiModalOpen = true)}
+        signalGroups={[]}
+        recentSnapshots={diagnosis.recentSnapshots ?? []}
+        suspected={suspected}
+        crashMcreator={crashMcreator}
+        crashClassFinder={crashClassFinder}
+        bind:classQuery
+        classBusy={classBusy}
+        classResults={classResults}
+        dependentResults={dependentResults}
+        bind:analysisToolsOpen
+        disablingModId={disablingModId}
+        bisectMods={bisectMods}
+        onJumpLine={() => void openEvidence()}
+        onDisableMod={fixDisableMod}
+        onUpdateMod={async (id) => {
+          if (!id) return;
+          try { await applyFixBatchOrThrow([{ kind: "updateMod", label: `Update ${id}`, modId: id }]); message = `Update requested for ${id}`; }
+          catch (err) { error = String(err); }
+        }}
+        onToggleBisect={toggleBisect}
+        onFindClass={runClassFinder}
+        onFindDependents={runFindDependents}
+        onOpenSnapshots={() => ideStageRequest.set("snapshots")}
+        groupTest={groupTest}
+        groupTestActive={groupTestActive}
+        groupTestStatus={groupTestStatus(groupTest)}
+        groupTestPhaseKey={groupTestPhaseKey(groupTest)}
+        groupTestBusy={groupTestBusy}
+        bind:groupTestAuto
+        launching={launching}
+        onStartGroupTest={() => void startGroupTest()}
+        onGroupTestLaunch={() => void runTest()}
+        onReportGroupTest={(outcome) => void reportGroupTest(outcome)}
+        onCancelGroupTest={() => void cancelGroupTest()}
+        graphDiagnostics={graphDiagnostics}
+        duplicateJarGroups={duplicateJarGroups}
+        wrongLoaderJars={wrongLoaderJars}
+        fixingIdx={fixingIdx}
+        duplicateJarFixing={duplicateJarFixing}
+        wrongLoaderFixing={wrongLoaderFixing}
+        onFixMissingDependency={({ modId, idx }) => fixMissingDependency(modId, idx)}
+        onFixDeduplicate={fixDeduplicate}
+        onKeepOneDuplicateJar={({ modId, fileName }) => keepOneDuplicateJar(modId, fileName)}
+        onDisableWrongJar={disableWrongJar}
+        onRemoveWrongJar={removeWrongJar}
+        plan={plan}
+        bind:selectedFixOption
+        applying={applying}
+        onApplyPlan={() => void applyFix()}
+        bind:authorOpen
+        bind:authorId
+        bind:authorSolution
+        bind:authorSymptoms
+        bind:authorSuspected
+        bind:authorActionsJson
+        bind:authorNotes
+        authorExportPreview={authorExportPreview}
+        authorMessage={authorMsg}
+        onSaveAuthor={() => void saveAuthorCase()}
+        onCopyAuthorExport={() => void copyAuthorExport()}
+        onOpenAuthorFolder={() => void openAuthorExportFolder()}
+      />
     {/if}
   {:else}
     <div class="empty">Press Refresh to load diagnosis.</div>

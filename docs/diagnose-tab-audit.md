@@ -70,6 +70,7 @@ Crash diagnosis, graph cache и Pack Health имеют разные cache keys �
 - Author KB form вынесен в `diagnostics/DiagnoseAuthorPanel.svelte`; поля формы и presentation отделены от сохранения/экспорта cases.
 - Heuristic Fix Plan вынесен в `diagnostics/DiagnoseHeuristicPlan.svelte`; выбор option и apply button отделены от основного Advanced layout.
 - Tool results container вынесен в `diagnostics/DiagnoseToolsResults.svelte`; prompt, heuristic plan и Author KB больше не собираются в основном component markup.
+- Весь Advanced surface вынесен в `diagnostics/DiagnoseAdvanced.svelte`; основной `Diagnostics.svelte` теперь только передаёт state/callbacks для Advanced, без композиции его дочерних панелей.
 - Это создаёт границы для дальнейшего выделения Advanced tools и уменьшает связанность основной Diagnose view.
 
 ## Целевая реконструкция
