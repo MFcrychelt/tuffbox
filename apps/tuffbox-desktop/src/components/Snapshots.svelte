@@ -1040,14 +1040,14 @@
     min-height: 42px;
     padding: 4px 5px 4px 12px;
     border: 1px solid rgba(52, 211, 153, .35);
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     background: linear-gradient(135deg, rgba(16,185,129,.14), rgba(16,185,129,.035));
     box-shadow: 0 0 22px rgba(16,185,129,.08), inset 0 1px 0 rgba(255,255,255,.08);
   }
   .quick-save-icon { color: #34d399; flex: 0 0 auto; }
   .quick-save input { min-width: 190px; width: 220px; padding: 8px 4px; border: 0; outline: 0; background: transparent; color: var(--text-primary); }
   .quick-save input::placeholder { color: color-mix(in srgb, var(--text-muted) 85%, transparent); }
-  :global(.snapshots) .quick-save-action { min-height: 34px; padding: 7px 12px; border: 0; border-radius: 8px; background: #10b981; color: #04130e; font-weight: 800; }
+  :global(.snapshots) .quick-save-action { min-height: 34px; padding: 7px 12px; border: 0; border-radius: var(--border-radius-sm); background: #10b981; color: #04130e; font-weight: 800; }
   :global(.snapshots) .quick-save-action:hover:not(:disabled) { background: #34d399; box-shadow: 0 0 14px rgba(52,211,153,.3); }
   .quick-save-action:disabled { opacity: .5; }
   .search-kbd, kbd { padding: 2px 6px; border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-muted); font: 10px ui-monospace, SFMono-Regular, monospace; white-space: nowrap; }

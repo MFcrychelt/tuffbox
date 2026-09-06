@@ -1563,7 +1563,7 @@ pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<C
                     .any(|n| n.starts_with(&package_prefix) && n.ends_with(".class")));
         if !hit {
             // Fallback: exact class basename somewhere in the jar (rare shading cases).
-            let simple = fqn.rsplit('.').next().unwrap_or(fqn.as_str());
+            let simple = fqn.rsplit('.').next().unwrap_or(fqn);
             let simple_class = format!("{simple}.class");
             if !names.iter().any(|n| n.ends_with(&simple_class)) {
                 continue;
@@ -1624,7 +1624,7 @@ pub fn find_classes_in_mods(
         let names: Vec<String> = zip.file_names().map(str::to_string).collect();
         let mut matched: Vec<String> = Vec::new();
         for (fqn, exact, package) in &queries {
-            let simple = fqn.rsplit('.').next().unwrap_or(fqn.as_str());
+            let simple = fqn.rsplit('.').next().unwrap_or(fqn);
             let hit = names.iter().any(|name| name == exact)
                 || (!package.is_empty()
                     && names.iter().any(|name| {
