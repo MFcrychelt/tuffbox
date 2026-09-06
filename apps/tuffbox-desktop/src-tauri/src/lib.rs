@@ -10516,7 +10516,11 @@ fn get_pack_health_impl(path: &str) -> Result<PackHealthReport, String> {
             exit_code: e.exit_code,
         });
 
-    let overall = if diag_errors > 0 || wrong_loader_count > 0 {
+    // A recent non-zero launch exit is a real health failure even when the
+    // static graph is clean. Previously `last_crash` was displayed in the
+    // report but did not affect the overall verdict, so the badge could say
+    // Healthy immediately after a crash.
+    let overall = if diag_errors > 0 || wrong_loader_count > 0 || last_crash.is_some() {
         PackHealthOverall::Errors
     } else if diag_warnings > 0
         || !export_issues.is_empty()
