@@ -169,7 +169,19 @@
   // cancelled (Ollama/network), so late results from an older refresh must
   // never overwrite the currently selected report.
   let analysisGeneration = 0;
+  let analysisKickoff: ReturnType<typeof setTimeout> | undefined;
   const isCurrentAnalysis = (generation: number) => generation === analysisGeneration;
+
+  // Coalesce load-triggered enrichments into one post-paint job. Source/path
+  // changes can otherwise schedule multiple Crash Assistant + AI cascades
+  // before the first result has even reached the UI.
+  function scheduleUnifiedAnalysis() {
+    if (analysisKickoff) clearTimeout(analysisKickoff);
+    analysisKickoff = setTimeout(() => {
+      analysisKickoff = undefined;
+      void runUnifiedAnalysis();
+    }, 32);
+  }
   /** Task #66: source id the last unified analysis ran against (dedupe key). */
   let lastAnalyzedSource = $state<string | null>(null);
   /** Main Health canvas tab. */
@@ -345,7 +357,7 @@
         void invoke("confirm_crash_resolution_from_diagnose", { path: $projectPath }).catch(() => {});
       } else {
         if (!data.sessionHealthy) ideNeedsHealth.set(true);
-        void runUnifiedAnalysis();
+        scheduleUnifiedAnalysis();
       }
     } catch (e) {
       error = String(e);
@@ -2623,6 +2635,10 @@
     if (!path) {
       softVerifyStatus = null;
       advancedLoadedPath = null;
+      if (analysisKickoff) {
+        clearTimeout(analysisKickoff);
+        analysisKickoff = undefined;
+      }
     }
     onProjectPathChange(path);
   });
