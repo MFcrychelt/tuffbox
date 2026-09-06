@@ -5849,7 +5849,12 @@ fn run_crash_assistant(path: String) -> Result<serde_json::Value, String> {
 fn find_class_in_mods(path: String, class_name: String) -> Result<Vec<serde_json::Value>, String> {
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
-    let results = tuffbox_core::crash_assistant::find_class_in_mods(&class_name, &mods_dir);
+    let mods_key = format!(
+        "{}:{}",
+        mods_dir.display(),
+        tuffbox_core::installed_jars_fingerprint(Path::new(&path))
+    );
+    let results = find_class_in_mods_cached(&class_name, &mods_dir, &mods_key);
     Ok(results
         .into_iter()
         .map(|r| {
@@ -5967,18 +5972,8 @@ fn run_crash_assistant_full_impl(
     let class_finder_started = std::time::Instant::now();
     let mut class_finder = Vec::new();
     let mut combined = String::new();
-    // Task #66: per-run memo plus the process-wide ClassFinderCache so repeat
-    // runs of the same project don't rescan every jar for known classes.
-    let mut class_finder_cache: std::collections::HashMap<String, Vec<tuffbox_core::crash_assistant::ClassMatch>> =
-        std::collections::HashMap::new();
-    // The directory path alone is not a valid cache key: replacing a jar in
-    // place keeps the path unchanged. Include the cheap jar metadata
-    // fingerprint so class ownership results cannot survive a mod update.
-    let mods_dir_key = format!(
-        "{}:{}",
-        mods_dir.display(),
-        tuffbox_core::installed_jars_fingerprint(Path::new(&path))
-    );
+    // Class attribution is performed by the batch scanner below; its
+    // process-wide single-class cache is used by the interactive tool.
     let mut class_finder_seen = std::collections::HashSet::new();
     if let Some(text) = load_scoped_crash_report(&project_dir, report_id.as_deref()) {
         combined.push_str(&text);
@@ -6019,29 +6014,19 @@ fn run_crash_assistant_full_impl(
             ),
         );
     }
-    for line in combined.lines() {
-        if line.contains("NoClassDefFoundError") || line.contains("ClassNotFoundException") {
-            if let Some(cls) = line
-                .split(": ")
-                .nth(1)
-                .and_then(|s| s.split_whitespace().next())
-            {
-                if cls.len() > 5 && cls.len() < 200 && cls.contains('.') {
-                    // Task #66: the same class can appear on many log lines;
-                    // re-scanning every jar per line made Diagnose take minutes.
-                    // Cache lookups within this run.
-                    let matches = class_finder_cache
-                        .entry(cls.to_string())
-                        .or_insert_with(|| {
-                            find_class_in_mods_cached(cls, &mods_dir, &mods_dir_key)
-                        });
-                    for m in matches.iter() {
-                        let key = format!("{}:{}", m.mod_id, m.class_name);
-                        if class_finder_seen.insert(key) {
-                            class_finder.push(serde_json::json!({"className":m.class_name,"modId":m.mod_id,"modName":m.mod_name}));
-                        }
-                    }
-                }
+    if !unique_classes.is_empty() {
+        let matches = tuffbox_core::crash_assistant::find_classes_in_mods(
+            &unique_classes,
+            &mods_dir,
+        );
+        for m in matches {
+            let key = format!("{}:{}", m.mod_id, m.class_name);
+            if class_finder_seen.insert(key) {
+                class_finder.push(serde_json::json!({
+                    "className": m.class_name,
+                    "modId": m.mod_id,
+                    "modName": m.mod_name,
+                }));
             }
         }
     }

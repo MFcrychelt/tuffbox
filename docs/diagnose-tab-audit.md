@@ -55,6 +55,7 @@ Crash diagnosis, graph cache и Pack Health имеют разные cache keys �
 - Pack Health получил 10-секундный project-scoped cache по manifest/mods/history mtimes, поэтому badge и Diagnose не запускают одинаковые тяжёлые scans одновременно.
 - rule-based Crash Assistant report получил 30-секундный cache по тому же input fingerprint: базовая diagnosis и расширенная панель больше не прогоняют одинаковые crash patterns дважды.
 - class-finder cache теперь учитывает fingerprint JAR, а результаты дедуплицируются по `modId:className`; замена модов не оставляет старое ownership-решение.
+- холодный class-finder переведён на batch scan: каждый JAR открывается один раз для всех missing classes из отчёта, вместо полного прохода JAR на каждый класс.
 - Pack Health Badge получил отдельный in-flight path guard: первая загрузка больше не дублируется до того, как `lastPath` успеет обновиться после ответа.
 - загрузка состояния Group Test отложена до открытия Advanced tab; базовое открытие Diagnose больше не делает лишний IPC-запрос для инструмента, которым пользователь не воспользовался.
 - graph diagnostics кэшируются единым 5-секундным project fingerprint для `get_diagnostics`, counts и Pack Health; повторные consumers не перестраивают один и тот же graph.
