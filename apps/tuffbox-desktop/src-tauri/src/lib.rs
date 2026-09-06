@@ -10652,8 +10652,8 @@ async fn get_pack_health(path: String) -> Result<PackHealthReport, String> {
         return Ok(cached);
     }
 
-    let report = tokio::task::spawn_blocking(move || {
-        let _guard = PACK_HEALTH_IO_LOCK.lock().ok();
+    let report = tokio::task::spawn_blocking(move || -> Result<PackHealthReport, String> {
+            let _guard = PACK_HEALTH_IO_LOCK.lock().ok();
         // Re-check after waiting so simultaneous badge/Diagnose requests
         // share one cold scan instead of all running export/JAR/quest checks.
         if let Some(cached) = tuffbox_core::api_cache::get::<PackHealthReport>(&cache_key) {

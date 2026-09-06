@@ -13,7 +13,7 @@
 //! - macOS:   `open` (Finder)
 //! - Linux:   xdg-open, falling back to known file managers
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Open a directory in the OS file manager. On Windows the directory itself
 /// is opened (pass `select_path` to reveal/select a file or folder inside

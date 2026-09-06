@@ -10,23 +10,18 @@
   import { marked } from "marked";
   import { sanitizeHtml } from "../lib/sanitizeHtml";
   import {
-    Bold,
-    Italic,
-    Heading,
-    Link,
-    Image as ImageIcon,
-    FolderOpen,
-    Copy,
-    Save,
-    History,
-    UploadCloud,
-    Rocket,
-    X,
-    Plus,
-  } from "@lucide/svelte";
-  import { api, type ListingGalleryItem, type PackBrief, type ProjectListing } from "../lib/api";
-  import { projectPath, projectInfo, ideStageRequest, briefDirty } from "../lib/store";
-  import ListingCardPreview from "./ListingCardPreview.svelte";
+      FolderOpen,
+      Copy,
+      Save,
+      History,
+      UploadCloud,
+      Rocket,
+    } from "@lucide/svelte";
+    import { api, type ListingGalleryItem, type PackBrief, type ProjectListing } from "../lib/api";
+    import { projectPath, projectInfo, ideStageRequest, briefDirty } from "../lib/store";
+    import ListingCardPreview from "./ListingCardPreview.svelte";
+    import MdToolbar from "./listing/MdToolbar.svelte";
+    import GalleryGrid from "./listing/GalleryGrid.svelte";
 
   const SUMMARY_LIMIT = 256;
 
@@ -379,12 +374,6 @@
     }
   }
 
-  function gallerySrc(item: ListingGalleryItem): string | null {
-    if (item.url) return item.url;
-    if (item.path && galleryUrls[item.path]) return galleryUrls[item.path];
-    return null;
-  }
-
   function insertAtCursor(insert: string, selectPlaceholder = true) {
     if (!cmView) {
       bodyMarkdown = bodyMarkdown + insert;
@@ -580,15 +569,51 @@
     }
   }
 
-  $effect(() => {
-    if ($projectPath) void loadAll();
-  });
-  $effect(() => {
-    if (!$projectPath) {
-      lastPath = null;
-      dirty = false;
+  function extForType(type: string): string {
+      if (type.includes("jpeg")) return "jpg";
+      if (type.includes("webp")) return "webp";
+      if (type.includes("gif")) return "gif";
+      return "png";
     }
-  });
+
+    async function handleGalleryDrop(e: DragEvent) {
+      if (!$projectPath) return;
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      e.preventDefault();
+      for (const file of Array.from(files)) {
+        if (!file.type.startsWith("image/")) continue;
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        const b64 = btoa(binary);
+        try {
+          await flushForm();
+          const listing = await api.project.addListingGalleryBytes(
+            b64,
+            extForType(file.type),
+            null,
+            $projectPath,
+          );
+          applyIconGallery(listing);
+          message = "Dropped image added to gallery.";
+          await refreshAssets();
+        } catch (err) {
+          error = String(err);
+        }
+      }
+    }
+
+        $effect(() => {
+        if ($projectPath) void loadAll();
+      });
+        $effect(() => {
+        if (!$projectPath) {
+          lastPath = null;
+          dirty = false;
+        }
+      });
 
   function handleBeforeUnload(e: BeforeUnloadEvent) {
     if (dirty) {
@@ -628,20 +653,33 @@
 </script>
 
 <div class="brief-editor" onpaste={handlePaste}>
-  <div class="page-header">
-    <div>
-      <h2>Storefront listing</h2>
-      <p>
-        Edit the pack card players see on Modrinth / CurseForge. Preview updates live; Save writes
-        listing + syncs project name/summary.
+  <!-- Unified header: title left, fast actions right -->
+  <header class="page-header">
+    <div class="ph-text">
+      <h2 class="text-lg font-bold text-[color:var(--text-primary)] leading-tight">Storefront listing</h2>
+      <p class="ph-sub">
+        The pack card shown on Modrinth / CurseForge — preview updates live.
       </p>
     </div>
     <div class="header-actions">
-      <button type="button" onclick={saveAll} disabled={!$projectPath || saving || nameEmpty}>
-        <Save size={14} /> {saving ? "Saving…" : dirty ? "Save*" : "Save"}
+      <span
+        class="sync-pill"
+        class:unsaved={dirty}
+        title={dirty ? "You have unsaved changes (auto-saves in a moment)" : "All changes saved"}
+      >
+        <span class="sync-dot" class:on={!dirty}></span>
+        {dirty ? "Unsaved changes" : "Synced"}
+              </span>
+              <button
+        type="button"
+        class="primary-btn"
+        onclick={saveAll}
+        disabled={!$projectPath || saving || nameEmpty}
+      >
+        <Save size={15} /> {saving ? "Saving…" : dirty ? "Save" : "Save"}
       </button>
     </div>
-  </div>
+  </header>
 
   {#if !$projectPath}
     <div class="empty">Open a project to edit the storefront listing.</div>
@@ -652,13 +690,51 @@
       {#if error}<div class="inline-error">{error}</div>{/if}
       {#if message}<div class="inline-success">{message}</div>{/if}
 
-      <div class="top-split">
-        <section class="panel identity-panel">
-          <h3>Identity</h3>
-          <div class="identity-grid">
-            <div class="identity-fields">
-              <label>
-                Pack name
+      <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,520px)]">
+        <!-- Identity block -->
+        <section class="panel glass-card p-5">
+          <h3 class="text-sm font-semibold text-[color:var(--text-primary)] mb-4">Identity</h3>
+          <div class="flex flex-col gap-4 sm:flex-row">
+            <!-- Icon dropzone left (112x112) -->
+            <div class="icon-block">
+              <span class="icon-label">Icon</span>
+              <button
+                              type="button"
+                              class="icon-dropzone"
+                              class:has-img={!!iconUrl}
+                              ondragenter={(e) => e.preventDefault()}
+                              ondragover={(e) => e.preventDefault()}
+                              ondrop={(e) => {
+                                if ($projectPath) void handleGalleryDrop(e);
+                              }}
+                              onclick={pickIcon}
+                              title="Click to choose a square icon"
+                              aria-label="Choose pack icon"
+                            >
+                              {#if iconUrl}
+                                <img src={iconUrl} alt="Pack icon" />
+                              {:else}
+                                <span>No icon</span>
+                              {/if}
+                            </button>
+              <div class="icon-actions">
+                <button type="button" class="sm-btn" onclick={pickIcon}>Choose…</button>
+                <button
+                  type="button"
+                  class="sm-btn ghost"
+                  onclick={clearIcon}
+                  disabled={!iconPath}
+                >
+                  Clear
+                </button>
+              </div>
+              <small class="hint">Square PNG/WebP/JPG</small>
+            </div>
+
+            <!-- Pack name + Summary right -->
+            <div class="identity-fields flex-1 min-w-0">
+              <label class="field-label">
+                <span class="fl-title">Pack name</span>
                 <input
                   bind:value={name}
                   oninput={markDirty}
@@ -667,8 +743,8 @@
                 />
                 {#if nameEmpty}<small class="hint warn">Name is required</small>{/if}
               </label>
-              <label>
-                Summary
+              <label class="field-label">
+                <span class="fl-title">Summary</span>
                 <textarea
                   bind:value={summary}
                   oninput={markDirty}
@@ -683,27 +759,12 @@
                 </small>
               </label>
             </div>
-            <div class="icon-block">
-              <span class="icon-label">Icon</span>
-              <div class="icon-preview">
-                {#if iconUrl}
-                  <img src={iconUrl} alt="Pack icon" />
-                {:else}
-                  <span>No icon</span>
-                {/if}
-              </div>
-              <div class="icon-actions">
-                <button type="button" onclick={pickIcon}>Choose…</button>
-                <button type="button" class="ghost" onclick={clearIcon} disabled={!iconPath}>
-                  Clear
-                </button>
-              </div>
-              <small class="hint">Square PNG/WebP/JPG</small>
-            </div>
           </div>
-          <label>
-            Categories
-            <div class="cat-picker" role="group" aria-label="Modrinth modpack categories">
+
+          <!-- Categories / Tags -->
+          <div class="mt-4">
+            <span class="fl-title block mb-2">Categories</span>
+            <div class="flex flex-wrap gap-2" role="group" aria-label="Modrinth modpack categories">
               {#if categoriesLoading && modrinthCategories.length === 0}
                 <span class="muted">Loading Modrinth categories…</span>
               {:else}
@@ -720,32 +781,36 @@
                 {/each}
               {/if}
             </div>
-            {#if categoriesError}
-              <small class="hint warn">Using offline Modrinth list ({categoriesError})</small>
-            {:else}
-              <small class="hint">Official Modrinth modpack tags</small>
-            {/if}
-            {#if categories.length}
-              <small class="hint">Selected: {categories.map(prettyCat).join(", ")}</small>
-            {/if}
-          </label>
+            <div class="mt-2 flex items-center gap-2">
+              {#if categoriesError}
+                <small class="hint warn">Using offline Modrinth list ({categoriesError})</small>
+              {:else}
+                <small class="hint">Official Modrinth modpack tags</small>
+              {/if}
+            </div>
+          </div>
         </section>
 
-        <aside class="preview-column">
-          <div class="preview-sticky">
+        <!-- Listing preview column -->
+        <aside class="min-w-0">
+          <div class="preview-sticky glass-card p-5 flex flex-col gap-3">
             <div class="preview-heading-row">
               <div class="preview-heading">Listing preview</div>
-              <div class="style-toggle">
+              <div class="seg-control" role="group" aria-label="Preview platform">
                 <button
                   type="button"
                   class:active={cardStyle === "modrinth"}
-                  onclick={() => (cardStyle = "modrinth")}>Modrinth</button
+                  onclick={() => (cardStyle = "modrinth")}
                 >
+                  Modrinth
+                </button>
                 <button
                   type="button"
                   class:active={cardStyle === "curseforge"}
-                  onclick={() => (cardStyle = "curseforge")}>CurseForge</button
+                  onclick={() => (cardStyle = "curseforge")}
                 >
+                  CurseForge
+                </button>
               </div>
             </div>
             <div class="listing-preview-compact">
@@ -766,187 +831,164 @@
         </aside>
       </div>
 
-      <section class="panel description-panel">
-        <div class="panel-head">
-          <h3>Description</h3>
-          <div class="seg">
-            <button type="button" class:active={mdView === "edit"} onclick={() => (mdView = "edit")}
-              >Edit</button
-            >
-            <button
-              type="button"
-              class:active={mdView === "split"}
-              onclick={() => (mdView = "split")}>Split</button
-            >
-            <button
-              type="button"
-              class:active={mdView === "preview"}
-              onclick={() => (mdView = "preview")}>Preview</button
-            >
-          </div>
-        </div>
-        <div class="md-toolbar">
-          <button type="button" class="ghost" title="Bold" onclick={() => insertAround("**")}
-            ><Bold size={14} /></button
-          >
-          <button type="button" class="ghost" title="Italic" onclick={() => insertAround("_")}
-            ><Italic size={14} /></button
-          >
-          <button type="button" class="ghost" title="Heading" onclick={insertHeading}
-            ><Heading size={14} /></button
-          >
-          <button type="button" class="ghost" title="Link" onclick={insertLink}
-            ><Link size={14} /></button
-          >
-          <button type="button" class="ghost" title="Image URL" onclick={insertImageUrl}
-            ><ImageIcon size={14} /></button
-          >
-          <button type="button" class="ghost" onclick={insertLocalImage}>Insert local image</button>
-        </div>
-        <div class="md-split" class:edit-only={mdView === "edit"} class:preview-only={mdView === "preview"}>
-          {#if mdView !== "preview"}
-            <div class="cm-wrap">
-              <CodeMirror
-                value={bodyMarkdown}
-                lang={markdown()}
-                theme={oneDark}
-                on:change={onBodyChange}
-                on:ready={(e) => (cmView = e.detail)}
-              />
-            </div>
-          {/if}
-          {#if mdView !== "edit"}
-            <div class="md-preview prose">
-              {#if bodyMarkdown.trim()}
-                {@html renderedHtml}
-              {:else}
-                <p class="muted">Markdown preview — paste images or insert from gallery.</p>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      </section>
+      <section class="panel description-panel glass-card p-5">
+              <div class="panel-head">
+                <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">Description</h3>
+                <div class="seg-control" role="group" aria-label="Editor mode">
+                  <button
+                    type="button"
+                    class:active={mdView === "edit"}
+                    onclick={() => (mdView = "edit")}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    class:active={mdView === "split"}
+                    onclick={() => (mdView = "split")}
+                  >
+                    Split
+                  </button>
+                  <button
+                    type="button"
+                    class:active={mdView === "preview"}
+                    onclick={() => (mdView = "preview")}
+                  >
+                    Preview
+                  </button>
+                </div>
+              </div>
+              <MdToolbar
+                              onBold={() => insertAround("**")}
+                              onItalic={() => insertAround("_")}
+                              onHeading={insertHeading}
+                              onLink={insertLink}
+                              onImageUrl={insertImageUrl}
+                              onLocalImage={insertLocalImage}
+                            />
+              <div class="md-split" class:edit-only={mdView === "edit"} class:preview-only={mdView === "preview"}>
+                {#if mdView !== "preview"}
+                  <div class="cm-wrap">
+                    <CodeMirror
+                      value={bodyMarkdown}
+                      lang={markdown()}
+                      theme={oneDark}
+                      on:change={onBodyChange}
+                      on:ready={(e) => (cmView = e.detail)}
+                    />
+                  </div>
+                {/if}
+                {#if mdView !== "edit"}
+                  <div class="md-preview prose md-preview-glass">
+                    {#if bodyMarkdown.trim()}
+                      {@html renderedHtml}
+                    {:else}
+                      <p class="muted">Markdown preview — paste images or insert from gallery.</p>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            </section>
 
       <div class="brief-below">
-        <section class="panel">
-          <div class="panel-head">
-            <h3>Gallery</h3>
-            <div class="row-actions">
-              <button type="button" class="ghost" onclick={addGalleryFile}
-                ><Plus size={14} /> File</button
-              >
-              <button type="button" class="ghost" onclick={addGalleryUrl}
-                ><Plus size={14} /> URL</button
-              >
-            </div>
-          </div>
-          {#if gallery.length === 0}
-            <p class="muted">No gallery images yet. Add files/URLs or paste from clipboard.</p>
-          {:else}
-            <div class="gallery-strip">
-              {#each gallery as item, i (item.path || item.url || `g-${i}`)}
-                <div class="gal-item">
-                  {#if gallerySrc(item)}
-                    <img src={gallerySrc(item)} alt={item.caption || "gallery"} />
-                  {:else}
-                    <div class="gal-ph">?</div>
-                  {/if}
-                  <div class="gal-actions">
-                    <button type="button" class="ghost" onclick={() => insertGalleryIntoBody(item)}
-                      >Insert</button
-                    >
-                    <button type="button" class="ghost" onclick={() => moveGallery(i, i - 1)} disabled={i === 0}
-                      >↑</button
-                    >
+              <section class="panel glass-card p-5">
+                <div class="panel-head">
+                  <h3 class="text-sm font-semibold text-[color:var(--text-primary)]">Gallery</h3>
+                </div>
+                <GalleryGrid
+                                  items={gallery}
+                                  urls={galleryUrls}
+                  onAddFile={addGalleryFile}
+                  onAddUrl={addGalleryUrl}
+                  onDropFiles={handleGalleryDrop}
+                  onRemove={removeGallery}
+                  onMove={moveGallery}
+                  onInsert={insertGalleryIntoBody}
+                />
+              </section>
+
+              <summary class="sr-only">Author notes</summary>
+              <details class="panel glass-card p-5 author-notes" open>
+                <summary class="panel-summary">Author notes (planning)</summary>
+                <div class="brief-grid">
+                  <label
+                    class="field-label"
+                    ><span class="fl-title">Pack goal</span><textarea bind:value={briefGoal} oninput={markDirty} rows="3"></textarea
+                    ></label
+                  >
+                  <label
+                    class="field-label"
+                    ><span class="fl-title">Target player</span><textarea
+                      bind:value={briefAudience}
+                      oninput={markDirty}
+                      rows="3"
+                    ></textarea></label
+                  >
+                  <label
+                    class="field-label"
+                    ><span class="fl-title">Gameplay pillars</span><textarea
+                      bind:value={briefPillars}
+                      oninput={markDirty}
+                      rows="3"
+                      placeholder="One per line"
+                    ></textarea></label
+                  >
+                  <label
+                    class="field-label"
+                    ><span class="fl-title">Hard constraints</span><textarea
+                      bind:value={briefConstraints}
+                      oninput={markDirty}
+                      rows="3"
+                      placeholder="One per line"
+                    ></textarea></label
+                  >
+                  <label
+                    class="field-label"
+                    ><span class="fl-title">Release targets</span><textarea
+                      bind:value={briefReleaseTargets}
+                      oninput={markDirty}
+                      rows="3"
+                      placeholder="One per line"
+                    ></textarea></label
+                  >
+                  <label
+                    class="field-label"
+                    ><span class="fl-title">Notes</span><textarea bind:value={briefNotes} oninput={markDirty} rows="3"></textarea
+                    ></label
+                  >
+                </div>
+              </details>
+
+              <details class="panel glass-card p-5 extras-panel">
+                <summary class="panel-summary">More · copy, folder, workflow</summary>
+                <div class="extras-grid">
+                  <div class="extras-actions">
+                    <button type="button" class="sm-btn" onclick={copySummary} disabled={!summary}>
+                      <Copy size={14} /> Copy summary
+                    </button>
                     <button
                       type="button"
-                      class="ghost"
-                      onclick={() => moveGallery(i, i + 1)}
-                      disabled={i === gallery.length - 1}>↓</button
+                      class="sm-btn"
+                      onclick={openListingFolder}
+                      disabled={!$projectPath}
                     >
-                    <button type="button" class="ghost danger" onclick={() => removeGallery(i)}
-                      ><X size={12} /></button
+                      <FolderOpen size={14} /> Listing folder
+                    </button>
+                  </div>
+                  <div class="trail">
+                    <button type="button" class="sm-btn" onclick={() => goTrail("history")}
+                      ><History size={14} /> History</button
+                    >
+                    <button type="button" class="sm-btn" onclick={() => goTrail("export")}
+                      ><UploadCloud size={14} /> Export</button
+                    >
+                    <button type="button" class="sm-btn" onclick={() => goTrail("release")}
+                      ><Rocket size={14} /> Release</button
                     >
                   </div>
-                  {#if item.caption}<small>{item.caption}</small>{/if}
                 </div>
-              {/each}
+              </details>
             </div>
-          {/if}
-        </section>
-
-        <section class="panel author-notes">
-          <div class="panel-head">
-            <h3>Author notes (planning)</h3>
-          </div>
-          <div class="brief-grid">
-            <label
-              >Pack goal<textarea bind:value={briefGoal} oninput={markDirty} rows="3"></textarea
-              ></label
-            >
-            <label
-              >Target player<textarea
-                bind:value={briefAudience}
-                oninput={markDirty}
-                rows="3"
-              ></textarea></label
-            >
-            <label
-              >Gameplay pillars<textarea
-                bind:value={briefPillars}
-                oninput={markDirty}
-                rows="3"
-                placeholder="One per line"
-              ></textarea></label
-            >
-            <label
-              >Hard constraints<textarea
-                bind:value={briefConstraints}
-                oninput={markDirty}
-                rows="3"
-                placeholder="One per line"
-              ></textarea></label
-            >
-            <label
-              >Release targets<textarea
-                bind:value={briefReleaseTargets}
-                oninput={markDirty}
-                rows="3"
-                placeholder="One per line"
-              ></textarea></label
-            >
-            <label
-              >Notes<textarea bind:value={briefNotes} oninput={markDirty} rows="3"></textarea
-              ></label
-            >
-          </div>
-        </section>
-
-        <details class="panel extras-panel">
-          <summary>More · copy, folder, workflow</summary>
-          <div class="extras-grid">
-            <div class="extras-actions">
-              <button type="button" class="ghost" onclick={copySummary} disabled={!summary}>
-                <Copy size={14} /> Copy summary
-              </button>
-              <button type="button" class="ghost" onclick={openListingFolder} disabled={!$projectPath}>
-                <FolderOpen size={14} /> Listing folder
-              </button>
-            </div>
-            <div class="trail">
-              <button type="button" class="ghost" onclick={() => goTrail("history")}
-                ><History size={14} /> History</button
-              >
-              <button type="button" class="ghost" onclick={() => goTrail("export")}
-                ><UploadCloud size={14} /> Export</button
-              >
-              <button type="button" class="ghost" onclick={() => goTrail("release")}
-                ><Rocket size={14} /> Release</button
-              >
-            </div>
-          </div>
-        </details>
-      </div>
     </div>
   {/if}
 </div>
@@ -970,11 +1012,14 @@
     overflow: hidden;
     padding: 12px 16px 16px;
     box-sizing: border-box;
-    /* Task #62 + responsive pass: cap the column and center it; grows a bit
-       on 1440p so two-column layouts keep room without full-bleed stretch. */
+    /* Task #62 + responsive pass: cap the column and center it */
     max-width: 1280px;
     margin: 0 auto;
     width: 100%;
+    /* Native glass shell under the whole editor */
+    background: rgba(0, 0, 0, 0.28);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    backdrop-filter: blur(24px) saturate(150%);
   }
 
   .main-body {
@@ -982,32 +1027,33 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 14px;
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-gutter: stable;
     font-size: 13px;
+    padding-right: 2px;
   }
 
   .page-header {
     display: flex;
     justify-content: space-between;
     gap: 16px;
-    align-items: flex-start;
+    align-items: center;
+    flex-wrap: wrap;
     flex-shrink: 0;
     margin-bottom: 4px;
   }
 
-  .page-header h2 {
-    margin: 0 0 4px;
-    font-size: 18px;
+  .ph-text {
+    min-width: 0;
   }
 
-  .page-header p {
-    margin: 0;
+  .ph-sub {
+    margin: 3px 0 0;
     color: var(--text-muted);
     max-width: 62ch;
-    font-size: 13px;
+    font-size: 12.5px;
   }
 
   .header-actions {
@@ -1015,186 +1061,117 @@
     flex-wrap: wrap;
     gap: 8px;
     justify-content: flex-end;
+    align-items: center;
+    margin-left: auto;
   }
 
-  .header-actions button,
-  .md-toolbar button,
-  .trail button,
-  .row-actions button,
-  .icon-actions button,
-  .gal-actions button,
-  .extras-actions button {
+  /* Glass card shell reused across every section panel */
+  .glass-card {
+      background: color-mix(in srgb, var(--bg-secondary) 35%, transparent);
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      backdrop-filter: blur(14px) saturate(140%);
+      border: 1px solid var(--border-color);
+          border-radius: var(--border-radius-lg);
+      box-shadow:
+        inset 0 1px 0 color-mix(in srgb, var(--text-muted) 10%, transparent),
+        0 14px 44px rgba(3, 6, 10, 0.16);
+      padding: 18px;
+    }
+
+  .primary-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-  }
-
-  .top-split {
-    flex-shrink: 0;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(440px, 560px);
-    gap: 14px;
-    align-items: start;
-  }
-
-  .identity-panel {
-    min-width: 0;
-  }
-
-  .preview-column {
-    min-width: 0;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    background: var(--bg-elevated);
-    padding: 10px;
-  }
-
-  .preview-sticky {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .preview-heading-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .listing-preview-compact :global(.mr-card),
-  .listing-preview-compact :global(.cf-card) {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 12px;
-    padding: 12px;
-  }
-
-  .listing-preview-compact :global(.mr-icon) {
-    width: 80px;
-    height: 80px;
-  }
-
-  .listing-preview-compact :global(.cf-icon) {
-    width: 80px;
-    height: 80px;
-  }
-
-  .listing-preview-compact :global(.mr-title-line h3),
-  .listing-preview-compact :global(.cf-body h3) {
-    font-size: 15px;
-  }
-
-  .listing-preview-compact :global(.mr-summary),
-  .listing-preview-compact :global(.cf-summary) {
-    font-size: 12px;
-    line-height: 1.4;
-  }
-
-  .listing-preview-compact :global(.mr-center),
-  .listing-preview-compact :global(.cf-body) {
-    gap: 6px;
-    min-width: 0;
-  }
-
-  .listing-preview-compact :global(.mr-actions) {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
-  }
-
-  .listing-preview-compact :global(.mr-dl-btn.card-dl) {
-    height: 28px;
-    font-size: 12px;
-    padding: 0 12px;
-  }
-
-  .listing-preview-compact :global(.card-summary) {
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-  }
-  .identity-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 14px;
-    align-items: start;
-    margin-bottom: 8px;
-  }
-
-  .icon-block {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    min-width: 108px;
-  }
-
-  .icon-label {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-secondary);
-  }
-
-  .description-panel {
-    min-height: 220px;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    flex-shrink: 0;
-  }
-
-  .description-panel .md-split {
-    min-height: 240px;
-    height: clamp(240px, 36vh, 400px);
-  }
-
-  .description-panel .cm-wrap,
-  .description-panel .md-preview {
-    min-height: 0;
-    height: 100%;
-  }
-
-  .brief-below {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding-top: 2px;
-  }
-
-  .preview-heading {
+    gap: 7px;
+    height: 36px;
+    padding: 0 16px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #10b981, #059669);
+    color: #fff;
     font-size: 13px;
-    font-weight: 700;
-    color: var(--text-secondary);
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 0 14px rgba(16, 185, 129, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+    transition: filter var(--motion-fast, 160ms) ease, transform var(--motion-fast, 160ms) ease;
+  }
+  .primary-btn:hover:not(:disabled) {
+    filter: brightness(1.06);
+    transform: translateY(-1px);
+  }
+  .primary-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
-  .panel {
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    background: var(--bg-elevated);
-    padding: 16px;
+  .sync-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      border: 1px solid var(--border-color);
+      background: color-mix(in srgb, var(--bg-secondary) 35%, transparent);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+  .sync-pill.unsaved {
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.35);
+    background: rgba(251, 191, 36, 0.08);
+  }
+  .sync-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #fbbf24;
+    box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+  }
+  .sync-dot.on {
+    background: #34d399;
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
   }
 
-  .panel h3 {
-    margin: 0 0 10px;
-    font-size: 15px;
-  }
+  /* Segmented control (platform / editor mode) */
+  .seg-control {
+      display: inline-flex;
+      gap: 3px;
+      padding: 3px;
+      border-radius: var(--border-radius-md);
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+    }
+    .seg-control button {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      padding: 6px 12px;
+      border-radius: 9px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
+    }
+    .seg-control button.active {
+      background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+      color: var(--accent-primary);
+      box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+    }
 
   .panel-head {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 8px;
-    margin-bottom: 8px;
+    margin-bottom: 12px;
   }
-
   .panel-head h3 {
     margin: 0;
   }
 
-  label {
+  /* Fields */
+  .field-label {
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -1203,51 +1180,33 @@
     font-weight: 600;
     font-size: 13px;
   }
-
-  .identity-fields label:last-child {
+  .field-label:last-child {
     margin-bottom: 0;
   }
-
-  .cat-picker {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .cat-chip {
-    border: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
-    color: var(--text-secondary);
-    border-radius: 999px;
-    padding: 5px 10px;
-    font-size: 12px;
+  .fl-title {
+    font-size: 12.5px;
     font-weight: 600;
-    cursor: pointer;
-    transform: none !important;
-  }
-
-  .cat-chip:hover {
-    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
-    color: var(--text-primary);
-    transform: none !important;
-  }
-
-  .cat-chip.on {
-    border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
-    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-    color: var(--accent-primary);
+    color: var(--text-secondary);
+    letter-spacing: 0.01em;
   }
 
   input,
-  textarea {
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    padding: 8px 10px;
-    font-family: inherit;
+    textarea {
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      padding: 10px 12px;
+      font-family: inherit;
+      font-size: 13.5px;
+      transition: border-color var(--motion-fast, 160ms) ease, box-shadow var(--motion-fast, 160ms) ease;
+    }
+  input:focus,
+  textarea:focus {
+    outline: none;
+    border-color: rgba(16, 185, 129, 0.5);
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
   }
-
   input.invalid {
     border-color: rgba(239, 68, 68, 0.55);
   }
@@ -1257,29 +1216,54 @@
     color: var(--text-muted);
     font-size: 12px;
   }
-
   .hint.warn {
     color: #fbbf24;
   }
-
   .hint.bad {
     color: #f87171;
   }
 
-  .icon-preview {
-    width: 88px;
-    height: 88px;
-    border-radius: var(--border-radius-md);
-    border: 1px dashed var(--border-color);
-    background: var(--bg-tertiary);
+  /* Icon dropzone — square 112x112 with drag & drop */
+  .icon-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    min-width: 120px;
+  }
+  .icon-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  .icon-dropzone {
+    width: 112px;
+    height: 112px;
+    border-radius: 14px;
+    border: 1.5px dashed rgba(255, 255, 255, 0.18);
+    background: rgba(0, 0, 0, 0.24);
     overflow: hidden;
     display: grid;
     place-items: center;
     color: var(--text-muted);
     font-size: 11px;
+    cursor: pointer;
+    transition: border-color var(--motion-fast, 160ms) ease, background var(--motion-fast, 160ms) ease;
   }
-
-  .icon-preview img {
+  .icon-dropzone:hover {
+      border-color: rgba(16, 185, 129, 0.5);
+      background: rgba(16, 185, 129, 0.05);
+    }
+    .icon-dropzone:focus-visible {
+      outline: none;
+      border-color: rgba(16, 185, 129, 0.6);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+    }
+    .icon-dropzone.has-img {
+    border-style: solid;
+    border-color: rgba(16, 185, 129, 0.4);
+  }
+  .icon-dropzone img {
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -1288,15 +1272,145 @@
   .icon-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 6px;
     justify-content: center;
   }
 
-  .md-toolbar {
+  .sm-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 11px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--motion-fast, 160ms) ease, border-color var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
+  }
+  .sm-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 255, 255, 0.18);
+    color: #fff;
+  }
+  .sm-btn.ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-muted);
+  }
+  .sm-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  /* Category chips */
+  .cat-chip {
+      border: 1px solid color-mix(in srgb, var(--border-color) 55%, transparent);
+      background: color-mix(in srgb, var(--bg-secondary) 25%, transparent);
+      color: var(--text-muted);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    transition: background var(--motion-fast, 160ms) ease, border-color var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
+  }
+  .cat-chip:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.14);
+    color: #d1d5db;
+  }
+  .cat-chip.on {
+    background: rgba(16, 185, 129, 0.2);
+    border-color: rgba(16, 185, 129, 0.4);
+    color: #34d399;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
+  }
+
+  /* Preview column */
+  .preview-sticky {
     display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .preview-heading-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     flex-wrap: wrap;
-    gap: 4px;
-    margin-bottom: 6px;
+  }
+  .preview-heading {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+
+  .listing-preview-compact :global(.mr-card),
+  .listing-preview-compact :global(.cf-card) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 14px;
+  }
+  .listing-preview-compact :global(.mr-icon) {
+    width: 80px;
+    height: 80px;
+  }
+  .listing-preview-compact :global(.cf-icon) {
+    width: 80px;
+    height: 80px;
+  }
+  .listing-preview-compact :global(.mr-title-line h3),
+  .listing-preview-compact :global(.cf-body h3) {
+    font-size: 15px;
+  }
+  .listing-preview-compact :global(.mr-summary),
+  .listing-preview-compact :global(.cf-summary) {
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .listing-preview-compact :global(.mr-center),
+  .listing-preview-compact :global(.cf-body) {
+    gap: 6px;
+    min-width: 0;
+  }
+  .listing-preview-compact :global(.mr-actions) {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .listing-preview-compact :global(.mr-dl-btn.card-dl) {
+    height: 28px;
+    font-size: 12px;
+    padding: 0 12px;
+  }
+  .listing-preview-compact :global(.card-summary) {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+
+  /* Description editor */
+  .description-panel {
+    min-height: 220px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    gap: 10px;
+  }
+  .description-panel .md-split {
+    min-height: 280px;
+    height: clamp(280px, 42vh, 420px);
+  }
+  .description-panel .cm-wrap,
+  .description-panel .md-preview {
+    min-height: 0;
+    height: 100%;
   }
 
   .md-split {
@@ -1305,95 +1419,72 @@
     gap: 10px;
     min-height: 0;
   }
-
   .md-split.edit-only,
   .md-split.preview-only {
     grid-template-columns: 1fr;
   }
 
   .cm-wrap {
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-sm);
-    overflow: hidden;
-    min-height: 0;
-    height: 100%;
-  }
-
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius-md);
+      overflow: hidden;
+      min-height: 0;
+      height: 100%;
+    }
   .cm-wrap :global(.cm-editor) {
     height: 100%;
   }
+  .cm-wrap :global(.cm-scroller) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+  }
 
   .md-preview {
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-sm);
-    padding: 12px;
-    background: var(--bg-tertiary);
-    min-height: 0;
-    height: 100%;
-    overflow: auto;
-  }
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius-md);
+      padding: 16px;
+      min-height: 0;
+      height: 100%;
+      overflow: auto;
+    }
+    .md-preview-glass {
+      background: color-mix(in srgb, var(--bg-secondary) 30%, transparent);
+      backdrop-filter: blur(10px);
+    }
 
   .prose :global(img) {
-    max-width: 100%;
-    border-radius: var(--border-radius-sm);
-  }
-
+      max-width: 100%;
+      border-radius: var(--border-radius-sm);
+    }
   .prose :global(a) {
-    color: var(--accent-primary);
-  }
+      color: var(--accent-primary);
+    }
+    .prose :global(h1),
+    .prose :global(h2),
+    .prose :global(h3) {
+      margin: 0.6em 0 0.35em;
+      color: var(--text-primary);
+    }
 
-  .prose :global(h1),
-  .prose :global(h2),
-  .prose :global(h3) {
-    margin: 0.6em 0 0.35em;
-  }
-
-  .gallery-strip {
-    display: flex;
-    gap: 10px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-  }
-
-  .gal-item {
-    flex: 0 0 120px;
+  .brief-below {
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 12px;
+    padding-top: 2px;
   }
 
-  .gal-item img,
-  .gal-ph {
-    width: 120px;
-    height: 72px;
-    object-fit: cover;
-    border-radius: var(--border-radius-sm);
-    border: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
-  }
-
-  .gal-ph {
-    display: grid;
-    place-items: center;
-    color: var(--text-muted);
-  }
-
-  .gal-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-  }
-
-  .gal-actions .danger {
-    color: #f87171;
-  }
-
-  .author-notes .panel-head h3,
-  .extras-panel summary {
+  .panel-summary {
     cursor: pointer;
     font-weight: 700;
     color: var(--text-secondary);
     font-size: 13px;
+    list-style: none;
+    margin-bottom: 10px;
+  }
+  .panel-summary::-webkit-details-marker {
+    display: none;
   }
 
   .brief-grid {
@@ -1409,7 +1500,6 @@
     gap: 10px;
     margin-top: 10px;
   }
-
   .extras-actions,
   .trail {
     display: flex;
@@ -1418,37 +1508,9 @@
     gap: 8px;
   }
 
-  .style-toggle,
-  .seg {
-    display: inline-flex;
-    gap: 4px;
-    padding: 3px;
-    border-radius: 999px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-  }
-
-  .style-toggle button,
-  .seg button {
-    border: none;
-    background: transparent;
-    color: var(--text-muted);
-    padding: 5px 10px;
-    border-radius: 999px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .style-toggle button.active,
-  .seg button.active {
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-  }
-
   .muted {
     color: var(--text-muted);
   }
-
   .empty {
     padding: 24px;
     color: var(--text-muted);
@@ -1456,55 +1518,55 @@
 
   .inline-error,
   .inline-success {
-    padding: 8px 10px;
+    padding: 10px 12px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     flex-shrink: 0;
     font-size: 13px;
+    background: rgba(255, 255, 255, 0.03);
   }
-
   .inline-error {
     color: #fecaca;
     background: rgba(239, 68, 68, 0.08);
     border-color: rgba(239, 68, 68, 0.28);
   }
-
   .inline-success {
-    color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
+    color: #6ee7b7;
+    background: rgba(16, 185, 129, 0.08);
+    border-color: rgba(16, 185, 129, 0.25);
+  }
+
+  /* Slim scrollbars */
+  .main-body::-webkit-scrollbar,
+  .md-preview::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .main-body::-webkit-scrollbar-thumb,
+  .md-preview::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+  }
+  .main-body::-webkit-scrollbar-thumb:hover,
+  .md-preview::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
   }
 
   @media (max-width: 1100px) {
-    .top-split {
-      grid-template-columns: 1fr;
-    }
-
-    .preview-column {
-      order: -1;
-    }
-
-    .identity-grid {
-      grid-template-columns: 1fr;
-    }
-
     .icon-block {
       flex-direction: row;
       flex-wrap: wrap;
       justify-content: flex-start;
       min-width: 0;
     }
-
     .brief-grid {
       grid-template-columns: 1fr;
     }
-
     .md-split {
       grid-template-columns: 1fr;
     }
-
     .description-panel {
-      min-height: 280px;
+      min-height: 320px;
     }
   }
 </style>

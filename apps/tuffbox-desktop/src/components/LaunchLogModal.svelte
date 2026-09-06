@@ -346,19 +346,19 @@
     width: min(960px, 100%);
     max-height: min(85vh, 820px);
     background: var(--bg-elevated, #1a1f28);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--border-radius-md);
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
-  }
+        border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+        border-radius: var(--border-radius-md);
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+      }
 
-  .modal-header {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 14px 16px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
     position: relative;
   }
 
@@ -445,9 +445,9 @@
   }
 
   .icon-btn:hover {
-    background: rgba(255, 255, 255, 0.06);
-    color: #fff;
-  }
+      background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+      color: var(--text-primary, #fff);
+    }
 
   .modal-body {
     flex: 1;
@@ -466,12 +466,12 @@
   }
 
   .log-select-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
     background: transparent;
     color: var(--text-muted, #9aa4b2);
     font-size: 12px;

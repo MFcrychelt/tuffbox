@@ -25,9 +25,9 @@ pub fn enter_for_game(java_pid: u32) -> Result<(), String> {
             ));
         }
         SetPriorityClass(process, PROCESS_CREATION_FLAGS(PROCESS_MODE_BACKGROUND_BEGIN))
-            .map_err(|e| format!("SetPriorityClass(background): {e}"))?
+                    .map_err(|e| format!("SetPriorityClass(background): {e}"))?;
 
-        std::thread::spawn(move || {
+                std::thread::spawn(move || {
             while tuffbox_core::process::pid_is_alive(java_pid) {
                 std::thread::sleep(std::time::Duration::from_millis(750));
             }
