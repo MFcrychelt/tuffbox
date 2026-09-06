@@ -52,6 +52,7 @@ Crash diagnosis, graph cache и Pack Health имеют разные cache keys �
 - повторный Refresh во время активной загрузки не создаёт второй pipeline;
 - path фиксируется для конкретного IPC-запроса;
 - завершение старого запроса не сбрасывает состояние нового проекта.
+- Pack Health получил 10-секундный project-scoped cache по manifest/mods/history mtimes, поэтому badge и Diagnose не запускают одинаковые тяжёлые scans одновременно.
 
 ## Целевая реконструкция
 

@@ -10555,9 +10555,36 @@ fn get_pack_health_impl(path: &str) -> Result<PackHealthReport, String> {
 /// Pack Health panel). Heavy scans run on the blocking pool.
 #[tauri::command(rename_all = "camelCase")]
 async fn get_pack_health(path: String) -> Result<PackHealthReport, String> {
-    tokio::task::spawn_blocking(move || get_pack_health_impl(&path))
+    // The header badge and Diagnose can request the same report at once. Use
+    // a short project-scoped cache so opening Diagnose does not start a second
+    // full quest/export/JAR scan while the badge is still rendering.
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_path.parent().map(Path::to_path_buf);
+    let manifest_mtime = file_mtime_nanos(&manifest_path).unwrap_or(0);
+    let mods_mtime = project_dir
+        .as_ref()
+        .map(|dir| dir_mtime_nanos(&dir.join("mods")).unwrap_or(0))
+        .unwrap_or(0);
+    let history_mtime = project_dir
+        .as_ref()
+        .map(|dir| file_mtime_nanos(&dir.join(".tuffbox/history/launches.jsonl")).unwrap_or(0))
+        .unwrap_or(0);
+    let cache_key = format!(
+        "pack-health:{path}:{manifest_mtime}:{mods_mtime}:{history_mtime}"
+    );
+    if let Some(cached) = tuffbox_core::api_cache::get::<PackHealthReport>(&cache_key) {
+        return Ok(cached);
+    }
+
+    let report = tokio::task::spawn_blocking(move || get_pack_health_impl(&path))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())??;
+    tuffbox_core::api_cache::put_with_ttl(
+        cache_key,
+        report.clone(),
+        std::time::Duration::from_secs(10),
+    );
+    Ok(report)
 }
 
 #[tauri::command(rename_all = "camelCase")]
