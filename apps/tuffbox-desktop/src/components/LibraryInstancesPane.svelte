@@ -25,6 +25,7 @@
     Eraser,
     Search,
     X,
+    Compass,
   } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
@@ -43,6 +44,7 @@
     loginTypeLabel,
     loginModalOpen,
     uiScalePercentLive,
+    libraryTabRequest,
     type RecentProject,
   } from "../lib/store";
   import { homeIcons, homeStats } from "../lib/homeBootstrap";
@@ -121,7 +123,7 @@
   }
   let groupMap = $state<GroupMap>(loadGroupMap());
   let collapsed = $state(loadCollapsedGroups());
-  let projectStats = $state<Record<string, { playtime: number }>>({});
+  let projectStats = $state<Record<string, { playtime: number; lastLaunch: string | null }>>({});
   let refreshing = $state(false);
 
   let showClonePrompt = $state(false);
@@ -268,10 +270,10 @@
   async function loadStats(path: string) {
     try {
       const s = await api.stats.get(path);
-      projectStats[path] = { playtime: s.totalPlaytimeSeconds ?? 0 };
+      projectStats[path] = { playtime: s.totalPlaytimeSeconds ?? 0, lastLaunch: s.lastLaunch ?? null };
       projectStats = { ...projectStats };
     } catch {
-      projectStats[path] = { playtime: 0 };
+      projectStats[path] = { playtime: 0, lastLaunch: null };
       projectStats = { ...projectStats };
     }
   }
@@ -286,6 +288,26 @@
   $effect(() => {
     ensureStats($recentProjects.map((p) => p.path));
   });
+
+  function formatLastLaunch(iso: string | null): string {
+    if (!iso) return "Never";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "Never";
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  /** Expose the configured JRE for the selected pack (path or "Auto"). */
+  function javaLabel(javaPath: string | null): string {
+    if (!javaPath) return "Auto";
+    const base = javaPath.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? javaPath;
+    return base || "Auto";
+  }
+
+  function memoryLabel(memoryMb: number): string {
+    if (!memoryMb || memoryMb <= 0) return "Auto";
+    if (memoryMb >= 1024) return `${(memoryMb / 1024).toFixed(memoryMb % 1024 === 0 ? 0 : 1)} GB`;
+    return `${memoryMb} MB`;
+  }
 
   async function selectInstance(
     project: RecentProject,
@@ -1056,7 +1078,7 @@
         <button
           type="button"
           class="tb-btn primary"
-          title="Add instance"
+          title="Add an instance to the library"
           onclick={(e) => { e.stopPropagation(); (addMenuOpen = !addMenuOpen);  }}
         >
           <Plus size={16} />
@@ -1077,42 +1099,13 @@
             <button type="button" role="menuitem" onclick={importGithubRepo} disabled={actionBusy}>
               <Link2 size={14} /> Import GitHub repository
             </button>
+            <div class="menu-sep"></div>
+            <button type="button" role="menuitem" onclick={() => { addMenuOpen = false; libraryTabRequest.set("discover"); }}>
+              <Compass size={14} /> Find in catalog
+            </button>
           </div>
         {/if}
       </div>
-
-      <div class="tb-search" role="search">
-        <Search size={15} class="tb-search-icon" />
-        <input
-          type="text"
-          placeholder="Filter instances…"
-          aria-label="Filter instances"
-          spellcheck="false"
-          bind:value={instanceFilter}
-        />
-        {#if instanceFilter}
-          <button
-            type="button"
-            class="tb-search-clear"
-            aria-label="Clear filter"
-            onclick={() => (instanceFilter = "")}
-          >
-            <X size={13} />
-          </button>
-        {/if}
-      </div>
-
-      <select
-        class="tb-sort"
-        aria-label="Sort instances"
-        title="Sort instances"
-        value={sortMode}
-        onchange={(e) => setSortMode((e.currentTarget as HTMLSelectElement).value as SortMode)}
-      >
-        <option value="recent">Last played</option>
-        <option value="name">Name</option>
-        <option value="playtime">Most played</option>
-      </select>
 
       <div class="tb-folders-wrap">
         <button
@@ -1137,20 +1130,9 @@
           </div>
         {/if}
       </div>
+    </div>
 
-      <button type="button" class="tb-btn" title="Settings" onclick={() => (currentView = "settings")}>
-        <Settings size={16} />
-        <span>Settings</span>
-      </button>
-      <button
-        type="button"
-        class="tb-btn"
-        title="Help"
-        onclick={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
-      >
-        <HelpCircle size={16} />
-        <span>Help</span>
-      </button>
+    <div class="tb-right">
       <button
         type="button"
         class="tb-btn"
@@ -1161,9 +1143,19 @@
         <span class:spinning={refreshing}><RefreshCw size={16} /></span>
         <span>Update</span>
       </button>
-    </div>
-
-    <div class="tb-right">
+      <button
+        type="button"
+        class="tb-btn"
+        title="Help"
+        onclick={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
+      >
+        <HelpCircle size={16} />
+        <span>Help</span>
+      </button>
+      <button type="button" class="tb-btn" title="Settings" onclick={() => (currentView = "settings")}>
+        <Settings size={16} />
+        <span>Settings</span>
+      </button>
       {#if $authState.loggedIn && $authState.profile}
         <button
           type="button"
@@ -1190,6 +1182,47 @@
 
   <div class="prism-body" class:is-dragging={dragging} style={`--side-scale: ${sideScale}`}>
     <div class="prism-grid-pane">
+      <div class="lib-page-head">
+        <div class="lib-page-title">
+          <h2 class="lib-title">Library</h2>
+          {#if $recentProjects.length > 0}
+            <span class="lib-title-count">{visibleCount} of {$recentProjects.length}</span>
+          {/if}
+        </div>
+        <div class="lib-filterbar" role="search">
+          <div class="tb-search">
+            <Search size={15} class="tb-search-icon" />
+            <input
+              type="text"
+              placeholder="Filter instances…"
+              aria-label="Filter instances"
+              spellcheck="false"
+              bind:value={instanceFilter}
+            />
+            {#if instanceFilter}
+              <button
+                type="button"
+                class="tb-search-clear"
+                aria-label="Clear filter"
+                onclick={() => (instanceFilter = "")}
+              >
+                <X size={13} />
+              </button>
+            {/if}
+          </div>
+          <select
+            class="tb-sort"
+            aria-label="Sort instances"
+            title="Sort instances"
+            value={sortMode}
+            onchange={(e) => setSortMode((e.currentTarget as HTMLSelectElement).value as SortMode)}
+          >
+            <option value="recent">Last played</option>
+            <option value="name">Name</option>
+            <option value="playtime">Most played</option>
+          </select>
+        </div>
+      </div>
       {#if $recentProjects.length === 0}
         <div class="empty-state">
           <h3>No instances yet</h3>
@@ -1284,6 +1317,9 @@
                       class="inst-name"
                       title={project.info.name}
                     >{project.info.name}</span>
+                    <span class="inst-version" title={`${project.info.minecraftVersion} · ${project.info.loaderKind}`}>
+                      {project.info.minecraftVersion} · {project.info.loaderKind}
+                    </span>
                   </div>
                 {/each}
               </div>
@@ -1347,97 +1383,119 @@
                 {#if launching === selected.path}
                   <span class="mini-spinner"></span> Launching…
                 {:else if selectedRunning}
-                  <Square size={14} /> Stop
+                  <Square size={16} fill="currentColor" /> Stop
                 {:else}
-                  <Play size={16} fill="currentColor" /> Play
+                  <Play size={18} fill="currentColor" /> Play
                 {/if}
               </button>
-              <div class="side-sep" aria-hidden="true"></div>
-              <button type="button" class="side-btn" disabled={actionBusy} onclick={() => runAction("open-ide", selected)}>
-                <Package size={14} /> Open IDE
-              </button>
-              <button
-                type="button"
-                class="side-btn"
-                disabled={actionBusy}
-                onclick={() => void runAction("folder", selected)}
-              >
-                <Folder size={14} /> Folder
-              </button>
-              <button
-                type="button"
-                class="side-btn"
-                disabled={actionBusy}
-                onclick={() => void runAction("change-icon", selected)}
-              >
-                <ImageIcon size={14} /> Change icon…
-              </button>
-              {#if instanceIcons[selected.path]}
-                <button
-                  type="button"
-                  class="side-btn"
-                  disabled={actionBusy}
-                  onclick={() => void runAction("clear-icon", selected)}
-                >
-                  <Eraser size={14} /> Clear icon
-                </button>
-              {/if}
 
-              <div class="tb-export-wrap">
+              <div class="side-icon-row">
                 <button
                   type="button"
-                  class="side-btn"
+                  class="side-icon-btn"
+                  title="Open in IDE"
+                  aria-label="Open in IDE"
                   disabled={actionBusy}
-                  onclick={(e) => { e.stopPropagation(); (exportMenuOpen = !exportMenuOpen);  }}
+                  onclick={() => runAction("open-ide", selected)}
                 >
-                  <Share2 size={14} /> Export <ChevronDown size={12} />
+                  <Package size={16} />
                 </button>
-                {#if exportMenuOpen}
-                  <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
-                    <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", selected)}>
-                      Export .mrpack
-                    </button>
-                    <button type="button" role="menuitem" onclick={() => void runAction("export-prism", selected)}>
-                      Export Prism zip
-                    </button>
-                  </div>
-                {/if}
+                <button
+                  type="button"
+                  class="side-icon-btn"
+                  title="Open folder"
+                  aria-label="Open folder"
+                  disabled={actionBusy}
+                  onclick={() => void runAction("folder", selected)}
+                >
+                  <Folder size={16} />
+                </button>
+                <div class="tb-export-wrap">
+                  <button
+                    type="button"
+                    class="side-icon-btn"
+                    title="Export"
+                    aria-label="Export"
+                    disabled={actionBusy}
+                    onclick={(e) => { e.stopPropagation(); (exportMenuOpen = !exportMenuOpen);  }}
+                  >
+                    <Share2 size={16} />
+                  </button>
+                  {#if exportMenuOpen}
+                    <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
+                      <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", selected)}>
+                        Export .mrpack
+                      </button>
+                      <button type="button" role="menuitem" onclick={() => void runAction("export-prism", selected)}>
+                        Export Prism zip
+                      </button>
+                    </div>
+                  {/if}
+                </div>
+                <div class="side-more-wrap">
+                  <button
+                    type="button"
+                    class="side-icon-btn"
+                    title="More"
+                    aria-label="More actions"
+                    onclick={(e) => { e.stopPropagation(); (moreMenuOpen = !moreMenuOpen); }}
+                  >
+                    <Settings size={16} />
+                  </button>
+                  {#if moreMenuOpen}
+                    <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-group", selected); }}>
+                        <Tags size={14} /> Change Group
+                      </button>
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-icon", selected); }} disabled={actionBusy}>
+                        <ImageIcon size={14} /> Change icon…
+                      </button>
+                      {#if instanceIcons[selected.path]}
+                        <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("clear-icon", selected); }} disabled={actionBusy}>
+                          <Eraser size={14} /> Clear icon
+                        </button>
+                      {/if}
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy", selected); }}>
+                        <Copy size={14} /> Copy instance
+                      </button>
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("shortcut", selected); }}>
+                        <Link2 size={14} /> Create Shortcut
+                      </button>
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("repair", selected); }} disabled={actionBusy}>
+                        <Wrench size={14} /> Repair
+                      </button>
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy-path", selected); }}>
+                        <Copy size={14} /> Copy path
+                      </button>
+                      <div class="menu-sep"></div>
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("remove", selected); }}>
+                        <Minus size={14} /> Remove from library
+                      </button>
+                      <button type="button" role="menuitem" class="danger" onclick={() => { moreMenuOpen = false; void runAction("delete", selected); }}>
+                        <Trash2 size={14} /> Delete from disk
+                      </button>
+                    </div>
+                  {/if}
+                </div>
               </div>
+            </div>
 
-              <div class="side-more-wrap">
-                <button
-                  type="button"
-                  class="side-btn"
-                  onclick={(e) => { e.stopPropagation(); (moreMenuOpen = !moreMenuOpen); }}
-                >
-                  <Settings size={14} /> More <ChevronDown size={12} />
-                </button>
-                {#if moreMenuOpen}
-                  <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
-                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-group", selected); }}>
-                      <Tags size={14} /> Change Group
-                    </button>
-                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy", selected); }}>
-                      <Copy size={14} /> Copy instance
-                    </button>
-                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("shortcut", selected); }}>
-                      <Link2 size={14} /> Create Shortcut
-                    </button>
-                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("repair", selected); }} disabled={actionBusy}>
-                      <Wrench size={14} /> Repair
-                    </button>
-                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy-path", selected); }}>
-                      <Copy size={14} /> Copy path
-                    </button>
-                    <div class="menu-sep"></div>
-                    <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("remove", selected); }}>
-                      <Minus size={14} /> Remove from library
-                    </button>
-                    <button type="button" role="menuitem" class="danger" onclick={() => { moreMenuOpen = false; void runAction("delete", selected); }}>
-                      <Trash2 size={14} /> Delete from disk
-                    </button>
-                  </div>
-                {/if}
+            <div class="side-meta-grid">
+              <div class="side-meta-item">
+                <span class="side-meta-label">Play time</span>
+                <span class="side-meta-value">{formatPlaytime(projectStats[selected.path]?.playtime ?? 0)}</span>
+              </div>
+              <div class="side-meta-item">
+                <span class="side-meta-label">Last played</span>
+                <span class="side-meta-value">{formatLastLaunch(projectStats[selected.path]?.lastLaunch ?? null)}</span>
+              </div>
+              <div class="side-meta-item">
+                <span class="side-meta-label">Java</span>
+                <span class="side-meta-value">{javaLabel(selected.info.javaPath)}</span>
+              </div>
+              <div class="side-meta-item">
+                <span class="side-meta-label">Memory</span>
+                <span class="side-meta-value">{memoryLabel(selected.info.memoryMb)}</span>
               </div>
             </div>
           </div>
@@ -1855,15 +1913,53 @@
     display: flex;
     flex-direction: column;
   }
+  .lib-page-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin: 4px 2px 14px;
+  }
+  .lib-page-title {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+  .lib-title {
+    margin: 0;
+    font-size: 26px;
+    line-height: 1.1;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+  }
+  .lib-title-count {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  .lib-filterbar {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
   .lib-footer {
     margin-top: auto;
-    padding-top: 10px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
-    font-size: 11px;
-    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .lib-footer span:last-child {
+    color: var(--accent-primary);
   }
   .drag-hint {
     margin: 0 0 10px;
@@ -1885,26 +1981,31 @@
   .group-header {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 6px;
-    margin-bottom: 8px;
-    border: none;
-    background: transparent;
-    color: var(--text-secondary);
+    gap: 8px;
+    padding: 5px 12px;
+    margin-bottom: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;
-    border-radius: var(--border-radius-sm);
+    border-radius: 999px;
     transition:
       color var(--motion-fast) var(--ease-out),
       background var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-fast) var(--ease-out);
+      box-shadow var(--motion-fast) var(--ease-out),
+      border-color var(--motion-fast) var(--ease-out);
   }
-  .group-header:hover { color: var(--text-primary); }
+  .group-header:hover {
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+    background: var(--bg-tertiary);
+  }
   .group-header.drop-target {
     background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
     color: var(--accent-primary);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
   }
   .group-count {
     font-size: 11px;
@@ -1913,18 +2014,18 @@
   }
   .inst-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
-    gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
   }
   .inst-tile {
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: stretch;
     gap: 8px;
-    padding: 12px 8px 10px;
+    padding: 10px;
     border-radius: var(--border-radius-md);
-    border: 1px solid transparent;
-    background: transparent;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
     cursor: pointer;
     text-align: center;
     outline: none;
@@ -1937,19 +2038,23 @@
       opacity var(--motion-fast) var(--ease-out),
       box-shadow var(--motion-fast) var(--ease-out);
   }
+  .inst-tile:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+    background: var(--bg-tertiary);
+  }
   .inst-tile:hover .inst-icon {
     transform: translateY(-1px);
     filter: brightness(1.04);
   }
   .inst-tile:hover:not(.selected) .inst-name {
-    background: color-mix(in srgb, var(--bg-hover) 90%, transparent);
+    color: var(--text-primary);
   }
-  .inst-tile.selected .inst-icon {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+  .inst-tile.selected {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-secondary));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
   }
   .inst-tile.selected .inst-name {
-    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
-    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--accent-primary);
   }
   .inst-tile.running .inst-icon {
@@ -2021,13 +2126,13 @@
   }
 
   .inst-icon {
-    width: 76px;
-    height: 76px;
-    border-radius: 0;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    border-radius: var(--border-radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 30px;
+    font-size: 34px;
     font-weight: 900;
     color: #fff;
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -2081,21 +2186,35 @@
   .folder-stack .stack-b { bottom: 10px; right: 10px; }
   .inst-name {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
     color: var(--text-primary);
     max-width: 100%;
-    width: fit-content;
-    line-height: 1.35;
+    width: 100%;
+    line-height: 1.3;
     white-space: normal;
+    overflow: hidden;
     word-break: break-word;
-    padding: 2px 8px;
-    border-radius: var(--border-radius-sm);
-    border: 1px solid transparent;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    padding: 0 2px;
     box-sizing: border-box;
     transition:
       color var(--motion-fast) var(--ease-out),
       background var(--motion-fast) var(--ease-out),
       border-color var(--motion-fast) var(--ease-out);
+  }
+  .inst-version {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 2px;
+    box-sizing: border-box;
   }
   .inst-tile.drop-target .inst-name { color: var(--accent-primary); }
 
@@ -2201,33 +2320,98 @@
   .side-btn:active:not(:disabled) { opacity: 0.9; }
   .side-btn:disabled { opacity: 0.4; cursor: default; }
   .side-btn.launch {
-    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
-    border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
-    color: var(--accent-primary);
-    margin-bottom: 4px;
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 60%, #000);
+    color: var(--on-accent);
+    font-size: 16px;
+    font-weight: 700;
+    padding: 15px 14px;
+    margin-bottom: 2px;
+    justify-content: center;
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--accent-primary) 30%, transparent);
   }
   .side-btn.launch:hover:not(:disabled) {
-    box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    color: var(--on-accent);
+    box-shadow: 0 8px 22px color-mix(in srgb, var(--accent-primary) 38%, transparent);
   }
   .side-btn.launch.stop {
-    background: color-mix(in srgb, var(--accent-danger, #ef4444) 16%, transparent);
-    border-color: color-mix(in srgb, var(--accent-danger, #ef4444) 30%, transparent);
-    color: var(--accent-danger, #f87171);
+    background: var(--accent-danger, #ef4444);
+    border-color: var(--accent-danger, #ef4444);
+    border-bottom-color: color-mix(in srgb, var(--accent-danger, #ef4444) 60%, #000);
+    color: var(--on-accent, #fff);
   }
   .side-btn.launch.stop:hover:not(:disabled) {
-    box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-danger, #ef4444) 18%, transparent);
+    background: color-mix(in srgb, var(--accent-danger, #ef4444) 90%, #000);
+    border-color: color-mix(in srgb, var(--accent-danger, #ef4444) 90%, #000);
+    color: var(--on-accent, #fff);
+    box-shadow: 0 8px 22px color-mix(in srgb, var(--accent-danger, #ef4444) 38%, transparent);
+  }
+  .side-icon-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .side-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    height: 38px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition:
+      background var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out),
+      border-color var(--motion-fast) var(--ease-out);
+  }
+  .side-icon-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+    color: var(--accent-primary);
+  }
+  .side-icon-btn:disabled { opacity: 0.4; cursor: default; }
+  .side-meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 2px;
+  }
+  .side-meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    min-width: 0;
+  }
+  .side-meta-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  .side-meta-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .side-empty {
     padding: 24px 8px;
     text-align: center;
     color: var(--text-muted);
     font-size: 13px;
-  }
-
-  .side-sep {
-    height: 1px;
-    margin: 4px 2px;
-    background: var(--border-color);
   }
 
   .empty-state {

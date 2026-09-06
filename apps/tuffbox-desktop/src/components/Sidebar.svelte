@@ -447,7 +447,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 10px;
+    gap: 14px;
     width: 100%;
     flex-shrink: 0;
   }
