@@ -170,6 +170,7 @@
   // never overwrite the currently selected report.
   let analysisGeneration = 0;
   let analysisKickoff: ReturnType<typeof setTimeout> | undefined;
+  let diagnoseTimings = $state<Record<string, { elapsedMs: number; cacheHit: boolean }>>({});
   const isCurrentAnalysis = (generation: number) => generation === analysisGeneration;
 
   // Coalesce load-triggered enrichments into one post-paint job. Source/path
@@ -372,6 +373,7 @@
   function onProjectPathChange(path: string | null) {
     if (!path || path === lastLoadedPath) return;
     lastLoadedPath = path;
+    diagnoseTimings = {};
     preferLatestLog = true;
     selectedReportId = "";
     appliedProblemIds = new Set();
@@ -2671,6 +2673,7 @@
     let unlistenSoftVerify: UnlistenFn | undefined;
     let unlistenCrash: UnlistenFn | undefined;
     let unlistenProgress: UnlistenFn | undefined;
+    let unlistenTiming: UnlistenFn | undefined;
     void listen<{ stage?: string }>("diagnose-cascade", (ev) => {
       const stage = ev.payload?.stage;
       if (stage) cascadeLiveStage = stage;
@@ -2684,6 +2687,17 @@
       if (stage) liveDiagnoseStage = stage;
     }).then((u) => {
       unlistenProgress = u;
+    });
+    void listen<{ phase?: string; elapsedMs?: number; cacheHit?: boolean }>("diagnose-timing", (ev) => {
+      const phase = ev.payload?.phase;
+      const elapsedMs = Number(ev.payload?.elapsedMs);
+      if (!phase || !Number.isFinite(elapsedMs)) return;
+      diagnoseTimings = {
+        ...diagnoseTimings,
+        [phase]: { elapsedMs, cacheHit: !!ev.payload?.cacheHit },
+      };
+    }).then((u) => {
+      unlistenTiming = u;
     });
     void listen<SoftVerifyOutcome>("tuffbox:soft-verify-outcome", (ev) => {
       const payload = ev.payload ?? {};
@@ -2715,6 +2729,7 @@
       unlistenSoftVerify?.();
       unlistenCrash?.();
       unlistenProgress?.();
+      unlistenTiming?.();
     };
   });
 </script>
@@ -3091,6 +3106,7 @@
         wrongLoaderLoading={wrongLoaderLoading}
         duplicateJarLoading={duplicateJarLoading}
         authorBusy={authorBusy}
+        timings={diagnoseTimings}
         bind:aiPrompt
         bind:aiShowPrompt
         runAiExplain={() => void runAiExplain()}

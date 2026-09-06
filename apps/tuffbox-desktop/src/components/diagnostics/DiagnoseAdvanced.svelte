@@ -4,6 +4,7 @@
   import DiagnoseGroupTestPanel from "./DiagnoseGroupTestPanel.svelte";
   import DiagnoseConflictsJars from "./DiagnoseConflictsJars.svelte";
   import DiagnoseToolsResults from "./DiagnoseToolsResults.svelte";
+  import DiagnosePerformancePanel from "./DiagnosePerformancePanel.svelte";
 
   // Advanced is intentionally a dumb composition layer. State and side
   // effects stay in the orchestration component; this file owns only the
@@ -11,7 +12,7 @@
   let {
     projectPath, aiLoading, sessionOk, sharingLog, currentLogText, supportBusy,
     planning, oreLoading, duplicateLoading, unifyLoading, wrongLoaderLoading,
-    duplicateJarLoading, authorBusy, aiPrompt = $bindable(), aiShowPrompt = $bindable(),
+    duplicateJarLoading, authorBusy, timings, aiPrompt = $bindable(), aiShowPrompt = $bindable(),
     runAiExplain, shareCurrentLog, exportSupportPack, copyCurrentLog, openFolder, openSubdir,
     createFixPlan, scanOreGen, scanDuplicateItems, generateUnify, detectWrongLoaderMods,
     detectDuplicateModJars, onOpenAuthorForm, onOpenAiSettings,
@@ -66,6 +67,7 @@
           openAuthorForm={() => void onOpenAuthorForm()}
           openAiSettings={onOpenAiSettings}
         />
+        <DiagnosePerformancePanel timings={timings} />
 
         <DiagnoseTriagePanels
           signalGroups={[]}

@@ -102,6 +102,8 @@ Backend теперь emits `diagnose-timing` и native trace с полями `ph
 - `class_finder > 300 ms` — использовать batch class index вместо открытия JAR на каждый класс;
 - AI latency анализировать отдельно и не смешивать с base health latency.
 
+Профильные события теперь собираются в frontend и доступны в Advanced → Performance phases: самые медленные фазы сортируются сверху, рядом отображается cold/cache режим. Метрики сбрасываются при смене проекта.
+
 ## Целевая реконструкция
 
 1. Вынести state machine в `diagnostics/store.ts`:
