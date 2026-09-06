@@ -6,7 +6,6 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::HashSet;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Schema version for cache invalidation. Increment when the cache format or
@@ -54,10 +53,15 @@ impl GraphCache {
         if !path.is_file() {
             return Ok(None);
         }
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|error| format!("failed to read graph cache {}: {error}", path.display()))?;
-        let cache: Self = serde_json::from_str(&raw)
-            .map_err(|error| format!("failed to parse graph cache {}: {error}", path.display()))?;
+        // A cache is an optimization, never a reason for Diagnose to fail.
+        // Interrupted writes, upgrades and manual edits are all treated as a
+        // miss; the next warm pass will rebuild it.
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return Ok(None);
+        };
+        let Ok(cache) = serde_json::from_str::<Self>(&raw) else {
+            return Ok(None);
+        };
         Ok((cache.cache_version == CACHE_VERSION
             && cache.manifest_fingerprint == manifest_fingerprint(manifest))
         .then_some(cache))
@@ -69,16 +73,11 @@ impl GraphCache {
             .parent()
             .ok_or_else(|| format!("graph cache path has no parent: {}", path.display()))?;
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let mut staged = tempfile::Builder::new()
-            .prefix(".dependency-graph-")
-            .suffix(".tmp")
-            .tempfile_in(parent)
-            .map_err(|error| error.to_string())?;
-        serde_json::to_writer_pretty(&mut staged, self).map_err(|error| error.to_string())?;
-        staged.flush().map_err(|error| error.to_string())?;
-        staged
-            .persist(&path)
-            .map_err(|error| error.error.to_string())?;
+        let bytes = serde_json::to_vec_pretty(self).map_err(|error| error.to_string())?;
+        // Use the shared replacement primitive: unlike a direct persist, it
+        // replaces an existing stale cache on every supported platform and
+        // still never exposes a half-written JSON file to Diagnose.
+        crate::fs_util::atomic_write(&path, bytes)?;
         Ok(path)
     }
 }

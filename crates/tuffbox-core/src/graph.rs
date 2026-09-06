@@ -391,6 +391,11 @@ impl DependencyGraph {
             })
             .map(|edge| edge.to.clone())
             .collect();
+        let mut missing: Vec<NodeId> = missing.into_iter().collect();
+        // HashSet iteration used to make diagnostics and graph JSON change
+        // order between runs. Stable node order is important for reproducible
+        // reports and for the frontend's action indexes.
+        missing.sort_by(|a, b| a.0.cmp(&b.0));
         for id in missing {
             graph.nodes.push(GraphNode {
                 label: id.0.strip_prefix("mod:").unwrap_or(&id.0).to_string(),
