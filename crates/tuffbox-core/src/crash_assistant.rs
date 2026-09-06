@@ -1534,14 +1534,6 @@ pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<C
         return results;
     }
     let exact = format!("{}.class", fqn.replace('.', "/"));
-    let package_prefix = {
-        let slash = fqn.replace('.', "/");
-        if let Some((pkg, _)) = slash.rsplit_once('/') {
-            format!("{pkg}/")
-        } else {
-            String::new()
-        }
-    };
 
     for entry in std::fs::read_dir(mods_dir).into_iter().flatten().flatten() {
         let p = entry.path();
@@ -1556,18 +1548,14 @@ pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<C
             continue;
         };
         let names: Vec<String> = zip.file_names().map(|s| s.to_string()).collect();
-        let hit = names.iter().any(|n| n == &exact)
-            || (!package_prefix.is_empty()
-                && names
-                    .iter()
-                    .any(|n| n.starts_with(&package_prefix) && n.ends_with(".class")));
-        if !hit {
-            // Fallback: exact class basename somewhere in the jar (rare shading cases).
-            let simple = fqn.rsplit('.').next().unwrap_or(fqn);
-            let simple_class = format!("{simple}.class");
-            if !names.iter().any(|n| n.ends_with(&simple_class)) {
-                continue;
-            }
+        // Exact class match, or same simple class name somewhere in the jar
+        // (rare shading cases). A bare package-prefix match is intentionally
+        // NOT used: any class in the package would then be attributed to this
+        // mod even when the queried class is absent (false positive).
+        let simple = fqn.rsplit('.').next().unwrap_or(fqn);
+        let simple_class = format!("{simple}.class");
+        if !names.iter().any(|n| n == &exact) && !names.iter().any(|n| n.ends_with(&simple_class)) {
+            continue;
         }
 
         let meta = crate::mod_scan::scan_mod_jar(&p).ok();
@@ -1591,7 +1579,7 @@ pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<C
 ///
 /// The single-class API opens every JAR for each query. Crash reports often
 /// contain multiple missing classes, so the batch variant opens each archive
-/// once and tests all requested class/package prefixes against its entry list.
+/// once and tests all requested classes against its entry list.
 pub fn find_classes_in_mods(
     class_names: &[String],
     mods_dir: &std::path::Path,
@@ -1599,18 +1587,14 @@ pub fn find_classes_in_mods(
     if !mods_dir.is_dir() {
         return Vec::new();
     }
-    let queries: Vec<(String, String, String)> = class_names
+    let queries: Vec<(String, String)> = class_names
         .iter()
         .map(|name| {
             let fqn = name.trim().trim_end_matches(".class").to_string();
             let slash = fqn.replace('.', "/");
-            let package = slash
-                .rsplit_once('/')
-                .map(|(pkg, _)| format!("{pkg}/"))
-                .unwrap_or_default();
-            (fqn, format!("{slash}.class"), package)
+            (fqn, format!("{slash}.class"))
         })
-        .filter(|(fqn, _, _)| !fqn.is_empty())
+        .filter(|(fqn, _)| !fqn.is_empty())
         .collect();
     let mut results = Vec::new();
     for entry in std::fs::read_dir(mods_dir).into_iter().flatten().flatten() {
@@ -1623,13 +1607,9 @@ pub fn find_classes_in_mods(
         let Ok(zip) = zip::ZipArchive::new(file) else { continue };
         let names: Vec<String> = zip.file_names().map(str::to_string).collect();
         let mut matched: Vec<String> = Vec::new();
-        for (fqn, exact, package) in &queries {
+        for (fqn, exact) in &queries {
             let simple = fqn.rsplit('.').next().unwrap_or(fqn);
             let hit = names.iter().any(|name| name == exact)
-                || (!package.is_empty()
-                    && names.iter().any(|name| {
-                        name.starts_with(package) && name.ends_with(".class")
-                    }))
                 || names.iter().any(|name| name.ends_with(&format!("{simple}.class")));
             if hit {
                 matched.push(fqn.clone());

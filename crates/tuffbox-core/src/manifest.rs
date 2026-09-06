@@ -423,10 +423,10 @@ impl ContentType {
     /// (`VanillaTweaks_r….zip` / any `VanillaTweaks_….zip`) as resource packs.
     pub fn from_filename(name: &str) -> Self {
         let lower = name.to_ascii_lowercase();
-        let base = Path::new(&lower)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(lower.as_str());
+        // Extract the basename manually (split on both separators) so a full
+        // Windows path like `C:\Downloads\foo.zip` is detected the same on any
+        // host OS — Path::file_name() only splits on '\' when built for Windows.
+        let base = lower.rsplit(['/', '\\']).next().unwrap_or(lower.as_str());
         if base.starts_with("vanillatweaks_")
             || lower.contains("resourcepack")
             || (lower.ends_with(".zip") && lower.contains("resource"))
