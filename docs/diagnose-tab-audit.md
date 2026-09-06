@@ -67,6 +67,7 @@ Crash diagnosis, graph cache и Pack Health имеют разные cache keys �
 - Triage, folders и scanner actions больше не живут в основном God-компоненте.
 - Родитель передаёт только state и callbacks, а child отвечает за rendering и button-level disabled/loading states.
 - Group Test panel также вынесен в `diagnostics/DiagnoseGroupTestPanel.svelte`; его controls и presentation больше не смешаны с AI/log/fix UI.
+- Author KB form вынесен в `diagnostics/DiagnoseAuthorPanel.svelte`; поля формы и presentation отделены от сохранения/экспорта cases.
 - Это создаёт границы для дальнейшего выделения Advanced tools и уменьшает связанность основной Diagnose view.
 
 ## Целевая реконструкция

@@ -44,6 +44,7 @@
   import DiagnoseStatusBar from "./diagnostics/DiagnoseStatusBar.svelte";
   import DiagnoseAdvancedToolbar from "./diagnostics/DiagnoseAdvancedToolbar.svelte";
   import DiagnoseGroupTestPanel from "./diagnostics/DiagnoseGroupTestPanel.svelte";
+  import DiagnoseAuthorPanel from "./diagnostics/DiagnoseAuthorPanel.svelte";
   import { formatCascadeLabel } from "./diagnostics/cascadeLabel";
   import {
     buildUnifiedProblems,
@@ -3192,24 +3193,21 @@
                 <button class="primary" onclick={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply heuristic fix plan"}</button>
               </div>
             {/if}
-            {#if authorOpen}
-              <div class="author-form">
-                <h3>Save KB case</h3>
-                <label>Case id<input bind:value={authorId} placeholder="authored-outofmemory" /></label>
-                <label>Solution<textarea bind:value={authorSolution} rows="3"></textarea></label>
-                <label>Symptoms (one per line)<textarea bind:value={authorSymptoms} rows="3"></textarea></label>
-                <label>Suspected (comma)<input bind:value={authorSuspected} /></label>
-                <label>Actions JSON<textarea bind:value={authorActionsJson} rows="6" class="mono"></textarea></label>
-                <label>Notes (local only)<textarea bind:value={authorNotes} rows="2"></textarea></label>
-                <div class="actions">
-                  <button class="primary" onclick={saveAuthorCase} disabled={authorBusy || !authorSolution.trim()}>Save</button>
-                  <button class="ghost" onclick={() => copyAuthorExport()} disabled={!authorExportPreview}>Copy export</button>
-                  <button class="ghost" onclick={openAuthorExportFolder}>Open folder</button>
-                  <button class="ghost" onclick={() => (authorOpen = false)}>Close</button>
-                </div>
-                {#if authorMsg}<p class="muted-inline">{authorMsg}</p>{/if}
-              </div>
-            {/if}
+            <DiagnoseAuthorPanel
+              bind:open={authorOpen}
+              bind:authorId
+              bind:solution={authorSolution}
+              bind:symptoms={authorSymptoms}
+              bind:suspected={authorSuspected}
+              bind:actionsJson={authorActionsJson}
+              bind:notes={authorNotes}
+              busy={authorBusy}
+              exportPreview={authorExportPreview}
+              message={authorMsg}
+              onSave={() => void saveAuthorCase()}
+              onCopyExport={() => void copyAuthorExport()}
+              onOpenFolder={() => void openAuthorExportFolder()}
+            />
           </section>
         {/if}
       </div>
