@@ -2585,15 +2585,30 @@
         ],
   );
   const signalGroups = $derived(
-    [
-      { title: "Entrypoint", hint: "Fabric/Quilt entrypoint failures", items: allSignals.filter((s) => s.kind === "Entrypoint") },
-      { title: "Loader mismatch", hint: "Wrong loader/API/version bridge", items: allSignals.filter((s) => s.kind === "LoaderMismatch" || s.kind === "WrongLoader") },
-      { title: "Mixin", hint: "Mixin apply / inject conflicts", items: allSignals.filter((s) => s.kind === "Mixin") },
-      { title: "OutOfMemory", hint: "Java heap / native OOM", items: allSignals.filter((s) => s.kind === "OutOfMemory") },
-      { title: "Render/OpenGL", hint: "Renderer, shader or GPU pipeline", items: allSignals.filter((s) => s.kind === "OpenGl") },
-      { title: "Ticking / world", hint: "Ticking entity or world corruption signals", items: allSignals.filter((s) => s.kind === "TickingEntity") },
-      { title: "Performance", hint: "Tick stalls and overload", items: allSignals.filter((s) => s.kind === "Performance") },
-    ].filter((group) => group.items.length > 0),
+    (() => {
+      const groups = [
+        { title: "Entrypoint", hint: "Fabric/Quilt entrypoint failures", kinds: ["Entrypoint"] },
+        { title: "Loader mismatch", hint: "Wrong loader/API/version bridge", kinds: ["LoaderMismatch", "WrongLoader"] },
+        { title: "Mixin", hint: "Mixin apply / inject conflicts", kinds: ["Mixin"] },
+        { title: "OutOfMemory", hint: "Java heap / native OOM", kinds: ["OutOfMemory"] },
+        { title: "Render/OpenGL", hint: "Renderer, shader or GPU pipeline", kinds: ["OpenGl"] },
+        { title: "Ticking / world", hint: "Ticking entity or world corruption signals", kinds: ["TickingEntity"] },
+        { title: "Performance", hint: "Tick stalls and overload", kinds: ["Performance"] },
+      ].map((group) => ({ ...group, items: [] as Evidence[] }));
+      const byKind = new Map<string, Evidence[]>();
+      for (const signal of allSignals) {
+        const bucket = byKind.get(signal.kind) ?? [];
+        bucket.push(signal);
+        byKind.set(signal.kind, bucket);
+      }
+      return groups
+        .map(({ title, hint, kinds }) => ({
+          title,
+          hint,
+          items: kinds.flatMap((kind) => byKind.get(kind) ?? []),
+        }))
+        .filter((group) => group.items.length > 0);
+    })(),
   );
 
   const cascadingFinding = $derived(

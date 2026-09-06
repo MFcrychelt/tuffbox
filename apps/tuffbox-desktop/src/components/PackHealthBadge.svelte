@@ -24,6 +24,10 @@
   let health = $state<Health | null>(null);
   let loading = $state(false);
   let lastPath: string | null = null;
+  // `lastPath` is only updated after a successful response, so it cannot
+  // prevent duplicate first-load requests. Track the in-flight project
+  // separately to avoid racing the badge and Diagnose refresh paths.
+  let activePath: string | null = null;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
   // Re-check when the project changes; refresh every 60 s while visible.
@@ -43,7 +47,8 @@
   });
 
   async function load(path: string) {
-    if (loading && lastPath === path) return;
+    if (activePath === path) return;
+    activePath = path;
     loading = true;
     try {
       const result = await api.diagnostics.getPackHealth(path);
@@ -54,7 +59,10 @@
     } catch {
       // best-effort: keep the previous snapshot, do not alarm the user
     } finally {
-      loading = false;
+      if (activePath === path) {
+        activePath = null;
+        loading = false;
+      }
     }
   }
 
