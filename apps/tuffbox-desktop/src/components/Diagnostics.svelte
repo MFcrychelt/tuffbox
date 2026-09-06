@@ -174,6 +174,11 @@
   const LATEST_LOG_SOURCE = "__latest_log__";
   const LAUNCHER_LOG_SOURCE = "__launcher_log__";
   let analysisBusy = $state(false);
+  // Monotonic client-side generation. Backend calls cannot always be
+  // cancelled (Ollama/network), so late results from an older refresh must
+  // never overwrite the currently selected report.
+  let analysisGeneration = 0;
+  const isCurrentAnalysis = (generation: number) => generation === analysisGeneration;
   /** Task #66: source id the last unified analysis ran against (dedupe key). */
   let lastAnalyzedSource = $state<string | null>(null);
   /** Main Health canvas tab. */
@@ -851,14 +856,16 @@
     if (file) void importExternalCrashFile(file);
   }
 
-  async function runCrashAssistant() {
+  async function runCrashAssistant(generation?: number) {
     if (!$projectPath) return;
+    const run = generation ?? ++analysisGeneration;
     crashLoading = true;
     try {
       const result: any = await invoke("run_crash_assistant_full", {
         path: $projectPath,
         reportId: activeReportId(),
       });
+      if (!isCurrentAnalysis(run)) return;
       crashFindings = result.findings ?? [];
       crashMcreator = result.mcreatorMods ?? [];
       crashClassFinder = result.classFinderResults ?? [];
@@ -868,7 +875,7 @@
     } catch (e) {
       error = String(e);
     } finally {
-      crashLoading = false;
+      if (isCurrentAnalysis(run)) crashLoading = false;
     }
   }
 
@@ -890,20 +897,24 @@
       return;
     }
     lastAnalyzedSource = source;
+    const run = ++analysisGeneration;
     analysisBusy = true;
     aiSoftError = null;
     try {
-      await runCrashAssistant();
+      await runCrashAssistant(run);
+      if (!isCurrentAnalysis(run)) return;
       try {
-        await runAiExplain({ quiet: true });
+        await runAiExplain({ quiet: true, runId: run });
       } catch (aiErr) {
+        if (!isCurrentAnalysis(run)) return;
         aiSoftError = String(aiErr);
         console.warn("[Diagnose] AI explain soft-fail:", aiErr);
       }
+      if (!isCurrentAnalysis(run)) return;
       // Single enrichment point, AFTER fresh AI results (fix #5).
       enrichCrashFindingsWithAi();
     } finally {
-      analysisBusy = false;
+      if (isCurrentAnalysis(run)) analysisBusy = false;
     }
   }
 
@@ -1124,8 +1135,9 @@
     setTimeout(() => void openEvidence(), 250);
   }
 
-  async function runAiExplain(opts: { quiet?: boolean } = {}) {
+  async function runAiExplain(opts: { quiet?: boolean; runId?: number } = {}) {
     if (!$projectPath) return;
+    const run = opts.runId ?? ++analysisGeneration;
     aiLoading = true;
     cascadeLiveStage = "l1_searching";
     if (!opts.quiet) error = null;
@@ -1155,13 +1167,16 @@
         path: $projectPath,
         reportId,
       });
+      if (!isCurrentAnalysis(run)) return;
       aiContext = context;
       aiPrompt = context.prompt ?? "";
       aiShowPrompt = false;
-      aiAnalysis = await invoke("analyze_crash_with_ai", {
+      const result = await invoke("analyze_crash_with_ai", {
         path: $projectPath,
         reportId,
       });
+      if (!isCurrentAnalysis(run)) return;
+      aiAnalysis = result;
       swarmEnabled = !!aiAnalysis?.swarmEnabled;
       enrichCrashFindingsWithAi();
       await loadPendingPlan();
@@ -1180,6 +1195,7 @@
         message = `AI analysis ready (${model}${similar ? `, ${similar} KB hit(s)` : ""}${stage}${miss}${spec}). Review before applying.`;
       }
     } catch (e) {
+      if (!isCurrentAnalysis(run)) return;
       const msg = String(e);
       aiAnalysis = null;
       if (opts.quiet) {
@@ -1197,8 +1213,10 @@
         error = msg;
       }
     } finally {
-      aiLoading = false;
-      cascadeLiveStage = null;
+      if (isCurrentAnalysis(run)) {
+        aiLoading = false;
+        cascadeLiveStage = null;
+      }
     }
   }
 
