@@ -61,6 +61,13 @@ Crash diagnosis, graph cache и Pack Health имеют разные cache keys �
 - cache miss защищён single-flight guard с повторной проверкой после ожидания: одновременные Badge/counts/Pack Health consumers не выполняют один cold graph build несколько раз.
 - Pack Health scan также получил single-flight guard внутри blocking pool: одновременные запросы не дублируют export, wrong-loader, duplicate и quest scans.
 
+## Выполненная структурная декомпозиция
+
+- Группа Advanced toolbar вынесена в `diagnostics/DiagnoseAdvancedToolbar.svelte`.
+- Triage, folders и scanner actions больше не живут в основном God-компоненте.
+- Родитель передаёт только state и callbacks, а child отвечает за rendering и button-level disabled/loading states.
+- Это создаёт границу для дальнейшего выделения Advanced tools и уменьшает связанность основной Diagnose view.
+
 ## Целевая реконструкция
 
 1. Вынести state machine в `diagnostics/store.ts`:

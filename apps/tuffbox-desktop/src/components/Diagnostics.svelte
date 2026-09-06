@@ -6,22 +6,14 @@
   import {
     Stethoscope,
     Play,
-    FolderOpen,
     RefreshCw,
     AlertCircle,
     AlertTriangle,
     Info,
-    FileText,
     History,
     Wrench,
-    Bug,
-    Download,
     Trash2,
     Database,
-    Copy,
-    Bot,
-    BookMarked,
-    Share2,
     ArrowDownToLine,
   } from "@lucide/svelte";
   import {
@@ -50,6 +42,7 @@
   import DiagnoseVerdictHero from "./diagnostics/DiagnoseVerdictHero.svelte";
   import DiagnoseProblemsList from "./diagnostics/DiagnoseProblemsList.svelte";
   import DiagnoseStatusBar from "./diagnostics/DiagnoseStatusBar.svelte";
+  import DiagnoseAdvancedToolbar from "./diagnostics/DiagnoseAdvancedToolbar.svelte";
   import { formatCascadeLabel } from "./diagnostics/cascadeLabel";
   import {
     buildUnifiedProblems,
@@ -3071,45 +3064,37 @@
       />
     {:else}
       <div class="dx-advanced panel">
-        <div class="tools-group">
-          <span class="tools-label">Triage</span>
-          <button class="ghost" onclick={() => runAiExplain()} disabled={!$projectPath || aiLoading || sessionOk}>
-            <Bot size={15} /> AI explain
-          </button>
-          <button class="ghost" onclick={shareCurrentLog} disabled={!$projectPath || sharingLog || !currentLogText}>
-            <Share2 size={15} /> {sharingLog ? "Sharing…" : "Share mclo.gs"}
-          </button>
-          <button class="ghost" onclick={exportSupportPack} disabled={!$projectPath || supportBusy}>
-            <Download size={15} /> {supportBusy ? "…" : "Support pack"}
-          </button>
-          <button class="ghost" onclick={copyCurrentLog} disabled={!currentLogText}>
-            <Copy size={15} /> Copy log
-          </button>
-        </div>
-        <div class="tools-group">
-          <span class="tools-label">Folders</span>
-          <button class="ghost" onclick={openFolder} disabled={!$projectPath}><FolderOpen size={15} /> Instance</button>
-          <button class="ghost" onclick={() => openSubdir("logs")} disabled={!$projectPath}><FileText size={15} /> logs/</button>
-          <button class="ghost" onclick={() => openSubdir("crash-reports")} disabled={!$projectPath}><Bug size={15} /> crashes/</button>
-        </div>
-        <div class="tools-group">
-          <span class="tools-label">Scanners</span>
-          <button class="ghost" onclick={createFixPlan} disabled={!$projectPath || planning}>{planning ? "…" : "Fix plan"}</button>
-          <button class="ghost" onclick={scanOreGen} disabled={!$projectPath || oreLoading}>{oreLoading ? "…" : "Ore gen"}</button>
-          <button class="ghost" onclick={scanDuplicateItems} disabled={!$projectPath || duplicateLoading}>{duplicateLoading ? "…" : "Duplicates"}</button>
-          <button class="ghost" onclick={generateUnify} disabled={!$projectPath || unifyLoading}>{unifyLoading ? "…" : "Unify"}</button>
-          <button class="ghost" onclick={() => detectWrongLoaderMods()} disabled={!$projectPath || wrongLoaderLoading}>Wrong jars</button>
-          <button class="ghost" onclick={() => detectDuplicateModJars()} disabled={!$projectPath || duplicateJarLoading}>
-            {duplicateJarLoading ? "Dupes…" : "Dup jars"}
-          </button>
-          <button class="ghost" onclick={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={!$projectPath || authorBusy}>
-            <BookMarked size={15} /> Save KB
-          </button>
-          <button class="ghost" onclick={() => (aiModalOpen = true)}><Bot size={15} /> AI settings</button>
-          {#if aiPrompt}
-            <button class="ghost" onclick={() => (aiShowPrompt = !aiShowPrompt)}>{aiShowPrompt ? "Hide" : "Show"} AI prompt</button>
-          {/if}
-        </div>
+        <DiagnoseAdvancedToolbar
+          projectPath={$projectPath}
+          aiLoading={aiLoading}
+          sessionOk={sessionOk}
+          sharingLog={sharingLog}
+          currentLogText={currentLogText}
+          supportBusy={supportBusy}
+          planning={planning}
+          oreLoading={oreLoading}
+          duplicateLoading={duplicateLoading}
+          unifyLoading={unifyLoading}
+          wrongLoaderLoading={wrongLoaderLoading}
+          duplicateJarLoading={duplicateJarLoading}
+          authorBusy={authorBusy}
+          aiPrompt={aiPrompt}
+          bind:aiShowPrompt
+          runAiExplain={() => void runAiExplain()}
+          shareCurrentLog={shareCurrentLog}
+          exportSupportPack={exportSupportPack}
+          copyCurrentLog={copyCurrentLog}
+          openFolder={openFolder}
+          openSubdir={openSubdir}
+          createFixPlan={() => void createFixPlan()}
+          scanOreGen={() => void scanOreGen()}
+          scanDuplicateItems={() => void scanDuplicateItems()}
+          generateUnify={() => void generateUnify()}
+          detectWrongLoaderMods={() => void detectWrongLoaderMods()}
+          detectDuplicateModJars={() => void detectDuplicateModJars()}
+          openAuthorForm={() => void openAuthorForm({ fromAnalysis: !!aiAnalysis })}
+          openAiSettings={() => (aiModalOpen = true)}
+        />
 
         <DiagnoseTriagePanels
           signalGroups={[]}
