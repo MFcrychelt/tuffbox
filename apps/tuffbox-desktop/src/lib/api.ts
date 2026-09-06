@@ -1673,6 +1673,20 @@ export const api = {
         ...rest,
       });
     },
+    searchContent(query: string, opts?: {
+      provider?: "modrinth" | "curseforge" | "both";
+      gameVersion?: string | null; loader?: string | null; contentType?: string | null;
+      page?: number; pageSize?: number; p?: string;
+    }) {
+      const { p, ...rest } = opts ?? {};
+      return cmd<{ results: SearchResult[]; total: number }>("search_content", {
+        ...pathArg(p), query, ...rest,
+      });
+    },
+    installContentBatch(contentIds: string[], provider: "modrinth" | "curseforge", side = "both", p?: string) {
+      return cmd<string[]>("install_content_batch", { ...pathArg(p), contentIds, provider, side });
+    },
+
     previewInstall(modId: string, p?: string) { return cmd<ModInstallPreview>("preview_modrinth_install", { ...pathArg(p), modId }); },
     previewCurseforgeInstall(modId: string, p?: string) {
       return cmd<ModInstallPreview>("preview_curseforge_install", { ...pathArg(p), modId });

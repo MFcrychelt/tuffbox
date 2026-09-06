@@ -1,6 +1,7 @@
 mod auth;
 mod cosmetics_local;
 mod cpu_affinity;
+mod resource_mode;
 mod create_mode_api;
 mod deep_link;
 mod file_manager;
@@ -961,6 +962,23 @@ async fn search_unified_mods(
     .map_err(|e| e.to_string())?
 }
 
+/// Provider-neutral catalog search used by the content browser. The unified provider
+/// keeps provider selection in the UI while preserving the existing search adapters.
+#[tauri::command(rename_all = "camelCase")]
+async fn search_content(
+    path: String,
+    query: String,
+    provider: Option<String>,
+    game_version: Option<String>,
+    loader: Option<String>,
+    content_type: Option<String>,
+    page: Option<u32>,
+    page_size: Option<u32>,
+) -> Result<PagedCatalog, String> {
+    let _provider = provider.unwrap_or_else(|| "both".to_string());
+    search_unified_mods(path, query, game_version, loader, content_type, page, page_size).await
+}
+
 #[tauri::command(rename_all = "camelCase")]
 async fn search_modrinth_mods(
     path: String,
@@ -1905,6 +1923,24 @@ async fn install_steam_bridge(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Batch install entry point for the content browser. It delegates to the
+/// provider-specific installers so dependency resolution and snapshots remain
+/// identical to the existing single-provider actions.
+#[tauri::command(rename_all = "camelCase")]
+async fn install_content_batch(
+    app: tauri::AppHandle,
+    path: String,
+    provider: String,
+    content_ids: Vec<String>,
+    side: Option<String>,
+) -> Result<Vec<String>, String> {
+    let side = side.unwrap_or_else(|| "both".to_string());
+    match provider.as_str() {
+        "curseforge" => add_curseforge_mods_with_dependencies(app, path, content_ids, side).await,
+        _ => add_modrinth_mods_with_dependencies(app, path, content_ids, side, None).await,
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -14300,6 +14336,14 @@ fn build_and_spawn(
         LaunchErrorInfo::new(kind, msg).with_log(&console_log)
     })?;
 
+    // Give Java the scheduler budget while it is running. On Windows this
+    // enters background CPU/I/O mode for TuffBox only and restores the exact
+    // previous priority after this Java PID exits. Java itself is not lowered.
+    match resource_mode::enter_for_game(running.pid) {
+        Ok(()) => progress.log("# Launcher resource mode: background until Minecraft exits"),
+        Err(e) => progress.log(&format!("# WARNING: launcher resource mode: {e}")),
+    }
+
     // CPU affinity (performance-core pinning) — best effort, never blocks the game.
     let affinity_cfg = cpu_affinity::AffinityConfig {
         mode: launch_settings.cpu_affinity_mode.clone(),
@@ -18198,6 +18242,7 @@ pub fn run() {
             list_mods,
             sync_mods_folder,
             import_local_content_files,
+            search_content,
             search_modrinth_mods,
             search_modpack_index,
             list_modpack_index_categories,
@@ -18221,6 +18266,7 @@ pub fn run() {
             rename_mod_list,
             add_to_mod_list,
             remove_from_mod_list,
+            install_content_batch,
             add_modrinth_mod,
             add_modrinth_mod_with_dependencies,
             add_modrinth_mods_with_dependencies,

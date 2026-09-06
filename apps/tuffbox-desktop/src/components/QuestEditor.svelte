@@ -8,6 +8,7 @@
   import ChapterRail from "./quests/ChapterRail.svelte";
   import { SvelteFlowProvider } from "@xyflow/svelte";
   import QuestCanvas from "./quests/QuestCanvas.svelte";
+  import QuestToolbar from "./QuestToolbar.svelte";
   import QuestInspector from "./quests/QuestInspector.svelte";
   import ChapterSettings from "./quests/ChapterSettings.svelte";
   import RewardTablesPanel from "./quests/RewardTablesPanel.svelte";
@@ -173,6 +174,7 @@
   let bookMenuOpen = $state(false);
   let issuesOpen = $state(false);
   let progressOpen = $state(false);
+  let editorMode = $state("Quests");
 
   // Phase C — player progress overlay (read-only) + G-Playtest simulate
   let progressTeams = $state<QuestProgressTeamRef[]>([]);
@@ -194,8 +196,10 @@
   let clipboard = $state<QuestData[]>([]);
   let showShortcuts = $state(false);
   let panelTab = $state<"quest" | "info" | "batch" | "colors" | "raw">("info");
-  let railWidth = $state(200);
-  let inspWidth = $state(300);
+  let railWidth = $state(164);
+  let inspWidth = $state(320);
+  let railCollapsed = $state(false);
+  let inspectorCollapsed = $state(false);
   let validateTimer: ReturnType<typeof setTimeout> | null = null;
   let itemCatalogCache = $state<Set<string> | null>(null);
   let snbtDiffOpen = $state(false);
@@ -2006,218 +2010,24 @@
 <svelte:window onkeydown={handleKeydown} onpointerdowncapture={onWindowPointerDown} />
 
 <div class="qe ftbq flex w-full min-h-0 flex-col bg-black/30 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] p-3">
-<div class="qe-tb flex items-center gap-2 flex-wrap shrink-0 justify-between mb-1 px-3 py-[7px] min-h-11 max-h-[52px]">
-    <div class="qe-title flex items-center gap-2 flex-wrap min-w-0">
-      <ScrollText size={18} />
-      {#if bookTitle}<span class="book-name">{stripMc(bookTitle)}</span>{:else}Quest editor{/if}
-      {#if $projectPath}
-        <span class="tb-chip">{chapters.length} ch</span>
-        <span class="tb-chip">{totalQuests} quests</span>
-        <div class="issues-wrap">
-          <button
-            type="button"
-            class="issues-btn"
-            class:warn={validationIssues.length > 0}
-            aria-haspopup="true"
-            aria-expanded={issuesOpen}
-            aria-controls="quest-issues-pop"
-            onclick={() => (issuesOpen = !issuesOpen)}
-          >
-            {#if validationIssues.length === 0}
-              <CheckCircle2 size={12} /> Live
-            {:else}
-              <AlertTriangle size={12} /> {validationIssues.length} live
-            {/if}
-          </button>
-          {#if issuesOpen}
-            <div class="issues-pop" id="quest-issues-pop" role="listbox" aria-label="Validation issues">
-              {#if validationIssues.length > 0}
-                {#each validationIssues as iss, i (`${iss.questId}-${i}`)}
-                  <button type="button" class="issue-row" onclick={() => jumpToIssue(iss)}>
-                    <code>{iss.questId.slice(0, 8)}</code>
-                    <span>{iss.message}</span>
-                  </button>
-                {/each}
-              {:else}
-                <div class="issues-ok"><CheckCircle2 size={12} /> No issues found</div>
-              {/if}
-              <div class="issues-pop-sep"></div>
-              <button
-                type="button"
-                class="issue-row action"
-                title="Re-run Rust validate_quest_book on disk (saved SNBT)"
-                onclick={() => void revalidateFromDisk()}
-              >
-                <RefreshCw size={12} /> Re-run validation on disk
-              </button>
-            </div>
-          {/if}
-        </div>
-        {#if progressSnap && progressOverlay}
-          <span class="tb-chip prog-stat"
-            >{progressSnap.completedCount} done · {progressSnap.startedCount} started</span
-          >
-        {/if}
-      {/if}
-    </div>
-    <div class="qe-actions flex items-center gap-2 flex-wrap">
-      <div class="tb-btn-group">
-        <button
-          type="button"
-          class="ghost"
-          class:active={aiSidebarOpen}
-          title="Quest AI sidebar"
-          aria-label="Quest AI sidebar"
-          onclick={() => setAiSidebar(!aiSidebarOpen)}
-        >
-          <Sparkles size={16} /> AI
-        </button>
-        <button
-          type="button"
-          class="ghost"
-          disabled={!canUndo(history)}
-          title="Undo (Ctrl+Z)"
-          aria-label="Undo (Ctrl+Z)"
-          onclick={handleUndo}
-        >
-          <Undo2 size={16} />
-        </button>
-        <button
-          type="button"
-          class="ghost"
-          disabled={!canRedo(history)}
-          title="Redo (Ctrl+Y)"
-          aria-label="Redo (Ctrl+Y)"
-          onclick={handleRedo}
-        >
-          <Redo2 size={16} />
-        </button>
-        <button
-          type="button"
-          class="ghost"
-          title="Shortcuts (Ctrl+/)"
-          aria-label="Shortcuts (Ctrl+/)"
-          onclick={() => (showShortcuts = !showShortcuts)}
-        >
-          <Keyboard size={16} />
-        </button>
-        <button
-          type="button"
-          class="ghost"
-          onclick={requestReload}
-          disabled={!$projectPath || loading}
-          title="Reload from disk"
-          aria-label="Reload from disk"
-        >
-          <RefreshCw size={16} class={loading ? "spin" : ""} />
-        </button>
-        <div class="tb-pop">
-          <button
-            type="button"
-            class="ghost"
-            class:active={bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel}
-            class:has-dirty={bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}
-            title="Book, groups, reward tables, locales, KubeJS"
-            aria-haspopup="menu"
-            aria-expanded={bookMenuOpen}
-            aria-controls="quest-book-menu"
-            onclick={() => {
-              const chromeOpen =
-                bookMenuOpen ||
-                showBookPanel ||
-                showGroupsPanel ||
-                showTablesPanel ||
-                showLocalePanel ||
-                showKubeJsPanel;
-              if (chromeOpen) {
-                closeBookChrome();
-              } else {
-                bookMenuOpen = true;
-              }
-            }}
-          >
-            <MoreHorizontal size={16} />
-            {#if bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
-          </button>
-          {#if bookMenuOpen && $projectPath}
-            <div class="book-menu" id="quest-book-menu" role="menu">
-              {#if availableLocales.length > 1}
-                <label class="menu-locale">
-                  <Globe size={14} />
-                  <select
-                    class="locale-select"
-                    value={activeLocale ?? ""}
-                    title="Language overlay (lang/*.snbt)"
-                    onchange={(e) => {
-                      const v = (e.currentTarget as HTMLSelectElement).value;
-                      if (v) switchLocale(v);
-                    }}
-                  >
-                    {#each availableLocales as code (code)}
-                      <option value={code}>{code}{#if dirtyLocales.has(code)} ●{/if}</option>
-                    {/each}
-                  </select>
-                </label>
-                <div class="menu-sep"></div>
-              {/if}
-              <button
-                type="button"
-                role="menuitem"
-                class:active={showBookPanel}
-                onclick={() => openBookDrawer("book")}
-              >
-                Book settings{#if bookDirty}<span class="dot-mini">●</span>{/if}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                class:active={showGroupsPanel}
-                onclick={() => openBookDrawer("groups")}
-              >
-                Chapter groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                class:active={showTablesPanel}
-                onclick={() => openBookDrawer("tables")}
-              >
-                Reward tables{#if rewardTablesDirty}<span class="dot-mini">●</span>{/if}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                class:active={showLocalePanel}
-                onclick={() => openBookDrawer("locales")}
-              >
-                Locales{#if dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                class:active={showKubeJsPanel}
-                onclick={() => openBookDrawer("kubejs")}
-              >
-                KubeJS
-              </button>
-            </div>
-          {/if}
-        </div>
-      </div>
-      {#if hasDirty}
-        <span class="dirty-badge"
-          >{dirtyChapters.size +
-            (rewardTablesDirty ? 1 : 0) +
-            (bookDirty ? 1 : 0) +
-            (groupsDirty ? 1 : 0) +
-            dirtyLocales.size} unsaved</span
-        >
-        <button type="button" class="primary" onclick={saveAll} disabled={!$projectPath || saving} title="Ctrl+S">
-          <Save size={16} class={saving ? "spin" : ""} /> {saving ? "Saving…" : "Save all"}
-        </button>
-      {/if}
-    </div>
-  </div>
+<QuestToolbar
+    title={bookTitle ? stripMc(bookTitle) : "Quest editor"}
+    chapterCount={chapters.length}
+    questCount={totalQuests}
+    dirty={hasDirty}
+    saving={saving}
+    hasErrors={validationIssues.length > 0}
+    mode={editorMode}
+    {railCollapsed}
+    {inspectorCollapsed}
+    onModeChange={(mode) => (editorMode = mode)}
+    onToggleRail={() => (railCollapsed = !railCollapsed)}
+    onToggleInspector={() => (inspectorCollapsed = !inspectorCollapsed)}
+    onSave={() => void saveAll()}
+    onAi={() => setAiSidebar(true)}
+    onRefresh={() => void requestReload()}
+    onSearch={() => (search = { ...search, isOpen: true })}
+  />
 
   {#if applyNeedsSave && hasDirty}
     <div class="apply-save-banner" role="status">
@@ -2367,8 +2177,10 @@
     <div class="qe-body-row flex flex-1 min-h-0 items-stretch overflow-hidden">
     <div
       class="qe-lay"
-      class:with-insp={!!selectedChapterObj}
-      style="--qe-rail: {railWidth}px; --qe-insp: {inspWidth}px;"
+      class:with-insp={!!selectedChapterObj && !inspectorCollapsed}
+      class:rail-collapsed={railCollapsed}
+      class:inspector-collapsed={inspectorCollapsed || !selectedChapterObj}
+      style="--qe-rail: {railCollapsed ? 0 : railWidth}px; --qe-insp: {inspWidth}px;"
     >
       <ChapterRail
         {chapters}
@@ -2458,7 +2270,7 @@
           />
         </SvelteFlowProvider>
       </div>
-      {#if selectedChapterObj}
+      {#if selectedChapterObj && !inspectorCollapsed}
         <div
           class="col-resizer"
           role="separator"
@@ -3426,6 +3238,21 @@
   }
   .qe-lay.with-insp {
     grid-template-columns: var(--qe-rail, 200px) 4px 1fr 4px var(--qe-insp, 300px);
+  }
+  .qe-lay.rail-collapsed > .ftbq-rail,
+  .qe-lay.rail-collapsed > .col-resizer:first-of-type {
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .qe-lay.inspector-collapsed > .side-panel,
+  .qe-lay.inspector-collapsed > .col-resizer:last-of-type {
+    display: none;
+  }
+  .qe-lay.rail-collapsed {
+    grid-template-columns: 0 0 1fr;
+  }
+  .qe-lay.rail-collapsed.with-insp {
+    grid-template-columns: 0 0 1fr 4px var(--qe-insp, 300px);
   }
   .col-resizer {
     width: 4px;

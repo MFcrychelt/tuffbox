@@ -5,6 +5,7 @@
     ArrowRightLeft, Clock, Zap, Hand, ShieldAlert, Database,
   } from "@lucide/svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import SnapshotItem from "./SnapshotItem.svelte";
   import EmptyState from "./EmptyState.svelte";
   import {
     api,
@@ -37,6 +38,7 @@
   let detail = $state<SnapshotDetail | null>(null);
   let detailLoading = $state(false);
   let search = $state("");
+  let searchInput = $state<HTMLInputElement | null>(null);
   let filterKind = $state<"all" | "auto" | "manual" | "crash">("all");
   let backupsOpen = $state(false);
   let compareOpen = $state(false);
@@ -187,6 +189,24 @@
     if (s.name?.startsWith("auto-before-")) return s.name.slice("auto-before-".length);
     if (s.tags?.includes("crash_fix")) return "crash_fix";
     return s.name || "snapshot";
+  }
+
+  /** Keep implementation ids out of the primary history label. */
+  function friendlySnapshotTitle(s: Snapshot): string {
+    const operation = operationLabel(s).toLowerCase().replaceAll("_", "-");
+    const summary = s.actionsSummary?.find(Boolean)?.trim();
+    if (summary) {
+      return summary
+        .replace(/^(auto[- ]?before[- ]?)/i, "")
+        .replace(/^(update|updated)\s+/i, "Updated ");
+    }
+    if (operation.includes("update-mod")) return "Mod update";
+    if (operation.includes("add-mod")) return "Mod added";
+    if (operation.includes("remove-mod")) return "Mod removed";
+    if (operation.includes("disable")) return "Mod disabled";
+    if (operation.includes("crash")) return "Crash recovery";
+    if (s.name?.startsWith("auto-before-")) return "Automatic checkpoint";
+    return s.name || "Snapshot";
   }
 
   function isCrash(s: Snapshot) {
@@ -498,6 +518,14 @@
     }
   }
 
+  function focusSearch(event: KeyboardEvent) {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      searchInput?.focus();
+      searchInput?.select();
+    }
+  }
+
   function lineClass(line: string) {
     if (line.startsWith("+ ")) return "added";
     if (line.startsWith("- ")) return "removed";
@@ -529,6 +557,8 @@
   });
 </script>
 
+<svelte:window onkeydown={focusSearch} />
+
 <div class="snapshots flex flex-col gap-3.5 h-full min-h-0 w-full max-w-[1440px] mx-auto box-border bg-black/30 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] p-6">
   <!-- ── Toolbar ─────────────────────────────────────────────── -->
   <div class="flex justify-between items-center gap-4 flex-wrap shrink-0">
@@ -540,16 +570,15 @@
       <p class="m-0 text-[var(--text-muted)] text-[13px]">Checkpoints of your pack — roll back to any saved state</p>
     </div>
     <div class="flex items-center gap-2.5 flex-wrap">
-      <div class="flex items-center gap-2">
+      <div class="quick-save" aria-label="Create a snapshot">
+        <History size={17} class="quick-save-icon" />
         <input
-          class="min-w-[200px] max-w-[300px]"
           bind:value={newName}
-          placeholder="Snapshot name"
+          placeholder="Название точки сохранения..."
           onkeydown={(e) => e.key === "Enter" && !loading && ($projectPath ? create() : null)}
         />
-        <button onclick={create} disabled={!$projectPath || loading} title="Create a safety snapshot of the current state">
-          <Plus size={16} />
-          Snapshot
+        <button class="quick-save-action" onclick={create} disabled={!$projectPath || loading} title="Create a safety snapshot of the current state">
+          <Plus size={16} /> Save point
         </button>
       </div>
       <button class="ghost w-[38px] h-[38px] p-0 shrink-0 justify-center" onclick={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
@@ -573,22 +602,22 @@
       <button type="button" class="filter-card {filterKind === "all" ? "active" : ""}" onclick={() => (filterKind = "all")}>
         <Database size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.all }</span>
-        <span>All</span>
+        <span>Все</span>
       </button>
       <button type="button" class="filter-card {filterKind === "auto" ? "active" : ""}" onclick={() => (filterKind = "auto")}>
         <Zap size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.auto }</span>
-        <span>Auto</span>
+        <span>Автоматические</span>
       </button>
       <button type="button" class="filter-card {filterKind === "manual" ? "active" : ""}" onclick={() => (filterKind = "manual")}>
         <Hand size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.manual }</span>
-        <span>Manual</span>
+        <span>Ручные</span>
       </button>
       <button type="button" class="filter-card {filterKind === "crash" ? "active" : ""}" onclick={() => (filterKind = "crash")}>
         <ShieldAlert size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.crash }</span>
-        <span>Crash fix</span>
+        <span>Сбои</span>
       </button>
     </div>
 
@@ -596,54 +625,28 @@
     <div class="flex gap-3 items-center shrink-0">
       <div class="flex-1 min-w-[240px] flex items-center gap-2 bg-black/40 border border-white/10 rounded-[var(--border-radius-md)] px-2.5 text-[var(--text-muted)] focus-within:border-emerald-500/50 focus-within:ring-1 focus-within:ring-emerald-500/30">
         <Search size={15} />
-        <input class="flex-1 border-0 bg-transparent text-[var(--text-primary)] py-2.5 outline-none min-w-0 text-[13px]" bind:value={search} placeholder="Search name, actions, tags…" />
+        <input bind:this={searchInput} class="flex-1 border-0 bg-transparent text-[var(--text-primary)] py-2.5 outline-none min-w-0 text-[13px]" bind:value={search} placeholder="Search snapshots, actions, tags…" aria-label="Search snapshots" />
+        <kbd>Ctrl F</kbd>
       </div>
-      <span class="text-[var(--text-muted)] text-[13px] whitespace-nowrap">{ filtered.length } of { snapshots.length }</span>
+      <span class="text-[var(--text-muted)] text-[13px] whitespace-nowrap tabular-nums">{ filtered.length } of { snapshots.length }</span>
     </div>
 
     <!-- ── Master / detail ─────────────────────────────────────── -->
     <div class="grid grid-cols-[minmax(300px,380px)_minmax(0,1fr)] max-[900px]:grid-cols-1 gap-3.5 flex-1 min-h-0">
-      <aside class="overflow-auto min-h-0 p-2 flex flex-col gap-1.5 bg-white/[0.03] border border-white/[0.08] backdrop-blur-md rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable]">
+      <aside class="overflow-auto min-h-0 p-2.5 flex flex-col gap-2 bg-white/[0.03] border border-white/[0.08] backdrop-blur-md rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable]">
         {#each filtered as s (s.id)}
           {@const kind = kindOf(s)}
-          <button
-            type="button"
-            class="w-full text-left rounded-[var(--border-radius-md)] border px-3 py-3 flex gap-2.5 cursor-pointer transition-colors duration-150 { selectedId === s.id
-              ? kind === "crash"
-                ? "bg-[rgba(245,158,11,0.08)] border-[rgba(245,158,11,0.35)] text-[var(--text-primary)] border-l-[3px] border-l-[#f59e0b]"
-                : kind === "auto"
-                  ? "bg-[rgba(147,197,253,0.07)] border-[rgba(147,197,253,0.35)] text-[var(--text-primary)] border-l-[3px] border-l-[#93c5fd]"
-                  : "bg-[color-mix(in_srgb,var(--accent-primary)_8%,var(--bg-tertiary))] border-[color-mix(in_srgb,var(--accent-primary)_32%,var(--border-color))] text-[var(--text-primary)] border-l-[3px] border-l-[var(--accent-primary)]"
-              : "border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" }"
-            onclick={() => selectSnapshot(s.id)}
-          >
-            <span class="w-2 h-2 rounded-full shrink-0 mt-[7px] {
-              kind === "auto" ? "bg-[#93c5fd] shadow-[0_0_0_3px_rgba(147,197,253,0.16)]"
-              : kind === "crash" ? "bg-[#f59e0b] shadow-[0_0_0_3px_rgba(245,158,11,0.16)]"
-              : "bg-[var(--accent-primary)] shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent-primary)_16%,transparent)]"
-            }" aria-hidden="true"></span>
-            <div class="min-w-0 flex-1 grid gap-1.5">
-              <div class="flex justify-between gap-2 items-start min-w-0">
-                <strong class="text-[13.5px] text-[var(--text-primary)] max-w-full tb-truncate">{ s.name }</strong>
-                <span class="text-[10.5px] px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-muted)] font-mono max-w-[130px] shrink-0 tb-truncate">{ operationLabel(s) }</span>
-              </div>
-              <p class="m-0 text-[12.5px] text-[var(--text-muted)] leading-snug line-clamp-2">{ previewLine(s) }</p>
-              <div class="flex items-center gap-2 text-[11.5px] text-[var(--text-muted)] flex-wrap">
-                <span class="kind-tag { kind }">{ kindLabel(kind) }</span>
-                <span class="inline-flex items-center gap-1"><Clock size={12} /> { formatDate(s.createdAt) }</span>
-                {#if changedCount(s) > 0}
-                  <span class="inline-flex items-center gap-1"><FileText size={12} /> { changedCount(s) }</span>
-                {/if}
-                {#if s.tags?.length}
-                  <span class="flex gap-1 flex-wrap">
-                    {#each s.tags as t}
-                      <span class="tag" class:crash-fix={ t === "crash_fix" }>{ t }</span>
-                    {/each}
-                  </span>
-                {/if}
-              </div>
-            </div>
-          </button>
+          <SnapshotItem
+            snapshot={s}
+            selected={selectedId === s.id}
+            kind={kind}
+            title={friendlySnapshotTitle(s)}
+            operation={operationLabel(s)}
+            preview={previewLine(s)}
+            date={formatDate(s.createdAt)}
+            changedCount={changedCount(s)}
+            onSelect={() => selectSnapshot(s.id)}
+          />
         {:else}
           <div class="text-[var(--text-muted)] text-[13px] p-6">No snapshots match filters.</div>
         {/each}
@@ -662,7 +665,7 @@
           <div class="flex justify-between gap-3.5 flex-wrap items-start">
             <div class="min-w-0">
               <div class="flex items-center gap-2.5 flex-wrap">
-                <h2 class="m-0 text-[20px] leading-tight [overflow-wrap:anywhere] text-[var(--text-primary)]">{ s.name }</h2>
+                <h2 class="m-0 text-[20px] leading-tight [overflow-wrap:anywhere] text-[var(--text-primary)]">{ friendlySnapshotTitle(s) }</h2>
                 <span class="kind-pill { detailKind }">{ kindLabel(detailKind) }</span>
               </div>
               <div class="flex items-center gap-2 flex-wrap mt-1.5">
@@ -707,7 +710,7 @@
           {#if detail.manifestOnly}
             <div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] border text-[13px] leading-snug inline-flex items-center gap-2 text-[#fcd34d] bg-[rgba(245,158,11,0.08)] border-[rgba(245,158,11,0.28)]">
               <AlertTriangle size={15} />
-              <span><strong>Checkpoint without file copies.</strong> Rollback restores the manifest but not mod jars from this snapshot.</span>
+              <span><strong>Manifest-only checkpoint.</strong> File copies were skipped because the project uses deduplication and hardlinks. Rollback restores the manifest, but not mod jars from this snapshot.</span>
             </div>
           {/if}
 
@@ -1030,6 +1033,25 @@
 </div>
 
 <style>
+  .quick-save {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 42px;
+    padding: 4px 5px 4px 12px;
+    border: 1px solid rgba(52, 211, 153, .35);
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(16,185,129,.14), rgba(16,185,129,.035));
+    box-shadow: 0 0 22px rgba(16,185,129,.08), inset 0 1px 0 rgba(255,255,255,.08);
+  }
+  .quick-save-icon { color: #34d399; flex: 0 0 auto; }
+  .quick-save input { min-width: 190px; width: 220px; padding: 8px 4px; border: 0; outline: 0; background: transparent; color: var(--text-primary); }
+  .quick-save input::placeholder { color: color-mix(in srgb, var(--text-muted) 85%, transparent); }
+  :global(.snapshots) .quick-save-action { min-height: 34px; padding: 7px 12px; border: 0; border-radius: 8px; background: #10b981; color: #04130e; font-weight: 800; }
+  :global(.snapshots) .quick-save-action:hover:not(:disabled) { background: #34d399; box-shadow: 0 0 14px rgba(52,211,153,.3); }
+  .quick-save-action:disabled { opacity: .5; }
+  .search-kbd, kbd { padding: 2px 6px; border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-muted); font: 10px ui-monospace, SFMono-Regular, monospace; white-space: nowrap; }
+
   /* Layout comes from Tailwind utilities. Scoped styles only for
      pieces Tailwind can't express: shared app button skins used here
      (ghost/secondary/danger/mini are defined app-wide), the Ore-style

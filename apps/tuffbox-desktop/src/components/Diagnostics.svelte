@@ -176,15 +176,16 @@
   // Coalesce load-triggered enrichments into one post-paint job. Source/path
   // changes can otherwise schedule multiple Crash Assistant + AI cascades
   // before the first result has even reached the UI.
-  function scheduleUnifiedAnalysis() {
+  function scheduleUnifiedAnalysis(includeAi = false) {
     if (analysisKickoff) clearTimeout(analysisKickoff);
     analysisKickoff = setTimeout(() => {
       analysisKickoff = undefined;
-      void runUnifiedAnalysis();
+      void runUnifiedAnalysis({ includeAi });
     }, 32);
   }
-  /** Task #66: source id the last unified analysis ran against (dedupe key). */
-  let lastAnalyzedSource = $state<string | null>(null);
+  /** Separate dedupe keys let base rules stay cheap while AI remains opt-in. */
+  let lastRulesSource = $state<string | null>(null);
+  let lastAiSource = $state<string | null>(null);
   /** Main Health canvas tab. */
   let mainTab = $state<"problems" | "evidence" | "ai" | "advanced">("problems");
   /** After a fix: ask user to verify with Test launch. */
@@ -270,7 +271,8 @@
       // The backend cascade may still be running (no client-side cancel).
       // Forget the source stamp so a refresh re-runs analysis instead of
       // trusting state from a run whose results will land out of order.
-      lastAnalyzedSource = null;
+      lastRulesSource = null;
+      lastAiSource = null;
       clearInterval(diagnoseWatch);
       diagnoseWatch = undefined;
       diagnoseBusySince = 0;
@@ -377,7 +379,8 @@
     preferLatestLog = true;
     selectedReportId = "";
     appliedProblemIds = new Set();
-    lastAnalyzedSource = null; // new project → force a fresh unified analysis
+    lastRulesSource = null;
+    lastAiSource = null; // new project → force a fresh unified analysis
     crashFindings = [];
     aiAnalysis = null;
     void load(true);
@@ -898,36 +901,32 @@
    * Task #66: with force=false (tab open / reload) reuse the previous run's
    * results when the log source hasn't changed — re-running the full AI
    * cascade on every tab visit made the tab appear stuck in "Analyzing…". */
-  async function runUnifiedAnalysis(opts: { force?: boolean } = {}) {
+  async function runUnifiedAnalysis(opts: { force?: boolean; includeAi?: boolean } = {}) {
     if (!$projectPath || analysisBusy) return;
     const source = activeReportId();
-    // Task #66 + retry-loop guard: with force=false reuse previous results
-    // when the source is unchanged AND the previous run produced anything
-    // (findings or an AI plan). Re-running the full AI cascade on every tab
-    // visit made the tab appear stuck in "Analyzing…"; but also don't retry
-    // an already-failed source forever (soft-fail left both empty).
-    const previousFailed = lastAnalyzedSource === source && !crashFindings.length && !aiAnalysis && !!aiSoftError;
-    if (previousFailed) return;
-    if (!opts.force && lastAnalyzedSource === source && (crashFindings.length > 0 || aiAnalysis)) {
-      return;
-    }
-    lastAnalyzedSource = source;
+    const includeAi = opts.includeAi ?? true;
+    if (!opts.force && !includeAi && lastRulesSource === source) return;
+    if (!opts.force && includeAi && lastAiSource === source && (aiAnalysis || aiSoftError)) return;
+    lastRulesSource = source;
     const run = ++analysisGeneration;
     analysisBusy = true;
     aiSoftError = null;
     try {
       await runCrashAssistant(run);
       if (!isCurrentAnalysis(run)) return;
+      if (!includeAi) return;
       try {
         await runAiExplain({ quiet: true, runId: run });
       } catch (aiErr) {
         if (!isCurrentAnalysis(run)) return;
         aiSoftError = String(aiErr);
+        lastAiSource = source;
         console.warn("[Diagnose] AI explain soft-fail:", aiErr);
       }
       if (!isCurrentAnalysis(run)) return;
       // Single enrichment point, AFTER fresh AI results (fix #5).
       enrichCrashFindingsWithAi();
+      lastAiSource = source;
     } finally {
       if (isCurrentAnalysis(run)) analysisBusy = false;
     }
@@ -2643,6 +2642,16 @@
       }
     }
     onProjectPathChange(path);
+  });
+
+  // AI is CPU-heavy (especially with local Ollama). Base rule diagnostics
+  // run on load, while AI enrichment starts only when the AI tab is opened or
+  // the user explicitly presses AI explain.
+  $effect(() => {
+    const path = $projectPath;
+    if (mainTab === "ai" && path && diagnosis && !sessionOk && !aiAnalysis && !aiSoftError && !analysisBusy) {
+      scheduleUnifiedAnalysis(true);
+    }
   });
 
   // Advanced tools are independent of the base diagnosis. Do not query the

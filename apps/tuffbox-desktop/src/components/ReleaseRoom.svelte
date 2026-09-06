@@ -1,11 +1,13 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Rocket, RefreshCw, Tag, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen, FolderTree, Save, UploadCloud } from "@lucide/svelte";
+  import { Rocket, RefreshCw, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen, FolderTree, UploadCloud } from "@lucide/svelte";
   import { api } from "../lib/api";
   import { projectPath, projectInfo, recentProjects } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
-  import GithubPackTransport from "./GithubPackTransport.svelte";
+  import ReleaseMetrics from "./ReleaseMetrics.svelte";
+  import ChangelogEditor from "./ChangelogEditor.svelte";
+  import PublishPlatformsConfig from "./PublishPlatformsConfig.svelte";
 
   type Issue = { severity: "error" | "warning"; code: string; message: string; target?: string | null };
   type Artifact = { id: string; kind: string; path: string; createdAt: string; fileCount: number; overrideCount: number };
@@ -47,6 +49,7 @@
   let publishingTarget = $state<string | null>(null);
   let publishResults = $state<Record<string, PublishResult>>({});
   let publishErrors = $state<Record<string, string>>({});
+  let selectedTargets = $state<Record<string, boolean>>({ github: true, modrinth: true, curseforge: true });
 
   let exportLoading = $state<string | null>(null);
   let githubRelease = $state<any>(null);
@@ -181,6 +184,16 @@
     }
   }
 
+  async function publishAllSelected() {
+    for (const target of ["github", "modrinth", "curseforge"]) {
+      if (selectedTargets[target] && canPublish(target)) await publish(target);
+    }
+  }
+
+  function showPublishSummary() {
+    message = `Dry-run: ${Object.entries(selectedTargets).filter(([, selected]) => selected).map(([target]) => target).join(", ") || "no channels selected"}.`;
+  }
+
   async function openPublishUrl(url?: string | null) {
     if (!url) return;
     try {
@@ -261,6 +274,11 @@
     } catch (e) {
       error = String(e);
     }
+  }
+
+  function incrementVersion(part: "patch" | "minor" | "major") {
+    const [major = 0, minor = 0, patch = 0] = version.split(".").map((value) => Number.parseInt(value, 10) || 0);
+    version = part === "major" ? `${major + 1}.0.0` : part === "minor" ? `${major}.${minor + 1}.0` : `${major}.${minor}.${patch + 1}`;
   }
 
   async function saveVersion() {
@@ -369,48 +387,21 @@
     <div class="layout">
       <section class="panel release-panel">
         <h2>Version & ship</h2>
-        <label>
-          Release version
-          <div class="version-row">
-            <input bind:value={version} placeholder="1.0.0" />
-            <button class="secondary" onclick={saveVersion} disabled={loading || !version.trim()}>
-              <Tag size={16} /> Save version
-            </button>
-          </div>
-        </label>
+        <ReleaseMetrics
+          bind:version
+          changedMods={warningCount + errorCount}
+          components={changelog.split("\n").filter(Boolean).length}
+          onSave={saveVersion}
+          onIncrement={incrementVersion}
+        />
 
-        <div class="scorecards">
-          <div class:error-card={errorCount > 0}><strong>{errorCount}</strong><span>blocking errors</span></div>
-          <div class:warning-card={warningCount > 0}><strong>{warningCount}</strong><span>warnings</span></div>
-          <div><strong>{changelog.split("\n").filter(Boolean).length}</strong><span>changelog lines</span></div>
-        </div>
-
-        <div class="publish-config">
-          <h3>Publish config</h3>
-          <p class="config-hint">Per-project IDs used by Publish. Tokens stay in Settings → Integrations.</p>
-          <label>
-            GitHub repository
-            <input bind:value={publishConfig.githubRepository} placeholder="owner/repository" />
-          </label>
-          <GithubPackTransport bind:repository={publishConfig.githubRepository} />
-          <label>
-            Modrinth project id / slug
-            <input bind:value={publishConfig.modrinthProjectId} placeholder="project-slug" />
-          </label>
-          <label>
-            CurseForge project id
-            <input bind:value={publishConfig.curseforgeProjectId} placeholder="123456" />
-          </label>
-          <label>
-            CurseForge game version ids
-            <input bind:value={curseforgeGameVersionIdsText} placeholder="9008, 9990" />
-          </label>
-          <div class="target-actions">
-            <button class="secondary mini" onclick={savePublishConfig} disabled={configSaving || configLoading}>
-              <Save size={12} /> {configSaving ? "Saving…" : "Save config"}
-            </button>
-          </div>
-        </div>
+        <PublishPlatformsConfig
+          bind:config={publishConfig}
+          bind:gameVersionIdsText={curseforgeGameVersionIdsText}
+          configSaving={configSaving}
+          configLoading={configLoading}
+          onSave={savePublishConfig}
+        />
 
         <div class="publish-targets">
           <h3>Export & publish</h3>
@@ -560,16 +551,15 @@
                 </div>
       </section>
 
-      <section class="panel changelog-panel">
-        <div class="changelog-header">
-          <div>
-            <h2>Changelog</h2>
-            <p>Generated from manifest, brief, diagnostics, mods and recent snapshots. Edit before publishing or creating a release snapshot.</p>
-          </div>
-          <button class="secondary" onclick={refresh} disabled={loading}>Regenerate</button>
-        </div>
-        <textarea bind:value={changelog} spellcheck="false"></textarea>
-      </section>
+      <ChangelogEditor bind:value={changelog} onRegenerate={refresh} onAi={generateGithubRelease} disabled={loading || githubLoading} />
+    </div>
+    <div class="sticky bottom-3 z-20 mt-4 flex flex-col gap-4 rounded-2xl border border-emerald-500/20 bg-neutral-950/90 p-4 shadow-[0_0_25px_rgba(16,185,129,0.12)] backdrop-blur-2xl lg:flex-row lg:items-center lg:justify-between">
+      <div class="flex flex-wrap gap-3 text-xs text-neutral-300">
+        {#each ["github", "modrinth", "curseforge"] as target}
+          <label class="flex items-center gap-2"><input type="checkbox" checked={selectedTargets[target]} onchange={(event) => selectedTargets = { ...selectedTargets, [target]: event.currentTarget.checked }} /> {target === "github" ? "GitHub" : target === "modrinth" ? "Modrinth" : "CurseForge"}</label>
+        {/each}
+      </div>
+      <div class="flex flex-wrap items-center gap-2"><button type="button" class="rounded-xl border border-white/10 px-4 py-3 text-sm text-neutral-200 hover:bg-white/10" onclick={showPublishSummary}>Предпросмотр перед отправкой</button><button type="button" class="rounded-xl bg-emerald-600 px-8 py-3 font-bold text-white shadow-[0_0_20px_rgba(16,185,129,0.35)] hover:bg-emerald-500" onclick={publishAllSelected} disabled={!!publishingTarget || errorCount > 0}>Опубликовать релиз во всех каналах</button></div>
     </div>
   {/if}
 </div>

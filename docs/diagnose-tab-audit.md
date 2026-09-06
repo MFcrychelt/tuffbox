@@ -57,6 +57,7 @@ Crash diagnosis, graph cache и Pack Health имеют разные cache keys �
 - class-finder cache теперь учитывает fingerprint JAR, а результаты дедуплицируются по `modId:className`; замена модов не оставляет старое ownership-решение.
 - холодный class-finder переведён на batch scan: каждый JAR открывается один раз для всех missing classes из отчёта, вместо полного прохода JAR на каждый класс.
 - load-triggered Crash Assistant/AI enrichment получил 32 ms coalescing window: быстрые повторные path/source events объединяются в один post-paint запуск, а stale kickoff отменяется.
+- AI enrichment больше не запускается автоматически при открытии Diagnose: базовые правила работают сразу, а Ollama/AI стартует только при открытии AI tab или явном AI explain. Это убирает постоянную CPU-нагрузку локальной модели при обычном просмотре health.
 - Pack Health Badge получил отдельный in-flight path guard: первая загрузка больше не дублируется до того, как `lastPath` успеет обновиться после ответа.
 - загрузка состояния Group Test отложена до открытия Advanced tab; базовое открытие Diagnose больше не делает лишний IPC-запрос для инструмента, которым пользователь не воспользовался.
 - graph diagnostics кэшируются единым 5-секундным project fingerprint для `get_diagnostics`, counts и Pack Health; повторные consumers не перестраивают один и тот же graph.

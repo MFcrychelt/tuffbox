@@ -19,6 +19,9 @@
   } from "@lucide/svelte";
   import { projectPath, projectInfo, pushWorkTrail } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
+  import ExportFormatSelector from "./ExportFormatSelector.svelte";
+  import PreflightWarnings from "./PreflightWarnings.svelte";
+  import ArchivePreviewTree from "./ArchivePreviewTree.svelte";
   import { api } from "../lib/api";
 
   type ExportMode = "mrpack" | "curseforge" | "prism" | "server" | "packwiz";
@@ -112,10 +115,13 @@
     { kind: string; status: string; path?: string; error?: string; files?: number }[]
   >([]);
   let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
   let mrIssues = $state<ExportIssue[]>([]);
   let cfIssues = $state<ExportIssue[]>([]);
   let exportMode = $state<ExportMode>("mrpack");
   let copiedFlash = $state(false);
+  let includeConfigs = $state(true);
+  let clientOnly = $state(false);
 
   let lastPathForDefaults = $state("");
   let lastInfoReadyForDefaults = $state(false);
@@ -170,6 +176,10 @@
   });
   const errorGroups = $derived(groupedIssues.filter((g) => g.severity === "error"));
   const warningGroups = $derived(groupedIssues.filter((g) => g.severity === "warning"));
+  const warningCounts = $derived(Object.fromEntries(FORMATS.map((fmt) => [fmt.id, formatWarns(fmt.id)])));
+  const errorCounts = $derived(Object.fromEntries(FORMATS.map((fmt) => [fmt.id, formatErrors(fmt.id)])));
+  const archiveMods = $derived(activeIssues.map((issue) => issue.target).filter((target): target is string => !!target && /\\.jar$/i.test(target)));
+  const archiveEntries = $derived(archiveMods.length + (includeConfigs ? 1 : 0) + 3);
 
   function toggleGroup(code: string) {
     const next = new Set(expandedGroups);
@@ -324,6 +334,12 @@
     }
   }
 
+  async function openTargetFolder(path?: string | null) {
+    if (!path) return;
+    const folder = path.replace(/[\\/][^\\/]*$/, "") || path;
+    await openPath(folder);
+  }
+
   async function copyPath(path?: string | null) {
     if (!path) return;
     try {
@@ -374,6 +390,7 @@
   {/if}
 
   {#if error}<div class="flex items-start gap-2 px-2.5 py-2 rounded-[length:var(--border-radius-md)] mb-2.5 border text-xs leading-snug text-[#fecaca] bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.28)]"><AlertTriangle size={14} class="shrink-0" /> {error}</div>{/if}
+  {#if message}<div class="mb-2.5 flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200"><CheckCircle2 size={14} /> {message}</div>{/if}
   {#if result}
     <div class="flex items-start gap-2 px-2.5 py-2 rounded-[length:var(--border-radius-md)] mb-2.5 border text-xs leading-snug text-[color:var(--accent-primary)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)] border-[color-mix(in_srgb,var(--accent-primary)_25%,transparent)]">
       <CheckCircle2 size={14} class="shrink-0 mt-0.5" />
@@ -396,40 +413,13 @@
     <EmptyState icon={PackageOpen} title="No project selected" description="Open a project to export a modpack." />
   {:else}
     <section class="bg-white/[0.03] border border-white/[0.08] rounded-[length:var(--border-radius-lg)] p-3.5 grid gap-3 shadow-xl backdrop-blur-md">
-      <div class="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" role="listbox" aria-label="Export format">
-        {#each FORMATS as fmt (fmt.id)}
-          {@const errs = formatErrors(fmt.id)}
-          {@const warns = formatWarns(fmt.id)}
-          <button
-            type="button"
-            class="format-card grid grid-cols-[auto_minmax(0,1fr)] grid-rows-[auto_auto] gap-x-2 gap-y-0.5 items-start text-left px-2.5 py-2 rounded-[length:var(--border-radius-md)] bg-white/[0.04] border border-white/[0.08] text-[color:var(--text-secondary)] cursor-pointer min-w-0 overflow-hidden hover:border-[color:color-mix(in_srgb,#10b981_40%,transparent)] hover:bg-white/[0.07]"
-            class:active={exportMode === fmt.id}
-            class:has-error={errs > 0}
-            role="option"
-            aria-selected={exportMode === fmt.id}
-            title="{fmt.title} {fmt.badge} — {fmt.blurb}"
-            onclick={() => (exportMode = fmt.id)}
-          >
-            <span class="row-span-2 flex items-center justify-center w-7 h-7 rounded-md bg-white/[0.06] text-[color:var(--accent-primary)] mt-px" aria-hidden="true">
-              {#if fmt.id === "mrpack"}<PackageOpen size={16} />
-              {:else if fmt.id === "curseforge"}<FileArchive size={16} />
-              {:else if fmt.id === "prism"}<Box size={16} />
-              {:else if fmt.id === "server"}<Server size={16} />
-              {:else}<FolderTree size={16} />{/if}
-            </span>
-            <span class="flex items-baseline gap-1.5 min-w-0 max-w-full overflow-hidden">
-              <span class="min-w-0 flex-1 text-xs font-bold leading-tight truncate">{fmt.title}</span>
-              <span class="text-[10px] font-semibold text-[color:var(--text-muted)] lowercase shrink-0">{fmt.badge}</span>
-              {#if errs > 0}
-                <span class="shrink-0 min-w-3.5 h-3.5 px-1 rounded-full inline-flex items-center justify-center text-[10px] font-extrabold leading-none text-[#fecaca] bg-[rgba(239,68,68,0.15)] border border-[rgba(239,68,68,0.4)]" title="{errs} blocking error(s)">{errs}</span>
-              {:else if warns > 0}
-                <span class="shrink-0 min-w-3.5 h-3.5 px-1 rounded-full inline-flex items-center justify-center text-[10px] font-extrabold leading-none text-[#fbbf24] bg-[rgba(245,158,11,0.15)] border border-[rgba(245,158,11,0.35)]" title="{warns} warning(s)">{warns}</span>
-              {/if}
-            </span>
-            <span class="col-start-2 min-w-0 text-[11px] text-[color:var(--text-muted)] leading-tight line-clamp-2 break-words">{fmt.blurb}</span>
-          </button>
-        {/each}
-      </div>
+      <ExportFormatSelector
+        formats={FORMATS}
+        selected={exportMode}
+        warningCounts={warningCounts}
+        errorCounts={errorCounts}
+        onSelect={(id) => (exportMode = id as ExportMode)}
+      />
 
       <div class="grid gap-2.5 p-3 border border-white/[0.08] rounded-[length:var(--border-radius-md)] bg-black/40">
         <div>
@@ -439,7 +429,8 @@
 
         <label class="grid gap-1 text-[11px] font-semibold text-[color:var(--text-secondary)]">
           {activeFormat.pathKind === "dir" ? "Output folder" : "Output file"}
-          <div class="flex gap-1.5 items-stretch flex-wrap sm:flex-nowrap">
+          <div class="flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 p-1.5 focus-within:border-emerald-500/50">
+            <FolderOpen size={15} class="ml-1 shrink-0 text-neutral-500" />
             <input
               class="flex-1 min-w-0 text-xs px-2.5 py-[7px] bg-black/40 border-white/10 focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30 font-mono"
               value={activePath}
@@ -453,79 +444,39 @@
           </div>
         </label>
 
-        {#if activeIssues.length > 0}
-          <div class="flex flex-col gap-2">
-            <div class="flex items-center gap-2 flex-wrap">
-              {#if blockingErrors.length > 0}
-                <span class="text-[10px] font-bold px-[7px] py-0.5 rounded-full text-[#fecaca] bg-[rgba(239,68,68,0.12)] border border-[rgba(239,68,68,0.3)]">{blockingErrors.length} error{blockingErrors.length === 1 ? "" : "s"}</span>
-              {/if}
-              {#if warnCount > 0}
-                <span class="text-[10px] font-bold px-[7px] py-0.5 rounded-full text-[#fbbf24] bg-[rgba(245,158,11,0.12)] border border-[rgba(245,158,11,0.3)]">{warnCount} warning{warnCount === 1 ? "" : "s"}</span>
-              {/if}
-              {#if groupedIssues.length > 1}
-                <button type="button" class="ml-auto text-[10px] text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)] cursor-pointer" onclick={expandAllGroups}>Expand all</button>
-                <button type="button" class="text-[10px] text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)] cursor-pointer" onclick={collapseAllGroups}>Collapse all</button>
-              {/if}
-            </div>
+        <PreflightWarnings
+          errors={errorGroups}
+          warnings={warningGroups}
+          expanded={expandedGroups}
+          onToggle={toggleGroup}
+          onExpandAll={expandAllGroups}
+          onCollapseAll={collapseAllGroups}
+          onAction={(action, target) => (message = `${action}${target ? ` · ${target}` : ""}`)}
+        />
 
-            {#each errorGroups as g (g.code)}
-              <div class="grid gap-0.5 p-2 rounded-md bg-red-500/10 border border-red-500/30 text-[11px] backdrop-blur-sm">
-                <div class="flex items-baseline gap-2 flex-wrap">
-                  <strong class="text-[#fecaca]">{g.code}{#if g.count > 1}&nbsp;× {g.count}{/if}</strong>
-                  <span class="text-[color:var(--text-muted)] break-words">{g.message}</span>
-                </div>
-                {#if g.targets.length > 0}
-                  <div class="flex flex-wrap gap-x-2 gap-y-0.5">
-                    {#each g.targets.slice(0, 8) as tgt (tgt)}
-                      <code class="font-mono text-[10px] text-[color:var(--text-secondary)] break-all">{tgt}</code>
-                    {/each}
-                    {#if g.targets.length > 8}<span class="text-[10px] text-[color:var(--text-muted)]">+{g.targets.length - 8} more</span>{/if}
-                  </div>
-                {/if}
-              </div>
-            {/each}
+        <ArchivePreviewTree
+          modFiles={archiveMods}
+          configCount={includeConfigs ? 1 : 0}
+          outputName={activePath.split(/[\\/]/).pop() || `${activeFormat.title} export`}
+          entryCount={archiveEntries}
+        />
 
-            {#each warningGroups as g (g.code)}
-              <div class="rounded-md bg-amber-500/10 border border-amber-500/30 backdrop-blur-sm text-[11px]">
-                <button
-                  type="button"
-                  class="w-full flex items-center gap-2 px-2 py-2 text-left cursor-pointer hover:bg-amber-500/10 rounded-md"
-                  onclick={() => toggleGroup(g.code)}
-                  aria-expanded={expandedGroups.has(g.code)}
-                >
-                  <strong class="text-amber-300 shrink-0">{g.code}{#if g.count > 1}&nbsp;× {g.count}{/if}</strong>
-                  <span class="text-[color:var(--text-muted)] truncate">{g.message}</span>
-                  <span class="ml-auto text-[10px] text-[color:var(--text-muted)] shrink-0">{expandedGroups.has(g.code) ? "▲" : "▼"}</span>
-                </button>
-                {#if expandedGroups.has(g.code)}
-                  <div class="flex flex-wrap gap-x-2 gap-y-0.5 px-2 pb-2">
-                    {#each g.targets as tgt (tgt)}
-                      <code class="font-mono text-[10px] text-[color:var(--text-secondary)] break-all">{tgt}</code>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/each}
+        <div class="sticky bottom-3 z-10 flex flex-col gap-4 rounded-xl border border-emerald-500/20 bg-neutral-950/90 p-4 shadow-2xl backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-300">
+            <strong class="text-neutral-100">{activeFormat.badge}</strong>
+            <span>{archiveMods.length} mods</span>
+            <span>v{$projectInfo?.version ?? "?"}</span>
+            <span>{includeConfigs ? "Configs included" : "Manifest only"}</span>
           </div>
-        {/if}
-
-        <div class="flex gap-2 flex-wrap items-center">
-          <button class="eb-export-btn" onclick={runSelectedExport} disabled={exportBlocked || batching}>
-            <UploadCloud size={15} />
-            {#if exporting}
-              Exporting…
-            {:else}
-              Export {activeFormat.title}
-            {/if}
-          </button>
-          {#if result}
-            <button class="ghost" onclick={() => openPath(result?.path)}>
-              <ExternalLink size={14} /> Open
+          <div class="flex flex-wrap items-center gap-3">
+            <label class="inline-flex items-center gap-2 text-xs text-neutral-300"><input type="checkbox" bind:checked={includeConfigs} /> Include configs</label>
+            <label class="inline-flex items-center gap-2 text-xs text-neutral-300"><input type="checkbox" bind:checked={clientOnly} /> Client mods only</label>
+            {#if result}<button class="ghost mini" onclick={() => openTargetFolder(result?.path)}><FolderOpen size={14} /> Open target folder</button>{/if}
+            <button class="eb-export-btn" onclick={runSelectedExport} disabled={exportBlocked || batching}>
+              <UploadCloud size={16} />
+              {exporting ? "Exporting…" : "Экспортировать сборку"}
             </button>
-            <button class="ghost" onclick={() => copyPath(result?.path)}>
-              <Copy size={14} /> {copiedFlash ? "Copied" : "Copy path"}
-            </button>
-          {/if}
+          </div>
         </div>
       </div>
 

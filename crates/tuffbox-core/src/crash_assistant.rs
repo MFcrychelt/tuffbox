@@ -1622,19 +1622,19 @@ pub fn find_classes_in_mods(
         let Ok(file) = std::fs::File::open(&path) else { continue };
         let Ok(zip) = zip::ZipArchive::new(file) else { continue };
         let names: Vec<String> = zip.file_names().map(str::to_string).collect();
-        let matched: Vec<&String> = queries
-            .iter()
-            .filter(|(fqn, exact, package)| {
-                let simple = fqn.rsplit('.').next().unwrap_or(fqn.as_str());
-                names.iter().any(|name| name == exact)
-                    || (!package.is_empty()
-                        && names.iter().any(|name| {
-                            name.starts_with(package) && name.ends_with(".class")
-                        }))
-                    || names.iter().any(|name| name.ends_with(&format!("{simple}.class")))
-            })
-            .map(|query| &query.0)
-            .collect();
+        let mut matched: Vec<String> = Vec::new();
+        for (fqn, exact, package) in &queries {
+            let simple = fqn.rsplit('.').next().unwrap_or(fqn.as_str());
+            let hit = names.iter().any(|name| name == exact)
+                || (!package.is_empty()
+                    && names.iter().any(|name| {
+                        name.starts_with(package) && name.ends_with(".class")
+                    }))
+                || names.iter().any(|name| name.ends_with(&format!("{simple}.class")));
+            if hit {
+                matched.push(fqn.clone());
+            }
+        }
         if matched.is_empty() {
             continue;
         }
