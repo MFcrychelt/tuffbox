@@ -51,6 +51,11 @@ use tauri::Emitter;
 /// Serializes manifest + mods-folder mutations so background `sync_mods_folder`
 /// cannot overwrite an in-flight Update All / single update.
 static MODS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+/// Single-flight guard for the short diagnostics cache miss path. Without it,
+/// Badge, counts and Pack Health could all miss the cache concurrently and
+/// rebuild the same graph three times.
+static DIAGNOSTICS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static PACK_HEALTH_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 use types::*;
 
@@ -5844,7 +5849,12 @@ fn run_crash_assistant(path: String) -> Result<serde_json::Value, String> {
 fn find_class_in_mods(path: String, class_name: String) -> Result<Vec<serde_json::Value>, String> {
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
-    let results = tuffbox_core::crash_assistant::find_class_in_mods(&class_name, &mods_dir);
+    let mods_key = format!(
+        "{}:{}",
+        mods_dir.display(),
+        tuffbox_core::installed_jars_fingerprint(Path::new(&path))
+    );
+    let results = find_class_in_mods_cached(&class_name, &mods_dir, &mods_key);
     Ok(results
         .into_iter()
         .map(|r| {
@@ -5959,13 +5969,12 @@ fn run_crash_assistant_full_impl(
     diagnose_stage(app, "Running crash checks…");
     let report = run_crash_assistant_analysis(&path, &manifest, &project_dir, report_id.as_deref())?;
 
+    let class_finder_started = std::time::Instant::now();
     let mut class_finder = Vec::new();
     let mut combined = String::new();
-    // Task #66: per-run memo plus the process-wide ClassFinderCache so repeat
-    // runs of the same project don't rescan every jar for known classes.
-    let mut class_finder_cache: std::collections::HashMap<String, Vec<tuffbox_core::crash_assistant::ClassMatch>> =
-        std::collections::HashMap::new();
-    let mods_dir_key = mods_dir.display().to_string();
+    // Class attribution is performed by the batch scanner below; its
+    // process-wide single-class cache is used by the interactive tool.
+    let mut class_finder_seen = std::collections::HashSet::new();
     if let Some(text) = load_scoped_crash_report(&project_dir, report_id.as_deref()) {
         combined.push_str(&text);
         combined.push('\n');
@@ -6005,30 +6014,24 @@ fn run_crash_assistant_full_impl(
             ),
         );
     }
-    for line in combined.lines() {
-        if line.contains("NoClassDefFoundError") || line.contains("ClassNotFoundException") {
-            if let Some(cls) = line
-                .split(": ")
-                .nth(1)
-                .and_then(|s| s.split_whitespace().next())
-            {
-                if cls.len() > 5 && cls.len() < 200 && cls.contains('.') {
-                    // Task #66: the same class can appear on many log lines;
-                    // re-scanning every jar per line made Diagnose take minutes.
-                    // Cache lookups within this run.
-                    let matches = class_finder_cache
-                        .entry(cls.to_string())
-                        .or_insert_with(|| {
-                            find_class_in_mods_cached(cls, &mods_dir, &mods_dir_key)
-                        });
-                    for m in matches.iter() {
-                        class_finder.push(serde_json::json!({"className":m.class_name,"modId":m.mod_id,"modName":m.mod_name}));
-                    }
-                }
+    if !unique_classes.is_empty() {
+        let matches = tuffbox_core::crash_assistant::find_classes_in_mods(
+            &unique_classes,
+            &mods_dir,
+        );
+        for m in matches {
+            let key = format!("{}:{}", m.mod_id, m.class_name);
+            if class_finder_seen.insert(key) {
+                class_finder.push(serde_json::json!({
+                    "className": m.class_name,
+                    "modId": m.mod_id,
+                    "modName": m.mod_name,
+                }));
             }
         }
     }
     class_finder.truncate(20);
+    diagnose_timing(Some(app), "class_finder", class_finder_started, false);
 
     Ok(serde_json::json!({
         "findings": report.findings.iter().map(|f| serde_json::json!({
@@ -10364,18 +10367,56 @@ fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), Strin
     Ok(())
 }
 
+fn diagnostics_cache_key(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> String {
+    format!(
+        "diagnostics:{}:{}",
+        tuffbox_core::manifest_fingerprint(manifest),
+        tuffbox_core::installed_jars_fingerprint(manifest_path)
+    )
+}
+
+fn diagnostics_for_path_cached(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> tuffbox_core::ClickPathDiagnostics {
+    let key = diagnostics_cache_key(manifest_path, manifest);
+    if let Some(cached) =
+        tuffbox_core::api_cache::get::<tuffbox_core::ClickPathDiagnostics>(&key)
+    {
+        return cached;
+    }
+    let _guard = DIAGNOSTICS_IO_LOCK.lock().ok();
+    // Re-check after waiting: another consumer may have populated the cache
+    // while this caller was blocked.
+    if let Some(cached) =
+        tuffbox_core::api_cache::get::<tuffbox_core::ClickPathDiagnostics>(&key)
+    {
+        return cached;
+    }
+    let result = tuffbox_core::diagnostics_for_click_path(manifest_path, manifest);
+    tuffbox_core::api_cache::put_with_ttl(
+        key,
+        result.clone(),
+        std::time::Duration::from_secs(5),
+    );
+    result
+}
+
 #[tauri::command]
 fn get_diagnostics(path: String) -> Result<Vec<tuffbox_core::Diagnostic>, String> {
     let manifest_path = PathBuf::from(&path);
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    Ok(tuffbox_core::diagnostics_for_click_path(&manifest_path, &manifest).diagnostics)
+    Ok(diagnostics_for_path_cached(&manifest_path, &manifest).diagnostics)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 fn get_diagnostic_counts(path: String) -> Result<tuffbox_core::DiagnosticCounts, String> {
     let manifest_path = PathBuf::from(&path);
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let result = tuffbox_core::diagnostics_for_click_path(&manifest_path, &manifest);
+    let result = diagnostics_for_path_cached(&manifest_path, &manifest);
     Ok(tuffbox_core::diagnostic_counts(
         &result.diagnostics,
         result.cached,
@@ -10444,8 +10485,7 @@ fn get_pack_health_impl(path: &str) -> Result<PackHealthReport, String> {
     let project_dir = manifest_parent(path)?;
 
     // Same core helper as get_diagnostics.
-    let diagnostics =
-        tuffbox_core::diagnostics_for_click_path(&manifest_path, &manifest).diagnostics;
+    let diagnostics = diagnostics_for_path_cached(&manifest_path, &manifest).diagnostics;
     let diag_errors = diagnostics
         .iter()
         .filter(|d| d.severity == tuffbox_core::DiagnosticSeverity::Error)
@@ -10516,7 +10556,16 @@ fn get_pack_health_impl(path: &str) -> Result<PackHealthReport, String> {
             exit_code: e.exit_code,
         });
 
-    let overall = if diag_errors > 0 || wrong_loader_count > 0 {
+    // A recent non-zero launch exit is a real health failure even when the
+    // static graph is clean. Previously `last_crash` was displayed in the
+    // report but did not affect the overall verdict, so the badge could say
+    // Healthy immediately after a crash.
+    let export_errors = export_issues.iter().any(|issue| issue.severity == "error");
+    let overall = if diag_errors > 0
+        || wrong_loader_count > 0
+        || last_crash.is_some()
+        || export_errors
+    {
         PackHealthOverall::Errors
     } else if diag_warnings > 0
         || !export_issues.is_empty()
@@ -10546,9 +10595,45 @@ fn get_pack_health_impl(path: &str) -> Result<PackHealthReport, String> {
 /// Pack Health panel). Heavy scans run on the blocking pool.
 #[tauri::command(rename_all = "camelCase")]
 async fn get_pack_health(path: String) -> Result<PackHealthReport, String> {
-    tokio::task::spawn_blocking(move || get_pack_health_impl(&path))
-        .await
-        .map_err(|e| e.to_string())?
+    // The header badge and Diagnose can request the same report at once. Use
+    // a short project-scoped cache so opening Diagnose does not start a second
+    // full quest/export/JAR scan while the badge is still rendering.
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_path.parent().map(Path::to_path_buf);
+    let manifest_mtime = file_mtime_nanos(&manifest_path).unwrap_or(0);
+    let mods_mtime = project_dir
+        .as_ref()
+        .map(|dir| dir_mtime_nanos(&dir.join("mods")).unwrap_or(0))
+        .unwrap_or(0);
+    let history_mtime = project_dir
+        .as_ref()
+        .map(|dir| file_mtime_nanos(&dir.join(".tuffbox/history/launches.jsonl")).unwrap_or(0))
+        .unwrap_or(0);
+    let cache_key = format!(
+        "pack-health:{path}:{manifest_mtime}:{mods_mtime}:{history_mtime}"
+    );
+    if let Some(cached) = tuffbox_core::api_cache::get::<PackHealthReport>(&cache_key) {
+        return Ok(cached);
+    }
+
+    let report = tokio::task::spawn_blocking(move || {
+        let _guard = PACK_HEALTH_IO_LOCK.lock().ok();
+        // Re-check after waiting so simultaneous badge/Diagnose requests
+        // share one cold scan instead of all running export/JAR/quest checks.
+        if let Some(cached) = tuffbox_core::api_cache::get::<PackHealthReport>(&cache_key) {
+            return Ok(cached);
+        }
+        let report = get_pack_health_impl(&path)?;
+        tuffbox_core::api_cache::put_with_ttl(
+            cache_key,
+            report.clone(),
+            std::time::Duration::from_secs(10),
+        );
+        Ok(report)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(report)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -10568,6 +10653,7 @@ async fn apply_resolve_action(
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let mut manifest = manifest_for_graph(&path)?;
+        let expected_fingerprint = tuffbox_core::manifest_fingerprint(&manifest);
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let Some(plan) = Resolver::create_fix_plan(&graph, &diagnostics) else {
@@ -10576,11 +10662,20 @@ async fn apply_resolve_action(
         let Some(action) = plan.actions.get(action_index).cloned() else {
             return Err(format!("action index {action_index} out of range"));
         };
+        let current = manifest_for_graph(&path)?;
+        if tuffbox_core::manifest_fingerprint(&current) != expected_fingerprint {
+            return Err("Project changed while diagnostics were running; refresh diagnostics and review the new plan.".into());
+        }
+
         if plan.requires_snapshot {
             auto_snapshot(&manifest_path, "apply-resolve-action").map_err(|e| e.to_string())?;
         }
         let mut applied = Vec::new();
         apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
+        let current = manifest_for_graph(&path)?;
+        if tuffbox_core::manifest_fingerprint(&current) != expected_fingerprint {
+            return Err("Project changed while applying the plan; no changes were written. Refresh diagnostics.".into());
+        }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         Ok(applied)
@@ -10597,17 +10692,27 @@ async fn apply_resolve_change_plan(
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let mut manifest = manifest_for_graph(&path)?;
+        let expected_fingerprint = tuffbox_core::manifest_fingerprint(&manifest);
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let Some(plan) = Resolver::create_fix_plan(&graph, &diagnostics) else {
             return Ok(Vec::new());
         };
+        let current = manifest_for_graph(&path)?;
+        if tuffbox_core::manifest_fingerprint(&current) != expected_fingerprint {
+            return Err("Project changed while diagnostics were running; refresh diagnostics and review the new plan.".into());
+        }
+
         if plan.requires_snapshot {
             auto_snapshot(&manifest_path, "apply-resolve-plan").map_err(|e| e.to_string())?;
         }
         let mut applied = Vec::new();
         for action in plan.actions {
             apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
+        }
+        let current = manifest_for_graph(&path)?;
+        if tuffbox_core::manifest_fingerprint(&current) != expected_fingerprint {
+            return Err("Project changed while applying the plan; no changes were written. Refresh diagnostics.".into());
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
@@ -10765,6 +10870,32 @@ fn diagnose_stage_or_task(app: Option<&tauri::AppHandle>, stage: &str) {
     }
 }
 
+/// Emits measurable phase data instead of relying on subjective spinner time.
+/// The event is intentionally additive: older frontends can ignore it while
+/// profiling builds can collect per-stage timings without changing results.
+fn diagnose_timing(
+    app: Option<&tauri::AppHandle>,
+    phase: &str,
+    started: std::time::Instant,
+    cache_hit: bool,
+) {
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if let Some(app) = app {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "diagnose-timing",
+            serde_json::json!({
+                "phase": phase,
+                "elapsedMs": elapsed_ms,
+                "cacheHit": cache_hit,
+            }),
+        );
+    }
+    // Keep a concise native trace for packaged builds where the webview event
+    // stream is not being observed.
+    eprintln!("[diagnose] phase={phase} elapsed_ms={elapsed_ms} cache_hit={cache_hit}");
+}
+
 fn diagnose_finish(app: &tauri::AppHandle, ok: bool, detail: &str) {
     if ok {
         tuffbox_core::task_progress::succeed(DIAGNOSE_TASK_ID, Some(detail.to_string()));
@@ -10778,6 +10909,7 @@ fn get_crash_diagnosis_impl(
     path: String,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::crash::CrashDiagnosis, String> {
+    let total_started = std::time::Instant::now();
     tuffbox_core::task_progress::start_task(DIAGNOSE_TASK_ID, "Crash diagnosis");
     if let Some(app) = app {
         diagnose_stage(app, "Reading logs and pack graph…");
@@ -10800,9 +10932,11 @@ fn get_crash_diagnosis_impl(
         } else {
             tuffbox_core::task_progress::succeed(DIAGNOSE_TASK_ID, Some("Loaded from cache".into()));
         }
+        diagnose_timing(app, "diagnosis_total", total_started, true);
         return Ok(cached);
     }
     let result = get_crash_diagnosis_uncached(app, &path, report_id.clone());
+    diagnose_timing(app, "diagnosis_total", total_started, false);
     let finish_detail = match &result {
         Ok(d) => format!("{} hint(s), {} suspect(s)", d.hints.len(), d.suspected_mods.len()),
         Err(e) => e.clone(),
@@ -10890,6 +11024,7 @@ fn get_crash_diagnosis_uncached(
     snapshots.reverse();
     snapshots.truncate(6);
     diagnose_stage_or_task(app, "Analyzing crash report and logs…");
+    let base_started = std::time::Instant::now();
     let mut diagnosis = tuffbox_core::crash::build_crash_diagnosis(
         &project_dir,
         &manifest,
@@ -10897,11 +11032,13 @@ fn get_crash_diagnosis_uncached(
         snapshots,
     )
     .map_err(|e| e.to_string())?;
+    diagnose_timing(app, "base_crash_diagnosis", base_started, false);
 
     // Merge Crash Assistant log-phrase findings into hints so each detect
     // gets one-by-one FixAction buttons in the Problems / Recommended panels.
     // Skip when the live session is healthy — those detectors often match
     // leftover ERROR lines from a previously fixed crash.
+    let assistant_started = std::time::Instant::now();
     if !diagnosis.session_healthy {
         diagnose_stage_or_task(app, "Scanning mod jars for suspects…");
         if let Ok(assistant) =
@@ -10941,6 +11078,7 @@ fn get_crash_diagnosis_uncached(
             }
         }
     }
+    diagnose_timing(app, "crash_assistant_rules", assistant_started, false);
 
     Ok(diagnosis)
 }
@@ -10984,6 +11122,18 @@ fn run_crash_assistant_analysis(
     project_dir: &Path,
     report_id: Option<&str>,
 ) -> Result<tuffbox_core::crash_assistant::CrashAnalysisReport, String> {
+    let cache_key = format!(
+        "crash-assistant-report:{}",
+        crash_diagnosis_cache_key(path, report_id)
+    );
+    if let Some(cached) =
+        tuffbox_core::api_cache::get::<tuffbox_core::crash_assistant::CrashAnalysisReport>(
+            &cache_key,
+        )
+    {
+        return Ok(cached);
+    }
+
     // Scope: selected crash report (or newest) + latest.log + current mods.
     // Do not dump every historical crash-report into the analyzer.
     // If latest.log is newer than the crash report (successful relaunch), skip
@@ -11057,8 +11207,17 @@ fn run_crash_assistant_analysis(
         win_events: Vec::new(),
         combined_lines: std::cell::OnceCell::new(),
     };
-    let _ = path;
-    Ok(tuffbox_core::crash_assistant::run_full_analysis(&ctx))
+    // get_crash_diagnosis and run_crash_assistant_full consume the same
+    // expensive rule-based report during one Diagnose refresh. Share it by
+    // the same input fingerprint so the second caller does not reopen every
+    // log and re-run all crash patterns.
+    let report = tuffbox_core::crash_assistant::run_full_analysis(&ctx);
+    tuffbox_core::api_cache::put_with_ttl(
+        cache_key,
+        report.clone(),
+        std::time::Duration::from_secs(30),
+    );
+    Ok(report)
 }
 
 #[tauri::command(rename_all = "camelCase")]

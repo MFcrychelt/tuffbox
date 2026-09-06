@@ -10,6 +10,17 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_LIST_LIMIT: usize = 24;
 
+/// Second-resolution IDs caused two fast launch attempts to overwrite the
+/// same archived log directory. Keep the human-readable timestamp and add
+/// milliseconds for a stable per-attempt identity.
+fn launch_id() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    format!("{}-{}", time_util::compact_now(), millis)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchHistoryEntry {
@@ -65,7 +76,7 @@ pub fn archive_crashed_session(
     fingerprint_key: Option<String>,
     crash_report_path: Option<&Path>,
 ) -> Result<LaunchHistoryEntry, String> {
-    let session_id = time_util::compact_now();
+    let session_id = launch_id();
     let started_at = time_util::rfc3339_now();
     let dir = session_dir(project_dir, &session_id);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -127,7 +138,7 @@ pub fn record_launch_exit(
     fingerprint_key: Option<String>,
 ) -> Result<(), String> {
     let entry = LaunchHistoryEntry {
-        id: time_util::compact_now(),
+        id: launch_id(),
         started_at: time_util::rfc3339_now(),
         ended_at: time_util::rfc3339_now(),
         exit_code,

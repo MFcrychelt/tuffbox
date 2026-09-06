@@ -1563,7 +1563,7 @@ pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<C
                     .any(|n| n.starts_with(&package_prefix) && n.ends_with(".class")));
         if !hit {
             // Fallback: exact class basename somewhere in the jar (rare shading cases).
-            let simple = fqn.rsplit('.').next().unwrap_or(fqn);
+            let simple = fqn.rsplit('.').next().unwrap_or(fqn.as_str());
             let simple_class = format!("{simple}.class");
             if !names.iter().any(|n| n.ends_with(&simple_class)) {
                 continue;
@@ -1583,6 +1583,75 @@ pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<C
             mod_name,
             file_name: Some(file_name),
         });
+    }
+    results
+}
+
+/// Finds several missing classes in one pass over the mod directory.
+///
+/// The single-class API opens every JAR for each query. Crash reports often
+/// contain multiple missing classes, so the batch variant opens each archive
+/// once and tests all requested class/package prefixes against its entry list.
+pub fn find_classes_in_mods(
+    class_names: &[String],
+    mods_dir: &std::path::Path,
+) -> Vec<ClassMatch> {
+    if !mods_dir.is_dir() {
+        return Vec::new();
+    }
+    let queries: Vec<(String, String, String)> = class_names
+        .iter()
+        .map(|name| {
+            let fqn = name.trim().trim_end_matches(".class").to_string();
+            let slash = fqn.replace('.', "/");
+            let package = slash
+                .rsplit_once('/')
+                .map(|(pkg, _)| format!("{pkg}/"))
+                .unwrap_or_default();
+            (fqn, format!("{slash}.class"), package)
+        })
+        .filter(|(fqn, _, _)| !fqn.is_empty())
+        .collect();
+    let mut results = Vec::new();
+    for entry in std::fs::read_dir(mods_dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().map_or(true, |ext| ext != "jar") {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let Ok(file) = std::fs::File::open(&path) else { continue };
+        let Ok(zip) = zip::ZipArchive::new(file) else { continue };
+        let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+        let matched: Vec<&String> = queries
+            .iter()
+            .filter(|(fqn, exact, package)| {
+                let simple = fqn.rsplit('.').next().unwrap_or(fqn.as_str());
+                names.iter().any(|name| name == exact)
+                    || (!package.is_empty()
+                        && names.iter().any(|name| {
+                            name.starts_with(package) && name.ends_with(".class")
+                        }))
+                    || names.iter().any(|name| name.ends_with(&format!("{simple}.class")))
+            })
+            .map(|query| &query.0)
+            .collect();
+        if matched.is_empty() {
+            continue;
+        }
+        let meta = crate::mod_scan::scan_mod_jar(&path).ok();
+        let mod_id = meta
+            .as_ref()
+            .and_then(|m| m.mod_id.clone())
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| file_name.trim_end_matches(".jar").to_string());
+        for class_name in matched {
+            results.push(ClassMatch {
+                class_name: class_name.clone(),
+                mod_id: mod_id.clone(),
+                mod_name: mod_id.clone(),
+                file_name: Some(file_name.clone()),
+            });
+        }
     }
     results
 }
@@ -3177,6 +3246,12 @@ Caused by: java.io.FileNotFoundException: minecraft:shaders/core/rendertype_soli
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].mod_id, "coolmod");
         assert_eq!(hits[0].file_name.as_deref(), Some("coolmod-1.0.jar"));
+        let batch = find_classes_in_mods(
+            &["com.example.CoolClass".into(), "com.example.OtherClass".into()],
+            dir.path(),
+        );
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].class_name, "com.example.CoolClass");
 
         let names = extract_blame_class_names(
             "java.lang.NoClassDefFoundError: com/example/CoolClass\n\tat com.example.CoolClass.init(CoolClass.java:10)\n",

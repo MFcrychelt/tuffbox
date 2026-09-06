@@ -32,6 +32,46 @@ fn pick_conflict_removable(graph: &DependencyGraph, related_nodes: &[NodeId]) ->
 
 pub struct Resolver;
 
+/// Keep the diagnostics contract deterministic for both the UI and fix-plan
+/// generation. Graphs can contain repeated metadata edges (and HashSet-based
+/// enrichment intentionally has no iteration order); exposing that directly
+/// produced duplicate cards and flaky action ordering.
+fn normalize_diagnostics(mut diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    let mut seen = HashSet::new();
+    diagnostics.retain(|diagnostic| {
+        let related = diagnostic
+            .related_nodes
+            .iter()
+            .map(|node| node.0.as_str())
+            .collect::<Vec<_>>()
+            .join("\u{1f}");
+        seen.insert(format!(
+            "{:?}\u{1f}{}\u{1f}{}\u{1f}{}",
+            diagnostic.severity, diagnostic.code, diagnostic.message, related
+        ))
+    });
+    diagnostics.sort_by(|a, b| {
+        severity_rank(&a.severity)
+            .cmp(&severity_rank(&b.severity))
+            .then_with(|| a.code.cmp(&b.code))
+            .then_with(|| a.message.cmp(&b.message))
+            .then_with(|| format_node_ids(&a.related_nodes).cmp(&format_node_ids(&b.related_nodes)))
+    });
+    diagnostics
+}
+
+fn severity_rank(severity: &DiagnosticSeverity) -> u8 {
+    match severity {
+        DiagnosticSeverity::Error => 0,
+        DiagnosticSeverity::Warning => 1,
+        DiagnosticSeverity::Info => 2,
+    }
+}
+
+fn format_node_ids(nodes: &[NodeId]) -> String {
+    nodes.iter().map(|node| node.0.as_str()).collect::<Vec<_>>().join("\u{1f}")
+}
+
 impl Resolver {
     pub fn analyze(graph: &DependencyGraph) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
@@ -39,14 +79,14 @@ impl Resolver {
         diagnostics.extend(Self::find_conflicts(graph));
         diagnostics.extend(Self::find_duplicate_mod_ids(graph));
         diagnostics.extend(Self::find_profile_includes_unknown_mod(graph));
-        diagnostics
+        normalize_diagnostics(diagnostics)
     }
 
     pub fn analyze_project(manifest: &ProjectManifest, graph: &DependencyGraph) -> Vec<Diagnostic> {
         let mut diagnostics = Self::analyze(graph);
         diagnostics.extend(Self::find_wrong_side_in_profile(manifest));
         diagnostics.extend(Self::find_unknown_sides(graph));
-        diagnostics
+        normalize_diagnostics(diagnostics)
     }
 
     pub fn create_fix_plan(

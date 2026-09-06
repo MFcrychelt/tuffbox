@@ -6,17 +6,21 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::HashSet;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Schema version for cache invalidation. Increment when the cache format or
 /// enrichment logic changes so old caches are rebuilt automatically.
-const CACHE_VERSION: u32 = 4;
+const CACHE_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphCache {
     pub manifest_fingerprint: String,
+    /// Fingerprint of installed mod jars used during local metadata enrichment.
+    /// Keeping it separate avoids rescanning unchanged jars while still
+    /// invalidating the graph when a local jar is replaced in-place.
+    #[serde(default)]
+    pub installed_jars_fingerprint: String,
     pub generated_at: String,
     pub enriched_manifest: ProjectManifest,
     pub graph: DependencyGraph,
@@ -33,6 +37,7 @@ impl GraphCache {
         let graph = DependencyGraph::from_manifest(&enriched_manifest);
         Self {
             manifest_fingerprint: manifest_fingerprint(base_manifest),
+            installed_jars_fingerprint: String::new(),
             generated_at: crate::time_util::rfc3339_now(),
             enriched_manifest,
             graph,
@@ -54,12 +59,23 @@ impl GraphCache {
         if !path.is_file() {
             return Ok(None);
         }
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|error| format!("failed to read graph cache {}: {error}", path.display()))?;
-        let cache: Self = serde_json::from_str(&raw)
-            .map_err(|error| format!("failed to parse graph cache {}: {error}", path.display()))?;
+        // A cache is an optimization, never a reason for Diagnose to fail.
+        // Interrupted writes, upgrades and manual edits are all treated as a
+        // miss; the next warm pass will rebuild it.
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return Ok(None);
+        };
+        let Ok(cache) = serde_json::from_str::<Self>(&raw) else {
+            return Ok(None);
+        };
+        let expected_jars = installed_jars_fingerprint(manifest_path);
+        // Empty is retained for programmatic GraphCache::new callers and
+        // older test fixtures; warm_graph_cache always writes the real key.
+        let jars_match = cache.installed_jars_fingerprint.is_empty()
+            || cache.installed_jars_fingerprint == expected_jars;
         Ok((cache.cache_version == CACHE_VERSION
-            && cache.manifest_fingerprint == manifest_fingerprint(manifest))
+            && cache.manifest_fingerprint == manifest_fingerprint(manifest)
+            && jars_match)
         .then_some(cache))
     }
 
@@ -69,16 +85,11 @@ impl GraphCache {
             .parent()
             .ok_or_else(|| format!("graph cache path has no parent: {}", path.display()))?;
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let mut staged = tempfile::Builder::new()
-            .prefix(".dependency-graph-")
-            .suffix(".tmp")
-            .tempfile_in(parent)
-            .map_err(|error| error.to_string())?;
-        serde_json::to_writer_pretty(&mut staged, self).map_err(|error| error.to_string())?;
-        staged.flush().map_err(|error| error.to_string())?;
-        staged
-            .persist(&path)
-            .map_err(|error| error.error.to_string())?;
+        let bytes = serde_json::to_vec_pretty(self).map_err(|error| error.to_string())?;
+        // Use the shared replacement primitive: unlike a direct persist, it
+        // replaces an existing stale cache on every supported platform and
+        // still never exposes a half-written JSON file to Diagnose.
+        crate::fs_util::atomic_write(&path, bytes)?;
         Ok(path)
     }
 }
@@ -163,13 +174,54 @@ pub fn warm_graph_cache(manifest_path: &Path, manifest: &ProjectManifest) -> Res
     }
     let mut enriched = manifest.clone();
     enrich_manifest_from_installed_jars(manifest_path, &mut enriched);
-    GraphCache::new(manifest, enriched).save(manifest_path)?;
+    let mut cache = GraphCache::new(manifest, enriched);
+    cache.installed_jars_fingerprint = installed_jars_fingerprint(manifest_path);
+    cache.save(manifest_path)?;
     Ok(true)
 }
 
 pub fn manifest_fingerprint(manifest: &ProjectManifest) -> String {
     let bytes = serde_json::to_vec(manifest).unwrap_or_default();
     format!("{:x}", Sha1::digest(bytes))
+}
+
+/// Cheap invalidation key for local jar enrichment. It intentionally hashes
+/// names, lengths and mtimes rather than jar contents: download/materialize
+/// code already verifies content hashes, while this keeps startup O(number of
+/// directory entries) instead of reading hundreds of megabytes.
+pub fn installed_jars_fingerprint(manifest_path: &Path) -> String {
+    let Some(instance_dir) = crate::instance_dir_for_manifest(manifest_path) else {
+        return String::new();
+    };
+    let mods_dir = instance_dir.join("mods");
+    let mut entries = Vec::new();
+    let Ok(read_dir) = std::fs::read_dir(mods_dir) else {
+        return format!("{:x}", Sha1::digest(b""));
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let is_jar = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jar"));
+        if !is_jar {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        entries.push(format!(
+            "{}:{}:{}",
+            entry.file_name().to_string_lossy(),
+            metadata.len(),
+            modified
+        ));
+    }
+    entries.sort_unstable();
+    format!("{:x}", Sha1::digest(entries.join("\\n").as_bytes()))
 }
 
 pub fn graph_cache_path(manifest_path: &Path) -> Result<PathBuf, String> {
@@ -314,6 +366,43 @@ mod tests {
                 .is_none(),
             "old-version cache should be rejected"
         );
+    }
+
+    #[test]
+    fn corrupted_cache_is_a_miss_not_a_diagnostics_error() {
+        let manifest: ProjectManifest = serde_json::from_str(include_str!(
+            "../../../examples/sample-project.tuffbox.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("project.tuffbox.json");
+        let cache_path = graph_cache_path(&manifest_path).unwrap();
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        std::fs::write(&cache_path, b"{ definitely not json").unwrap();
+        assert!(GraphCache::load_if_current(&manifest_path, &manifest)
+            .unwrap()
+            .is_none());
+        let result = diagnostics_for_click_path(&manifest_path, &manifest);
+        assert!(!result.cached);
+    }
+
+    #[test]
+    fn local_jar_change_invalidates_warmed_cache() {
+        let manifest: ProjectManifest = serde_json::from_str(include_str!(
+            "../../../examples/sample-project.tuffbox.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("project.tuffbox.json");
+        std::fs::create_dir_all(dir.path().join("mods")).unwrap();
+        assert!(warm_graph_cache(&manifest_path, &manifest).unwrap());
+        assert!(GraphCache::load_if_current(&manifest_path, &manifest)
+            .unwrap()
+            .is_some());
+        std::fs::write(dir.path().join("mods").join("changed.jar"), b"jar").unwrap();
+        assert!(GraphCache::load_if_current(&manifest_path, &manifest)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

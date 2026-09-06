@@ -6,22 +6,13 @@
   import {
     Stethoscope,
     Play,
-    FolderOpen,
     RefreshCw,
     AlertCircle,
     AlertTriangle,
     Info,
-    FileText,
     History,
-    Wrench,
-    Bug,
-    Download,
     Trash2,
     Database,
-    Copy,
-    Bot,
-    BookMarked,
-    Share2,
     ArrowDownToLine,
   } from "@lucide/svelte";
   import {
@@ -45,11 +36,11 @@
   import DiagnoseTriagePanels from "./diagnostics/DiagnoseTriagePanels.svelte";
   import DiagnosePlanReviewModal from "./diagnostics/DiagnosePlanReviewModal.svelte";
   import DiagnoseLogViewer from "./diagnostics/DiagnoseLogViewer.svelte";
-  import DiagnoseConflictsJars from "./diagnostics/DiagnoseConflictsJars.svelte";
   import DiagnoseAnalysisTabs from "./diagnostics/DiagnoseAnalysisTabs.svelte";
   import DiagnoseVerdictHero from "./diagnostics/DiagnoseVerdictHero.svelte";
   import DiagnoseProblemsList from "./diagnostics/DiagnoseProblemsList.svelte";
   import DiagnoseStatusBar from "./diagnostics/DiagnoseStatusBar.svelte";
+  import DiagnoseAdvanced from "./diagnostics/DiagnoseAdvanced.svelte";
   import { formatCascadeLabel } from "./diagnostics/cascadeLabel";
   import {
     buildUnifiedProblems,
@@ -174,6 +165,24 @@
   const LATEST_LOG_SOURCE = "__latest_log__";
   const LAUNCHER_LOG_SOURCE = "__launcher_log__";
   let analysisBusy = $state(false);
+  // Monotonic client-side generation. Backend calls cannot always be
+  // cancelled (Ollama/network), so late results from an older refresh must
+  // never overwrite the currently selected report.
+  let analysisGeneration = 0;
+  let analysisKickoff: ReturnType<typeof setTimeout> | undefined;
+  let diagnoseTimings = $state<Record<string, { elapsedMs: number; cacheHit: boolean }>>({});
+  const isCurrentAnalysis = (generation: number) => generation === analysisGeneration;
+
+  // Coalesce load-triggered enrichments into one post-paint job. Source/path
+  // changes can otherwise schedule multiple Crash Assistant + AI cascades
+  // before the first result has even reached the UI.
+  function scheduleUnifiedAnalysis() {
+    if (analysisKickoff) clearTimeout(analysisKickoff);
+    analysisKickoff = setTimeout(() => {
+      analysisKickoff = undefined;
+      void runUnifiedAnalysis();
+    }, 32);
+  }
   /** Task #66: source id the last unified analysis ran against (dedupe key). */
   let lastAnalyzedSource = $state<string | null>(null);
   /** Main Health canvas tab. */
@@ -208,6 +217,10 @@
   /** Radio choice for plans that carry `options` (conflict resolutions). */
   let selectedFixOption = $state<number | null>(null);
   let lastLoadedPath = $state<string | null>(null);
+  let advancedLoadedPath: string | null = null;
+  // Prevent the project-path effect, onMount and the open-diagnostics event
+  // from starting identical IPC pipelines at the same time.
+  let activeLoadPath: string | null = null;
 
   function onSourceChange(e: Event) {
     const el = e.currentTarget;
@@ -299,7 +312,10 @@
 
   async function load(force = false) {
     if (!$projectPath) return;
-    if (!force && lastLoadedPath === $projectPath && diagnosis) return;
+    const requestedPath = $projectPath;
+    if (activeLoadPath === requestedPath) return;
+    if (!force && lastLoadedPath === requestedPath && diagnosis) return;
+    activeLoadPath = requestedPath;
     loading = true;
     error = null;
     const requestedLatest = preferLatestLog;
@@ -310,7 +326,7 @@
           ? LAUNCHER_LOG_SOURCE
           : selectedReportId || null;
       const data: CrashDiagnosis = await invoke("get_crash_diagnosis", {
-        path: $projectPath,
+        path: requestedPath,
         reportId,
       });
       diagnosis = data;
@@ -342,18 +358,22 @@
         void invoke("confirm_crash_resolution_from_diagnose", { path: $projectPath }).catch(() => {});
       } else {
         if (!data.sessionHealthy) ideNeedsHealth.set(true);
-        void runUnifiedAnalysis();
+        scheduleUnifiedAnalysis();
       }
     } catch (e) {
       error = String(e);
     } finally {
-      loading = false;
+      if (activeLoadPath === requestedPath) {
+        activeLoadPath = null;
+        loading = false;
+      }
     }
   }
 
   function onProjectPathChange(path: string | null) {
     if (!path || path === lastLoadedPath) return;
     lastLoadedPath = path;
+    diagnoseTimings = {};
     preferLatestLog = true;
     selectedReportId = "";
     appliedProblemIds = new Set();
@@ -851,14 +871,16 @@
     if (file) void importExternalCrashFile(file);
   }
 
-  async function runCrashAssistant() {
+  async function runCrashAssistant(generation?: number) {
     if (!$projectPath) return;
+    const run = generation ?? ++analysisGeneration;
     crashLoading = true;
     try {
       const result: any = await invoke("run_crash_assistant_full", {
         path: $projectPath,
         reportId: activeReportId(),
       });
+      if (!isCurrentAnalysis(run)) return;
       crashFindings = result.findings ?? [];
       crashMcreator = result.mcreatorMods ?? [];
       crashClassFinder = result.classFinderResults ?? [];
@@ -868,7 +890,7 @@
     } catch (e) {
       error = String(e);
     } finally {
-      crashLoading = false;
+      if (isCurrentAnalysis(run)) crashLoading = false;
     }
   }
 
@@ -890,20 +912,24 @@
       return;
     }
     lastAnalyzedSource = source;
+    const run = ++analysisGeneration;
     analysisBusy = true;
     aiSoftError = null;
     try {
-      await runCrashAssistant();
+      await runCrashAssistant(run);
+      if (!isCurrentAnalysis(run)) return;
       try {
-        await runAiExplain({ quiet: true });
+        await runAiExplain({ quiet: true, runId: run });
       } catch (aiErr) {
+        if (!isCurrentAnalysis(run)) return;
         aiSoftError = String(aiErr);
         console.warn("[Diagnose] AI explain soft-fail:", aiErr);
       }
+      if (!isCurrentAnalysis(run)) return;
       // Single enrichment point, AFTER fresh AI results (fix #5).
       enrichCrashFindingsWithAi();
     } finally {
-      analysisBusy = false;
+      if (isCurrentAnalysis(run)) analysisBusy = false;
     }
   }
 
@@ -1124,8 +1150,9 @@
     setTimeout(() => void openEvidence(), 250);
   }
 
-  async function runAiExplain(opts: { quiet?: boolean } = {}) {
+  async function runAiExplain(opts: { quiet?: boolean; runId?: number } = {}) {
     if (!$projectPath) return;
+    const run = opts.runId ?? ++analysisGeneration;
     aiLoading = true;
     cascadeLiveStage = "l1_searching";
     if (!opts.quiet) error = null;
@@ -1155,13 +1182,16 @@
         path: $projectPath,
         reportId,
       });
+      if (!isCurrentAnalysis(run)) return;
       aiContext = context;
       aiPrompt = context.prompt ?? "";
       aiShowPrompt = false;
-      aiAnalysis = await invoke("analyze_crash_with_ai", {
+      const result = await invoke("analyze_crash_with_ai", {
         path: $projectPath,
         reportId,
       });
+      if (!isCurrentAnalysis(run)) return;
+      aiAnalysis = result;
       swarmEnabled = !!aiAnalysis?.swarmEnabled;
       enrichCrashFindingsWithAi();
       await loadPendingPlan();
@@ -1180,6 +1210,7 @@
         message = `AI analysis ready (${model}${similar ? `, ${similar} KB hit(s)` : ""}${stage}${miss}${spec}). Review before applying.`;
       }
     } catch (e) {
+      if (!isCurrentAnalysis(run)) return;
       const msg = String(e);
       aiAnalysis = null;
       if (opts.quiet) {
@@ -1197,8 +1228,10 @@
         error = msg;
       }
     } finally {
-      aiLoading = false;
-      cascadeLiveStage = null;
+      if (isCurrentAnalysis(run)) {
+        aiLoading = false;
+        cascadeLiveStage = null;
+      }
     }
   }
 
@@ -2558,15 +2591,30 @@
         ],
   );
   const signalGroups = $derived(
-    [
-      { title: "Entrypoint", hint: "Fabric/Quilt entrypoint failures", items: allSignals.filter((s) => s.kind === "Entrypoint") },
-      { title: "Loader mismatch", hint: "Wrong loader/API/version bridge", items: allSignals.filter((s) => s.kind === "LoaderMismatch" || s.kind === "WrongLoader") },
-      { title: "Mixin", hint: "Mixin apply / inject conflicts", items: allSignals.filter((s) => s.kind === "Mixin") },
-      { title: "OutOfMemory", hint: "Java heap / native OOM", items: allSignals.filter((s) => s.kind === "OutOfMemory") },
-      { title: "Render/OpenGL", hint: "Renderer, shader or GPU pipeline", items: allSignals.filter((s) => s.kind === "OpenGl") },
-      { title: "Ticking / world", hint: "Ticking entity or world corruption signals", items: allSignals.filter((s) => s.kind === "TickingEntity") },
-      { title: "Performance", hint: "Tick stalls and overload", items: allSignals.filter((s) => s.kind === "Performance") },
-    ].filter((group) => group.items.length > 0),
+    (() => {
+      const groups = [
+        { title: "Entrypoint", hint: "Fabric/Quilt entrypoint failures", kinds: ["Entrypoint"] },
+        { title: "Loader mismatch", hint: "Wrong loader/API/version bridge", kinds: ["LoaderMismatch", "WrongLoader"] },
+        { title: "Mixin", hint: "Mixin apply / inject conflicts", kinds: ["Mixin"] },
+        { title: "OutOfMemory", hint: "Java heap / native OOM", kinds: ["OutOfMemory"] },
+        { title: "Render/OpenGL", hint: "Renderer, shader or GPU pipeline", kinds: ["OpenGl"] },
+        { title: "Ticking / world", hint: "Ticking entity or world corruption signals", kinds: ["TickingEntity"] },
+        { title: "Performance", hint: "Tick stalls and overload", kinds: ["Performance"] },
+      ].map((group) => ({ ...group, items: [] as Evidence[] }));
+      const byKind = new Map<string, Evidence[]>();
+      for (const signal of allSignals) {
+        const bucket = byKind.get(signal.kind) ?? [];
+        bucket.push(signal);
+        byKind.set(signal.kind, bucket);
+      }
+      return groups
+        .map(({ title, hint, kinds }) => ({
+          title,
+          hint,
+          items: kinds.flatMap((kind) => byKind.get(kind) ?? []),
+        }))
+        .filter((group) => group.items.length > 0);
+    })(),
   );
 
   const cascadingFinding = $derived(
@@ -2588,8 +2636,23 @@
     const path = $projectPath;
     if (!path) {
       softVerifyStatus = null;
+      advancedLoadedPath = null;
+      if (analysisKickoff) {
+        clearTimeout(analysisKickoff);
+        analysisKickoff = undefined;
+      }
     }
     onProjectPathChange(path);
+  });
+
+  // Advanced tools are independent of the base diagnosis. Do not query the
+  // group-test session on every Diagnose open; load it only when the user
+  // actually enters the Advanced tab.
+  $effect(() => {
+    const path = $projectPath;
+    if (mainTab !== "advanced" || !path || advancedLoadedPath === path) return;
+    advancedLoadedPath = path;
+    void refreshGroupTest();
   });
 
   onMount(() => {
@@ -2605,12 +2668,12 @@
       void load(true);
       void loadPendingPlan();
       void refreshSoftVerifyStatus($projectPath);
-      void refreshGroupTest();
     }
     let unlistenCascade: UnlistenFn | undefined;
     let unlistenSoftVerify: UnlistenFn | undefined;
     let unlistenCrash: UnlistenFn | undefined;
     let unlistenProgress: UnlistenFn | undefined;
+    let unlistenTiming: UnlistenFn | undefined;
     void listen<{ stage?: string }>("diagnose-cascade", (ev) => {
       const stage = ev.payload?.stage;
       if (stage) cascadeLiveStage = stage;
@@ -2624,6 +2687,17 @@
       if (stage) liveDiagnoseStage = stage;
     }).then((u) => {
       unlistenProgress = u;
+    });
+    void listen<{ phase?: string; elapsedMs?: number; cacheHit?: boolean }>("diagnose-timing", (ev) => {
+      const phase = ev.payload?.phase;
+      const elapsedMs = Number(ev.payload?.elapsedMs);
+      if (!phase || !Number.isFinite(elapsedMs)) return;
+      diagnoseTimings = {
+        ...diagnoseTimings,
+        [phase]: { elapsedMs, cacheHit: !!ev.payload?.cacheHit },
+      };
+    }).then((u) => {
+      unlistenTiming = u;
     });
     void listen<SoftVerifyOutcome>("tuffbox:soft-verify-outcome", (ev) => {
       const payload = ev.payload ?? {};
@@ -2655,6 +2729,7 @@
       unlistenSoftVerify?.();
       unlistenCrash?.();
       unlistenProgress?.();
+      unlistenTiming?.();
     };
   });
 </script>
@@ -3017,193 +3092,99 @@
         onFeedback={sendAiFeedback}
       />
     {:else}
-      <div class="dx-advanced panel">
-        <div class="tools-group">
-          <span class="tools-label">Triage</span>
-          <button class="ghost" onclick={() => runAiExplain()} disabled={!$projectPath || aiLoading || sessionOk}>
-            <Bot size={15} /> AI explain
-          </button>
-          <button class="ghost" onclick={shareCurrentLog} disabled={!$projectPath || sharingLog || !currentLogText}>
-            <Share2 size={15} /> {sharingLog ? "Sharing…" : "Share mclo.gs"}
-          </button>
-          <button class="ghost" onclick={exportSupportPack} disabled={!$projectPath || supportBusy}>
-            <Download size={15} /> {supportBusy ? "…" : "Support pack"}
-          </button>
-          <button class="ghost" onclick={copyCurrentLog} disabled={!currentLogText}>
-            <Copy size={15} /> Copy log
-          </button>
-        </div>
-        <div class="tools-group">
-          <span class="tools-label">Folders</span>
-          <button class="ghost" onclick={openFolder} disabled={!$projectPath}><FolderOpen size={15} /> Instance</button>
-          <button class="ghost" onclick={() => openSubdir("logs")} disabled={!$projectPath}><FileText size={15} /> logs/</button>
-          <button class="ghost" onclick={() => openSubdir("crash-reports")} disabled={!$projectPath}><Bug size={15} /> crashes/</button>
-        </div>
-        <div class="tools-group">
-          <span class="tools-label">Scanners</span>
-          <button class="ghost" onclick={createFixPlan} disabled={!$projectPath || planning}>{planning ? "…" : "Fix plan"}</button>
-          <button class="ghost" onclick={scanOreGen} disabled={!$projectPath || oreLoading}>{oreLoading ? "…" : "Ore gen"}</button>
-          <button class="ghost" onclick={scanDuplicateItems} disabled={!$projectPath || duplicateLoading}>{duplicateLoading ? "…" : "Duplicates"}</button>
-          <button class="ghost" onclick={generateUnify} disabled={!$projectPath || unifyLoading}>{unifyLoading ? "…" : "Unify"}</button>
-          <button class="ghost" onclick={() => detectWrongLoaderMods()} disabled={!$projectPath || wrongLoaderLoading}>Wrong jars</button>
-          <button class="ghost" onclick={() => detectDuplicateModJars()} disabled={!$projectPath || duplicateJarLoading}>
-            {duplicateJarLoading ? "Dupes…" : "Dup jars"}
-          </button>
-          <button class="ghost" onclick={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={!$projectPath || authorBusy}>
-            <BookMarked size={15} /> Save KB
-          </button>
-          <button class="ghost" onclick={() => (aiModalOpen = true)}><Bot size={15} /> AI settings</button>
-          {#if aiPrompt}
-            <button class="ghost" onclick={() => (aiShowPrompt = !aiShowPrompt)}>{aiShowPrompt ? "Hide" : "Show"} AI prompt</button>
-          {/if}
-        </div>
-
-        <DiagnoseTriagePanels
-          signalGroups={[]}
-          sections={[]}
-          suspected={suspected}
-          recentSnapshots={diagnosis.recentSnapshots ?? []}
-          mcreatorMods={crashMcreator}
-          classFinderResults={crashClassFinder}
-          bind:classQuery
-          classBusy={classBusy}
-          classResults={classResults}
-          dependentResults={dependentResults}
-          bind:toolsOpen={analysisToolsOpen}
-          disablingModId={disablingModId}
-          bisectMods={bisectMods}
-          worldCoords={null}
-          memoryHint={null}
-          cascadingBanner={null}
-          sourceHint=""
-          onJumpLine={() => void openEvidence()}
-          onDisableMod={fixDisableMod}
-          onUpdateMod={async (id) => {
-            if (!id) return;
-            try {
-              await applyFixBatchOrThrow([
-                { kind: "updateMod", label: `Update ${id}`, modId: id },
-              ]);
-              message = `Update requested for ${id}`;
-            } catch (err) {
-              error = String(err);
-            }
-          }}
-          onToggleBisect={toggleBisect}
-          onFindClass={runClassFinder}
-          onFindDependents={runFindDependents}
-          onOpenSnapshots={() => ideStageRequest.set("snapshots")}
-        />
-
-        {#if groupTest}
-          <div class="notice warning group-test-panel">
-            <strong>Group test</strong>
-            <span>step {groupTest.step} · {groupTestStatus(groupTest)}</span>
-            <small>
-              Covering {groupTest.covering.length}
-              · clean {groupTest.knownClean.length}
-              {#if groupTest.testGroup.length}
-                · testing [{groupTest.testGroup.join(", ")}]
-              {/if}
-            </small>
-            {#if groupTest.defectives.length}
-              <small>Isolated: {groupTest.defectives.join(", ")}</small>
-            {/if}
-            {#if groupTestActive}
-              <label class="group-test-auto">
-                <input type="checkbox" bind:checked={groupTestAuto} />
-                Auto-launch next step
-              </label>
-              <div class="group-test-actions">
-                <button type="button" class="secondary small" disabled={launching || groupTestBusy} onclick={() => void runTest()}>
-                  Test launch
-                </button>
-                <button type="button" class="secondary small" disabled={groupTestBusy} onclick={() => void reportGroupTest("crash")}>
-                  Still crashed
-                </button>
-                <button type="button" class="secondary small" disabled={groupTestBusy} onclick={() => void reportGroupTest("healthy")}>
-                  Launched
-                </button>
-                <button type="button" class="ghost small" disabled={groupTestBusy} onclick={() => void cancelGroupTest()}>
-                  Cancel
-                </button>
-              </div>
-            {:else if groupTestPhaseKey(groupTest) === "done"}
-              <small>Verified covering. Share prompt can use these disables.</small>
-            {/if}
-          </div>
-        {:else}
-          <div class="notice warning">
-            Group test suspects: {bisectMods.length ? bisectMods.join(", ") : "recent + crash suspects"}
-            <button type="button" class="secondary small" disabled={groupTestBusy || !$projectPath} onclick={() => void startGroupTest()}>
-              Start group test
-            </button>
-          </div>
-        {/if}
-
-        <DiagnoseConflictsJars
-          graphDiagnostics={graphDiagnostics}
-          duplicateJarGroups={duplicateJarGroups}
-          wrongLoaderJars={wrongLoaderJars}
-          fixingIdx={fixingIdx}
-          duplicateJarFixing={duplicateJarFixing}
-          wrongLoaderFixing={wrongLoaderFixing}
-          onFixMissingDependency={({ modId, idx }) => fixMissingDependency(modId, idx)}
-          onFixDeduplicate={fixDeduplicate}
-          onKeepOneDuplicateJar={({ modId, fileName }) => keepOneDuplicateJar(modId, fileName)}
-          onDisableWrongJar={disableWrongJar}
-          onRemoveWrongJar={removeWrongJar}
-        />
-
-        {#if plan || oreFindings?.length || duplicateFindings?.length || unifyConfigResult || authorOpen || aiShowPrompt}
-          <section class="tools-results">
-            <h2><Wrench size={16} /> Tool results</h2>
-            {#if aiShowPrompt && aiPrompt}
-              <pre class="log-pre">{aiPrompt.slice(0, 20000)}</pre>
-            {/if}
-            {#if plan}
-              <div class="plan-card">
-                <h3>Heuristic Fix plan</h3>
-                <p>{plan.summary}</p>
-                {#if (plan?.options?.length ?? 0) > 1}
-                  <div class="plan-options">
-                    <div class="plan-options-title">Which side to fix?</div>
-                    {#each plan.options as opt, i (i)}
-                      <label class="plan-option" class:preferred={opt?.preferred}>
-                        <input type="radio" name="fix-option" value={i} bind:group={selectedFixOption} />
-                        <span class="plan-option-label">
-                          {opt?.label ?? `Option ${i + 1}`}
-                          {#if opt?.preferred}<small class="muted-inline">recommended</small>{/if}
-                        </span>
-                        {#if opt?.reason}<small class="plan-option-reason">{opt.reason}</small>{/if}
-                      </label>
-                    {/each}
-                  </div>
-                {/if}
-                <button class="primary" onclick={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply heuristic fix plan"}</button>
-              </div>
-            {/if}
-            {#if authorOpen}
-              <div class="author-form">
-                <h3>Save KB case</h3>
-                <label>Case id<input bind:value={authorId} placeholder="authored-outofmemory" /></label>
-                <label>Solution<textarea bind:value={authorSolution} rows="3"></textarea></label>
-                <label>Symptoms (one per line)<textarea bind:value={authorSymptoms} rows="3"></textarea></label>
-                <label>Suspected (comma)<input bind:value={authorSuspected} /></label>
-                <label>Actions JSON<textarea bind:value={authorActionsJson} rows="6" class="mono"></textarea></label>
-                <label>Notes (local only)<textarea bind:value={authorNotes} rows="2"></textarea></label>
-                <div class="actions">
-                  <button class="primary" onclick={saveAuthorCase} disabled={authorBusy || !authorSolution.trim()}>Save</button>
-                  <button class="ghost" onclick={() => copyAuthorExport()} disabled={!authorExportPreview}>Copy export</button>
-                  <button class="ghost" onclick={openAuthorExportFolder}>Open folder</button>
-                  <button class="ghost" onclick={() => (authorOpen = false)}>Close</button>
-                </div>
-                {#if authorMsg}<p class="muted-inline">{authorMsg}</p>{/if}
-              </div>
-            {/if}
-          </section>
-        {/if}
-      </div>
+      <DiagnoseAdvanced
+        projectPath={$projectPath}
+        aiLoading={aiLoading}
+        sessionOk={sessionOk}
+        sharingLog={sharingLog}
+        currentLogText={currentLogText}
+        supportBusy={supportBusy}
+        planning={planning}
+        oreLoading={oreLoading}
+        duplicateLoading={duplicateLoading}
+        unifyLoading={unifyLoading}
+        wrongLoaderLoading={wrongLoaderLoading}
+        duplicateJarLoading={duplicateJarLoading}
+        authorBusy={authorBusy}
+        timings={diagnoseTimings}
+        bind:aiPrompt
+        bind:aiShowPrompt
+        runAiExplain={() => void runAiExplain()}
+        shareCurrentLog={shareCurrentLog}
+        exportSupportPack={exportSupportPack}
+        copyCurrentLog={copyCurrentLog}
+        openFolder={openFolder}
+        openSubdir={openSubdir}
+        createFixPlan={() => void createFixPlan()}
+        scanOreGen={() => void scanOreGen()}
+        scanDuplicateItems={() => void scanDuplicateItems()}
+        generateUnify={() => void generateUnify()}
+        detectWrongLoaderMods={() => void detectWrongLoaderMods()}
+        detectDuplicateModJars={() => void detectDuplicateModJars()}
+        onOpenAuthorForm={() => void openAuthorForm({ fromAnalysis: !!aiAnalysis })}
+        onOpenAiSettings={() => (aiModalOpen = true)}
+        signalGroups={[]}
+        recentSnapshots={diagnosis.recentSnapshots ?? []}
+        suspected={suspected}
+        crashMcreator={crashMcreator}
+        crashClassFinder={crashClassFinder}
+        bind:classQuery
+        classBusy={classBusy}
+        classResults={classResults}
+        dependentResults={dependentResults}
+        bind:analysisToolsOpen
+        disablingModId={disablingModId}
+        bisectMods={bisectMods}
+        onJumpLine={() => void openEvidence()}
+        onDisableMod={fixDisableMod}
+        onUpdateMod={async (id) => {
+          if (!id) return;
+          try { await applyFixBatchOrThrow([{ kind: "updateMod", label: `Update ${id}`, modId: id }]); message = `Update requested for ${id}`; }
+          catch (err) { error = String(err); }
+        }}
+        onToggleBisect={toggleBisect}
+        onFindClass={runClassFinder}
+        onFindDependents={runFindDependents}
+        onOpenSnapshots={() => ideStageRequest.set("snapshots")}
+        groupTest={groupTest}
+        groupTestActive={groupTestActive}
+        groupTestStatus={groupTestStatus(groupTest)}
+        groupTestPhaseKey={groupTestPhaseKey(groupTest)}
+        groupTestBusy={groupTestBusy}
+        bind:groupTestAuto
+        launching={launching}
+        onStartGroupTest={() => void startGroupTest()}
+        onGroupTestLaunch={() => void runTest()}
+        onReportGroupTest={(outcome) => void reportGroupTest(outcome)}
+        onCancelGroupTest={() => void cancelGroupTest()}
+        graphDiagnostics={graphDiagnostics}
+        duplicateJarGroups={duplicateJarGroups}
+        wrongLoaderJars={wrongLoaderJars}
+        fixingIdx={fixingIdx}
+        duplicateJarFixing={duplicateJarFixing}
+        wrongLoaderFixing={wrongLoaderFixing}
+        onFixMissingDependency={({ modId, idx }) => fixMissingDependency(modId, idx)}
+        onFixDeduplicate={fixDeduplicate}
+        onKeepOneDuplicateJar={({ modId, fileName }) => keepOneDuplicateJar(modId, fileName)}
+        onDisableWrongJar={disableWrongJar}
+        onRemoveWrongJar={removeWrongJar}
+        plan={plan}
+        bind:selectedFixOption
+        applying={applying}
+        onApplyPlan={() => void applyFix()}
+        bind:authorOpen
+        bind:authorId
+        bind:authorSolution
+        bind:authorSymptoms
+        bind:authorSuspected
+        bind:authorActionsJson
+        bind:authorNotes
+        authorExportPreview={authorExportPreview}
+        authorMessage={authorMsg}
+        onSaveAuthor={() => void saveAuthorCase()}
+        onCopyAuthorExport={() => void copyAuthorExport()}
+        onOpenAuthorFolder={() => void openAuthorExportFolder()}
+      />
     {/if}
   {:else}
     <div class="empty">Press Refresh to load diagnosis.</div>

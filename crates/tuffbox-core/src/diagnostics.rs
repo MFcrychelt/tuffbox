@@ -18,6 +18,19 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
+    pub fn info(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        related_nodes: Vec<NodeId>,
+    ) -> Self {
+        Self {
+            severity: DiagnosticSeverity::Info,
+            code: code.into(),
+            message: message.into(),
+            related_nodes,
+        }
+    }
+
     pub fn error(
         code: impl Into<String>,
         message: impl Into<String>,
