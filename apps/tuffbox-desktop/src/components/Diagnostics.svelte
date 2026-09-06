@@ -213,6 +213,7 @@
   /** Radio choice for plans that carry `options` (conflict resolutions). */
   let selectedFixOption = $state<number | null>(null);
   let lastLoadedPath = $state<string | null>(null);
+  let advancedLoadedPath: string | null = null;
   // Prevent the project-path effect, onMount and the open-diagnostics event
   // from starting identical IPC pipelines at the same time.
   let activeLoadPath: string | null = null;
@@ -2630,8 +2631,19 @@
     const path = $projectPath;
     if (!path) {
       softVerifyStatus = null;
+      advancedLoadedPath = null;
     }
     onProjectPathChange(path);
+  });
+
+  // Advanced tools are independent of the base diagnosis. Do not query the
+  // group-test session on every Diagnose open; load it only when the user
+  // actually enters the Advanced tab.
+  $effect(() => {
+    const path = $projectPath;
+    if (mainTab !== "advanced" || !path || advancedLoadedPath === path) return;
+    advancedLoadedPath = path;
+    void refreshGroupTest();
   });
 
   onMount(() => {
@@ -2647,7 +2659,6 @@
       void load(true);
       void loadPendingPlan();
       void refreshSoftVerifyStatus($projectPath);
-      void refreshGroupTest();
     }
     let unlistenCascade: UnlistenFn | undefined;
     let unlistenSoftVerify: UnlistenFn | undefined;
