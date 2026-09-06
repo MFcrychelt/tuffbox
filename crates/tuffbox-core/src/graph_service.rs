@@ -10,12 +10,17 @@ use std::path::{Path, PathBuf};
 
 /// Schema version for cache invalidation. Increment when the cache format or
 /// enrichment logic changes so old caches are rebuilt automatically.
-const CACHE_VERSION: u32 = 4;
+const CACHE_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphCache {
     pub manifest_fingerprint: String,
+    /// Fingerprint of installed mod jars used during local metadata enrichment.
+    /// Keeping it separate avoids rescanning unchanged jars while still
+    /// invalidating the graph when a local jar is replaced in-place.
+    #[serde(default)]
+    pub installed_jars_fingerprint: String,
     pub generated_at: String,
     pub enriched_manifest: ProjectManifest,
     pub graph: DependencyGraph,
@@ -32,6 +37,7 @@ impl GraphCache {
         let graph = DependencyGraph::from_manifest(&enriched_manifest);
         Self {
             manifest_fingerprint: manifest_fingerprint(base_manifest),
+            installed_jars_fingerprint: String::new(),
             generated_at: crate::time_util::rfc3339_now(),
             enriched_manifest,
             graph,
@@ -62,8 +68,14 @@ impl GraphCache {
         let Ok(cache) = serde_json::from_str::<Self>(&raw) else {
             return Ok(None);
         };
+        let expected_jars = installed_jars_fingerprint(manifest_path);
+        // Empty is retained for programmatic GraphCache::new callers and
+        // older test fixtures; warm_graph_cache always writes the real key.
+        let jars_match = cache.installed_jars_fingerprint.is_empty()
+            || cache.installed_jars_fingerprint == expected_jars;
         Ok((cache.cache_version == CACHE_VERSION
-            && cache.manifest_fingerprint == manifest_fingerprint(manifest))
+            && cache.manifest_fingerprint == manifest_fingerprint(manifest)
+            && jars_match)
         .then_some(cache))
     }
 
@@ -162,13 +174,54 @@ pub fn warm_graph_cache(manifest_path: &Path, manifest: &ProjectManifest) -> Res
     }
     let mut enriched = manifest.clone();
     enrich_manifest_from_installed_jars(manifest_path, &mut enriched);
-    GraphCache::new(manifest, enriched).save(manifest_path)?;
+    let mut cache = GraphCache::new(manifest, enriched);
+    cache.installed_jars_fingerprint = installed_jars_fingerprint(manifest_path);
+    cache.save(manifest_path)?;
     Ok(true)
 }
 
 pub fn manifest_fingerprint(manifest: &ProjectManifest) -> String {
     let bytes = serde_json::to_vec(manifest).unwrap_or_default();
     format!("{:x}", Sha1::digest(bytes))
+}
+
+/// Cheap invalidation key for local jar enrichment. It intentionally hashes
+/// names, lengths and mtimes rather than jar contents: download/materialize
+/// code already verifies content hashes, while this keeps startup O(number of
+/// directory entries) instead of reading hundreds of megabytes.
+pub fn installed_jars_fingerprint(manifest_path: &Path) -> String {
+    let Some(instance_dir) = crate::instance_dir_for_manifest(manifest_path) else {
+        return String::new();
+    };
+    let mods_dir = instance_dir.join("mods");
+    let mut entries = Vec::new();
+    let Ok(read_dir) = std::fs::read_dir(mods_dir) else {
+        return format!("{:x}", Sha1::digest(b""));
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let is_jar = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jar"));
+        if !is_jar {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        entries.push(format!(
+            "{}:{}:{}",
+            entry.file_name().to_string_lossy(),
+            metadata.len(),
+            modified
+        ));
+    }
+    entries.sort_unstable();
+    format!("{:x}", Sha1::digest(entries.join("\\n").as_bytes()))
 }
 
 pub fn graph_cache_path(manifest_path: &Path) -> Result<PathBuf, String> {
