@@ -5965,7 +5965,15 @@ fn run_crash_assistant_full_impl(
     // runs of the same project don't rescan every jar for known classes.
     let mut class_finder_cache: std::collections::HashMap<String, Vec<tuffbox_core::crash_assistant::ClassMatch>> =
         std::collections::HashMap::new();
-    let mods_dir_key = mods_dir.display().to_string();
+    // The directory path alone is not a valid cache key: replacing a jar in
+    // place keeps the path unchanged. Include the cheap jar metadata
+    // fingerprint so class ownership results cannot survive a mod update.
+    let mods_dir_key = format!(
+        "{}:{}",
+        mods_dir.display(),
+        tuffbox_core::installed_jars_fingerprint(Path::new(&path))
+    );
+    let mut class_finder_seen = std::collections::HashSet::new();
     if let Some(text) = load_scoped_crash_report(&project_dir, report_id.as_deref()) {
         combined.push_str(&text);
         combined.push('\n');
@@ -6022,7 +6030,10 @@ fn run_crash_assistant_full_impl(
                             find_class_in_mods_cached(cls, &mods_dir, &mods_dir_key)
                         });
                     for m in matches.iter() {
-                        class_finder.push(serde_json::json!({"className":m.class_name,"modId":m.mod_id,"modName":m.mod_name}));
+                        let key = format!("{}:{}", m.mod_id, m.class_name);
+                        if class_finder_seen.insert(key) {
+                            class_finder.push(serde_json::json!({"className":m.class_name,"modId":m.mod_id,"modName":m.mod_name}));
+                        }
                     }
                 }
             }
