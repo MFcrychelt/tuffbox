@@ -10520,7 +10520,12 @@ fn get_pack_health_impl(path: &str) -> Result<PackHealthReport, String> {
     // static graph is clean. Previously `last_crash` was displayed in the
     // report but did not affect the overall verdict, so the badge could say
     // Healthy immediately after a crash.
-    let overall = if diag_errors > 0 || wrong_loader_count > 0 || last_crash.is_some() {
+    let export_errors = export_issues.iter().any(|issue| issue.severity == "error");
+    let overall = if diag_errors > 0
+        || wrong_loader_count > 0
+        || last_crash.is_some()
+        || export_errors
+    {
         PackHealthOverall::Errors
     } else if diag_warnings > 0
         || !export_issues.is_empty()

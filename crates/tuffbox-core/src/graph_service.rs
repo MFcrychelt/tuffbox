@@ -369,6 +369,43 @@ mod tests {
     }
 
     #[test]
+    fn corrupted_cache_is_a_miss_not_a_diagnostics_error() {
+        let manifest: ProjectManifest = serde_json::from_str(include_str!(
+            "../../../examples/sample-project.tuffbox.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("project.tuffbox.json");
+        let cache_path = graph_cache_path(&manifest_path).unwrap();
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        std::fs::write(&cache_path, b"{ definitely not json").unwrap();
+        assert!(GraphCache::load_if_current(&manifest_path, &manifest)
+            .unwrap()
+            .is_none());
+        let result = diagnostics_for_click_path(&manifest_path, &manifest);
+        assert!(!result.cached);
+    }
+
+    #[test]
+    fn local_jar_change_invalidates_warmed_cache() {
+        let manifest: ProjectManifest = serde_json::from_str(include_str!(
+            "../../../examples/sample-project.tuffbox.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("project.tuffbox.json");
+        std::fs::create_dir_all(dir.path().join("mods")).unwrap();
+        assert!(warm_graph_cache(&manifest_path, &manifest).unwrap());
+        assert!(GraphCache::load_if_current(&manifest_path, &manifest)
+            .unwrap()
+            .is_some());
+        std::fs::write(dir.path().join("mods").join("changed.jar"), b"jar").unwrap();
+        assert!(GraphCache::load_if_current(&manifest_path, &manifest)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn click_path_diagnostics_without_cache_use_manifest_only() {
         let manifest: ProjectManifest = serde_json::from_str(include_str!(
             "../../../examples/sample-project.tuffbox.json"
