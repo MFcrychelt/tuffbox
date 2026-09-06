@@ -51,6 +51,10 @@ use tauri::Emitter;
 /// Serializes manifest + mods-folder mutations so background `sync_mods_folder`
 /// cannot overwrite an in-flight Update All / single update.
 static MODS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+/// Single-flight guard for the short diagnostics cache miss path. Without it,
+/// Badge, counts and Pack Health could all miss the cache concurrently and
+/// rebuild the same graph three times.
+static DIAGNOSTICS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 use types::*;
 
@@ -10391,6 +10395,14 @@ fn diagnostics_for_path_cached(
     manifest: &ProjectManifest,
 ) -> tuffbox_core::ClickPathDiagnostics {
     let key = diagnostics_cache_key(manifest_path, manifest);
+    if let Some(cached) =
+        tuffbox_core::api_cache::get::<tuffbox_core::ClickPathDiagnostics>(&key)
+    {
+        return cached;
+    }
+    let _guard = DIAGNOSTICS_IO_LOCK.lock().ok();
+    // Re-check after waiting: another consumer may have populated the cache
+    // while this caller was blocked.
     if let Some(cached) =
         tuffbox_core::api_cache::get::<tuffbox_core::ClickPathDiagnostics>(&key)
     {

@@ -58,6 +58,7 @@ Crash diagnosis, graph cache и Pack Health имеют разные cache keys �
 - Pack Health Badge получил отдельный in-flight path guard: первая загрузка больше не дублируется до того, как `lastPath` успеет обновиться после ответа.
 - загрузка состояния Group Test отложена до открытия Advanced tab; базовое открытие Diagnose больше не делает лишний IPC-запрос для инструмента, которым пользователь не воспользовался.
 - graph diagnostics кэшируются единым 5-секундным project fingerprint для `get_diagnostics`, counts и Pack Health; повторные consumers не перестраивают один и тот же graph.
+- cache miss защищён single-flight guard с повторной проверкой после ожидания: одновременные Badge/counts/Pack Health consumers не выполняют один cold graph build несколько раз.
 
 ## Целевая реконструкция
 
