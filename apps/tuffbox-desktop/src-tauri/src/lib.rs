@@ -6770,7 +6770,6 @@ fn collect_mod_version_options_for_ai(
             id: id.clone(),
             installed,
             available,
-            severity: String::new(),
         });
     }
     out
