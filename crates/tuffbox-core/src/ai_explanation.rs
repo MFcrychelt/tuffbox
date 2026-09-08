@@ -952,6 +952,7 @@ mod tests {
                 id: "sodium".into(),
                 installed: "0.5.0".into(),
                 available: vec!["0.9.2+mc1.20.1".into(), "0.9.0+mc1.20.1".into()],
+                severity: "error".into(),
             }],
         };
         for prompt in [build_crash_prompt(&ctx), build_compact_crash_prompt(&ctx)] {
