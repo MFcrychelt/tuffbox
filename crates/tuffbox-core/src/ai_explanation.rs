@@ -130,6 +130,10 @@ pub struct CrashAiFinding {
     pub title: String,
     pub description: String,
     pub auto_fix: Option<String>,
+    /// `critical` | `error` | `warning` | `info` — carried so the prompt and
+    /// the heuristic fallback can tell real failures from informational notes.
+    #[serde(default)]
+    pub severity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,10 +177,52 @@ pub fn build_compact_crash_prompt(ctx: &CrashAiContext) -> String {
 
 /// True when the configured provider/model should use the compact Explain prompt.
 pub fn prefers_compact_crash_prompt(provider: &str, model: &str) -> bool {
-    if !provider.eq_ignore_ascii_case("ollama") {
+    prefers_compact_crash_prompt_for_endpoint(provider, "", model)
+}
+
+/// Endpoint-aware variant: small models served through an OpenAI-compatible
+/// *local* endpoint (LM Studio, llama.cpp server, …) need the compact prompt
+/// just like Ollama ones — the full 14 KB inventory dump overflows them.
+pub fn prefers_compact_crash_prompt_for_endpoint(
+    provider: &str,
+    endpoint: &str,
+    model: &str,
+) -> bool {
+    if !is_small_local_model(model) {
         return false;
     }
-    is_small_local_model(model)
+    if provider.eq_ignore_ascii_case("ollama") {
+        return true;
+    }
+    endpoint_looks_local(endpoint)
+}
+
+/// Heuristic: is this OpenAI-compatible endpoint served from this machine / LAN?
+fn endpoint_looks_local(endpoint: &str) -> bool {
+    let e = endpoint.trim().to_ascii_lowercase();
+    if e.is_empty() {
+        return false;
+    }
+    // Strip scheme for prefix checks.
+    let host = e
+        .split("://")
+        .next_back()
+        .unwrap_or(e.as_str())
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    host.starts_with("localhost")
+        || host.starts_with("127.")
+        || host.starts_with("0.0.0.0")
+        || host.starts_with("[::1]")
+        || host.starts_with("::1")
+        || host.starts_with("10.")
+        || host.starts_with("192.168.")
+        || host.starts_with("172.16.")
+        // Well-known local inference servers (LM Studio / llama.cpp / Ollama-alt-port).
+        || host.contains(":1234")
+        || host.contains(":8080")
+        || host.contains(":11434")
 }
 
 fn is_small_local_model(model: &str) -> bool {
@@ -356,7 +402,16 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
     if !ctx.crash_assistant_findings.is_empty() {
         p.push_str("## Automated Analysis Results\n");
         for f in &ctx.crash_assistant_findings {
-            p.push_str(&format!("- [{}] {}: {}\n", f.code, f.title, f.description));
+            // Severity is load-bearing: without it the model treats info notes
+            // (MCreator detection, pack recovery) as crash causes.
+            if f.severity.trim().is_empty() {
+                p.push_str(&format!("- [{}] {}: {}\n", f.code, f.title, f.description));
+            } else {
+                p.push_str(&format!(
+                    "- [{}|{}] {}: {}\n",
+                    f.code, f.severity, f.title, f.description
+                ));
+            }
             if let Some(fix) = &f.auto_fix {
                 p.push_str(&format!("  Auto-fix: {fix}\n"));
             }
@@ -510,32 +565,82 @@ Do not invent mods outside inventory. Do not collapse a covering of size > 1 int
 }
 
 /// Pull likely missing-dependency mod ids from graph diagnostic lines.
+///
+/// Only keeps plausible mod ids: quoted tokens win, CamelCase prose
+/// (`MissingDependency`) and diagnostic vocabulary are skipped. The old
+/// version pushed every 3+ char token — `MissingDependency`, `Graph`,
+/// `mandatory` — into the compact prompt's "relevant mod ids" AND into the
+/// install-allowlist, so a hallucinated `install_mod:missingdependency`
+/// could pass grounding.
 pub fn missing_dep_hints_from_graph(diags: &[String]) -> Vec<String> {
+    const STOPWORDS: &[&str] = &[
+        "missing",
+        "missingdependency",
+        "missingdependencies",
+        "missingmods",
+        "mandatory",
+        "optional",
+        "dependency",
+        "dependencies",
+        "requires",
+        "required",
+        "requirement",
+        "unmet",
+        "mod",
+        "mods",
+        "modid",
+        "version",
+        "range",
+        "minecraft",
+        "fabricloader",
+        "fabric",
+        "forge",
+        "neoforge",
+        "quilt",
+        "loader",
+        "which",
+        "with",
+        "from",
+        "that",
+        "this",
+        "have",
+        "needs",
+        "error",
+        "warning",
+        "info",
+        "graph",
+        "diagnostic",
+        "null",
+        "none",
+    ];
     let mut out = Vec::new();
     for line in diags {
         let lower = line.to_ascii_lowercase();
         if !(lower.contains("missing") || lower.contains("requires") || lower.contains("depend")) {
             continue;
         }
+        // Prefer quoted ids (`requires 'flywheel'`) — highest precision.
+        for id in quoted_tokens(line) {
+            if !out.iter().any(|x: &String| x.eq_ignore_ascii_case(&id)) {
+                out.push(id);
+            }
+        }
         for token in line.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
             let t = token.trim();
             if t.len() < 3 || t.len() > 64 {
                 continue;
             }
+            // Real mod ids are lowercase by convention (`fabric-api`); skip
+            // CamelCase prose glued from diagnostic words.
+            if t.chars().any(|c| c.is_ascii_uppercase()) {
+                continue;
+            }
             let tl = t.to_ascii_lowercase();
-            if matches!(
-                tl.as_str(),
-                "missing"
-                    | "dependency"
-                    | "requires"
-                    | "required"
-                    | "mod"
-                    | "error"
-                    | "warning"
-                    | "info"
-                    | "graph"
-                    | "null"
-            ) {
+            if STOPWORDS.contains(&tl.as_str()) {
+                continue;
+            }
+            // Residual glued forms (`dependencyx`) — never a mod id.
+            if tl.contains("missing") || tl.contains("depend") || tl.contains("requir") {
                 continue;
             }
             if !out.iter().any(|x: &String| x.eq_ignore_ascii_case(t)) {
@@ -544,6 +649,39 @@ pub fn missing_dep_hints_from_graph(diags: &[String]) -> Vec<String> {
         }
     }
     out.into_iter().take(16).collect()
+}
+
+/// `'quoted'` / `"quoted"` / `` `quoted` `` tokens — the precise way crash
+/// lines name mods (`Mod 'create' requires 'flywheel'`).
+fn quoted_tokens(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let q = bytes[i];
+        if q == b'\'' || q == b'"' || q == b'`' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j] != q {
+                j += 1;
+            }
+            if j < bytes.len() {
+                let inner = line[i + 1..j].trim();
+                if inner.len() >= 2
+                    && inner.len() <= 64
+                    && inner
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+                    && !inner.contains("..")
+                {
+                    out.push(inner.to_ascii_lowercase());
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
 }
 
 /// Context for post-resolution distill (user already fixed the crash).
@@ -655,6 +793,7 @@ pub fn findings_to_ai(findings: &[CrashAnalysisFinding]) -> Vec<CrashAiFinding> 
             title: f.title.clone(),
             description: f.description.clone(),
             auto_fix: f.auto_fix.clone(),
+            severity: f.severity.clone(),
         })
         .collect()
 }
@@ -704,6 +843,41 @@ mod tests {
             "openai-compatible",
             "gpt-4o-mini"
         ));
+        // Small model behind a LOCAL OpenAI-compatible endpoint → compact.
+        assert!(prefers_compact_crash_prompt_for_endpoint(
+            "openai-compatible",
+            "http://127.0.0.1:1234/v1",
+            "qwen2.5-coder:1.5b"
+        ));
+        assert!(prefers_compact_crash_prompt_for_endpoint(
+            "openai-compatible",
+            "http://localhost:8080/v1",
+            "tinyllama"
+        ));
+        // Same small tag on a cloud endpoint → full prompt (server can take it).
+        assert!(!prefers_compact_crash_prompt_for_endpoint(
+            "openai-compatible",
+            "https://openrouter.ai/api/v1",
+            "qwen2.5:3b"
+        ));
+    }
+
+    #[test]
+    fn missing_dep_hints_skip_diagnostic_prose() {
+        let diags = vec![
+            "[Error] MissingDependency: sodium requires indium".to_string(),
+            "Mod 'create' requires 'flywheel' which is missing!".to_string(),
+        ];
+        let hints = missing_dep_hints_from_graph(&diags);
+        assert!(hints.iter().any(|h| h == "indium"), "{hints:?}");
+        assert!(hints.iter().any(|h| h == "flywheel"), "{hints:?}");
+        assert!(hints.iter().any(|h| h == "sodium"), "{hints:?}");
+        for bad in ["MissingDependency", "missingdependency", "Graph", "Error", "requires"] {
+            assert!(
+                !hints.iter().any(|h| h.eq_ignore_ascii_case(bad)),
+                "prose token leaked: {bad} in {hints:?}"
+            );
+        }
     }
 
     #[test]

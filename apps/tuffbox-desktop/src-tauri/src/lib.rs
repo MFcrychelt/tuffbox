@@ -6011,31 +6011,32 @@ fn run_crash_assistant_full_impl(
     // Class attribution is performed by the batch scanner below; its
     // process-wide single-class cache is used by the interactive tool.
     let mut class_finder_seen = std::collections::HashSet::new();
-    if let Some(text) = load_scoped_crash_report(&project_dir, report_id.as_deref()) {
+    // Load latest.log FIRST: crash resolution needs it for the stale check,
+    // mirroring `run_crash_assistant_analysis` scope (explicit report, else
+    // newest-unless-stale). Previously a `None` report id analyzed the newest
+    // crash but attributed classes from latest.log only.
+    let latest = project_dir.join("logs").join("latest.log");
+    let latest_tail = if latest.is_file() {
+        tuffbox_core::process::read_log_tail(&latest, 2000).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    if let Some(text) =
+        resolve_attribution_crash_text(&project_dir, report_id.as_deref(), &latest_tail)
+    {
         combined.push_str(&text);
         combined.push('\n');
     }
-    let latest = project_dir.join("logs").join("latest.log");
-    if latest.is_file() {
-        combined.push_str(
-            &tuffbox_core::process::read_log_tail(&latest, 2000).unwrap_or_default(),
-        );
-    }
+    combined.push_str(&latest_tail);
     // Pre-compute the unique class list so the stage label can say how many
     // jar-scan rounds are coming (each round opens every mod jar once).
     let mut unique_classes: Vec<String> = Vec::new();
     for line in combined.lines() {
         if line.contains("NoClassDefFoundError") || line.contains("ClassNotFoundException") {
-            if let Some(cls) = line
-                .split(": ")
-                .nth(1)
-                .and_then(|s| s.split_whitespace().next())
-            {
-                if cls.len() > 5
-                    && cls.len() < 200
-                    && cls.contains('.')
-                    && !unique_classes.iter().any(|c| c == cls)
-                {
+            // Last `": "` segment — `nth(1)` grabs the exception name on
+            // `Caused by: …NoClassDefFoundError: com/foo/Bar` lines.
+            if let Some(cls) = tuffbox_core::crash_assistant::class_after_colon(line) {
+                if !unique_classes.iter().any(|c| c == cls) {
                     unique_classes.push(cls.to_string());
                 }
             }
@@ -6099,8 +6100,11 @@ fn run_crash_assistant_full_impl(
     }))
 }
 
-/// Load a single crash report by id (filename stem / path fragment), or the
-/// newest `.txt` under `crash-reports/` when `report_id` is None.
+/// Load a single crash report by id (filename stem / path fragment).
+/// Returns `None` for `None`, for the `__latest_log__` / `__launcher_log__`
+/// source sentinels, and when no crash file matches — it intentionally does
+/// NOT fall back to the newest crash (callers that want "last crash" use
+/// [`load_newest_crash_report`] explicitly).
 fn load_scoped_crash_report(project_dir: &Path, report_id: Option<&str>) -> Option<String> {
     load_scoped_crash_report_with_path(project_dir, report_id).map(|(_, text)| text)
 }
@@ -6109,9 +6113,13 @@ fn load_scoped_crash_report(project_dir: &Path, report_id: Option<&str>) -> Opti
 /// `LAUNCHER_LOG_SOURCE` in Diagnostics.svelte).
 const LAUNCHER_LOG_SOURCE_MARKER: &str = "__launcher_log__";
 
-/// True when the caller selected a real crash-report file (not latest.log).
+/// True when the caller selected a real crash-report file (not latest.log,
+/// not the launcher-log source sentinel).
 fn is_explicit_crash_report_id(report_id: Option<&str>) -> bool {
-    matches!(report_id, Some(id) if !id.is_empty() && id != "__latest_log__")
+    matches!(
+        report_id,
+        Some(id) if !id.is_empty() && id != "__latest_log__" && id != LAUNCHER_LOG_SOURCE_MARKER
+    )
 }
 
 /// Load a crash-report only when `report_id` is an explicit file id/name.
@@ -6121,7 +6129,12 @@ fn load_scoped_crash_report_with_path(
     project_dir: &Path,
     report_id: Option<&str>,
 ) -> Option<(PathBuf, String)> {
-    let id = report_id.filter(|s| !s.is_empty() && *s != "__latest_log__")?;
+    // Both source sentinels are filtered: `__launcher_log__` used to leak into
+    // the filename search (and `is_explicit_crash_report_id`), so selecting
+    // the launcher log also flipped the crash-file excerpt budgets.
+    let id = report_id.filter(|s| {
+        !s.is_empty() && *s != "__latest_log__" && *s != LAUNCHER_LOG_SOURCE_MARKER
+    })?;
     let cd = project_dir.join("crash-reports");
     if !cd.is_dir() {
         return None;
@@ -6145,6 +6158,36 @@ fn load_scoped_crash_report_with_path(
         .ok()
         .filter(|c| c.len() < 4 * 1024 * 1024)?;
     Some((path, text))
+}
+
+/// Crash text for class→jar attribution with the SAME scope as
+/// [`run_crash_assistant_analysis`]: explicit report id wins; `None` falls back
+/// to the newest crash unless latest.log supersedes it; the source sentinels
+/// (`__latest_log__`, `__launcher_log__`) resolve to no crash text.
+fn resolve_attribution_crash_text(
+    project_dir: &Path,
+    report_id: Option<&str>,
+    latest_log: &str,
+) -> Option<String> {
+    match report_id.filter(|id| !id.is_empty()) {
+        Some(id) if is_explicit_crash_report_id(Some(id)) => {
+            load_scoped_crash_report(project_dir, Some(id))
+        }
+        Some(_) => None, // source sentinel — no crash file in scope
+        None => {
+            let (report_path, text) = load_newest_crash_report(project_dir)?;
+            let stale = tuffbox_core::crash::latest_log_supersedes_crash(
+                project_dir,
+                Some(report_path.as_path()),
+                latest_log,
+            );
+            if stale {
+                None
+            } else {
+                Some(text)
+            }
+        }
+    }
 }
 
 /// Newest `crash-reports/*.txt` by mtime (for flows that intentionally want
@@ -6528,7 +6571,9 @@ fn prepare_ai_crash_context_uncached(
     let (crash_excerpt_budget, latest_excerpt_budget) = if using_crash_file {
         (6000usize, 4000usize)
     } else if using_launcher_log {
-        (0usize, 0usize) // sentinel: launcher log carries the content below
+        // Launcher log is the primary excerpt (see below); latest.log still
+        // contributes — dropping it entirely hid game-side errors.
+        (0usize, 4000usize)
     } else {
         (800usize, 7000usize)
     };
@@ -6776,6 +6821,10 @@ async fn build_ai_crash_context(
     let similar_case_count = ai_ctx.similar_cases.len();
     let fingerprint_key = ai_ctx.fingerprint_key.clone();
     let mut ui_ctx = ai_ctx;
+    // The frontend only reads fingerprint/prompt/counts from this payload —
+    // strip the full inventory blob (per-mod files, configs) that froze the
+    // webview IPC on big packs. Summary counts travel separately below.
+    ui_ctx.inventory = None;
 
     Ok(serde_json::json!({
         "context": ui_ctx,
@@ -6855,7 +6904,6 @@ async fn analyze_crash_with_ai(
         }
     }
     if online_kb && !matches!(mode, tuffbox_core::action_plan::DiagnoseMode::KbOnly) {
-        network_used = true;
         let req = tuffbox_core::crash_remote::CrashLookupRequest {
             fingerprint: fingerprint.clone(),
             excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 2000)),
@@ -6869,6 +6917,13 @@ async fn analyze_crash_with_ai(
         )
         .await
         {
+            // `network_used` must reflect actual network I/O, not transport
+            // availability: flag it only when the lookup really returned hits.
+            // (A timeout/empty response on a dead hub must not persist the
+            // plan as network-derived.)
+            if !resp.hits.is_empty() {
+                network_used = true;
+            }
             let mut remote = tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
             remote.extend(ai_ctx.similar_cases.drain(..));
             let mut seen = std::collections::HashSet::new();
@@ -6883,8 +6938,20 @@ async fn analyze_crash_with_ai(
         .as_ref()
         .map(|inv| inv.mods.iter().map(|m| m.id.clone()).collect())
         .unwrap_or_default();
-    let missing_ids =
-        tuffbox_core::ai_explanation::missing_dep_hints_from_graph(&ai_ctx.graph_diagnostics);
+    // Missing-dep allowlist for `install_mod` grounding: graph diagnostics
+    // PLUS crash/log-named requirements (`Mod 'x' requires 'y'`). The graph
+    // alone misses log-only mentions, which left legitimate installs warned
+    // and gave invented installs the same standing as real ones.
+    let missing_ids = {
+        let mut ids =
+            tuffbox_core::ai_explanation::missing_dep_hints_from_graph(&ai_ctx.graph_diagnostics);
+        for id in tuffbox_core::crash_assistant::required_mod_ids_from_text(&haystack) {
+            if !ids.iter().any(|x| x.eq_ignore_ascii_case(&id)) {
+                ids.push(id);
+            }
+        }
+        ids
+    };
 
     // ── L1: strong KB / capsule hit (free) ──────────────────────────
     let l1_plan = try_l1_strong_plan(&fingerprint, &haystack, &ai_ctx, swarm_on);
@@ -6892,16 +6959,15 @@ async fn analyze_crash_with_ai(
     let mut plan = if let Some(plan) = l1_plan {
         cascade_stage = "l1_hit".into();
         kb_short_circuit = true;
-        // Only count the network when the L1 hit actually came from the remote
-        // (global capsule) library — a purely local hit must not flip
-        // network_used, or the plan gets persisted as network-derived.
-        network_used = online_kb || network_used;
+        // A purely local L1 hit must NOT flip `network_used`, or the plan gets
+        // persisted as network-derived. (The old `online_kb ||` line did
+        // exactly that whenever transports merely existed.) Remote enrichment
+        // above already flagged genuine network I/O.
         plan
     } else if matches!(mode, tuffbox_core::action_plan::DiagnoseMode::KbOnly) {
         // KbOnly: L1 enrichment via remote lookup only — no L2/L3 LLM.
         cascade_tried.push("kb_only".into());
         if online_kb {
-            network_used = true;
             let req = tuffbox_core::crash_remote::CrashLookupRequest {
                 fingerprint: fingerprint.clone(),
                 excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 2000)),
@@ -6919,6 +6985,8 @@ async fn analyze_crash_with_ai(
                     let hit = resp.hits.first().ok_or_else(|| {
                         "no remote KB hits for this fingerprint".to_string()
                     })?;
+                    // Remote hit actually used → network-derived plan.
+                    network_used = true;
                     cascade_stage = "l1_hit".into();
                     kb_short_circuit = true;
                     tuffbox_core::action_plan::plan_from_launcher_actions(
@@ -7265,15 +7333,28 @@ fn note_is_heuristic(notes: &[String]) -> bool {
 fn strong_plan_from_similar(
     ctx: &tuffbox_core::ai_explanation::CrashAiContext,
 ) -> Option<tuffbox_core::action_plan::ActionPlan> {
+    // Only same-crash candidates (exact or blame-suffix-soft key match) may
+    // short-circuit: additive similarity weights (exception + frames + blame +
+    // symptoms) let a merely similar crash reach the STRONG threshold and
+    // skip AI with a wrong fix.
     let hit = ctx
         .similar_cases
         .iter()
+        .filter(|h| {
+            tuffbox_core::crash_kb::fingerprint_keys_match(
+                &ctx.fingerprint_key,
+                &h.fingerprint_key,
+            )
+        })
         .max_by(|a, b| {
             a.score
                 .partial_cmp(&b.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })?;
     if hit.score < tuffbox_core::swarm::STRONG_MATCH_THRESHOLD {
+        return None;
+    }
+    if hit.solution.trim().is_empty() && hit.actions.is_empty() {
         return None;
     }
     let mut plan = tuffbox_core::action_plan::plan_from_kb_hit(
@@ -7287,6 +7368,18 @@ fn strong_plan_from_similar(
     Some(plan)
 }
 
+/// Severity rank for picking the most important Crash Assistant finding
+/// (heuristic fallback must lead with the actual failure, not the first —
+/// often informational — finding in the list).
+fn heuristic_finding_rank(severity: &str) -> u8 {
+    match severity.trim().to_ascii_lowercase().as_str() {
+        "critical" => 4,
+        "error" | "high" => 3,
+        "warning" | "medium" => 2,
+        _ => 1,
+    }
+}
+
 /// When Ollama/API is down, still return an actionable plan from local culprits.
 fn heuristic_plan_from_context(
     ctx: &tuffbox_core::ai_explanation::CrashAiContext,
@@ -7297,12 +7390,36 @@ fn heuristic_plan_from_context(
             suspected.push(c.id.clone());
         }
     }
+    // Heuristic actions are `disable_mod` — targets MUST be installed. Without
+    // this, missing (not-installed) deps and stray ids produced disable actions
+    // that grounding later dropped, leaving an "actionable" plan with zero
+    // actions. Filter against the full inventory when available.
+    if let Some(inv) = ctx.inventory.as_ref() {
+        let installed: std::collections::HashSet<String> =
+            inv.mods.iter().map(|m| m.id.to_ascii_lowercase()).collect();
+        suspected.retain(|s| installed.contains(&s.to_ascii_lowercase()));
+    }
     suspected.truncate(5);
     if suspected.is_empty() && ctx.crash_assistant_findings.is_empty() {
         return None;
     }
 
-    let explanation = if let Some(f) = ctx.crash_assistant_findings.first() {
+    // Lead with the most severe finding, not `.first()` (which may be an
+    // informational note like MCreator detection or resource-pack recovery).
+    // Ties keep the earliest finding in the list (stable max).
+    let top_finding = {
+        let mut best: Option<&tuffbox_core::ai_explanation::CrashAiFinding> = None;
+        let mut best_rank: u8 = 0;
+        for f in &ctx.crash_assistant_findings {
+            let rank = heuristic_finding_rank(&f.severity);
+            if best.is_none() || rank > best_rank {
+                best = Some(f);
+                best_rank = rank;
+            }
+        }
+        best
+    };
+    let explanation = if let Some(f) = top_finding {
         let auto = f.auto_fix.as_deref().unwrap_or("");
         format!(
             "{} — {}{}",

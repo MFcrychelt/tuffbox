@@ -275,11 +275,55 @@ fn looks_like_mod_inventory_line(line: &str) -> bool {
 
 fn truncate_evidence(line: &str) -> String {
     const MAX: usize = 280;
+    // Byte slicing (`&t[..MAX]`) panics on multi-byte UTF-8 (Cyrillic logs,
+    // emoji, box-drawing). Truncate on a char boundary instead.
     let t = line.trim();
-    if t.len() <= MAX {
-        return t.to_string();
+    let cut = crate::crash_kb::truncate_at_char_boundary(t, MAX);
+    if cut.len() == t.len() {
+        t.to_string()
+    } else {
+        format!("{cut}…")
     }
-    format!("{}…", &t[..MAX])
+}
+
+/// Extract the missing class name from a `NoClassDefFoundError` /
+/// `ClassNotFoundException` log line.
+///
+/// Lines usually carry several `": "` segments
+/// (`"Caused by: java.lang.NoClassDefFoundError: com/foo/Bar"`), so the class
+/// is the LAST segment — `split(": ").nth(1)` would return the exception name
+/// instead of the missing class.
+pub fn class_after_colon(line: &str) -> Option<&str> {
+    // No `": "` segment at all → a bare exception name, not a class reference.
+    if !line.contains(": ") {
+        return None;
+    }
+    let tail = line.rsplit(": ").next()?.trim();
+    let token = tail.split_whitespace().next().unwrap_or("").trim_matches(
+        |c: char| {
+            c == ':'
+                || c == '"'
+                || c == '\''
+                || c == '('
+                || c == ')'
+                || c == '['
+                || c == ']'
+        },
+    );
+    // Accept both `com.foo.Bar` and JVM slash form `com/foo/Bar`.
+    if token.len() > 5 && token.len() < 200 && (token.contains('.') || token.contains('/')) {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+/// Required-mod ids named (quoted) on requires/missing/dependency log lines.
+///
+/// Public so the AI diagnose path can ground `install_mod` against crash-named
+/// missing deps even when the graph emits no MISSING_DEPENDENCY diagnostic.
+pub fn required_mod_ids_from_text(combined: &str) -> Vec<String> {
+    extract_required_mod_ids(combined)
 }
 
 fn extract_required_mod_ids(combined: &str) -> Vec<String> {
@@ -345,6 +389,9 @@ fn extract_required_mod_ids(combined: &str) -> Vec<String> {
 
 fn check_java_version(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
     let mut out = Vec::new();
+    // Only interpret a class-file major when the log actually shows the
+    // version error — otherwise any innocent number 45–69 (player count,
+    // mod count, port fragment) raises a bogus "needs Java" finding.
     if let Some(ver) = extract_major(combined) {
         let needed = m2j(ver);
         out.push(f(
@@ -358,8 +405,9 @@ fn check_java_version(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFin
             Some(&format!("Install Java {}+ in Project Settings.", needed)),
             &["https://adoptium.net/"],
         ));
-    }
-    if combined.contains("UnsupportedClassVersionError") {
+    } else if combined.contains("UnsupportedClassVersionError") {
+        // Same root cause as above without a parseable major — `else` avoids
+        // emitting two findings for one error.
         out.push(f(
             "error",
             "JAVA_VERSION_MISMATCH",
@@ -373,9 +421,24 @@ fn check_java_version(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFin
 }
 
 fn extract_major(text: &str) -> Option<u32> {
+    if !(text.contains("UnsupportedClassVersionError")
+        || text.to_ascii_lowercase().contains("class file version"))
+    {
+        return None;
+    }
     for l in text.lines() {
-        for w in l.split_whitespace() {
-            if let Ok(n) = w.parse::<u32>() {
+        let lower = l.to_ascii_lowercase();
+        // Only numbers on the error line itself count ("…class file version 65…").
+        if !(lower.contains("unsupportedclassversionerror")
+            || lower.contains("class file version")
+            || lower.contains("major.minor version"))
+        {
+            continue;
+        }
+        for w in l.split(|c: char| !c.is_ascii_alphanumeric() && c != '.') {
+            // Tolerate `major.minor` form (`65.0`).
+            let head = w.split('.').next().unwrap_or("");
+            if let Ok(n) = head.parse::<u32>() {
                 if (45..=69).contains(&n) {
                     return Some(n);
                 }
@@ -385,9 +448,23 @@ fn extract_major(text: &str) -> Option<u32> {
     None
 }
 fn m2j(m: u32) -> String {
+    // Complete class-file-major → Java mapping (45=1.1 … 69=25).
     match m {
+        45 => "1.1".into(),
+        46 => "1.2".into(),
+        47 => "1.3".into(),
+        48 => "1.4".into(),
+        49 => "5".into(),
+        50 => "6".into(),
+        51 => "7".into(),
         52 => "8".into(),
+        53 => "9".into(),
+        54 => "10".into(),
         55 => "11".into(),
+        56 => "12".into(),
+        57 => "13".into(),
+        58 => "14".into(),
+        59 => "15".into(),
         60 => "16".into(),
         61 => "17".into(),
         62 => "18".into(),
@@ -397,6 +474,7 @@ fn m2j(m: u32) -> String {
         66 => "22".into(),
         67 => "23".into(),
         68 => "24".into(),
+        69 => "25".into(),
         _ => format!("?({m})"),
     }
 }
@@ -655,13 +733,7 @@ fn check_module_resolution(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalys
             || lo.contains("classnotfoundexception")
             || lo.contains("module") && lo.contains("not found")
         {
-            let class = line
-                .split(": ")
-                .nth(1)
-                .unwrap_or("?")
-                .split_whitespace()
-                .next()
-                .unwrap_or("?");
+            let class = class_after_colon(line).unwrap_or("?");
             let cn = if class.len() > 200 {
                 "unknown class"
             } else {
@@ -831,9 +903,10 @@ fn check_epic_fight_addons(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalys
     if !has_ef {
         return vec![];
     }
-    if combined.contains("EpicFight")
-        || combined.contains("epicfight")
-            && (combined.contains("NoSuchMethod") || combined.contains("NoSuchField"))
+    // NOTE: `&&` binds tighter than `||` — the Epic Fight mention alone must
+    // NOT fire (healthy logs list the mod). Require the API-break signal too.
+    if (combined.contains("EpicFight") || combined.contains("epicfight"))
+        && (combined.contains("NoSuchMethod") || combined.contains("NoSuchField"))
     {
         let addons: Vec<_> = ctx
             .installed_mods
@@ -1027,11 +1100,36 @@ fn check_geckolib_oculus(ctx: &AnalysisCtx) -> Vec<CrashAnalysisFinding> {
     }
 }
 
+/// True when `line` (already lowercased) mentions `word` as a whole token.
+fn line_has_word(line_lower: &str, word: &str) -> bool {
+    line_lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
+        .any(|tok| {
+            tok == word
+                || tok.starts_with(&format!("{word}-"))
+                || tok.starts_with(&format!("{word}_"))
+        })
+}
+
 fn check_intel_driver(combined: &str) -> Vec<CrashAnalysisFinding> {
-    if combined.to_lowercase().contains("intel")
-        && (combined.to_lowercase().contains("driver") || combined.to_lowercase().contains("ig"))
-        && combined.to_lowercase().contains("crash")
-    {
+    // Per-line match: the old whole-log `intel && (driver || "ig") && crash`
+    // fired on any Intel machine whose log contained "crash" plus any word
+    // with "ig" in it (config, origin, signal…). Require the driver signal
+    // and intel on the SAME line, with word boundaries.
+    let hit = combined.lines().any(|line| {
+        let l = line.to_lowercase();
+        (l.contains("intel") || l.contains("igdkmd") || l.contains("igxelpicd") || l.contains("igd10"))
+            && (line_has_word(&l, "driver")
+                || l.contains("igdkmd")
+                || l.contains("igxelpicd")
+                || l.contains("opengl") && l.contains("error"))
+            && (l.contains("crash")
+                || l.contains("error")
+                || l.contains("exception")
+                || l.contains("failed")
+                || l.contains("fault"))
+    });
+    if hit {
         vec![f(
             "warning",
             "MODERN_INTEL_DRIVER",
@@ -1046,10 +1144,14 @@ fn check_intel_driver(combined: &str) -> Vec<CrashAnalysisFinding> {
 }
 
 fn check_macos_shader_driver(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
-    if ctx.os_name.to_lowercase().contains("mac")
-        && (combined.contains("shader") || combined.contains("GLSL"))
-        && combined.contains("error")
-    {
+    // Same-line requirement: shader info lines plus an unrelated "error"
+    // elsewhere in the log must not raise a driver finding.
+    let hit = combined.lines().any(|line| {
+        let l = line.to_lowercase();
+        (l.contains("shader") || l.contains("glsl"))
+            && (l.contains("error") || l.contains("failed") || l.contains("exception"))
+    });
+    if ctx.os_name.to_lowercase().contains("mac") && hit {
         vec![f(
             "warning",
             "MACOS_SHADER_DRIVER",
@@ -1099,7 +1201,21 @@ fn check_corrupted_mod_jar(combined: &str) -> Vec<CrashAnalysisFinding> {
 }
 
 fn check_watermedia_vlc(combined: &str) -> Vec<CrashAnalysisFinding> {
-    if combined.contains("WaterMedia") || combined.contains("vlcj") || combined.contains("VLC") {
+    // A mere mod-list mention of WaterMedia/vlcj must not raise an error —
+    // require a failure signal on the same line.
+    let hit = combined.lines().any(|line| {
+        let l = line.to_lowercase();
+        (l.contains("watermedia") || l.contains("vlcj"))
+            && (l.contains("error")
+                || l.contains("fail")
+                || l.contains("exception")
+                || l.contains("missing")
+                || l.contains("not found")
+                || l.contains("unsatisfiedlink"))
+            || line.contains("VLC")
+                && (l.contains("error") || l.contains("missing") || l.contains("not found"))
+    });
+    if hit {
         vec![f(
             "error",
             "WATERMEDIA_VLC",
@@ -1548,13 +1664,11 @@ pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<C
             continue;
         };
         let names: Vec<String> = zip.file_names().map(|s| s.to_string()).collect();
-        // Exact class match, or same simple class name somewhere in the jar
-        // (rare shading cases). A bare package-prefix match is intentionally
-        // NOT used: any class in the package would then be attributed to this
-        // mod even when the queried class is absent (false positive).
-        let simple = fqn.rsplit('.').next().unwrap_or(fqn);
-        let simple_class = format!("{simple}.class");
-        if !names.iter().any(|n| n == &exact) && !names.iter().any(|n| n.ends_with(&simple_class)) {
+        // Exact class-path match ONLY. The old same-simple-name fallback
+        // (`ends_with("{Simple}.class")`) attributed `com.foo.Bar` to any jar
+        // containing `org.other.Bar` — a wrong-mod false positive. A bare
+        // package-prefix match is likewise NOT used for the same reason.
+        if !names.iter().any(|n| n == &exact) {
             continue;
         }
 
@@ -1608,10 +1722,9 @@ pub fn find_classes_in_mods(
         let names: Vec<String> = zip.file_names().map(str::to_string).collect();
         let mut matched: Vec<String> = Vec::new();
         for (fqn, exact) in &queries {
-            let simple = fqn.rsplit('.').next().unwrap_or(fqn);
-            let hit = names.iter().any(|name| name == exact)
-                || names.iter().any(|name| name.ends_with(&format!("{simple}.class")));
-            if hit {
+            // Exact match only — see find_class_in_mods (simple-name fallback
+            // attributed missing classes to unrelated jars sharing a class name).
+            if names.iter().any(|name| name == exact) {
                 matched.push(fqn.clone());
             }
         }
@@ -1673,13 +1786,21 @@ pub fn extract_blame_class_names(text: &str, limit: usize) -> Vec<String> {
         }
         for prefix in re_candidates {
             if let Some(rest) = trimmed.strip_prefix(prefix).or_else(|| {
+                // Case-insensitive fallback: split at the byte offset found in
+                // the lowercased copy (`split(prefix)` with the original case
+                // fails exactly when the case differs — the case this branch
+                // exists for). Guard the boundary: Unicode lowercasing can
+                // shift byte offsets on non-ASCII lines.
                 let lower = trimmed.to_lowercase();
                 let p = prefix.to_lowercase();
-                if lower.contains(&p) {
-                    trimmed.split(prefix).nth(1)
-                } else {
-                    None
-                }
+                lower.find(&p).and_then(|idx| {
+                    let at = idx + prefix.len();
+                    if at <= trimmed.len() && trimmed.is_char_boundary(at) {
+                        Some(&trimmed[at..])
+                    } else {
+                        None
+                    }
+                })
             }) {
                 let token = rest
                     .trim()
@@ -1765,20 +1886,16 @@ fn find_classes_in_crashes(_ctx: &AnalysisCtx, combined: &str) -> Vec<ClassMatch
     let mut results = Vec::new();
     for line in combined.lines() {
         if line.contains("NoClassDefFoundError") || line.contains("ClassNotFoundException") {
-            if let Some(class) = line
-                .split(": ")
-                .nth(1)
-                .and_then(|s| s.split_whitespace().next())
-            {
-                if class.len() > 5 && class.len() < 200 && class.contains('.') {
-                    let _mods_dir = std::path::PathBuf::new(); // caller provides path
-                    results.push(ClassMatch {
-                        class_name: class.to_string(),
-                        mod_id: "?".into(),
-                        mod_name: "?".into(),
-                        file_name: None,
-                    });
-                }
+            // `rsplit` (last segment): `nth(1)` grabs the exception name on
+            // `Caused by: …NoClassDefFoundError: com/foo/Bar` lines.
+            if let Some(class) = class_after_colon(line) {
+                let _mods_dir = std::path::PathBuf::new(); // caller provides path
+                results.push(ClassMatch {
+                    class_name: class.to_string(),
+                    mod_id: "?".into(),
+                    mod_name: "?".into(),
+                    file_name: None,
+                });
             }
         }
     }
@@ -2614,10 +2731,22 @@ fn java_major_required(combined: &str) -> Option<u32> {
 fn parse_java_major(v: &str) -> Option<u32> {
     // "8", "17", "21", "25", maybe "1.8.0_345" or "17.0.10".
     let trimmed = v.trim();
+    // Legacy `1.x` versioning: `1.8.0_345` is Java 8, not Java 1.
+    if let Some(rest) = trimmed.strip_prefix("1.") {
+        let minor: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(m) = minor.parse::<u32>() {
+            return Some(m);
+        }
+    }
     if let Some(idx) = trimmed.find('.') {
         return trimmed[..idx].parse::<u32>().ok();
     }
-    trimmed.parse::<u32>().ok()
+    // Tolerate `8u412`-style or trailing build suffixes: leading digits win.
+    let head: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !head.is_empty() {
+        return head.parse::<u32>().ok();
+    }
+    None
 }
 
 fn find_mcreator_mods(mods: &[String]) -> Vec<String> {
@@ -2694,14 +2823,34 @@ fn build_message(ctx: &AnalysisCtx, findings: &[CrashAnalysisFinding], platform:
 }
 
 /// Read the last `max_lines` of a log file as a single string.
+///
+/// Bounded: huge logs (100 MB+ latest.log) are read from the tail only
+/// (last 512 KiB window) instead of loading the whole file into memory.
 pub fn tail_log(path: &Path, max_lines: usize) -> String {
-    match std::fs::read_to_string(path) {
-        Ok(content) => {
-            let lines: Vec<&str> = content.lines().collect();
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL_WINDOW: u64 = 512 * 1024;
+    let content = (|| -> Option<String> {
+        let mut file = std::fs::File::open(path).ok()?;
+        let len = file.metadata().ok()?.len();
+        if len > TAIL_WINDOW * 2 {
+            file.seek(SeekFrom::Start(len - TAIL_WINDOW)).ok()?;
+            let mut buf = Vec::with_capacity(TAIL_WINDOW as usize + 1);
+            file.read_to_end(&mut buf).ok()?;
+            // Drop the partial first line (seek may land mid-line).
+            let text = String::from_utf8_lossy(&buf);
+            let start = text.find('\n').map(|i| i + 1).unwrap_or(0);
+            Some(text[start..].to_string())
+        } else {
+            std::fs::read_to_string(path).ok()
+        }
+    })();
+    match content {
+        Some(text) => {
+            let lines: Vec<&str> = text.lines().collect();
             let start = lines.len().saturating_sub(max_lines);
             lines[start..].join("\n")
         }
-        Err(_) => String::new(),
+        None => String::new(),
     }
 }
 
@@ -2732,7 +2881,10 @@ pub fn classify_launch_crash(
 ) -> LaunchErrorInfo {
     let tail = tail_log(log_path, 300);
     let analysis_ctx = AnalysisCtx {
-        crash_content: tail.lines().map(|s| s.to_string()).collect(),
+        // The tail must live in exactly ONE field: `run_full_analysis`
+        // concatenates all three, so stuffing the same text twice doubles
+        // every signal (and doubles the scan cost).
+        crash_content: Vec::new(),
         latest_log: tail.clone(),
         launcher_log: String::new(),
         installed_mods: installed_mods.to_vec(),
@@ -3276,7 +3428,139 @@ Caused by: java.io.FileNotFoundException: minecraft:shaders/core/rendertype_soli
         assert_eq!(parse_java_major("17"), Some(17));
         assert_eq!(parse_java_major("17.0.10"), Some(17));
         assert_eq!(parse_java_major("8"), Some(8));
-        assert_eq!(parse_java_major("1.8.0_345"), Some(1));
+        // Legacy `1.x` scheme: `1.8.0_345` is Java 8.
+        assert_eq!(parse_java_major("1.8.0_345"), Some(8));
+        assert_eq!(parse_java_major("1.7.0_80"), Some(7));
+        assert_eq!(parse_java_major("8u412"), Some(8));
         assert_eq!(parse_java_major("xyz"), None);
+    }
+
+    #[test]
+    fn truncate_evidence_is_multibyte_safe() {
+        // 280-byte slicing used to panic on Cyrillic/emoji log lines.
+        let line = format!("ERROR {}", "Ж".repeat(400));
+        let out = truncate_evidence(&line);
+        assert!(out.len() <= 290);
+        assert!(out.ends_with('…'));
+        // Must be valid UTF-8 (no panic = no split surrogate).
+        assert!(out.is_char_boundary(out.len()));
+    }
+
+    #[test]
+    fn class_after_colon_picks_missing_class_not_exception() {
+        let line = "Caused by: java.lang.NoClassDefFoundError: com/example/CoolClass";
+        assert_eq!(
+            class_after_colon(line),
+            Some("com/example/CoolClass")
+        );
+        // Bare exception without a class → None (no invented evidence).
+        assert_eq!(class_after_colon("java.lang.NoClassDefFoundError"), None);
+    }
+
+    #[test]
+    fn module_resolution_names_missing_class_on_caused_by_lines() {
+        let log = "Caused by: java.lang.NoClassDefFoundError: com/example/CoolClass\n";
+        let hits = check_module_resolution(&ctx(), log);
+        assert_eq!(hits.len(), 1);
+        assert!(
+            hits[0].title.contains("CoolClass"),
+            "title must name the missing class, got: {}",
+            hits[0].title
+        );
+    }
+
+    #[test]
+    fn epic_fight_mention_alone_does_not_fire() {
+        let mut c = ctx();
+        c.installed_mods = vec!["epicfight".into()];
+        // Healthy log that merely lists the mod → quiet.
+        assert!(check_epic_fight_addons(&c, "Loading EpicFight 20.9.5 — done").is_empty());
+        // …but a real API break still fires.
+        assert!(!check_epic_fight_addons(
+            &c,
+            "EpicFight NoSuchMethodError: boom"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn java_version_check_ignores_unrelated_numbers() {
+        // 55 players online must not read as "class file version 55".
+        let plain = "[Server thread/INFO]: There are 55 of a max of 100 players online";
+        assert!(check_java_version(&ctx(), plain).is_empty());
+        // Real error → exactly ONE finding (no UNSUPPORTED + MISMATCH double).
+        let err = "java.lang.UnsupportedClassVersionError: BadClass has been compiled by a more recent version of the Java Runtime (class file version 65.0)";
+        let hits = check_java_version(&ctx(), err);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].code, "UNSUPPORTED_CLASS_VERSION");
+        assert!(hits[0].title.contains("Java 21"));
+        assert_eq!(m2j(53), "9");
+        assert_eq!(m2j(59), "15");
+        assert_eq!(m2j(69), "25");
+    }
+
+    #[test]
+    fn intel_driver_check_needs_same_line_signal() {
+        // "config" contains "ig" — with "intel" + "crash" elsewhere this used
+        // to false-positive on any Intel machine.
+        let noisy = "CPU: Intel i7\n[INFO]: loading config\n[ERROR]: crash while saving";
+        assert!(check_intel_driver(noisy).is_empty());
+        let real = "[ERROR]: crash in igdkmd64.sys Intel graphics driver fault";
+        assert!(!check_intel_driver(real).is_empty());
+    }
+
+    #[test]
+    fn watermedia_mention_alone_is_quiet() {
+        assert!(check_watermedia_vlc("[INFO]: Loaded WaterMedia 2.4.0").is_empty());
+        assert!(!check_watermedia_vlc(
+            "[ERROR]: WaterMedia failed: vlcj native library missing"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn macos_shader_check_needs_same_line_error() {
+        let mut c = ctx();
+        c.os_name = "macOS 15".into();
+        assert!(check_macos_shader_driver(&c, "[INFO]: shader pack loaded\n[ERROR]: disk slow").is_empty());
+        assert!(!check_macos_shader_driver(&c, "[ERROR]: shader compilation failed on mac").is_empty());
+    }
+
+    #[test]
+    fn blame_class_names_match_case_insensitively() {
+        let text = "caused by: java.lang.NoClassDefFoundError: com/example/CoolClass\n";
+        let names = extract_blame_class_names(text, 5);
+        assert!(
+            names.iter().any(|n| n == "com.example.CoolClass"),
+            "lowercase 'caused by:' must still attribute, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn class_finder_ignores_same_simple_name_other_package() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let jar = dir.path().join("unrelated-1.0.jar");
+        {
+            let file = std::fs::File::create(&jar).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("fabric.mod.json", opts).unwrap();
+            zip.write_all(br#"{"schemaVersion":1,"id":"unrelated","version":"1"}"#)
+                .unwrap();
+            // Same simple name, different package — must NOT match.
+            zip.start_file("org/other/CoolClass.class", opts).unwrap();
+            zip.write_all(&[0u8; 8]).unwrap();
+            zip.finish().unwrap();
+        }
+        assert!(find_class_in_mods("com.example.CoolClass", dir.path()).is_empty());
+        assert!(find_classes_in_mods(&["com.example.CoolClass".into()], dir.path()).is_empty());
+    }
+
+    #[test]
+    fn required_mod_ids_helper_matches_quoted_deps() {
+        let log = "Mod 'create' requires 'flywheel' which is missing!\n";
+        let ids = required_mod_ids_from_text(log);
+        assert!(ids.iter().any(|id| id == "flywheel"), "{ids:?}");
     }
 }

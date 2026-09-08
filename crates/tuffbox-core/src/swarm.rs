@@ -628,6 +628,12 @@ impl CapsuleLibrary {
         haystack: &str,
     ) -> Option<ActionPlan> {
         let hit = self.lookup(fingerprint, haystack, 1).into_iter().next()?;
+        // Same-crash only: a merely similar capsule must not short-circuit L1
+        // (see `strong_plan_from_similar` — additive similarity can clear the
+        // STRONG threshold without sharing the crash).
+        if !crate::crash_kb::fingerprint_keys_match(&fingerprint.key, &hit.fingerprint_key) {
+            return None;
+        }
         Some(crate::action_plan::plan_from_launcher_actions(
             &hit.solution,
             &hit.suspected_mods,

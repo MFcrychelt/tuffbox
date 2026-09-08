@@ -209,9 +209,45 @@ impl DiagnoseMode {
 /// Parse ActionPlan JSON. Also accepts legacy CrashAiResponse shape and normalizes it.
 pub fn parse_action_plan(json_str: &str) -> Result<ActionPlan, String> {
     let trimmed = strip_fences(json_str);
-    let v: Value =
-        serde_json::from_str(trimmed).map_err(|e| format!("Invalid ActionPlan JSON: {e}"))?;
+    // Small local models often wrap the object in prose
+    // ("Here is the plan: ```json {...} ``` …"). Fall back to the embedded
+    // {...} span instead of failing the whole diagnose run.
+    let direct: Result<Value, _> = serde_json::from_str(trimmed);
+    let v = match direct {
+        Ok(v) => v,
+        Err(first_err) => {
+            if let Some(embedded) = extract_embedded_json(trimmed) {
+                serde_json::from_str(embedded)
+                    .map_err(|e| format!("Invalid ActionPlan JSON: {e}"))?
+            } else {
+                return Err(format!("Invalid ActionPlan JSON: {first_err}"));
+            }
+        }
+    };
     parse_action_plan_value(&v)
+}
+
+/// Largest `{…}` span in `s` (first `{` to last `}`), if balanced enough.
+fn extract_embedded_json(s: &str) -> Option<&str> {
+    let start = s.find('{')?;
+    let end = s.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    let span = &s[start..=end];
+    // Sanity: braces must roughly balance, otherwise we'd hand serde garbage.
+    let (mut open, mut close) = (0usize, 0usize);
+    for c in span.chars() {
+        match c {
+            '{' => open += 1,
+            '}' => close += 1,
+            _ => {}
+        }
+    }
+    if open == 0 || open != close {
+        return None;
+    }
+    Some(span)
 }
 
 pub fn parse_action_plan_value(v: &Value) -> Result<ActionPlan, String> {
@@ -1494,6 +1530,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_json_wrapped_in_prose_and_fences() {
+        let wrapped = "Here is the plan:\n```json\n{\"schemaVersion\": 1, \"humanExplanation\": \"Missing Indium\", \"confidence\": 0.9, \"suspectedMods\": [\"sodium\"], \"needsUserReview\": true, \"actions\": [{\"op\":\"install_mod\",\"modId\":\"indium\",\"reason\":\"Install Indium\",\"risk\":\"low\"}]}\n```\nHope it helps!";
+        let plan = parse_action_plan(wrapped).unwrap();
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].mod_id.as_deref(), Some("indium"));
+    }
+
+    #[test]
     fn parses_new_schema() {
         let json = r#"{
           "schemaVersion": 1,
@@ -1771,6 +1815,7 @@ mod tests {
             title: "Needs Java 24".into(),
             description: "class 68".into(),
             auto_fix: Some("Install Java 24+".into()),
+            severity: "error".into(),
         }];
         let out = overlay_crash_assistant_findings(plan, &findings);
         assert!(out.needs_user_review);

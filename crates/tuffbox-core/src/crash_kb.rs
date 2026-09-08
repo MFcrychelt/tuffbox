@@ -512,10 +512,10 @@ pub fn record_feedback(
     suspected_mods: &[String],
 ) -> Result<PathBuf, String> {
     let mut case = CrashCase {
-        id: format!(
-            "user-{}",
-            fingerprint.key.chars().take(24).collect::<String>()
-        ),
+        // Full-key-derived id: the old 24-char prefix collided across
+        // different crashes sharing an exception/frame prefix, so feedback
+        // for crash B overwrote the case for crash A on upsert.
+        id: format!("user-{}", feedback_case_slug(&fingerprint.key)),
         fingerprint: fingerprint.clone(),
         symptoms: Vec::new(),
         suspected_mods: suspected_mods.to_vec(),
@@ -531,6 +531,61 @@ pub fn record_feedback(
         case.solution = "User confirmed this AI explanation helped.".into();
     }
     upsert_user_case(project_dir, &case)
+}
+
+/// Fingerprint keys match exactly, or on all segments but the trailing blame
+/// suffix (same soft rule as `score_case`: older cases without blame ids
+/// still hit the same crash). Used to gate L1 short-circuit: a merely similar
+/// crash must never skip AI with a wrong fix.
+pub fn fingerprint_keys_match(current: &str, candidate: &str) -> bool {
+    if current.is_empty() || candidate.is_empty() {
+        return false;
+    }
+    if current == candidate {
+        return true;
+    }
+    let trunc = |k: &str| k.rsplit_once('|').map(|(h, _)| h).unwrap_or(k);
+    trunc(current) == trunc(candidate)
+}
+
+/// Filesystem/JSON-friendly slug of a full fingerprint key (all segments, not
+/// just the exception prefix) for user-feedback case ids.
+fn feedback_case_slug(key: &str) -> String {
+    let slug: String = key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Collapse runs of `-` and trim — keep up to 96 chars (full key coverage).
+    let mut out = String::with_capacity(slug.len().min(96));
+    let mut prev_dash = false;
+    for c in slug.chars() {
+        if c == '-' {
+            if prev_dash || out.is_empty() {
+                continue;
+            }
+            prev_dash = true;
+        } else {
+            prev_dash = false;
+        }
+        out.push(c);
+        if out.len() >= 96 {
+            break;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "case".to_string()
+    } else {
+        out
+    }
 }
 
 /// Rank cases by similarity to the fingerprint + free-text haystack.
@@ -552,6 +607,11 @@ pub fn search_similar(
     scored
         .into_iter()
         .map(|(score, c)| {
+            // Additive weights (exception 0.55 + frames + blame + symptoms…)
+            // can exceed 1.0; an unclamped `score=2.40` misleads the LLM
+            // prompt ("score" reads as a 0–1 similarity) and lets mediocre
+            // matches pass the STRONG threshold downstream.
+            let score = score.clamp(0.0, 1.0);
             let actions = if !c.launcher_actions.is_empty() {
                 crate::action_plan::plan_to_legacy_ai_actions(&crate::action_plan::ActionPlan {
                     schema_version: crate::action_plan::ACTION_PLAN_SCHEMA_VERSION,

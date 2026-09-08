@@ -316,10 +316,12 @@ pub fn crash_explain_prompt_for(
     settings: &AiSettings,
     ctx: &tuffbox_core::ai_explanation::CrashAiContext,
 ) -> (String, bool) {
-    let compact = tuffbox_core::ai_explanation::prefers_compact_crash_prompt(
-        &settings.provider,
-        &settings.model,
-    );
+    let compact =
+        tuffbox_core::ai_explanation::prefers_compact_crash_prompt_for_endpoint(
+            &settings.provider,
+            &settings.endpoint,
+            &settings.model,
+        );
     if compact {
         (
             tuffbox_core::ai_explanation::build_compact_crash_prompt(ctx),
@@ -3308,7 +3310,22 @@ async fn call_ai_crash_explain_single(
             let raw = serde_json::to_string(&value).unwrap_or_default();
             match tuffbox_core::action_plan::parse_action_plan(&raw) {
                 Ok(plan) => Ok(serde_json::to_value(plan).unwrap_or(value)),
-                Err(_) => Ok(value),
+                Err(parse_err) => {
+                    // Valid JSON but not an ActionPlan (prose-shaped object,
+                    // explanation text, …): run the same repair retry as the
+                    // invalid-JSON path. Passing the unparseable value through
+                    // used to fail hard in `ai_plan_with_fallback` instead of
+                    // retrying, killing the whole diagnose run.
+                    let repair = format!(
+                        "{prompt}\n\nYour previous answer was valid JSON but not an ActionPlan ({parse_err}).\n{}\nReturn ONLY the JSON object.",
+                        tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT
+                    );
+                    let value = call_ai_once(settings, &repair).await?;
+                    let raw = serde_json::to_string(&value).unwrap_or_default();
+                    let plan = tuffbox_core::action_plan::parse_action_plan(&raw)
+                        .map_err(|e| format!("AI returned invalid JSON after retry: {e}"))?;
+                    Ok(serde_json::to_value(plan).map_err(|e| e.to_string())?)
+                }
             }
         }
         Err(first_err) => {

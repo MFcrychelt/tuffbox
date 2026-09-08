@@ -11,6 +11,7 @@
     selectedCount = 0,
     busy = false,
     networkTrust = null,
+    warnings = [],
     onCancel,
     onConfirm,
   }: {
@@ -44,6 +45,7 @@
       mc: string | null;
       loader: string | null;
     } | null;
+    warnings?: string[];
     onCancel?: () => void;
     onConfirm?: () => void;
   } = $props();
@@ -106,6 +108,19 @@
         <p class="plan-review-warn">
           This plan includes destructive actions (disable/remove). A snapshot will be created first — use Restore on the home screen if something breaks.
         </p>
+      {/if}
+      {#if warnings && warnings.length}
+        <div class="plan-review-warnings" role="note" aria-label="Plan validation warnings">
+          <strong>Validation warnings ({warnings.length}) — review before applying:</strong>
+          <ul>
+            {#each warnings.slice(0, 8) as w}
+              <li>{w}</li>
+            {/each}
+          </ul>
+          {#if warnings.length > 8}
+            <p class="more">+{warnings.length - 8} more…</p>
+          {/if}
+        </div>
       {/if}
       <div class="plan-review-list">
         {#each rows as row (row.key)}
@@ -207,6 +222,18 @@
   .plan-review-modal h2 { margin: 0 0 4px; font-size: 16px; }
   .plan-review-modal p { margin: 0; font-size: 13px; color: var(--text-muted); }
   .plan-review-expl { margin: 0 0 12px !important; color: var(--text-secondary) !important; }
+  .plan-review-warnings {
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    font-size: 12px;
+    color: #fde68a;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.28);
+  }
+  .plan-review-warnings ul { margin: 6px 0 0; padding-left: 18px; }
+  .plan-review-warnings li { margin: 2px 0; overflow-wrap: anywhere; }
+  .plan-review-warnings .more { margin: 4px 0 0; font-size: 11px; }
   .trust-card-line {
     font-size: 12px;
     color: var(--text-secondary);

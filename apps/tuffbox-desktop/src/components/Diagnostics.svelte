@@ -906,7 +906,10 @@
     const source = activeReportId();
     const includeAi = opts.includeAi ?? true;
     if (!opts.force && !includeAi && lastRulesSource === source) return;
-    if (!opts.force && includeAi && lastAiSource === source && (aiAnalysis || aiSoftError)) return;
+    // Only cache AI *successes*: a cached soft-failure permanently hid AI
+    // results (even after the user fixed Settings → AI), because every later
+    // visit returned early on the stale `aiSoftError`.
+    if (!opts.force && includeAi && lastAiSource === source && aiAnalysis) return;
     lastRulesSource = source;
     const run = ++analysisGeneration;
     analysisBusy = true;
@@ -920,16 +923,33 @@
       } catch (aiErr) {
         if (!isCurrentAnalysis(run)) return;
         aiSoftError = String(aiErr);
-        lastAiSource = source;
+        // Do NOT cache the failure (no `lastAiSource = source`): the next
+        // visit must retry AI instead of serving the stale error forever.
         console.warn("[Diagnose] AI explain soft-fail:", aiErr);
       }
       if (!isCurrentAnalysis(run)) return;
       // Single enrichment point, AFTER fresh AI results (fix #5).
       enrichCrashFindingsWithAi();
-      lastAiSource = source;
+      if (aiAnalysis) lastAiSource = source;
     } finally {
       if (isCurrentAnalysis(run)) analysisBusy = false;
     }
+  }
+
+  function escapeRegExp(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  /** Token-boundary mod mention check: `blob.includes("rei")` matched "series",
+   * "their", … — short mod ids need word boundaries (mirrors the backend
+   * `contains_mod_token`). */
+  function blobMentionsMod(blobLower: string, modIdLower: string): boolean {
+    if (!modIdLower || modIdLower.length < 2) return false;
+    const id = escapeRegExp(modIdLower);
+    const dash = escapeRegExp(modIdLower.replace(/_/g, "-"));
+    const us = escapeRegExp(modIdLower.replace(/-/g, "_"));
+    const re = new RegExp(`(^|[^a-z0-9])(${id}|${dash}|${us})([^a-z0-9]|$)`);
+    return re.test(blobLower);
   }
 
   function enrichCrashFindingsWithAi() {
@@ -948,7 +968,11 @@
       const matched = actions.find((a: any) => {
         const mid = String(a.modId ?? a.mod_id ?? "").toLowerCase();
         if (!mid) return false;
-        return fixIds.includes(mid) || blob.includes(mid) || suspected.has(mid);
+        // NOTE: no bare `suspected.has(mid)` here — suspected is global to the
+        // analysis, so it matched EVERY finding to EVERY AI action and painted
+        // unrelated rows (disk space, GPU hints) with AI agreement. Agreement
+        // needs a per-finding link: same fix target or a text mention.
+        return fixIds.includes(mid) || blobMentionsMod(blob, mid);
       });
       if (!matched && !fixIds.some((id: string) => suspected.has(id))) {
         return { ...f, aiAgree: false, aiHint: null };
@@ -1007,6 +1031,7 @@
   let planReviewAcknowledged = $state(false);
   let planReviewNeedsAck = $state(false);
   let planReviewExplanation = $state("");
+  let planReviewWarnings = $state<string[]>([]);
   let showApplyTrail = $state(false);
   const planReviewSelectedCount = $derived(planReviewRows.filter((r) => r.selected).length);
   const planReviewCanApply = $derived(
@@ -1346,7 +1371,7 @@
         detail: a.reason ?? a.description ?? "",
         risk: a.risk ?? "medium",
         modId: mid,
-        apply: () => void applyAiPlan(),
+        apply: () => void openSingleAiActionReview(a),
       });
     }
     return out.slice(0, 12);
@@ -1456,6 +1481,36 @@
     }
   }
 
+  function planValidationWarnings(plan: any): string[] {
+    const w = plan?.validation?.warnings;
+    return Array.isArray(w) ? w.map(String) : [];
+  }
+
+  function openPlanReviewFor(
+    source: "ai" | "network",
+    plan: any,
+    actions: any[],
+    fallbackExplanation: string,
+  ) {
+    if (plan?.validation && plan.validation.ok === false) {
+      error = `Plan invalid: ${(plan.validation.errors ?? []).join("; ")}`;
+      return;
+    }
+    const warnings = planValidationWarnings(plan);
+    planReviewSource = source;
+    planReviewRows = buildPlanRows(actions);
+    // Validation warnings (invented install targets, speculative conflicts, …)
+    // must force the same explicit ack as needsUserReview — previously they
+    // were silently ignored and the plan applied without any notice.
+    planReviewNeedsAck =
+      !!(plan.needsUserReview ?? plan.needs_user_review ?? true) || warnings.length > 0;
+    planReviewAcknowledged = !planReviewNeedsAck;
+    planReviewWarnings = warnings;
+    planReviewExplanation =
+      plan.humanExplanation ?? plan.human_explanation ?? fallbackExplanation;
+    planReviewOpen = true;
+  }
+
   function openAiPlanReview() {
     if (!$projectPath || !aiAnalysis) return;
     const actions = aiPlanActions(aiAnalysis);
@@ -1463,17 +1518,15 @@
       error = "No actions in the AI plan to apply.";
       return;
     }
-    if (aiAnalysis.validation && aiAnalysis.validation.ok === false) {
-      error = `Plan invalid: ${(aiAnalysis.validation.errors ?? []).join("; ")}`;
-      return;
-    }
-    planReviewSource = "ai";
-    planReviewRows = buildPlanRows(actions);
-    planReviewNeedsAck = !!(aiAnalysis.needsUserReview ?? aiAnalysis.needs_user_review ?? true);
-    planReviewAcknowledged = !planReviewNeedsAck;
-    planReviewExplanation =
-      aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation ?? "AI / KB ActionPlan";
-    planReviewOpen = true;
+    openPlanReviewFor("ai", aiAnalysis, actions, "AI / KB ActionPlan");
+  }
+
+  /** Review modal for ONE AI action (merged-recommendations row). Previously
+   * every AI row ran `applyAiPlan()` — i.e. the WHOLE plan — which was both
+   * surprising and risky. */
+  function openSingleAiActionReview(action: any) {
+    if (!$projectPath || !aiAnalysis) return;
+    openPlanReviewFor("ai", aiAnalysis, [action], "AI / KB ActionPlan");
   }
 
   function openNetworkPlanReview() {
@@ -1483,13 +1536,7 @@
       error = "Pending network plan has no actions.";
       return;
     }
-    planReviewSource = "network";
-    planReviewRows = buildPlanRows(actions);
-    planReviewNeedsAck = !!(pendingPlan.needsUserReview ?? pendingPlan.needs_user_review ?? true);
-    planReviewAcknowledged = !planReviewNeedsAck;
-    planReviewExplanation =
-      pendingPlan.humanExplanation ?? pendingPlan.human_explanation ?? "Network ActionPlan";
-    planReviewOpen = true;
+    openPlanReviewFor("network", pendingPlan, actions, "Network ActionPlan");
   }
 
   async function applyAiPlan() {
@@ -1535,6 +1582,7 @@
     const destructive = rows.some((r) => r.destructive);
     planReviewNeedsAck = destructive;
     planReviewAcknowledged = !destructive;
+    planReviewWarnings = [];
     planReviewExplanation = `Apply ${rows.length} fix(es) from the Problems list. Snapshot is created once before the batch.`;
     planReviewOpen = true;
   }
@@ -3213,6 +3261,7 @@
   selectedCount={planReviewSelectedCount}
   busy={aiApplyBusy || pendingBusy || fixAllBusy}
   networkTrust={planReviewSource === "network" ? networkTrust : null}
+  warnings={planReviewWarnings}
   onCancel={() => (planReviewOpen = false)}
   onConfirm={confirmPlanReviewApply}
 />
