@@ -27,11 +27,12 @@
 - **Дополнительно:** `BriefEditor.svelte` — один из двух файлов с legacy
   `on:`-синтаксисом Svelte 4 (второй — `ConfigEditor.svelte`), компонент
   подключён в `IdeWorkspace.svelte:463`, т.е. это живой экран, а не мёртвый код.
-- **Статус:** не исправлено.
-- **План:** восстановить/написать `listing/MdToolbar.svelte` +
-  `listing/GalleryGrid.svelte` (или вырезать зависимость и упростить
-  BriefEditor), прогнать `npm run build`, убедиться, что Windows EXE
-  проходит дальше сборки фронтенда.
+- **Статус:** исправлено (2026-09-08, коммит `2352ea0`, CI-подтверждено).
+- **Что сделано:** написаны оба недостающих компонента
+  (`listing/MdToolbar.svelte` + `listing/GalleryGrid.svelte`) в Svelte 5
+  runes-стиле под точный prop-контракт, который уже использует BriefEditor.
+  `vite build` зелёный; Windows EXE workflow проходит шаг `Verify frontend
+  production build` (run 34204338390, SUCCESS).
 
 ## P0-2. Вкладка Diagnose → Advanced падает при открытии (ReferenceError)
 
@@ -73,12 +74,15 @@
   ни разу не компилировался (в песочнице нет toolchain: rustup/crates.io
   заблокированы на уровне TLS; логи CI из песочницы недоступны).
 - **Влияние:** нет доверия к `master`, релизиться не с чего.
-- **Статус:** в работе — требуется CI-сигнал по текущему коду.
-- **План:** PR arena → master (ветка — строгий суперсет PR #6: feat HEAD не
-  двигался с форка) → смотреть шаги Build/Run tests → чинить по факту.
-  После зелёного мёржа PR #6 закрыть как superseded. Flaky/network-тесты
-  при необходимости — `#[ignore]` с причиной (прецеденты: `versions.rs`,
-  `provider/modrinth.rs`).
+- **Статус:** исправлено на ветке (2026-09-08, CI-подтверждено);
+  мёрж в master — PR #8 (открыт).
+- **Что сделано:** новый Rust-код ветки впервые скомпилирован в CI и вылечен
+  строго по фактам из логов: `e00d26c` (E0599 `next_back` на `Split<&str>` →
+  `rsplit().next()`; closure→free fn в `trunc`), `4c131ab` + `a5984f1`
+  (2 падавших теста `mod_version_req`). Rust workflow (run 34204338314):
+  Build ✓, тесты **581 passed**; Windows EXE (run 34204338390): SUCCESS.
+  Замёрзший `master` заменится мёржем PR #8; PR #6 после этого закрыть как
+  superseded.
 
 ## P0-4. В CI нет ворот качества — всё вышеупомянутое мёржится молча
 
@@ -89,20 +93,31 @@
 - **Дополнительно:** workflows триггерятся только на `master` (+ legacy
   `feat/svelte-5-migration`) и PR в `master` — ветки вида `arena/*` и
   `feat/*` без PR вообще не проверяются.
-- **Статус:** не исправлено.
-- **План:** добавить job/stепы `svelte-check` + `vitest run` + `cargo clippy
-  -- -D warnings` + `cargo fmt --check` (или отделить fmt в собственный
-  быстрый job); расширить триггеры минимум на все PR. После P0-1/P0-2 —
-  сделать эти job обязательными (required checks).
+- **Статус:** написано, НЕ запушено (2026-09-08, коммит `18ef112`,
+  local-only): токену песочницы не хватает scope `workflows`, push `.github/`
+  отклоняется GitHub. Требуется ручной push с машины с правами:
+  `git push origin arena/01a07fae-tuffbox`.
+- **Что сделано:** `quick-checks.yml` (svelte-check + vitest + fnmatch-guard)
+  + шаги `cargo fmt --check` / `cargo clippy -- -D warnings` в `rust.yml` +
+  триггеры на все PR. После мёржа сделать job обязательными (required
+  checks).
 
 ## P0-5. Дистрибуция нулевая: нет релизов, нет автообновления
 
 - **Факт:** релизов нет (см. P0-1), в `src-tauri` нет updater-плагина,
   signed builds / installer / crash reporting opt-in (требования Stage 15)
   отсутствуют. Даже когда сборка починится, доставка = «скачай exe руками».
-- **Статус:** не исправлено (зависит от P0-1, P0-3).
-- **План:** после зелёного `master` — собрать первый pre-release artifact,
-  затем по Stage 15: installer, auto-update, подпись, opt-in crash reporting.
+- **Статус:** частично (2026-09-08): опубликован первый pre-release
+  [v0.1.0-pre.1](https://github.com/MFcrychelt/tuffbox/releases/tag/v0.1.0-pre.1)
+  (помечен pre-release, target — ветка `@ a5984f1`, до мёржа в master).
+- **Ограничение:** бинарник EXE к релизу не приложен — песочница не может
+  скачать CI-артефакты (egress к blob-хранилищу заблокирован на уровне TLS).
+  EXE лежит в артефактах зелёного рана ([Build Windows EXE
+  #8](https://github.com/MFcrychelt/tuffbox/actions/runs/34204338390#artifacts),
+  нужен логин GitHub). С обычной машины: `gh run download 34204338390` +
+  `gh release upload v0.1.0-pre.1 <exe>`.
+- **Остаток по Stage 15:** installer, auto-update (updater-плагин + ключ
+  подписи), подпись сборок, opt-in crash reporting.
 
 ---
 
