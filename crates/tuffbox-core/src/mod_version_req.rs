@@ -279,9 +279,9 @@ fn key_quoted(lower: &str, key: &str) -> Option<String> {
     }
     let rest = lower[abs..].trim();
     // Bare bracketed range keeps its inner comma: `Expected range: [0.6,)`.
+    // Either closing bracket ends it (`[` pairs with `]` or `)` in Maven ranges).
     if rest.starts_with('[') || rest.starts_with('(') {
-        let close = if rest.starts_with('[') { ']' } else { ')' };
-        if let Some(end) = rest.find(close) {
+        if let Some(end) = rest.find([')', ']']) {
             return Some(rest[..=end].to_string());
         }
     }
