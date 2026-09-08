@@ -5944,9 +5944,23 @@ async fn run_crash_assistant_full(
     report_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // Task #66: same blocking-pool treatment as get_crash_diagnosis.
-    tokio::task::spawn_blocking(move || run_crash_assistant_full_impl(&app, path, report_id))
+    // This follow-up command owns the same `diagnose` task as the initial
+    // diagnosis, so it must close that task too. Previously the impl only
+    // published "Running crash checks…" and returned without succeed/fail;
+    // the task panel therefore kept showing that stage forever.
+    let worker_app = app.clone();
+    let result = tokio::task::spawn_blocking(move || run_crash_assistant_full_impl(&worker_app, path, report_id))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let detail = match &result {
+        Ok(value) => format!(
+            "Crash checks complete · {} finding(s)",
+            value.get("findingsCount").and_then(|v| v.as_u64()).unwrap_or(0)
+        ),
+        Err(error) => error.clone(),
+    };
+    diagnose_finish(&app, result.is_ok(), &detail);
+    result
 }
 
 /// Task #66: process-wide cache of class→jar lookups. Scanning every mod jar
