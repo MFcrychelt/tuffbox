@@ -14,6 +14,7 @@
     Trash2,
     Database,
     ArrowDownToLine,
+    Search,
   } from "@lucide/svelte";
   import {
     diagnoseFocus,
@@ -375,7 +376,10 @@
         void invoke("confirm_crash_resolution_from_diagnose", { path: $projectPath }).catch(() => {});
       } else {
         if (!data.sessionHealthy) ideNeedsHealth.set(true);
-        scheduleUnifiedAnalysis();
+        // The expensive Crash Assistant (rules + JAR class attribution) is
+        // intentionally opt-in. Basic diagnosis above is enough to render
+        // this view quickly; the user can start the extended checks from the
+        // toolbar when they need them.
       }
     } catch (e) {
       error = String(e);
@@ -919,7 +923,14 @@
     }
   }
 
-  /** Crash Assistant first, then AI — equal analysis cards.
+  async function runOptionalCrashChecks() {
+    if (!$projectPath || loading || crashLoading || analysisBusy) return;
+    error = null;
+    await runCrashAssistant();
+    if (aiAnalysis) enrichCrashFindingsWithAi();
+  }
+
+  /** AI explanation only. Crash Assistant is an explicit, separate action.
    * Task #66: with force=false (tab open / reload) reuse the previous run's
    * results when the log source hasn't changed — re-running the full AI
    * cascade on every tab visit made the tab appear stuck in "Analyzing…". */
@@ -934,8 +945,9 @@
     analysisBusy = true;
     aiSoftError = null;
     try {
-      await runCrashAssistant(run);
-      if (!isCurrentAnalysis(run)) return;
+      // Crash Assistant is deliberately not part of the normal analysis
+      // pipeline. It performs an additional rules pass and scans mod JARs;
+      // the dedicated toolbar action starts it on demand.
       if (!includeAi) return;
       try {
         await runAiExplain({ quiet: true, runId: run });
@@ -2803,6 +2815,15 @@
         {/if}
         <button class="ghost" onclick={() => load(true)} disabled={!$projectPath || loading} title="Reload logs & pack graph">
           <RefreshCw size={15} class={loading ? "spin" : ""} /> Refresh
+        </button>
+        <button
+          class="secondary"
+          onclick={runOptionalCrashChecks}
+          disabled={!$projectPath || crashLoading || analysisBusy || loading}
+          title="Run the extended crash rules and scan mod JARs"
+        >
+          <Search size={15} class={crashLoading ? "spin" : ""} />
+          {crashLoading ? "Running crash checks…" : "Crash checks"}
         </button>
         <button
           class="secondary"
