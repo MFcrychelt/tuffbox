@@ -310,6 +310,13 @@ pub fn format_launcher_action_summary(a: &tuffbox_core::action_plan::LauncherAct
         "accept_eula" => "Accepted EULA".into(),
         "change_port" => "Changed server port".into(),
         "auto_java" => "Selected compatible Java".into(),
+        "set_java" => {
+            if let Some(v) = a.version.as_deref().filter(|s| !s.is_empty()) {
+                format!("Selected Java {v}")
+            } else {
+                "Selected compatible Java".into()
+            }
+        }
         "update_loader" => "Updated loader".into(),
         other => {
             if target == "-" {

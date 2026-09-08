@@ -297,8 +297,8 @@ pub fn builtin_seed() -> Vec<CrashCase> {
             "UnsupportedClassVersionError",
             &["java.lang.UnsupportedClassVersionError"],
             &["wrong java", "class file version"],
-            "Minecraft/mod requires a newer Java. Install the Java version required by your MC version (17 for 1.18–1.20.4, 21 for 1.20.5+) and point TuffBox at it.",
-            vec![action("config_change", None, "Switch project Java to the required major version", "low")],
+            "Minecraft/mod requires a newer Java. Read the required major from the crash itself (Fabric `depends java` bound or class file version — mods often need MORE than the MC floor) and switch the project runtime to it.",
+            vec![action("set_java", None, "Switch project Java to the required major version", "low")],
         ),
         case(
             "builtin-mixin-apply",
@@ -667,6 +667,8 @@ pub fn save_authored_case(
                     "disable" | "disable_mod" => "disable_mod".into(),
                     "config_change" | "edit_config" => "edit_config".into(),
                     "reinstall" | "reinstall_mod" => "reinstall_mod".into(),
+                    "set_java" | "setjava" | "select_java" | "selectjava"
+                    | "auto_java" | "autojava" => "set_java".into(),
                     other => other.to_string(),
                 },
                 mod_id: a.mod_id.clone(),

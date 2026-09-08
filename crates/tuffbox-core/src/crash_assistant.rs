@@ -2693,6 +2693,45 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
     out
 }
 
+/// Required Java major parsed from crash/log text, any source.
+///
+/// Combines the Fabric `depends java @ [>=N]` hard-dependency pattern with the
+/// `UnsupportedClassVersionError` class-file major. This is the single source
+/// of truth the AI context, the `set_java` backfill, and the `selectJava` fix
+/// executor all share — previously each path re-derived (or guessed) it.
+pub fn required_java_major_from_text(combined: &str) -> Option<u32> {
+    if let Some(req) = java_major_required(combined) {
+        return Some(req);
+    }
+    extract_major(combined).map(class_major_to_java)
+}
+
+/// Class-file major → Java major, numeric. Majors below 52 (Java ≤ 7) are
+/// floored to 8: no modern selector can provision Java 5–7, and anything
+/// that old still needs *at least* a Java 8 runtime to even parse.
+fn class_major_to_java(m: u32) -> u32 {
+    match m {
+        0..=52 => 8,
+        53 => 9,
+        54 => 10,
+        55 => 11,
+        56 => 12,
+        57 => 13,
+        58 => 14,
+        59 => 15,
+        60 => 16,
+        61 => 17,
+        62 => 18,
+        63 => 19,
+        64 => 20,
+        65 => 21,
+        66 => 22,
+        67 => 23,
+        68 => 24,
+        _ => m.saturating_sub(44),
+    }
+}
+
 /// Extract the highest required Java major from a Fabric hard-dependency error
 /// ("HARD_DEP ... depends java @ [>=25]" or "requires version 25 or later of
 /// 'Java ...'"). Returns the first found bound; callers compare it to the
@@ -3555,6 +3594,24 @@ Caused by: java.io.FileNotFoundException: minecraft:shaders/core/rendertype_soli
         }
         assert!(find_class_in_mods("com.example.CoolClass", dir.path()).is_empty());
         assert!(find_classes_in_mods(&["com.example.CoolClass".into()], dir.path()).is_empty());
+    }
+
+    #[test]
+    fn required_java_major_from_hard_dep_and_class_version() {
+        assert_eq!(
+            required_java_major_from_text("HARD_DEP fabric-api {depends java @ [>=25]}"),
+            Some(25)
+        );
+        assert_eq!(
+            required_java_major_from_text(
+                "java.lang.UnsupportedClassVersionError: X (class file version 65.0)"
+            ),
+            Some(21)
+        );
+        assert_eq!(required_java_major_from_text("no java hints here"), None);
+        assert_eq!(class_major_to_java(52), 8);
+        assert_eq!(class_major_to_java(61), 17);
+        assert_eq!(class_major_to_java(69), 25);
     }
 
     #[test]

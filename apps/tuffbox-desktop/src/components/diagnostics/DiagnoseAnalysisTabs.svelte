@@ -78,6 +78,8 @@
       case "edit_config":
       case "config_change":
         return "Edit config";
+      case "set_java":
+        return "Set Java";
       default:
         return op || "Action";
     }
@@ -196,7 +198,7 @@
                   <li>
                     <strong>{aiActionLabel(action)}</strong>
                     {#if action.modId ?? action.mod_id}<code>{action.modId ?? action.mod_id}</code>{/if}
-                    {#if aiActionVersion(action)}<span class="ai-ver">v{aiActionVersion(action)}</span>{/if}
+                    {#if aiActionVersion(action)}<span class="ai-ver">{(action.op ?? action.action_type ?? "") === "set_java" ? `Java ${aiActionVersion(action)}` : `v${aiActionVersion(action)}`}</span>{/if}
                     <span class="risk-pill">{action.risk ?? "medium"}</span>
                     <span>{action.reason ?? action.description ?? ""}</span>
                   </li>

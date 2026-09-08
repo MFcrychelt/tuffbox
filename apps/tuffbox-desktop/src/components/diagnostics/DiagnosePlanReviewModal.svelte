@@ -25,6 +25,7 @@
       op: string;
       modId: string | null;
       path: string | null;
+      version?: string | null;
       patchPreview: string | null;
       reason: string;
       risk: string;
@@ -133,6 +134,7 @@
                 </span>
                 <strong>{row.op}</strong>
                 {#if row.modId}<code>{row.modId}</code>{/if}
+                {#if row.version}<code>{row.op === "set_java" ? `Java ${row.version}` : `→ ${row.version}`}</code>{/if}
                 <span class="risk-pill">{row.risk}</span>
               </div>
               {#if row.problemTitle}

@@ -320,6 +320,28 @@ pub fn ensure_java_for_minecraft(mc_version: &str) -> Result<JavaRuntime, JreErr
 
 pub fn ensure_java_for_minecraft_with_log<F>(
     mc_version: &str,
+    log: F,
+) -> Result<JavaRuntime, JreError>
+where
+    F: FnMut(&str),
+{
+    ensure_java_for_major_with_log(required_java_major(mc_version), log)
+}
+
+/// Like [`ensure_java_for_minecraft_with_log`], but for an explicit required
+/// major parsed from the crash (Fabric `depends java @ [>=N]`,
+/// `UnsupportedClassVersionError`).
+///
+/// This is what the AI `set_java` op and the `selectJava` fix button resolve
+/// through. The Minecraft-version variant is NOT a substitute: mods routinely
+/// demand a newer major than the MC floor (e.g. Java 25 mods on MC 1.20.1,
+/// whose floor is 17) — resolving by MC version re-picks the same too-old JVM.
+pub fn ensure_java_for_major(major: u32) -> Result<JavaRuntime, JreError> {
+    ensure_java_for_major_with_log(major, |_| {})
+}
+
+pub fn ensure_java_for_major_with_log<F>(
+    required: u32,
     mut log: F,
 ) -> Result<JavaRuntime, JreError>
 where
@@ -329,10 +351,9 @@ where
     if runtimes.is_empty() {
         runtimes = find_all_runtimes_full()?;
     }
-    let required = required_java_major(mc_version);
     if managed_install_needed(&runtimes, required) {
         log(&format!(
-            "# No compatible Java found (need Java {required}+ for Minecraft {mc_version}) — downloading GraalVM Community JDK {required}…"
+            "# No compatible Java found (need Java {required}+) — downloading GraalVM Community JDK {required}…"
         ));
         let installed = install_graalvm_major(required, &mut log)?;
         invalidate_runtime_cache();

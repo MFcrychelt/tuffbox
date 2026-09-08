@@ -3060,6 +3060,63 @@ fn apply_mod_reinstall(
     Ok(format!("Reinstalled {} ({})", old_mod.name, version_info.version_number))
 }
 
+/// Assign a Java runtime for the project (shared by the `selectJava` fix
+/// button and the AI `set_java` op).
+///
+/// Required-major resolution order: explicit `major` (plan version) →
+/// current crash/log text (`depends java` / UnsupportedClassVersionError) →
+/// the Minecraft-version floor (legacy autoJava behavior). The crash text
+/// wins over the MC floor because mods routinely demand a newer major than
+/// the game itself (e.g. Java 25 mods on MC 1.20.1, whose floor is 17).
+fn select_java_for_project(manifest_path: &Path, major: Option<u32>) -> Result<String, String> {
+    let required = match major {
+        Some(m) => m,
+        None => {
+            let project_dir = manifest_parent(&manifest_path.to_string_lossy())?;
+            let haystack = java_evidence_haystack(&project_dir);
+            match tuffbox_core::crash_assistant::required_java_major_from_text(&haystack) {
+                Some(m) => m,
+                None => {
+                    let manifest = ProjectManifest::load_from_path(manifest_path)
+                        .map_err(|e| e.to_string())?;
+                    tuffbox_core::jre::required_java_major(&manifest.minecraft.version)
+                }
+            }
+        }
+    };
+    // ensure_java_for_major_with_log picks the best installed runtime for the
+    // required major AND downloads the matching GraalVM JDK when nothing
+    // installed satisfies the requirement.
+    let best = {
+        let log = |line: &str| eprintln!("[selectJava] {line}");
+        tuffbox_core::jre::ensure_java_for_major_with_log(required, log)
+            .map_err(|e| format!("failed to provision Java {required}: {e}"))?
+    };
+    let mut manifest =
+        ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
+    let mut java = manifest.java.clone().unwrap_or(tuffbox_core::manifest::JavaSpec {
+        major: None,
+        distribution: None,
+        path: None,
+    });
+    java.path = Some(best.path.clone());
+    java.major = Some(best.major.try_into().unwrap_or(u16::MAX));
+    manifest.java = Some(java);
+    save_manifest(manifest_path, &manifest).map_err(|e| e.to_string())?;
+    // Keep the "Selected Java {major} ({path})" shape — diagnose history
+    // parses the major back out of this summary.
+    Ok(format!("Selected Java {} ({})", best.major, best.path))
+}
+
+/// Crash + log text used to re-derive the required Java major when the
+/// `selectJava` button is pressed without an explicit version.
+fn java_evidence_haystack(project_dir: &Path) -> String {
+    let crash = load_scoped_crash_report(project_dir, None).unwrap_or_default();
+    let latest = project_dir.join("logs").join("latest.log");
+    let log_tail = tuffbox_core::process::read_log_tail(&latest, 1200).unwrap_or_default();
+    format!("{crash}\n{log_tail}")
+}
+
 /// Applies a machine-actionable fix produced by crash diagnosis.
 fn execute_fix_action_inner(
     app: &tauri::AppHandle,
@@ -3204,6 +3261,16 @@ fn execute_fix_action_inner(
             save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
             Ok(format!("Selected Java {} ({})", best.major, best.path))
         }
+        // Crash Assistant WRONG_JAVA_VERSION button + set_java plan op. Unlike
+        // autoJava (MC-version floor), this honors the crash-derived required
+        // major — passing None makes the helper re-derive it from the
+        // current logs, which is exactly what the finding computed.
+        "selectJava" => {
+            if !skip_snapshot {
+                auto_snapshot(&manifest_path, "fix-select-java").map_err(|e| e.to_string())?;
+            }
+            select_java_for_project(&manifest_path, None)
+        }
         other => Err(format!("unknown fix action kind: {other}")),
     }
 }
@@ -3212,7 +3279,7 @@ fn fix_action_batch_order(kind: &str) -> u8 {
     match kind {
         "installDependency" | "installAllMissing" | "installMissingForMod" => 0,
         "updateMod" | "reinstallMod" | "updateLoader" => 1,
-        "raiseMemory" | "autoJava" | "acceptEula" | "changePort" => 2,
+        "raiseMemory" | "autoJava" | "selectJava" | "acceptEula" | "changePort" => 2,
         "disableMod" | "removeMod" | "removeWrongJar" => 3,
         _ => 2,
     }
@@ -3357,7 +3424,19 @@ fn fix_action_to_launcher_action(
         "acceptEula" => "accept_eula",
         "changePort" => "change_port",
         "autoJava" => "auto_java",
+        "selectJava" => "set_java",
         other => other,
+    };
+    // selectJava history entries keep the resolved major so re-apply replays
+    // the same runtime choice (summary shape: "Selected Java {major} ({path})").
+    let version = if op == "set_java" {
+        summary
+            .strip_prefix("Selected Java ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .filter(|v| v.parse::<u32>().is_ok())
+            .map(|v| v.to_string())
+    } else {
+        None
     };
     tuffbox_core::action_plan::LauncherAction {
         op: op.into(),
@@ -3372,7 +3451,7 @@ fn fix_action_to_launcher_action(
         } else {
             None
         },
-        version: None,
+        version,
         path: None,
         patch_type: None,
         patch: None,
@@ -6525,6 +6604,87 @@ fn ai_context_cache_key(path: &str, report_id: Option<&str>) -> String {
     )
 }
 
+/// Fetch newest MC+loader-compatible Modrinth versions for up to 5 suspect
+/// mods (≤5 versions each) to ground AI `change_mod_version` pins.
+///
+/// Best-effort by design: per-(project, MC, loader) 10-minute cache, a global
+/// 12s deadline between queries, and skip-on-error. Offline or slow networks
+/// must degrade to an empty list (the prompt then tells the model to use
+/// `update_mod` with null version) — never stall Diagnose.
+fn collect_mod_version_options_for_ai(
+    manifest: &ProjectManifest,
+    inventory: &tuffbox_core::project_ai_inventory::ProjectAiInventory,
+    suspect_ids: &[String],
+) -> Vec<tuffbox_core::ai_explanation::CrashAiModVersions> {
+    use std::collections::HashSet;
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let mc = manifest.minecraft.version.clone();
+    let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+    let query = ProviderSearchQuery {
+        query: None,
+        minecraft_version: Some(mc.clone()),
+        loader: Some(loader.clone()),
+        ..Default::default()
+    };
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for id in suspect_ids.iter().take(5) {
+        if Instant::now() >= deadline {
+            break;
+        }
+        if !seen.insert(id.to_ascii_lowercase()) {
+            continue;
+        }
+        let project = manifest
+            .mods
+            .iter()
+            .find(|m| m.id.eq_ignore_ascii_case(id))
+            .and_then(|m| m.source.project_id.clone())
+            .unwrap_or_else(|| id.clone());
+        let installed = inventory
+            .mods
+            .iter()
+            .find(|m| m.id.eq_ignore_ascii_case(id))
+            .map(|m| m.version.clone())
+            .unwrap_or_default();
+        let cache_key = format!("modvers:{project}:{mc}:{loader}");
+        let available: Vec<String> =
+            if let Some(cached) = tuffbox_core::api_cache::get::<Vec<String>>(&cache_key) {
+                cached
+            } else {
+                let mut versions = match provider.get_versions(&project, &query) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                // Newest first by publish date (ISO-8601 sorts lexicographically).
+                versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
+                let available: Vec<String> = versions
+                    .into_iter()
+                    .map(|v| v.version_number)
+                    .filter(|s| !s.trim().is_empty())
+                    .take(5)
+                    .collect();
+                tuffbox_core::api_cache::put_with_ttl(
+                    cache_key,
+                    available.clone(),
+                    Duration::from_secs(600),
+                );
+                available
+            };
+        if available.is_empty() {
+            continue;
+        }
+        out.push(tuffbox_core::ai_explanation::CrashAiModVersions {
+            id: id.clone(),
+            installed,
+            available,
+        });
+    }
+    out
+}
+
 fn prepare_ai_crash_context_uncached(
     path: &str,
     report_id: Option<&str>,
@@ -6734,6 +6894,24 @@ fn prepare_ai_crash_context_uncached(
         None
     };
 
+    // Crash-derived Java requirement: the single number the `set_java` op and
+    // its validation backfill share. Parsed from Fabric `depends java` /
+    // UnsupportedClassVersionError — never from the MC version floor.
+    let java_required_major =
+        tuffbox_core::crash_assistant::required_java_major_from_text(&haystack);
+
+    // Real Modrinth versions for the top suspects so the model can emit
+    // change_mod_version pins without inventing version numbers.
+    let mut version_suspects: Vec<String> =
+        culprit_details.iter().map(|c| c.id.clone()).collect();
+    for id in report.suspected_mods.iter() {
+        if !version_suspects.iter().any(|s| s.eq_ignore_ascii_case(id)) {
+            version_suspects.push(id.clone());
+        }
+    }
+    let mod_version_options =
+        collect_mod_version_options_for_ai(&manifest, &inventory, &version_suspects);
+
     let ai_ctx = tuffbox_core::ai_explanation::CrashAiContext {
         mc_version: manifest.minecraft.version.clone(),
         loader: loader.clone(),
@@ -6762,6 +6940,8 @@ fn prepare_ai_crash_context_uncached(
         inventory: Some(inventory),
         group_test,
         trail_covering,
+        java_required_major,
+        mod_version_options,
     };
 
     Ok((ai_ctx, fingerprint, haystack, report.findings.len()))
@@ -7220,6 +7400,15 @@ async fn analyze_crash_with_ai(
         });
     }
 
+    // Fill version-less set_java ops from crash evidence (small models emit the
+    // op but drop the major). After grounding/overlay, before validation.
+    normalize_notes.extend(
+        tuffbox_core::action_plan::backfill_java_action_versions(
+            &mut plan,
+            ai_ctx.java_required_major,
+        ),
+    );
+
     let pending_path =
         swarm_api::maybe_persist_pending_from_plan(&project_dir, &plan, network_used);
     let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory_and_compat(
@@ -7438,29 +7627,69 @@ fn heuristic_plan_from_context(
         )
     };
 
-    let actions = suspected
-        .iter()
-        .take(3)
-        .map(|id| tuffbox_core::action_plan::LauncherAction {
-            op: "disable_mod".into(),
-            mod_id: Some(id.clone()),
-            provider: None,
-            project_id: None,
-            version: None,
-            path: None,
-            patch_type: None,
-            patch: None,
-            reason: Some(format!(
-                "Heuristic: disable high-confidence culprit `{id}` to isolate the crash"
-            )),
-            risk: "medium".into(),
-        })
-        .collect::<Vec<_>>();
+    // Java first: when Crash Assistant isolated a JVM mismatch, the fix is a
+    // runtime switch — not disabling mods. (Offline fallback; the AI path
+    // covers this via the "Java requirement" prompt section + rule 12.)
+    let has_java_finding = ctx.crash_assistant_findings.iter().any(|f| {
+        matches!(
+            f.code.to_ascii_uppercase().as_str(),
+            "UNSUPPORTED_CLASS_VERSION" | "JAVA_VERSION_MISMATCH" | "WRONG_JAVA_VERSION"
+        )
+    });
+    let mut actions: Vec<tuffbox_core::action_plan::LauncherAction> = Vec::new();
+    if has_java_finding {
+        if let Some(major) = ctx.java_required_major {
+            actions.push(tuffbox_core::action_plan::LauncherAction {
+                op: "set_java".into(),
+                mod_id: None,
+                provider: None,
+                project_id: None,
+                version: Some(major.to_string()),
+                path: None,
+                patch_type: None,
+                patch: None,
+                reason: Some(format!(
+                    "Heuristic: crash requires Java {major}+ — switch the project runtime"
+                )),
+                risk: "low".into(),
+            });
+        }
+    }
+    // Skip mod churn when the java switch is emitted: the finding isolated
+    // the cause, and disabling suspects would be the exact "churn instead of
+    // the java fix" failure this fallback must avoid.
+    if actions.is_empty() {
+        actions.extend(suspected.iter().take(3).map(|id| {
+            tuffbox_core::action_plan::LauncherAction {
+                op: "disable_mod".into(),
+                mod_id: Some(id.clone()),
+                provider: None,
+                project_id: None,
+                version: None,
+                path: None,
+                patch_type: None,
+                patch: None,
+                reason: Some(format!(
+                    "Heuristic: disable high-confidence culprit `{id}` to isolate the crash"
+                )),
+                risk: "medium".into(),
+            }
+        }));
+    }
 
+    // A crash-derived java switch is deterministic evidence, not a guess —
+    // rate it above blind suspect disables.
+    let java_led = actions.iter().any(|a| a.op == "set_java");
     Some(tuffbox_core::action_plan::ActionPlan {
         schema_version: tuffbox_core::action_plan::ACTION_PLAN_SCHEMA_VERSION,
         human_explanation: explanation,
-        confidence: if actions.is_empty() { 0.35 } else { 0.48 },
+        confidence: if java_led {
+            0.7
+        } else if actions.is_empty() {
+            0.35
+        } else {
+            0.48
+        },
         suspected_mods: suspected,
         needs_user_review: true,
         source: Some("heuristic".into()),
@@ -7569,7 +7798,19 @@ async fn apply_action_plan(
     };
     let grounded =
         tuffbox_core::action_plan::ground_action_plan(plan, &inventory_ids, &missing_ids);
-    let plan = grounded.plan;
+    let mut plan = grounded.plan;
+    // Safety net for version-less set_java (KB replay, legacy/network plans):
+    // analyze already backfills from crash evidence, but plans can arrive via
+    // other paths — re-derive the major rather than rejecting the fix.
+    {
+        let haystack = manifest_parent(&path_str)
+            .ok()
+            .map(|dir| java_evidence_haystack(&dir));
+        let required = haystack
+            .as_deref()
+            .and_then(tuffbox_core::crash_assistant::required_java_major_from_text);
+        let _ = tuffbox_core::action_plan::backfill_java_action_versions(&mut plan, required);
+    }
     let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory(
         &plan,
         &inventory_ids,
@@ -7651,6 +7892,28 @@ async fn apply_action_plan(
                     }
                 }
                 Err(e) => errors.push(e.to_string()),
+            }
+            continue;
+        }
+
+        // set_java: exact major from the plan (grounded + backfilled at
+        // analyze time). Handled directly instead of via selectJava so log
+        // rotation between analyze and apply cannot silently switch the
+        // target runtime.
+        if action.op == "set_java" {
+            let major = action
+                .version
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .parse::<u32>()
+                .ok();
+            match major {
+                Some(m) => match select_java_for_project(&manifest_path, Some(m)) {
+                    Ok(msg) => applied.push(msg),
+                    Err(e) => errors.push(e),
+                },
+                None => errors.push("set_java requires version = Java major".into()),
             }
             continue;
         }

@@ -41,13 +41,13 @@ AI Decision making — follow these steps IN ORDER before emitting JSON:
    - Lower confidence when the stack is ambiguous or context is incomplete. Never hide uncertainty.
 
 4) Map decision
-   - Map the isolated cause to the smallest set of launcher ops (install_mod, remove_mod, disable_mod, update_mod, change_mod_version, reinstall_mod, edit_config).
+   - Map the isolated cause to the smallest set of launcher ops (install_mod, remove_mod, disable_mod, update_mod, change_mod_version, reinstall_mod, edit_config, set_java).
    - Each action’s reason must link back to the isolated problem; no speculative drive-by fixes.
    - Order actions: safest confirmation step first, then the fix.
 
 Hard rules:
 1. Prefer matchedCaseIds / similar known cases when score is high.
-2. Every mutating action MUST include modId (except pure edit_config).
+2. Every mutating action MUST include modId (except pure edit_config and set_java, which carry no mod).
 3. Only reference mods that appear in inventory OR are explicit missing dependencies named in the crash.
 4. Prefer disable_mod before remove_mod; prefer exact version when known.
 5. For edit_config: path relative to instance; patch must be minimal; never rewrite whole unrelated files.
@@ -56,7 +56,9 @@ Hard rules:
 8. Never invent version numbers or file paths. If the exact version is unknown, set "version" and "path" to null (launcher resolves). Do not use placeholders like 1.2.3, 0.0.1, or /game/mods/….
 9. If a mod is a suspected culprit AND already installed, prefer disable_mod or remove_mod — never install_mod for that culprit. Missing dependencies named in the crash stay install_mod (they are not culprits).
 10. Conflict claims need a concrete signal. A remove_mod/disable_mod justified by "conflict" is allowed ONLY when grounded in (a) explicit conflicts metadata for the mod present in inventory, (b) a crash/log signal (mixin class collision, duplicate registry, packet clash), or (c) a matched KB case (matchedCaseIds). Category/keyword overlap is NOT a conflict — "both touch message systems", "another modded message system", "potential conflict with other mods" must NOT trigger removal. In that case keep the mods only in suspectedMods with confidence < 0.5 and needsUserReview true, or prefer edit_config to disable the overlapping feature.
-11. Return JSON only. No markdown fences."#;
+11. Version conflicts are fixed with VERSIONS, not removal. When an API-break signal (NoSuchMethodError/NoSuchFieldError/Mixin apply failed on a render/shader/class target) implicates two mods that are designed to work together (classic: Iris + old Sodium, Oculus + mismatched Embeddium), the fix is update_mod (null version = launcher picks newest compatible) or change_mod_version pinned to a version from the "Available mod versions" list — NEVER remove/disable one side as the first step. change_mod_version "version" MUST be copied verbatim from that list; if the list has no entry for the mod, use update_mod with null version instead of inventing one.
+12. Java mismatch is fixed with the set_java OP, not prose. When the "Java requirement" section shows required > current (Fabric `depends java`, UnsupportedClassVersionError), emit {"op":"set_java","version":"<required major>","reason":…} as the FIRST action (risk low — the launcher picks an installed runtime or provisions one). Never describe the Java switch only in humanExplanation.
+13. Return JSON only. No markdown fences."#;
 
 /// Post-resolution distill: compress a user's trial-and-error fix path into a
 /// minimal ActionPlan suitable for sharing as an ExperienceCapsule.
@@ -73,7 +75,8 @@ Rules:
 7. Every mutating action MUST include modId (except pure edit_config).
 8. suspectedMods = culprits that needed disable/remove — NEVER list a mod you install_mod as a missing dependency.
 9. If the efficient fix was installing a missing dependency, keep op install_mod (do not flip to disable).
-10. Return JSON only. No markdown fences."#;
+10. If the efficient fix was switching Java (timeline shows "Selected Java N"), keep op set_java with version "N" (the major from the timeline, not the MC floor).
+11. Return JSON only. No markdown fences."#;
 
 pub const ACTION_PLAN_JSON_SCHEMA_HINT: &str = r#"Return ONLY valid JSON with this schema:
 {
@@ -85,11 +88,11 @@ pub const ACTION_PLAN_JSON_SCHEMA_HINT: &str = r#"Return ONLY valid JSON with th
   "source": "kb"|"ai"|"hybrid"|null,
   "matchedCaseIds": string[]|null,
   "actions": [{
-    "op": "install_mod"|"remove_mod"|"disable_mod"|"update_mod"|"change_mod_version"|"reinstall_mod"|"edit_config",
+    "op": "install_mod"|"remove_mod"|"disable_mod"|"update_mod"|"change_mod_version"|"reinstall_mod"|"edit_config"|"set_java",
     "modId": string|null,
     "provider": "modrinth"|"curseforge"|null,
     "projectId": string|null,
-    "version": string|null,
+    "version": string|null (REQUIRED for change_mod_version: copy verbatim from "Available mod versions"; for set_java: Java major like "21"),
     "path": string|null,
     "patchType": "json_merge"|"toml_set"|"properties_set"|"replace_file"|null,
     "patch": object|string|null,
@@ -108,6 +111,7 @@ pub const KNOWN_OPS: &[&str] = &[
     "change_mod_version",
     "reinstall_mod",
     "edit_config",
+    "set_java",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -354,6 +358,8 @@ fn legacy_action_type_to_op(action_type: &str) -> String {
         "config_change" | "edit_config" | "config" => "edit_config".into(),
         "reinstall" | "reinstall_mod" => "reinstall_mod".into(),
         "change_mod_version" | "change_version" => "change_mod_version".into(),
+        "set_java" | "setjava" | "select_java" | "selectjava" | "switch_java" | "auto_java"
+        | "autojava" => "set_java".into(),
         other => other.to_string(),
     }
 }
@@ -1045,6 +1051,17 @@ pub fn validate_action_plan_with_inventory_and_compat(
                     errors.push(format!("{label}: edit_config requires patch"));
                 }
             }
+            "set_java" => {
+                match a.version.as_deref().unwrap_or("").trim().parse::<u32>() {
+                    Ok(major) if (8..=99).contains(&major) => {}
+                    _ => errors.push(format!(
+                        "{label}: set_java requires version = Java major (8-99), e.g. \"21\""
+                    )),
+                }
+                if a.mod_id.as_deref().map_or(false, |s| !s.trim().is_empty()) {
+                    warnings.push(format!("{label}: set_java ignores modId"));
+                }
+            }
             _ => {}
         }
         match a.risk.to_ascii_lowercase().as_str() {
@@ -1078,6 +1095,19 @@ pub fn validate_action_plan_with_inventory_and_compat(
         }
     }
 
+    // Two java switches in one plan means the AI hedged — keep the first (the
+    // executor keeps it too) and fail loudly instead of racing runtimes.
+    let java_count = plan
+        .actions
+        .iter()
+        .filter(|a| a.op == "set_java")
+        .count();
+    if java_count > 1 {
+        errors.push(format!(
+            "plan has {java_count} set_java actions — keep only the required one"
+        ));
+    }
+
     ActionPlanValidation {
         ok: errors.is_empty(),
         errors,
@@ -1085,7 +1115,42 @@ pub fn validate_action_plan_with_inventory_and_compat(
     }
 }
 
-/// Map a single launcher action to Crash Assistant FixAction (mod ops only).
+/// Backfill missing `set_java` versions from the crash-derived required major.
+///
+/// The prompt tells the AI to copy the major from the "Java requirement"
+/// section, but small models still emit `set_java` with a null version.
+/// Rather than rejecting the plan (the version is *known* — it was in the
+/// context), fill it in and record a note. Call after grounding, before
+/// [`validate_action_plan`].
+pub fn backfill_java_action_versions(
+    plan: &mut ActionPlan,
+    required: Option<u32>,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    let Some(major) = required else {
+        return notes;
+    };
+    for (i, a) in plan.actions.iter_mut().enumerate() {
+        if a.op != "set_java" {
+            continue;
+        }
+        let missing = a
+            .version
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none();
+        if missing {
+            a.version = Some(major.to_string());
+            notes.push(format!(
+                "actions[{i}]: set_java version backfilled to Java {major} from crash evidence"
+            ));
+        }
+    }
+    notes
+}
+
+/// Map a single launcher action to Crash Assistant FixAction (mod ops + java).
 pub fn launcher_action_to_fix_action(action: &LauncherAction) -> Option<FixAction> {
     let mod_id = action
         .mod_id
@@ -1100,12 +1165,19 @@ pub fn launcher_action_to_fix_action(action: &LauncherAction) -> Option<FixActio
         // Bare update_mod (no version) maps to latest-compatible here.
         "update_mod" => "updateMod",
         "install_mod" => "installDependency",
+        "set_java" => "selectJava",
         _ => return None,
     };
-    let label = action
-        .reason
-        .clone()
-        .unwrap_or_else(|| format!("{} {}", action.op, mod_id.as_deref().unwrap_or("")));
+    let label = action.reason.clone().unwrap_or_else(|| {
+        if action.op == "set_java" {
+            match action.version.as_deref().map(str::trim) {
+                Some(v) if !v.is_empty() => format!("Use Java {v}"),
+                _ => "Use a compatible Java runtime".to_string(),
+            }
+        } else {
+            format!("{} {}", action.op, mod_id.as_deref().unwrap_or(""))
+        }
+    });
     Some(FixAction {
         kind: kind.into(),
         label,
@@ -1170,6 +1242,9 @@ pub fn action_plan_to_change_plan(plan: &ActionPlan) -> ChangePlan {
                     actions.push(ChangeAction::EditConfig { path, patch });
                 }
             }
+            // set_java has no ChangePlan equivalent (that model is mod-graph
+            // only); it is applied directly by apply_action_plan instead.
+            "set_java" => {}
             _ => {}
         }
     }
@@ -1478,19 +1553,38 @@ pub fn plan_from_launcher_actions(
 pub fn plan_to_legacy_ai_actions(plan: &ActionPlan) -> Vec<AiAction> {
     plan.actions
         .iter()
-        .map(|a| AiAction {
-            action_type: match a.op.as_str() {
-                "install_mod" => "install".into(),
-                "remove_mod" => "remove".into(),
-                "disable_mod" => "disable".into(),
-                "update_mod" | "change_mod_version" => "update".into(),
-                "edit_config" => "config_change".into(),
-                "reinstall_mod" => "update".into(),
-                other => other.into(),
-            },
-            mod_id: a.mod_id.clone(),
-            description: a.reason.clone().unwrap_or_default(),
-            risk: a.risk.clone(),
+        .map(|a| {
+            // Keep the version pin visible: AiAction has no version field, so a
+            // change_mod_version/update pin or set_java major would silently
+            // vanish from KB feedback/distill text. Suffix it instead.
+            let mut description = a.reason.clone().unwrap_or_default();
+            if let Some(v) = a.version.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                if matches!(
+                    a.op.as_str(),
+                    "change_mod_version" | "update_mod" | "set_java"
+                ) {
+                    if a.op == "set_java" {
+                        description = format!("{description} (Java {v})").trim().to_string();
+                    } else {
+                        description = format!("{description} (→ {v})").trim().to_string();
+                    }
+                }
+            }
+            AiAction {
+                action_type: match a.op.as_str() {
+                    "install_mod" => "install".into(),
+                    "remove_mod" => "remove".into(),
+                    "disable_mod" => "disable".into(),
+                    "update_mod" | "change_mod_version" => "update".into(),
+                    "edit_config" => "config_change".into(),
+                    "reinstall_mod" => "update".into(),
+                    "set_java" => "set_java".into(),
+                    other => other.into(),
+                },
+                mod_id: a.mod_id.clone(),
+                description,
+                risk: a.risk.clone(),
+            }
         })
         .collect()
 }
@@ -1535,6 +1629,118 @@ mod tests {
         let plan = parse_action_plan(wrapped).unwrap();
         assert_eq!(plan.actions.len(), 1);
         assert_eq!(plan.actions[0].mod_id.as_deref(), Some("indium"));
+    }
+
+    fn java_plan(versions: &[Option<&str>]) -> ActionPlan {
+        ActionPlan {
+            schema_version: ACTION_PLAN_SCHEMA_VERSION,
+            human_explanation: "Needs newer Java".into(),
+            confidence: 0.9,
+            suspected_mods: vec![],
+            needs_user_review: false,
+            source: Some("ai".into()),
+            matched_case_ids: vec![],
+            actions: versions
+                .iter()
+                .map(|v| LauncherAction {
+                    op: "set_java".into(),
+                    mod_id: None,
+                    provider: None,
+                    project_id: None,
+                    version: (*v).map(|s| s.to_string()),
+                    path: None,
+                    patch_type: None,
+                    patch: None,
+                    reason: Some("Switch to Java 21".into()),
+                    risk: "low".into(),
+                })
+                .collect(),
+            additional_context: None,
+        }
+    }
+
+    #[test]
+    fn set_java_validates_and_backfills() {
+        let good = java_plan(&[Some("21")]);
+        let v = validate_action_plan(&good);
+        assert!(v.ok, "{:?}", v.errors);
+
+        let bad_version = java_plan(&[Some("twenty-one")]);
+        let v = validate_action_plan(&bad_version);
+        assert!(!v.ok);
+
+        let missing = java_plan(&[None]);
+        assert!(!validate_action_plan(&missing).ok);
+
+        let dup = java_plan(&[Some("21"), Some("25")]);
+        let v = validate_action_plan(&dup);
+        assert!(!v.ok);
+
+        let mut plan = java_plan(&[None]);
+        let notes = backfill_java_action_versions(&mut plan, Some(25));
+        assert_eq!(plan.actions[0].version.as_deref(), Some("25"));
+        assert_eq!(notes.len(), 1);
+        assert!(validate_action_plan(&plan).ok);
+
+        // No crash evidence → no backfill, still invalid.
+        let mut plan = java_plan(&[None]);
+        assert!(backfill_java_action_versions(&mut plan, None).is_empty());
+        assert!(!validate_action_plan(&plan).ok);
+    }
+
+    #[test]
+    fn set_java_maps_to_select_java_and_legacy() {
+        let plan = java_plan(&[Some("21")]);
+        let fix = launcher_action_to_fix_action(&plan.actions[0]).unwrap();
+        assert_eq!(fix.kind, "selectJava");
+        assert!(fix.label.contains("Java 21"));
+
+        let legacy = plan_to_legacy_ai_actions(&plan);
+        assert_eq!(legacy[0].action_type, "set_java");
+        assert!(legacy[0].description.contains("Java 21"));
+
+        // Variant spellings normalize to the op (also pre-KB "auto_java").
+        for variant in ["setjava", "select_java", "selectjava", "auto_java"] {
+            assert_eq!(legacy_action_type_to_op(variant), "set_java");
+        }
+    }
+
+    #[test]
+    fn kb_java_seed_yields_backfillable_set_java() {
+        // End-to-end for the KB short-circuit: the legacy "set_java" seed
+        // action becomes a version-less op that crash evidence backfills
+        // into a valid, applicable plan.
+        let seed = AiAction {
+            action_type: "set_java".into(),
+            mod_id: None,
+            description: "Switch project Java to the required major version".into(),
+            risk: "low".into(),
+        };
+        let mut plan = plan_from_kb_hit("Needs newer Java", &[], &[seed], "builtin-java-version", 0.95);
+        assert_eq!(plan.actions[0].op, "set_java");
+        assert!(!validate_action_plan(&plan).ok);
+        backfill_java_action_versions(&mut plan, Some(21));
+        let v = validate_action_plan(&plan);
+        assert!(v.ok, "{:?}", v.errors);
+    }
+
+    #[test]
+    fn legacy_descriptions_keep_version_pins() {
+        let mut plan = java_plan(&[]);
+        plan.actions.push(LauncherAction {
+            op: "change_mod_version".into(),
+            mod_id: Some("sodium".into()),
+            provider: None,
+            project_id: None,
+            version: Some("0.9.2+mc1.20.1".into()),
+            path: None,
+            patch_type: None,
+            patch: None,
+            reason: Some("Pin Sodium for Iris".into()),
+            risk: "medium".into(),
+        });
+        let legacy = plan_to_legacy_ai_actions(&plan);
+        assert!(legacy[0].description.contains("0.9.2+mc1.20.1"));
     }
 
     #[test]

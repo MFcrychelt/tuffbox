@@ -42,6 +42,7 @@
     "change_mod_version",
     "reinstall_mod",
     "edit_config",
+    "set_java",
   ]);
 
   let {
@@ -137,7 +138,7 @@
       if (!a || typeof a !== "object") return "Each action must be an object";
       if (!a.op || typeof a.op !== "string") return "Each action needs an op string";
       if (!KNOWN_OPS.has(a.op)) return `Unknown op: ${a.op}`;
-      if (a.op !== "edit_config" && !a.modId && !a.projectId) {
+      if (a.op !== "edit_config" && a.op !== "set_java" && !a.modId && !a.projectId) {
         return `${a.op} requires modId or projectId`;
       }
     }

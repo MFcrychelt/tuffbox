@@ -821,6 +821,8 @@ fn fog_job_to_ai_context(job: &Value) -> tuffbox_core::ai_explanation::CrashAiCo
         inventory: None,
         group_test: None,
         trail_covering: None,
+        java_required_major: None,
+        mod_version_options: vec![],
     }
 }
 

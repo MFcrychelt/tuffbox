@@ -47,6 +47,31 @@ pub struct CrashAiContext {
     /// COMP-style decode of the crash→launch trail (healthy ⇒ enabled are clean).
     #[serde(default)]
     pub trail_covering: Option<CrashAiTrailCovering>,
+    /// Required Java major parsed from the crash/log (Fabric `depends java`,
+    /// UnsupportedClassVersionError). When `Some`, the prompt renders a "Java
+    /// requirement" section telling the model to emit a `set_java` op.
+    #[serde(default)]
+    pub java_required_major: Option<u32>,
+    /// Real, MC+loader-compatible Modrinth versions for the top suspect mods
+    /// (newest first). The ONLY versions the model may pin in
+    /// `change_mod_version`. Empty when offline or when no suspects resolved.
+    #[serde(default)]
+    pub mod_version_options: Vec<CrashAiModVersions>,
+}
+
+/// Real available versions for one installed mod (see `CrashAiContext::mod_version_options`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashAiModVersions {
+    /// Installed mod slug.
+    pub id: String,
+    /// Currently installed version (may be empty if unknown).
+    #[serde(default)]
+    pub installed: String,
+    /// Modrinth `version_number`s, newest first, all compatible with the
+    /// project's MC version + loader. Empty = no compatible release found.
+    #[serde(default)]
+    pub available: Vec<String>,
 }
 
 /// Compact group-test snapshot for the Crash Planner prompt.
@@ -318,6 +343,19 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
         p.push_str(&format!("- Fingerprint: {}\n\n", ctx.fingerprint_key));
     }
 
+    // Java requirement is actionable evidence, not decoration: when present
+    // the model MUST emit a set_java op (rule 12) instead of prose advice.
+    if let Some(required) = ctx.java_required_major {
+        p.push_str("## Java requirement (launcher-verified)\n");
+        p.push_str(&format!(
+            "- Required: Java {required}+ (parsed from crash/log: Fabric `depends java` or UnsupportedClassVersionError)\n"
+        ));
+        p.push_str(&format!("- Current runtime: {}\n", ctx.java_version));
+        p.push_str(&format!(
+            "Emit {{\"op\":\"set_java\",\"version\":\"{required}\",\"reason\":…}} as the FIRST action. Do not describe the switch in prose only.\n\n"
+        ));
+    }
+
     if !ctx.culprit_details.is_empty() {
         p.push_str("## Culprits (launcher diagnosis — prefer these)\n");
         for c in &ctx.culprit_details {
@@ -496,6 +534,28 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
             for id in ids.iter().take(24) {
                 p.push_str(&format!("- {id}\n"));
             }
+        }
+        p.push('\n');
+    }
+
+    if !ctx.mod_version_options.is_empty() {
+        p.push_str("## Available mod versions (real, from Modrinth — use ONLY these)\n");
+        p.push_str("Every entry below is compatible with this project's Minecraft version + loader. A change_mod_version \"version\" MUST be copied verbatim from the matching mod's list; never invent, shorten, or complete a version. If a mod has no entry here, use update_mod with null version (launcher resolves newest compatible).\n");
+        for m in &ctx.mod_version_options {
+            if m.available.is_empty() {
+                continue;
+            }
+            let installed = if m.installed.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" (installed: {})", m.installed.trim())
+            };
+            p.push_str(&format!(
+                "- {}{}: {}\n",
+                m.id,
+                installed,
+                m.available.join(", ")
+            ));
         }
         p.push('\n');
     }
@@ -833,6 +893,8 @@ mod tests {
             inventory: None,
             group_test: None,
             trail_covering: None,
+            java_required_major: None,
+            mod_version_options: vec![],
         };
         let prompt = build_compact_crash_prompt(&ctx);
         assert!(!prompt.starts_with("You are TuffBox"));
@@ -860,6 +922,45 @@ mod tests {
             "https://openrouter.ai/api/v1",
             "qwen2.5:3b"
         ));
+    }
+
+    #[test]
+    fn prompt_renders_java_requirement_and_version_options() {
+        let ctx = CrashAiContext {
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0.15".into(),
+            java_version: "17".into(),
+            os: "linux".into(),
+            installed_mods: vec!["sodium".into(), "iris".into()],
+            installed_mod_count: 2,
+            crash_report_excerpt: "HARD_DEP".into(),
+            latest_log_excerpt: String::new(),
+            suspected_mods: vec!["sodium".into()],
+            culprit_details: vec![],
+            crash_assistant_findings: vec![],
+            recent_changes: vec![],
+            graph_diagnostics: vec![],
+            similar_cases: vec![],
+            fingerprint_key: String::new(),
+            report_id: None,
+            inventory: None,
+            group_test: None,
+            trail_covering: None,
+            java_required_major: Some(25),
+            mod_version_options: vec![CrashAiModVersions {
+                id: "sodium".into(),
+                installed: "0.5.0".into(),
+                available: vec!["0.9.2+mc1.20.1".into(), "0.9.0+mc1.20.1".into()],
+            }],
+        };
+        for prompt in [build_crash_prompt(&ctx), build_compact_crash_prompt(&ctx)] {
+            assert!(prompt.contains("## Java requirement"), "{prompt}");
+            assert!(prompt.contains("set_java"), "{prompt}");
+            assert!(prompt.contains("\"25\""), "{prompt}");
+            assert!(prompt.contains("## Available mod versions"), "{prompt}");
+            assert!(prompt.contains("0.9.2+mc1.20.1"), "{prompt}");
+        }
     }
 
     #[test]
@@ -911,6 +1012,8 @@ mod tests {
             inventory: None,
             group_test: None,
             trail_covering: None,
+            java_required_major: None,
+            mod_version_options: vec![],
         };
         let prompt = build_crash_prompt(&ctx);
         assert!(prompt.contains("iris"));
@@ -958,6 +1061,8 @@ mod tests {
                 covering: vec!["foo".into(), "baz".into()],
                 explanation: "Launch succeeded with these mods disabled: foo, baz.".into(),
             }),
+            java_required_major: None,
+            mod_version_options: vec![],
         };
         let prompt = build_crash_prompt(&ctx);
         assert!(prompt.contains("defectives: [foo, baz]"), "{prompt}");

@@ -324,6 +324,11 @@ pub fn format_inventory_for_prompt(inv: &ProjectAiInventory, max_chars: usize) -
     ));
 
     p.push_str("### Mods\n");
+    // Installed-id set so conflict metadata only names mods actually present
+    // (rule 10(a) grounding: "conflicts metadata for the mod present in
+    // inventory" — listing absent mods would license invented conflicts).
+    let installed: std::collections::HashSet<String> =
+        inv.mods.iter().map(|m| m.id.to_ascii_lowercase()).collect();
     for m in &inv.mods {
         let flag = if m.enabled { "" } else { " [disabled]" };
         let ver = if m.version.is_empty() {
@@ -331,13 +336,25 @@ pub fn format_inventory_for_prompt(inv: &ProjectAiInventory, max_chars: usize) -
         } else {
             format!(" @{}", m.version)
         };
+        let conflicts = crate::knowledge::builtin::ModKnowledgeEntry::lookup(&m.id)
+            .map(|e| {
+                e.known_conflicts
+                    .iter()
+                    .filter(|c| installed.contains(&c.to_ascii_lowercase()))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .filter(|c| !c.is_empty())
+            .map(|c| format!(" conflicts=[{}]", c.join(",")))
+            .unwrap_or_default();
         let line = format!(
-            "- {}{}{} ({}, side={}){}{}\n",
+            "- {}{}{} ({}, side={}){}{}{}\n",
             m.id,
             ver,
             flag,
             m.content_type,
             m.side,
+            conflicts,
             m.file_name
                 .as_ref()
                 .map(|f| format!(" file={f}"))
@@ -425,6 +442,60 @@ mod tests {
         let inv = ProjectAiInventory::default();
         let text = format_inventory_for_prompt(&inv, 2000);
         assert!(text.contains("Mods: 0"));
+    }
+
+    #[test]
+    fn renders_only_installed_conflicts() {
+        let inv = ProjectAiInventory {
+            mods: vec![
+                InventoryMod {
+                    id: "sodium".into(),
+                    name: "Sodium".into(),
+                    version: "0.5.0".into(),
+                    content_type: "mod".into(),
+                    enabled: true,
+                    side: "both".into(),
+                    file_name: None,
+                    authors: vec![],
+                },
+                InventoryMod {
+                    id: "iris".into(),
+                    name: "Iris".into(),
+                    version: "1.6.0".into(),
+                    content_type: "mod".into(),
+                    enabled: true,
+                    side: "both".into(),
+                    file_name: None,
+                    authors: vec![],
+                },
+            ],
+            ..Default::default()
+        };
+        let text = format_inventory_for_prompt(&inv, 4000);
+        // optifine/vulkanmod/canvas are known sodium conflicts but NOT installed
+        // → must not be listed (else the model "grounds" invented conflicts).
+        assert!(!text.contains("conflicts="), "{text}");
+        assert!(text.contains("- sodium @0.5.0"), "{text}");
+    }
+
+    #[test]
+    fn renders_installed_conflict_pair() {
+        let mk = |id: &str| InventoryMod {
+            id: id.into(),
+            name: id.into(),
+            version: String::new(),
+            content_type: "mod".into(),
+            enabled: true,
+            side: "both".into(),
+            file_name: None,
+            authors: vec![],
+        };
+        let inv = ProjectAiInventory {
+            mods: vec![mk("sodium"), mk("optifine")],
+            ..Default::default()
+        };
+        let text = format_inventory_for_prompt(&inv, 4000);
+        assert!(text.contains("conflicts=[optifine]"), "{text}");
     }
 
     #[test]

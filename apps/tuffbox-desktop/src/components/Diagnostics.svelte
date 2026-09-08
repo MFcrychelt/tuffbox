@@ -1019,6 +1019,7 @@
     op: string;
     modId: string | null;
     path: string | null;
+    version?: string | null;
     patchPreview: string | null;
     reason: string;
     risk: string;
@@ -1312,6 +1313,8 @@
       case "edit_config":
       case "config_change":
         return "Edit config";
+      case "set_java":
+        return "Set Java";
       default:
         return op || "Action";
     }
@@ -1364,10 +1367,14 @@
       const key = `ai:${op}:${mid ?? a.reason ?? ""}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      // Surface version pins in the label ("Change version sodium → 0.9.2",
+      // "Set Java 21") so the user sees WHAT will be applied before review.
+      const ver = aiActionVersion(a);
+      const verSuffix = ver ? (op === "set_java" ? ` ${ver}` : ` → ${ver}`) : "";
       out.push({
         id: key,
         source: "ai",
-        label: `${aiActionLabel(a)}${mid ? ` ${mid}` : ""}`,
+        label: `${aiActionLabel(a)}${mid ? ` ${mid}` : ""}${verSuffix}`,
         detail: a.reason ?? a.description ?? "",
         risk: a.risk ?? "medium",
         modId: mid,
@@ -1399,17 +1406,19 @@
       }
       const diffKind: "add" | "remove" | "change" | "other" = destructiveOps.has(op)
         ? "remove"
-        : op === "edit_config" || op === "update_config" || op === "update_mod" || op === "change_mod_version"
+        : op === "edit_config" || op === "update_config" || op === "update_mod" || op === "change_mod_version" || op === "set_java"
           ? "change"
           : op.includes("install") || op.includes("download") || op === "reinstall_mod"
             ? "add"
             : "other";
+      const version = aiActionVersion(a);
       return {
         key: `${op}:${modId ?? path ?? idx}`,
         selected: true,
         op,
         modId: modId != null ? String(modId) : null,
         path: path != null ? String(path) : null,
+        version,
         patchPreview,
         reason: String(a.reason ?? a.description ?? ""),
         risk: String(a.risk ?? "medium"),
@@ -1570,6 +1579,7 @@
       op: r.action.label,
       modId: r.action.modId,
       path: null,
+      version: null,
       patchPreview: null,
       reason: r.action.label,
       risk: r.destructive ? "high" : "low",
