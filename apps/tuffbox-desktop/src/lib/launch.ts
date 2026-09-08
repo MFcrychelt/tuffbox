@@ -317,6 +317,15 @@ export function startRunningInstancesWatch(): () => void {
 
 /// Display a launch error as a toast with Retry / View log actions when
 /// appropriate.
+export function retryLastLaunch(): void {
+  if (!lastLaunch) return;
+  void launchWithFeedback(lastLaunch, {
+    ...(lastOpts ?? {}),
+    onStarted: lastOnStarted ?? lastOpts?.onStarted,
+    skipAuthGate: true,
+  });
+}
+
 export function showLaunchError(e: unknown, retry?: () => void): void {
   const info: LaunchErrorInfo = isLaunchError(e)
     ? e
@@ -353,6 +362,16 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
         void shareCrashLogWithFeedback(path);
       },
     });
+  }
+  if (info.kind === "launch_crash") {
+    window.dispatchEvent(
+      new CustomEvent("tuffbox:open-crash-recovery", {
+        detail: {
+          path: lastLaunch?.path || get(projectPath) || null,
+          message: info.message,
+        },
+      }),
+    );
   }
   if (info.kind === "java_missing") {
     actions.push({
