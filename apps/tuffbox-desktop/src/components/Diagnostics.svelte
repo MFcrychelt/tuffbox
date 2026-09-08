@@ -172,6 +172,21 @@
   let analysisKickoff: ReturnType<typeof setTimeout> | undefined;
   let diagnoseTimings = $state<Record<string, { elapsedMs: number; cacheHit: boolean }>>({});
   const isCurrentAnalysis = (generation: number) => generation === analysisGeneration;
+  // A broken/very large pack must not leave the Diagnose tab in a permanent
+  // "running crash checks" state. The backend work cannot be cancelled from
+  // the webview, but the UI can time out and remain usable; a later Refresh
+  // starts a fresh generation and ignores the late result.
+  const CRASH_ASSISTANT_TIMEOUT_MS = 45_000;
+
+  function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  }
 
   // Coalesce load-triggered enrichments into one post-paint job. Source/path
   // changes can otherwise schedule multiple Crash Assistant + AI cascades
@@ -879,10 +894,14 @@
     const run = generation ?? ++analysisGeneration;
     crashLoading = true;
     try {
-      const result: any = await invoke("run_crash_assistant_full", {
-        path: $projectPath,
-        reportId: activeReportId(),
-      });
+      const result: any = await withTimeout(
+        invoke("run_crash_assistant_full", {
+          path: $projectPath,
+          reportId: activeReportId(),
+        }),
+        CRASH_ASSISTANT_TIMEOUT_MS,
+        "Crash checks",
+      );
       if (!isCurrentAnalysis(run)) return;
       crashFindings = result.findings ?? [];
       crashMcreator = result.mcreatorMods ?? [];
@@ -891,7 +910,10 @@
       // null) at this point — runUnifiedAnalysis re-enriches after the fresh
       // runAiExplain completes, matching hints to the actual source.
     } catch (e) {
-      error = String(e);
+      if (isCurrentAnalysis(run)) {
+        lastRulesSource = null;
+        error = String(e);
+      }
     } finally {
       if (isCurrentAnalysis(run)) crashLoading = false;
     }
