@@ -166,10 +166,6 @@ pub fn merge_gui_extras(
     base
 }
 
-pub fn active_wings(player_key: &str) -> Option<String> {
-    load_profile(player_key).ok().and_then(|p| p.wings).filter(|w| !w.is_empty())
-}
-
 pub fn load_profile(player_key: &str) -> Result<CosmeticsProfile, String> {
     let path = profile_dir(player_key).join("profile.json");
     if !path.is_file() {

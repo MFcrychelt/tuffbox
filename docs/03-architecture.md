@@ -35,6 +35,7 @@
 │ - Minecraft process runner            │
 │ - Remote Crash KB client (opt-in)     │
 │ - TuffSwarm P2P (future)              │
+│ - GitHub Pack Transport               │
 └───────────────────────────────────────┘
 ```
 
@@ -153,3 +154,5 @@ User action
 - массовое изменение конфигов;
 - импорт нового modpack;
 - rollback.
+
+GitHub Pack Transport (public repos, anonymous consume) is documented in [`15-github-pack-transport.md`](15-github-pack-transport.md) and is not part of TuffSwarm.

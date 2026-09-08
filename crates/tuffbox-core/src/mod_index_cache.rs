@@ -79,9 +79,7 @@ impl ModHashIndex {
 
     pub fn get(&self, sha1: &str) -> Option<&ModHashIndexEntry> {
         let key = sha1.to_ascii_lowercase();
-        self.entries
-            .get(&key)
-            .or_else(|| self.entries.get(sha1))
+        self.entries.get(&key).or_else(|| self.entries.get(sha1))
     }
 
     pub fn put_miss(&mut self, sha1: &str) {
@@ -147,30 +145,28 @@ impl ModHashIndex {
     }
 
     /// Updates only Modrinth environment fields on an existing (or new stub) entry.
-    pub fn put_sides(
-        &mut self,
-        sha1: &str,
-        client_side: Option<&str>,
-        server_side: Option<&str>,
-    ) {
+    pub fn put_sides(&mut self, sha1: &str, client_side: Option<&str>, server_side: Option<&str>) {
         let key = sha1.to_ascii_lowercase();
         let side = Side::from_modrinth(client_side, server_side);
-        let entry = self.entries.entry(key.clone()).or_insert_with(|| ModHashIndexEntry {
-            status: "modrinth".into(),
-            id: None,
-            name: None,
-            version: None,
-            project_id: None,
-            file_id: None,
-            icon_url: None,
-            download_url: None,
-            sha1: Some(key),
-            sha512: None,
-            content_type: None,
-            side: None,
-            client_side: None,
-            server_side: None,
-        });
+        let entry = self
+            .entries
+            .entry(key.clone())
+            .or_insert_with(|| ModHashIndexEntry {
+                status: "modrinth".into(),
+                id: None,
+                name: None,
+                version: None,
+                project_id: None,
+                file_id: None,
+                icon_url: None,
+                download_url: None,
+                sha1: Some(key),
+                sha512: None,
+                content_type: None,
+                side: None,
+                client_side: None,
+                server_side: None,
+            });
         entry.client_side = client_side.map(|s| s.to_string());
         entry.server_side = server_side.map(|s| s.to_string());
         entry.side = Some(side.as_str().to_string());
@@ -241,7 +237,7 @@ impl ModHashIndexEntry {
             status: vec!["ok".into()],
             content_type,
             authors: Vec::new(),
-        option: None,
+            option: None,
         })
     }
 }

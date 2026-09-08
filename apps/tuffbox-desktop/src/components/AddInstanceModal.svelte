@@ -1,61 +1,82 @@
 <script lang="ts">
-  import { X, Folder, Loader2, Download, Search, Package } from "lucide-svelte";
-  import { createEventDispatcher, onMount, onDestroy } from "svelte";
+  import { X, Folder, Loader2, Download, ImagePlus } from "@lucide/svelte";
+  import { onMount, onDestroy } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { invoke } from "@tauri-apps/api/core";
+  import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { projectPath } from "../lib/store";
+  import { projectPath, libraryTabRequest } from "../lib/store";
+  import { toasts } from "../lib/toast";
   import { trapFocus } from "../lib/focusTrap";
   import LoadingButton from "./LoadingButton.svelte";
 
-  const dispatch = createEventDispatcher<{ close: void; created: string }>();
+  let {
+    onclose,
+    oncreated,
+    initialMode = "blank",
+  }: {
+    onclose?: () => void;
+    oncreated?: (path: string) => void;
+    /** Mode to open on — remounted each time the modal is shown. `"catalog"` redirects to Library Discover. */
+    initialMode?: "blank" | "import" | "catalog";
+  } = $props();
 
-  // Each "input type" on the home screen is an isolated, self-validating
-  // page (PrismLauncher-style: page-per-type) instead of one shared
-  // form whose fields leak across modes.
-  type CreateMode = "blank" | "import" | "curseforge";
-  let mode: CreateMode = "blank";
+  // Blank and import only — catalog browsing lives in Library Discover.
+  type CreateMode = "blank" | "import";
+  let mode: CreateMode = $state("blank");
+  const redirectedToDiscover = $derived(initialMode === "catalog");
+
+  function goToDiscover() {
+    libraryTabRequest.set("discover");
+    onclose?.();
+    window.dispatchEvent(new CustomEvent("tuffbox:open-library"));
+  }
+
+  // Apply before first paint; modal remounts on each open so this is once per show.
+  $effect.pre(() => {
+    if (initialMode === "catalog") {
+      goToDiscover();
+      return;
+    }
+    mode = initialMode === "import" ? "import" : "blank";
+  });
 
   // --- Blank instance (explicit, typed inputs) ---
-  let name = "New Instance";
-  let minecraftVersion = "1.20.1";
-  let loader: "vanilla" | "fabric" | "forge" | "neoforge" | "quilt" = "fabric";
-  let loaderVersion = "";
-  let mcVersions: { id: string; popular: boolean }[] = [];
-  let loaderVersions: { id: string; stable: boolean }[] = [];
-  let loadingMc = true;
-  let loadingLoader = false;
-  let memoryMode: "auto" | "manual" = "auto";
-  let recommendedMemoryMb = 8192;
-  let memoryMb = 8192;
-  let memoryMaxMb = 16384;
-  let jvmArgs = "-XX:+UseG1GC";
+  let name = $state("New Instance");
+  let minecraftVersion = $state("1.20.1");
+  let loader = $state<"vanilla" | "fabric" | "forge" | "neoforge" | "quilt">("fabric");
+  let loaderVersion = $state("");
+  let mcVersions = $state<{ id: string; popular: boolean }[]>([]);
+  let loaderVersions = $state<{ id: string; stable: boolean }[]>([]);
+  let loadingMc = $state(true);
+  let loadingLoader = $state(false);
+  let loaderRequestId = 0;
+  let memoryMode = $state<"auto" | "manual">("auto");
+  let recommendedMemoryMb = $state(8192);
+  let memoryMb = $state(8192);
+  /** Hard cap for Create modpack memory slider / presets. */
+  const MEMORY_MAX_MB = 64 * 1024;
+  const MEMORY_MIN_MB = 4 * 1024;
+  const MEMORY_PRESETS_GB = [4, 8, 10, 12, 16, 24, 32, 36, 48, 64] as const;
+  let memoryMaxMb = $state(MEMORY_MAX_MB);
+  let jvmArgs = $state("-XX:+UseG1GC");
+  let iconSourcePath = $state<string | null>(null);
+  let iconPreviewUrl = $state<string | null>(null);
 
   // --- Templates (blank helper) ---
-  let templates: any[] = [];
-  let templatesLoaded = false;
-  let useTemplate = false;
+  let templates = $state<any[]>([]);
+  let templatesLoaded = $state(false);
+  let useTemplate = $state(false);
 
   // --- Import pack (.mrpack / zip) ---
-  let importName = "New Instance";
-  let importPath = "";
-
-  // --- CurseForge browse ---
-  let cfName = "New Instance";
-  let cfQuery = "";
-  let cfHits: any[] = [];
-  let cfLoading = false;
-  let cfSelected: any = null;
-  let cfFiles: any[] = [];
-  let cfFilesLoading = false;
-  let cfFileId: number | null = null;
+  let importName = $state("New Instance");
+  let importPath = $state("");
 
   // --- Shared ---
-  let location = "";
-  let loading = false;
-  let error = "";
-  let installMessage = "";
-  let packPhase = "";
+  let location = $state("");
+  let loading = $state(false);
+  let error = $state("");
+  let installMessage = $state("");
+  let packPhase = $state("");
 
   let unlistenPack: UnlistenFn | null = null;
 
@@ -82,26 +103,19 @@
   }
 
   onMount(async () => {
+    if (redirectedToDiscover) return;
     loadingMc = true;
     try {
       try {
         const settings = await invoke<{ defaultMemoryMb?: number }>("get_launcher_settings");
         if (settings?.defaultMemoryMb && settings.defaultMemoryMb >= 1024) {
-          recommendedMemoryMb = settings.defaultMemoryMb;
-          memoryMb = settings.defaultMemoryMb;
+          recommendedMemoryMb = Math.min(MEMORY_MAX_MB, Math.max(MEMORY_MIN_MB, settings.defaultMemoryMb));
+          memoryMb = recommendedMemoryMb;
         }
       } catch {
         /* keep defaults */
       }
-      try {
-        // Rough upper bound for the slider from JS (navigator), fallback 16G.
-        const deviceMemGb = (navigator as any).deviceMemory as number | undefined;
-        if (deviceMemGb && deviceMemGb > 0) {
-          memoryMaxMb = Math.max(8192, Math.min(65536, Math.floor(deviceMemGb * 1024 * 0.75)));
-        }
-      } catch {
-        /* keep default max */
-      }
+      memoryMaxMb = MEMORY_MAX_MB;
       const versions = await invoke("get_minecraft_versions");
       mcVersions = versions as { id: string; popular: boolean }[];
       if (!mcVersions.some((v) => v.id === minecraftVersion)) {
@@ -126,14 +140,14 @@
 
   function guessLocation(): string {
     const home = (defaultHome ?? "").replace(/[\\/]+$/, "");
-    if (mode === "import" || mode === "curseforge") {
+    if (mode === "import") {
       // Pack install uses this as the parent folder; instance subfolder is created inside.
       return home;
     }
     return `${home}/${slugify(activeName())}`;
   }
 
-  let defaultHome = "";
+  let defaultHome = $state("");
   async function loadDefaultHome() {
     try {
       const info = await invoke<{ current: string; default: string }>("get_instances_path_info");
@@ -145,25 +159,70 @@
   }
 
   async function loadLoaderVersions() {
-    if (loadingLoader) return;
     if (loader === "vanilla") {
+      loaderVersions = [];
+      loaderVersion = "";
+      loadingLoader = false;
+      return;
+    }
+    if (!minecraftVersion) {
       loaderVersions = [];
       loaderVersion = "";
       return;
     }
+    const reqId = ++loaderRequestId;
     loadingLoader = true;
     try {
-      loaderVersions = await invoke("get_loader_versions", {
+      const versions = await invoke<{ id: string; stable: boolean }[]>("get_loader_versions", {
         loader,
         minecraftVersion,
       });
-      loaderVersion = loaderVersions.find((v) => v.stable)?.id ?? loaderVersions[0]?.id ?? "";
-    } catch {
+      if (reqId !== loaderRequestId) return;
+      loaderVersions = versions ?? [];
+      loaderVersion =
+        loaderVersions.find((v) => v.stable)?.id ?? loaderVersions[0]?.id ?? "";
+      if (loaderVersions.length === 0) {
+        error = `No ${loader} versions found for Minecraft ${minecraftVersion}.`;
+      } else if (error.startsWith("No ") || error.startsWith("Failed to load")) {
+        error = "";
+      }
+    } catch (e) {
+      if (reqId !== loaderRequestId) return;
       loaderVersions = [];
       loaderVersion = "";
+      error = `Failed to load ${loader} versions: ${e}`;
     } finally {
-      loadingLoader = false;
+      if (reqId === loaderRequestId) loadingLoader = false;
     }
+  }
+
+  async function pickIcon() {
+    try {
+      const selected = await open({
+        multiple: false,
+        title: "Choose pack icon",
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+      });
+      if (!selected || Array.isArray(selected)) return;
+      iconSourcePath = selected;
+      try {
+        iconPreviewUrl = convertFileSrc(selected);
+      } catch {
+        iconPreviewUrl = null;
+      }
+    } catch (e) {
+      error = `Could not choose icon: ${e}`;
+    }
+  }
+
+  function setMemoryPresetGb(gb: number) {
+    memoryMode = "manual";
+    memoryMb = Math.min(MEMORY_MAX_MB, Math.max(MEMORY_MIN_MB, gb * 1024));
+  }
+
+  function clearIcon() {
+    iconSourcePath = null;
+    iconPreviewUrl = null;
   }
 
   async function selectLocation() {
@@ -187,7 +246,7 @@
         { name: "Modpacks", extensions: ["mrpack", "zip"] },
         { name: "All", extensions: ["*"] },
       ],
-      title: "Import modpack (.mrpack / CurseForge zip / Prism zip)",
+      title: "Import pack (.mrpack / CurseForge zip / Prism zip)",
     });
     if (selected && typeof selected === "string") {
       importPath = selected;
@@ -216,15 +275,12 @@
   // Name for the current mode drives the default location slug.
   function activeName(): string {
     if (mode === "import") return importName || name;
-    if (mode === "curseforge") return cfName || name;
     return name;
   }
 
   // Page-per-type validation: each mode validates only its own inputs.
-  $: blankValid = !!minecraftVersion && (loader === "vanilla" || !!loaderVersion);
-  $: importValid = !!importPath;
-  $: cfValid = !!cfSelected && cfFileId !== null;
-  $: canCreate = mode === "blank" ? blankValid : mode === "import" ? importValid : cfValid;
+  const blankValid = $derived(!!minecraftVersion && (loader === "vanilla" || !!loaderVersion));
+  const importValid = $derived(!!importPath);
 
   async function create() {
     if (!blankValid) {
@@ -235,7 +291,8 @@
     error = "";
     installMessage = "";
     try {
-      const mem = memoryMode === "auto" ? recommendedMemoryMb : memoryMb;
+      const rawMem = memoryMode === "auto" ? recommendedMemoryMb : memoryMb;
+      const mem = Math.min(MEMORY_MAX_MB, Math.max(MEMORY_MIN_MB, rawMem));
       const args = jvmArgs
         .split(/\s+/)
         .map((s) => s.trim())
@@ -249,8 +306,18 @@
         memoryMb: mem,
         jvmArgs: args.length ? args : ["-XX:+UseG1GC"],
       });
-      dispatch("created", path as string);
-      dispatch("close");
+      if (iconSourcePath) {
+        try {
+          await invoke("set_project_listing_icon", {
+            path,
+            sourceFile: iconSourcePath,
+          });
+        } catch (iconErr) {
+          toasts.warning(`Pack created, but the icon could not be applied: ${iconErr}`);
+        }
+      }
+      oncreated?.(path as string);
+      onclose?.();
     } catch (e) {
       error = `${e}`;
     } finally {
@@ -260,12 +327,12 @@
 
   function pickLoader(id: string) {
     loader = id as typeof loader;
-    loadLoaderVersions();
+    void loadLoaderVersions();
   }
 
   async function installFromFile() {
     if (!importValid) {
-      error = "Pick a modpack file first.";
+      error = "Pick a pack file first.";
       return;
     }
     loading = true;
@@ -282,8 +349,8 @@
       if (failed > 0) {
         error = `Installed with ${failed} download failure(s) — open Content and Retry.`;
       }
-      dispatch("created", result.path as string);
-      dispatch("close");
+      oncreated?.(result.path as string);
+      onclose?.();
     } catch (e) {
       error = `${e}`;
     } finally {
@@ -292,104 +359,33 @@
     }
   }
 
-  async function searchCurseForge() {
-    cfLoading = true;
-    error = "";
-    cfSelected = null;
-    cfFiles = [];
-    cfFileId = null;
-    try {
-      cfHits = await invoke("search_curseforge_modpacks", {
-        query: cfQuery,
-        gameVersion: null,
-        offset: 0,
-      });
-      if (cfHits.length === 0) {
-        installMessage = "No modpacks found.";
-      }
-    } catch (e) {
-      error = `${e}`;
-      cfHits = [];
-    } finally {
-      cfLoading = false;
-    }
-  }
-
-  async function selectCfPack(hit: any) {
-    cfSelected = hit;
-    cfName = hit.name || cfName;
-    cfFilesLoading = true;
-    cfFiles = [];
-    cfFileId = null;
-    try {
-      cfFiles = await invoke("get_curseforge_modpack_files", {
-        modId: hit.id,
-        gameVersion: null,
-      });
-      cfFileId = cfFiles[0]?.id ?? null;
-    } catch (e) {
-      error = `${e}`;
-    } finally {
-      cfFilesLoading = false;
-    }
-  }
-
-  function onCfFileChange(e: Event) {
-    const v = (e.currentTarget as HTMLSelectElement).value;
-    cfFileId = v ? Number(v) : null;
-  }
-
-  async function installFromCurseForge() {
-    if (!cfValid) {
-      error = "Select a modpack file version.";
-      return;
-    }
-    loading = true;
-    error = "";
-    installMessage = "Downloading CurseForge modpack…";
-    try {
-      const targetDir = location.replace(/[\\/]+$/, "") || defaultHome;
-      const result: any = await invoke("install_modpack", {
-        source: `cf:${cfSelected.id}:${cfFileId}`,
-        targetDir,
-        instanceName: cfName,
-      });
-      const failed = result?.download?.failed?.length ?? 0;
-      if (failed > 0) {
-        error = `Installed with ${failed} download failure(s) — open Content and Retry.`;
-      }
-      dispatch("created", result.path as string);
-      dispatch("close");
-    } catch (e) {
-      error = `${e}`;
-    } finally {
-      loading = false;
-      installMessage = "";
-      packPhase = "";
-    }
-  }
-
-  $: if (mode === "blank" && (minecraftVersion || loader)) {
-    if (!loadingMc) loadLoaderVersions();
-  }
+  $effect(() => {
+    if (mode !== "blank") return;
+    const mc = minecraftVersion;
+    const ld = loader;
+    if (!mc) return;
+    void ld;
+    void loadLoaderVersions();
+  });
 </script>
 
-<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={(e) => e.key === 'Enter' && dispatch('close')}>
-  <div class="modal" class:wide={mode !== "blank"} role="dialog" aria-modal="true" aria-labelledby="add-instance-title" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+{#if !redirectedToDiscover}
+<div class="modal-backdrop" onclick={(e) => e.target === e.currentTarget && onclose?.()} role="button" tabindex="-1" aria-label="Close" onkeydown={(e) => e.key === 'Enter' && onclose?.()}>
+  <div class="modal" class:wide={mode === "import"} role="dialog" aria-modal="true" aria-labelledby="add-instance-title" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <div class="modal-hero">
       <div class="hero-copy">
-        <h2 id="add-instance-title">Create modpack</h2>
-        <p>Name it, pick loader + Minecraft, set memory — then build in IDE.</p>
+        <h2 id="add-instance-title">Add instance</h2>
+        <p>Name it, pick a loader and Minecraft version, then install.</p>
       </div>
-      <button class="icon-btn hero-close" on:click={() => dispatch("close")} aria-label="Close add instance dialog">
+      <button class="icon-btn hero-close" onclick={() => onclose?.()} aria-label="Close add instance dialog">
         <X size={18} />
       </button>
     </div>
 
     <div class="tabs">
-      <button class:active={mode === "blank"} on:click={() => { mode = "blank"; location = guessLocation(); }}>Blank</button>
-      <button class:active={mode === "import"} on:click={() => { mode = "import"; location = guessLocation(); }}>Import pack</button>
-      <button class:active={mode === "curseforge"} on:click={() => { mode = "curseforge"; location = guessLocation(); }}>CurseForge</button>
+      <button class:active={mode === "blank"} onclick={() => { mode = "blank"; location = guessLocation(); }}>Blank</button>
+      <button class:active={mode === "import"} onclick={() => { mode = "import"; location = guessLocation(); }}>Import pack</button>
+      <button type="button" onclick={goToDiscover}>Browse packs</button>
     </div>
 
     <div class="modal-body">
@@ -401,14 +397,14 @@
       {/if}
 
       {#if mode === "blank"}
-        <button class="ghost template-btn" on:click={() => { useTemplate = !useTemplate; if (useTemplate && !templatesLoaded) loadTemplates(); }}>
+        <button class="ghost template-btn" onclick={() => { useTemplate = !useTemplate; if (useTemplate && !templatesLoaded) loadTemplates(); }}>
           {useTemplate ? "Create from scratch" : "Use template"}
         </button>
 
         {#if useTemplate && templates.length > 0}
           <div class="template-list">
             {#each templates.slice(0, 5) as tpl, i (tpl.name || i)}
-              <button class="template-row" on:click={() => {
+              <button class="template-row" onclick={() => {
                 name = tpl.name || "New Instance";
                 if (tpl.manifest?.minecraft?.version) minecraftVersion = tpl.manifest.minecraft.version;
                 if (tpl.manifest?.loader?.kind) {
@@ -428,10 +424,27 @@
         {/if}
 
         <div class="name-row">
-          <div class="pack-icon" aria-hidden="true">{(name.trim()[0] || "?").toUpperCase()}</div>
+          <button
+            type="button"
+            class="pack-icon"
+            class:has-img={!!iconPreviewUrl}
+            onclick={pickIcon}
+            title="Choose pack icon"
+            aria-label="Choose pack icon"
+          >
+            {#if iconPreviewUrl}
+              <img src={iconPreviewUrl} alt="" />
+            {:else}
+              <span class="pack-icon-letter">{(name.trim()[0] || "?").toUpperCase()}</span>
+              <span class="pack-icon-hint"><ImagePlus size={14} /></span>
+            {/if}
+          </button>
           <div class="field grow">
-            <label for="inst-name">Profile name</label>
-            <input id="inst-name" bind:value={name} placeholder="Enter pack name" on:input={() => (location = guessLocation())} />
+            <label for="inst-name">Instance name</label>
+            <input id="inst-name" bind:value={name} placeholder="Enter instance name" oninput={() => (location = guessLocation())} />
+            {#if iconSourcePath}
+              <button type="button" class="clear-icon" onclick={clearIcon}>Remove icon</button>
+            {/if}
           </div>
         </div>
 
@@ -445,7 +458,7 @@
                 class:active={loader === l.id}
                 role="radio"
                 aria-checked={loader === l.id}
-                on:click={() => pickLoader(l.id)}
+                onclick={() => pickLoader(l.id)}
               >{l.label}</button>
             {/each}
           </div>
@@ -470,6 +483,8 @@
               <div class="field-loader"><Loader2 size={16} class="spin" /> Loading...</div>
             {:else if loader === "vanilla"}
               <input id="inst-loader-version" value="No loader (Vanilla)" disabled />
+            {:else if loaderVersions.length === 0}
+              <input id="inst-loader-version" value="No versions available" disabled />
             {:else}
               <select id="inst-loader-version" bind:value={loaderVersion}>
                 {#each loaderVersions as v (v.id)}
@@ -489,7 +504,7 @@
               class:active={memoryMode === "auto"}
               role="radio"
               aria-checked={memoryMode === "auto"}
-              on:click={() => {
+              onclick={() => {
                 memoryMode = "auto";
                 memoryMb = recommendedMemoryMb;
               }}
@@ -500,23 +515,33 @@
               class:active={memoryMode === "manual"}
               role="radio"
               aria-checked={memoryMode === "manual"}
-              on:click={() => (memoryMode = "manual")}
+              onclick={() => (memoryMode = "manual")}
             >Custom</button>
           </div>
           {#if memoryMode === "manual"}
+            <div class="mem-presets" role="group" aria-label="Memory presets">
+              {#each MEMORY_PRESETS_GB as gb (gb)}
+                <button
+                  type="button"
+                  class="mem-preset"
+                  class:active={memoryMb === gb * 1024}
+                  onclick={() => setMemoryPresetGb(gb)}
+                >{gb} GB</button>
+              {/each}
+            </div>
             <div class="mem-slider">
-              <div class="mem-value">{memoryMb} MB</div>
+              <div class="mem-value">{memoryMb} MB · {(memoryMb / 1024).toFixed(memoryMb % 1024 === 0 ? 0 : 1)} GB</div>
               <input
                 class="mem-range"
                 type="range"
-                min="1024"
+                min={MEMORY_MIN_MB}
                 max={memoryMaxMb}
-                step="256"
+                step="1024"
                 bind:value={memoryMb}
               />
               <div class="mem-scale">
-                <span>1 GB</span>
-                <span>{Math.round(memoryMaxMb / 1024)} GB</span>
+                <span>4 GB</span>
+                <span>64 GB</span>
               </div>
             </div>
           {/if}
@@ -526,105 +551,49 @@
           <label for="inst-jvm">Launch arguments</label>
           <input id="inst-jvm" bind:value={jvmArgs} placeholder="Extra Java arguments" />
         </div>
-      {:else if mode === "import"}
-         <!-- Page 2: import — name derived from file, isolated -->
+      {:else}
+         <!-- Import — name derived from file, isolated -->
          <p class="muted">Import a Modrinth <code>.mrpack</code>, CurseForge zip, or Prism instance zip — mods download automatically (Prism-style).</p>
          <div class="field">
            <label for="inst-pack-file">Pack file</label>
            <div class="input-row">
              <input id="inst-pack-file" bind:value={importPath} placeholder="path/to/pack.mrpack or .zip" />
-             <button class="secondary" on:click={pickImportFile} aria-label="Choose modpack file"><Folder size={16} /></button>
+             <button class="secondary" onclick={pickImportFile} aria-label="Choose pack file"><Folder size={16} /></button>
            </div>
          </div>
          <div class="field">
            <label for="inst-name-imp">Instance name</label>
-           <input id="inst-name-imp" bind:value={importName} on:input={() => (location = guessLocation())} />
-         </div>
-       {:else}
-         <!-- Page 3: CurseForge browse — name + file selection isolated -->
-         <p class="muted">Browse CurseForge modpacks (same API as PrismLauncher Flame).</p>
-         <div class="search-row">
-           <div class="search">
-             <Search size={16} />
-             <input aria-label="Search CurseForge modpacks" bind:value={cfQuery} placeholder="Search modpacks…" on:keydown={(e) => e.key === "Enter" && searchCurseForge()} />
-           </div>
-           <button class="secondary" on:click={searchCurseForge} disabled={cfLoading}>
-             {#if cfLoading}<Loader2 size={16} class="spin" />{:else}<Search size={16} />{/if}
-             Search
-           </button>
-         </div>
-         <div class="cf-layout">
-           <div class="cf-list">
-             {#each cfHits as hit (hit.id)}
-               <button class="cf-row" class:active={cfSelected?.id === hit.id} on:click={() => selectCfPack(hit)}>
-                 {#if hit.iconUrl}
-                   <img src={hit.iconUrl} alt="" />
-                 {:else}
-                   <span class="cf-icon"><Package size={18} /></span>
-                 {/if}
-                 <div>
-                   <strong>{hit.name}</strong>
-                   <span>{hit.summary?.slice(0, 100) ?? ""}</span>
-                 </div>
-               </button>
-             {:else}
-               <div class="muted compact">{cfLoading ? "Searching…" : "Search for a modpack to begin."}</div>
-             {/each}
-           </div>
-           <div class="cf-detail">
-             {#if cfSelected}
-               <h3>{cfSelected.name}</h3>
-               {#if cfFilesLoading}
-                 <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions…</div>
-               {:else}
-                 <label for="cf-file">Pack version</label>
-                 <select id="cf-file" value={cfFileId ?? ""} on:change={onCfFileChange}>
-                   {#each cfFiles as f (f.id)}
-                     <option value={f.id}>{f.displayName} · {(f.gameVersions || []).slice(0, 3).join(", ")}</option>
-                   {/each}
-                 </select>
-                 <div class="field" style="margin-top:12px">
-                   <label for="inst-name-cf">Instance name</label>
-                   <input id="inst-name-cf" bind:value={cfName} on:input={() => (location = guessLocation())} />
-                 </div>
-               {/if}
-             {:else}
-               <div class="muted compact">Select a pack to choose its file version.</div>
-             {/if}
-           </div>
+           <input id="inst-name-imp" bind:value={importName} oninput={() => (location = guessLocation())} />
          </div>
        {/if}
 
        <div class="field">
          <label for="inst-location">{mode === "blank" ? "Instance folder" : "Download folder"}</label>
          <div class="input-row">
-           <input id="inst-location" bind:value={location} placeholder={mode === "blank" ? "Folder for this instance" : "Parent folder for the modpack"} />
-           <button class="secondary" on:click={selectLocation} aria-label="Choose location"><Folder size={16} /></button>
+           <input id="inst-location" bind:value={location} placeholder={mode === "blank" ? "Folder for this instance" : "Parent folder for this instance"} />
+           <button class="secondary" onclick={selectLocation} aria-label="Choose location"><Folder size={16} /></button>
          </div>
          {#if mode !== "blank"}
-           <span class="path-hint">The modpack will be installed as a new folder inside this path.</span>
+           <span class="path-hint">The pack will be installed as a new folder inside this path.</span>
          {/if}
        </div>
      </div>
 
       <div class="modal-footer">
-        <button class="ghost" on:click={() => dispatch("close")} disabled={loading}>Cancel</button>
+        <button class="ghost" onclick={() => onclose?.()} disabled={loading}>Cancel</button>
         {#if mode === "blank"}
-          <LoadingButton {loading} disabled={!blankValid} on:click={create}>
+          <LoadingButton {loading} disabled={!blankValid} onclick={create}>
             Create
           </LoadingButton>
-        {:else if mode === "import"}
-          <LoadingButton {loading} disabled={!importValid} on:click={installFromFile}>
-            <Download size={16} /> Install pack
-          </LoadingButton>
         {:else}
-          <LoadingButton {loading} disabled={!cfValid} on:click={installFromCurseForge}>
-            <Download size={16} /> Install from CurseForge
+          <LoadingButton {loading} disabled={!importValid} onclick={installFromFile}>
+            <Download size={16} /> Install pack
           </LoadingButton>
         {/if}
       </div>
   </div>
 </div>
+{/if}
 
 <style>
   .modal-backdrop {
@@ -642,12 +611,12 @@
     border-radius: 18px;
     display: flex; flex-direction: column;
   }
-  .modal.wide { width: min(880px, 100%); }
+  .modal.wide { width: min(640px, 100%); }
   .modal-hero {
     position: relative;
     padding: 22px 20px 16px;
     background:
-      radial-gradient(ellipse at 20% 0%, rgba(27, 217, 106, 0.28), transparent 55%),
+      radial-gradient(ellipse at 20% 0%, color-mix(in srgb, var(--accent-primary) 28%, transparent), transparent 55%),
       radial-gradient(ellipse at 90% 40%, rgba(59, 130, 246, 0.18), transparent 50%),
       linear-gradient(160deg, #12161c 0%, #1a222c 100%);
     border-bottom: 1px solid var(--border-color);
@@ -677,8 +646,8 @@
     padding: 8px 12px; border-radius: 999px; font-weight: 600;
   }
   .tabs button.active {
-    border-color: rgba(27,217,106,.35);
-    background: rgba(27,217,106,.1);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--accent-primary);
   }
   .modal-body { padding: 8px 20px 16px; display: flex; flex-direction: column; gap: 14px; }
@@ -690,8 +659,7 @@
   .field.grow { flex: 1; min-width: 0; }
   .field label, .field-label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
   .field input:not([type="radio"]):not([type="range"]):not([type="checkbox"]),
-  .field select,
-  .cf-detail select {
+  .field select {
     box-sizing: border-box; width: 100%; height: 42px; padding: 0 12px; border-radius: 10px;
     border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
     font-size: 14px; line-height: 1;
@@ -706,6 +674,7 @@
     align-items: flex-end;
   }
   .pack-icon {
+    position: relative;
     width: 56px;
     height: 56px;
     border-radius: var(--border-radius-md);
@@ -714,9 +683,51 @@
     justify-content: center;
     font-size: 22px;
     font-weight: 800;
-    color: #04140a;
-    background: linear-gradient(135deg, #1bd96a, #0ea5e9);
+    color: var(--on-accent);
+    background: linear-gradient(135deg, var(--accent-primary), #0ea5e9);
     flex-shrink: 0;
+    border: 1px solid transparent;
+    padding: 0;
+    cursor: pointer;
+    overflow: hidden;
+  }
+  .pack-icon:hover {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    outline-offset: 1px;
+  }
+  .pack-icon.has-img {
+    background: var(--bg-tertiary);
+  }
+  .pack-icon-letter {
+    line-height: 1;
+  }
+  .pack-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .pack-icon-hint {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .clear-icon {
+    margin-top: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    text-decoration: underline;
   }
   .loader-chips {
     display: flex;
@@ -734,11 +745,36 @@
     cursor: pointer;
   }
   .loader-chip.active {
-    border-color: rgba(27, 217, 106, 0.45);
-    background: rgba(27, 217, 106, 0.14);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--accent-primary);
   }
   .mem-slider { display: grid; gap: 8px; margin-top: 8px; }
+  .mem-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .mem-preset {
+    padding: 5px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .mem-preset:hover {
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+  }
+  .mem-preset.active {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 12%, var(--bg-tertiary));
+  }
   .mem-value {
     font-size: 20px;
     font-weight: 800;
@@ -766,7 +802,7 @@
     background: var(--accent-primary);
     border: 2px solid #0b1a10;
     cursor: pointer;
-    box-shadow: 0 0 0 3px rgba(27, 217, 106, 0.25);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
   .mem-range::-moz-range-thumb {
     width: 18px;
@@ -791,11 +827,10 @@
   }
   .notice {
     padding: 10px 12px; border-radius: 10px;
-    background: rgba(27,217,106,.08); border: 1px solid rgba(27,217,106,.25); color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent); color: var(--accent-primary);
   }
   .muted { color: var(--text-muted); font-size: 13px; }
   .path-hint { font-size: 11px; color: var(--text-muted); }
-  .muted.compact { padding: 16px; text-align: center; }
   .field-loader { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
   .template-btn { align-self: flex-start; }
   .template-list { display: grid; gap: 6px; }
@@ -804,40 +839,12 @@
     border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
   }
   .template-row span { color: var(--text-muted); font-size: 12px; }
-  .search-row { display: flex; gap: 8px; }
-  .search {
-    flex: 1; display: flex; align-items: center; gap: 8px;
-    padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary);
-  }
-  .search input { border: 0; background: transparent; color: var(--text-primary); width: 100%; padding: 10px 0; }
-  .cf-layout {
-    display: grid; grid-template-columns: 1.2fr 0.9fr; gap: 12px;
-    min-height: 300px; max-height: 380px;
-  }
-  .cf-list { overflow: auto; display: grid; gap: 6px; align-content: start; }
-  .cf-row {
-    display: grid; grid-template-columns: 40px 1fr; gap: 10px; text-align: left;
-    padding: 10px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color);
-    background: var(--bg-tertiary); color: var(--text-secondary);
-  }
-  .cf-row.active, .cf-row:hover { border-color: rgba(27,217,106,.4); background: rgba(27,217,106,.06); }
-  .cf-row img, .cf-icon {
-    width: 40px; height: 40px; border-radius: 10px; object-fit: cover;
-    background: var(--bg-elevated); display: flex; align-items: center; justify-content: center;
-  }
-  .cf-row strong { display: block; color: var(--text-primary); font-size: 13px; }
-  .cf-row span { font-size: 11px; color: var(--text-muted); }
-  .cf-detail {
-    border: 1px solid var(--border-color); border-radius: 14px; padding: 12px;
-    background: var(--bg-tertiary); overflow: auto;
-  }
-  .cf-detail h3 { margin: 0 0 12px; font-size: 16px; }
   .icon-btn {
     background: transparent; border: 0; color: var(--text-muted); cursor: pointer;
   }
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 720px) {
-    .cf-layout, .field-row { grid-template-columns: 1fr; }
+    .field-row { grid-template-columns: 1fr; }
   }
 </style>

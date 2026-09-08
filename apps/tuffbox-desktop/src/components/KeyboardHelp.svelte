@@ -1,25 +1,30 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { X } from "lucide-svelte";
+  import { X } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
 
-  const dispatch = createEventDispatcher<{ close: void }>();
+  let { onclose }: { onclose?: () => void } = $props();
 
   const shortcuts = [
-    { keys: ["Ctrl", "K"], label: "Quick navigate" },
-    { keys: ["Ctrl", "1"], label: "Launcher" },
+    { keys: ["Ctrl", "K"], label: "Command palette (instances, stages, actions)" },
+    { keys: ["Ctrl", "1"], label: "Home" },
     { keys: ["Ctrl", "2"], label: "Open IDE" },
-    { keys: ["Ctrl", "3"], label: "Mods" },
-    { keys: ["Ctrl", "4"], label: "Graph" },
-    { keys: ["Ctrl", "5"], label: "Configs" },
-    { keys: ["Ctrl", "6"], label: "Diagnostics" },
-    { keys: ["Ctrl", "7"], label: "Snapshots" },
+    { keys: ["Ctrl", "3"], label: "IDE · Content" },
+    { keys: ["Ctrl", "4"], label: "IDE · Resolve" },
+    { keys: ["Ctrl", "5"], label: "IDE · Configs" },
+    { keys: ["Ctrl", "6"], label: "IDE · Diagnose" },
+    { keys: ["Ctrl", "7"], label: "IDE · Snapshots" },
+    { keys: ["Ctrl", "8"], label: "IDE · World map" },
+    { keys: ["Ctrl", "9"], label: "Library" },
+    { keys: ["Ctrl", ","], label: "Settings" },
+    { keys: ["Ctrl", "Shift", "P"], label: "IDE · Play / Test launch" },
+    { keys: ["["], label: "IDE · Prev stage in phase" },
+    { keys: ["]"], label: "IDE · Next stage in phase" },
     { keys: ["?"], label: "Show shortcuts" },
   ];
 </script>
 
-<div class="kh-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && dispatch("close")} on:keydown={() => {}}>
-  <div class="kh-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+<div class="kh-backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose?.()}>
+  <div class="kh-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <h3>Keyboard Shortcuts</h3>
     <div class="kh-list">
       {#each shortcuts as s}
@@ -32,7 +37,7 @@
       {/each}
     </div>
     <p class="kh-hint">Press <kbd>?</kbd> anywhere to toggle this panel</p>
-    <button class="kh-close" on:click={() => dispatch("close")} aria-label="Close shortcuts">
+    <button class="kh-close" onclick={() => onclose?.()} aria-label="Close shortcuts">
       <X size={16} />
     </button>
   </div>

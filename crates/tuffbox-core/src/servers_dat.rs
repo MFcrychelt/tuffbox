@@ -78,17 +78,23 @@ fn extract_servers(tag: &NbtTag) -> Vec<ServerEntry> {
 }
 
 fn get_string(fields: &[(String, NbtTag)], key: &str) -> Option<String> {
-    fields.iter().find(|(k, _)| k == key).and_then(|(_, v)| match v {
-        NbtTag::String(s) => Some(s.clone()),
-        _ => None,
-    })
+    fields
+        .iter()
+        .find(|(k, _)| k == key)
+        .and_then(|(_, v)| match v {
+            NbtTag::String(s) => Some(s.clone()),
+            _ => None,
+        })
 }
 
 fn get_byte(fields: &[(String, NbtTag)], key: &str) -> Option<i8> {
-    fields.iter().find(|(k, _)| k == key).and_then(|(_, v)| match v {
-        NbtTag::Byte(b) => Some(*b),
-        _ => None,
-    })
+    fields
+        .iter()
+        .find(|(k, _)| k == key)
+        .and_then(|(_, v)| match v {
+            NbtTag::Byte(b) => Some(*b),
+            _ => None,
+        })
 }
 
 /// TCP connect latency probe (not full Minecraft handshake).
@@ -145,14 +151,21 @@ pub fn ping_server_address(address: &str) -> ServerPingResult {
 }
 
 /// Append a server to servers.dat (creates file if missing).
-pub fn add_server(project_dir: &Path, name: &str, address: &str) -> Result<Vec<ServerEntry>, String> {
+pub fn add_server(
+    project_dir: &Path,
+    name: &str,
+    address: &str,
+) -> Result<Vec<ServerEntry>, String> {
     let name = name.trim();
     let address = address.trim();
     if name.is_empty() || address.is_empty() {
         return Err("name and address required".into());
     }
     let mut servers = list_servers(project_dir)?;
-    if servers.iter().any(|s| s.address.eq_ignore_ascii_case(address)) {
+    if servers
+        .iter()
+        .any(|s| s.address.eq_ignore_ascii_case(address))
+    {
         return Err("server already exists".into());
     }
     servers.push(ServerEntry {

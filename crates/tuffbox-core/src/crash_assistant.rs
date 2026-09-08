@@ -57,6 +57,11 @@ pub struct AnalysisCtx {
     pub latest_log: String,
     pub launcher_log: String,
     pub installed_mods: Vec<String>,
+    /// Mod id -> resolved version (from the manifest). Used to gate
+    /// version-sensitive findings like "Indium is missing" (only true for
+    /// Sodium < 0.6). `None` or a missing id means "version unknown" —
+    /// checks then keep the conservative (warn) behavior.
+    pub installed_versions: Option<std::collections::HashMap<String, String>>,
     pub previous_mods: Vec<String>,
     pub java_version: String,
     pub java_vendor: String,
@@ -69,6 +74,17 @@ pub struct AnalysisCtx {
     pub total_ram_mb: u64,
     pub is_offline: bool,
     pub win_events: Vec<String>,
+    /// Pre-split lines of the combined log text. Computed lazily by
+    /// `ensure_combined_lines()` to avoid re-splitting in 30+ check functions.
+    pub combined_lines: std::cell::OnceCell<Vec<String>>,
+}
+
+impl AnalysisCtx {
+    /// Return pre-split lines of the combined log text, computing on first call.
+    pub fn ensure_combined_lines(&self, combined: &str) -> &Vec<String> {
+        self.combined_lines
+            .get_or_init(|| combined.lines().map(String::from).collect())
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -81,6 +97,7 @@ pub fn run_full_analysis(ctx: &AnalysisCtx) -> CrashAnalysisReport {
     findings.extend(check_java_version(ctx, &combined));
     findings.extend(check_mixins(ctx, &combined));
     findings.extend(check_missing_mods(ctx, &combined));
+    findings.extend(check_dep_version_mismatch(ctx, &combined));
     findings.extend(check_intel_cpu(ctx));
     findings.extend(check_integrated_gpu(ctx));
     findings.extend(check_offline(ctx));
@@ -111,6 +128,7 @@ pub fn run_full_analysis(ctx: &AnalysisCtx) -> CrashAnalysisReport {
     findings.extend(check_cascading_config_mask(&combined));
     findings.extend(check_render_stack_conflict(ctx, &combined));
     findings.extend(check_mcreator_mods(&ctx.installed_mods));
+    findings.extend(check_resourcepack_shader_recoverable(ctx, &combined));
     findings.extend(check_conflict_log_phrases(ctx, &combined));
 
     // Deduplicate by code (keep first / highest-severity order).
@@ -145,7 +163,16 @@ fn f(
     auto_fix: Option<&str>,
     refs: &[&str],
 ) -> CrashAnalysisFinding {
-    fx(severity, code, title, description, auto_fix, refs, vec![], None)
+    fx(
+        severity,
+        code,
+        title,
+        description,
+        auto_fix,
+        refs,
+        vec![],
+        None,
+    )
 }
 
 fn fx(
@@ -171,10 +198,21 @@ fn fx(
 }
 
 fn fix_action(kind: &str, label: &str, mod_id: Option<&str>) -> crate::crash::FixAction {
+    fix_action_ver(kind, label, mod_id, None)
+}
+
+/// Fix action with an exact version / version range (for `changeModVersion`).
+fn fix_action_ver(
+    kind: &str,
+    label: &str,
+    mod_id: Option<&str>,
+    version: Option<&str>,
+) -> crate::crash::FixAction {
     crate::crash::FixAction {
         kind: kind.into(),
         label: label.into(),
         mod_id: mod_id.map(|s| s.into()),
+        version: version.map(|s| s.into()),
     }
 }
 
@@ -209,11 +247,9 @@ fn contains_mod_token(haystack: &str, needle: &str) -> bool {
     let mut start = 0;
     while let Some(rel) = haystack[start..].find(needle) {
         let abs = start + rel;
-        let before_ok = abs == 0
-            || !haystack.as_bytes()[abs - 1].is_ascii_alphanumeric();
+        let before_ok = abs == 0 || !haystack.as_bytes()[abs - 1].is_ascii_alphanumeric();
         let end = abs + needle.len();
-        let after_ok = end >= haystack.len()
-            || !haystack.as_bytes()[end].is_ascii_alphanumeric();
+        let after_ok = end >= haystack.len() || !haystack.as_bytes()[end].is_ascii_alphanumeric();
         if before_ok && after_ok {
             return true;
         }
@@ -228,7 +264,6 @@ fn first_evidence_line<'a>(combined: &'a str, needles: &[&str]) -> Option<&'a st
         if trimmed.len() < 8 {
             continue;
         }
-        // Skip Fabric/Quilt "Loading X mods: a, b, c, …" inventory dumps.
         if looks_like_mod_inventory_line(trimmed) {
             continue;
         }
@@ -252,11 +287,55 @@ fn looks_like_mod_inventory_line(line: &str) -> bool {
 
 fn truncate_evidence(line: &str) -> String {
     const MAX: usize = 280;
+    // Byte slicing (`&t[..MAX]`) panics on multi-byte UTF-8 (Cyrillic logs,
+    // emoji, box-drawing). Truncate on a char boundary instead.
     let t = line.trim();
-    if t.len() <= MAX {
-        return t.to_string();
+    let cut = crate::crash_kb::truncate_at_char_boundary(t, MAX);
+    if cut.len() == t.len() {
+        t.to_string()
+    } else {
+        format!("{cut}…")
     }
-    format!("{}…", &t[..MAX])
+}
+
+/// Extract the missing class name from a `NoClassDefFoundError` /
+/// `ClassNotFoundException` log line.
+///
+/// Lines usually carry several `": "` segments
+/// (`"Caused by: java.lang.NoClassDefFoundError: com/foo/Bar"`), so the class
+/// is the LAST segment — `split(": ").nth(1)` would return the exception name
+/// instead of the missing class.
+pub fn class_after_colon(line: &str) -> Option<&str> {
+    // No `": "` segment at all → a bare exception name, not a class reference.
+    if !line.contains(": ") {
+        return None;
+    }
+    let tail = line.rsplit(": ").next()?.trim();
+    let token = tail.split_whitespace().next().unwrap_or("").trim_matches(
+        |c: char| {
+            c == ':'
+                || c == '"'
+                || c == '\''
+                || c == '('
+                || c == ')'
+                || c == '['
+                || c == ']'
+        },
+    );
+    // Accept both `com.foo.Bar` and JVM slash form `com/foo/Bar`.
+    if token.len() > 5 && token.len() < 200 && (token.contains('.') || token.contains('/')) {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+/// Required-mod ids named (quoted) on requires/missing/dependency log lines.
+///
+/// Public so the AI diagnose path can ground `install_mod` against crash-named
+/// missing deps even when the graph emits no MISSING_DEPENDENCY diagnostic.
+pub fn required_mod_ids_from_text(combined: &str) -> Vec<String> {
+    extract_required_mod_ids(combined)
 }
 
 fn extract_required_mod_ids(combined: &str) -> Vec<String> {
@@ -273,6 +352,7 @@ fn extract_required_mod_ids(combined: &str) -> Vec<String> {
             let p = part.trim().to_lowercase();
             if p.len() >= 3
                 && p.len() <= 48
+                && !crate::action_plan::is_invented_vanilla_resource_mod_id(&p)
                 && !matches!(
                     p.as_str(),
                     "requires"
@@ -321,6 +401,9 @@ fn extract_required_mod_ids(combined: &str) -> Vec<String> {
 
 fn check_java_version(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
     let mut out = Vec::new();
+    // Only interpret a class-file major when the log actually shows the
+    // version error — otherwise any innocent number 45–69 (player count,
+    // mod count, port fragment) raises a bogus "needs Java" finding.
     if let Some(ver) = extract_major(combined) {
         let needed = m2j(ver);
         out.push(f(
@@ -334,8 +417,9 @@ fn check_java_version(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFin
             Some(&format!("Install Java {}+ in Project Settings.", needed)),
             &["https://adoptium.net/"],
         ));
-    }
-    if combined.contains("UnsupportedClassVersionError") {
+    } else if combined.contains("UnsupportedClassVersionError") {
+        // Same root cause as above without a parseable major — `else` avoids
+        // emitting two findings for one error.
         out.push(f(
             "error",
             "JAVA_VERSION_MISMATCH",
@@ -349,9 +433,24 @@ fn check_java_version(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFin
 }
 
 fn extract_major(text: &str) -> Option<u32> {
+    if !(text.contains("UnsupportedClassVersionError")
+        || text.to_ascii_lowercase().contains("class file version"))
+    {
+        return None;
+    }
     for l in text.lines() {
-        for w in l.split_whitespace() {
-            if let Ok(n) = w.parse::<u32>() {
+        let lower = l.to_ascii_lowercase();
+        // Only numbers on the error line itself count ("…class file version 65…").
+        if !(lower.contains("unsupportedclassversionerror")
+            || lower.contains("class file version")
+            || lower.contains("major.minor version"))
+        {
+            continue;
+        }
+        for w in l.split(|c: char| !c.is_ascii_alphanumeric() && c != '.') {
+            // Tolerate `major.minor` form (`65.0`).
+            let head = w.split('.').next().unwrap_or("");
+            if let Ok(n) = head.parse::<u32>() {
                 if (45..=69).contains(&n) {
                     return Some(n);
                 }
@@ -361,9 +460,23 @@ fn extract_major(text: &str) -> Option<u32> {
     None
 }
 fn m2j(m: u32) -> String {
+    // Complete class-file-major → Java mapping (45=1.1 … 69=25).
     match m {
+        45 => "1.1".into(),
+        46 => "1.2".into(),
+        47 => "1.3".into(),
+        48 => "1.4".into(),
+        49 => "5".into(),
+        50 => "6".into(),
+        51 => "7".into(),
         52 => "8".into(),
+        53 => "9".into(),
+        54 => "10".into(),
         55 => "11".into(),
+        56 => "12".into(),
+        57 => "13".into(),
+        58 => "14".into(),
+        59 => "15".into(),
         60 => "16".into(),
         61 => "17".into(),
         62 => "18".into(),
@@ -373,6 +486,7 @@ fn m2j(m: u32) -> String {
         66 => "22".into(),
         67 => "23".into(),
         68 => "24".into(),
+        69 => "25".into(),
         _ => format!("?({m})"),
     }
 }
@@ -383,15 +497,19 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
             || combined.contains("Error")
             || combined.contains("Exception"))
     {
+        let lines = ctx.ensure_combined_lines(combined);
         // Only scan lines that actually mention mixin failure — not the
         // Fabric "Loading mods:" inventory that substring-matches short ids.
-        let mixin_lines: String = combined
-            .lines()
+        let mixin_lines: String = lines
+            .iter()
             .filter(|l| {
                 let lower = l.to_lowercase();
-                (lower.contains("mixin") || lower.contains("@inject") || lower.contains("@redirect"))
+                (lower.contains("mixin")
+                    || lower.contains("@inject")
+                    || lower.contains("@redirect"))
                     && !looks_like_mod_inventory_line(l)
             })
+            .cloned()
             .collect::<Vec<_>>()
             .join("\n");
         let search = if mixin_lines.is_empty() {
@@ -455,11 +573,9 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
                 ]
             })
             .collect();
-        let evidence = first_evidence_line(
-            search,
-            &["Mixin apply failed", "Mixin", "@Inject", "mixin"],
-        )
-        .map(truncate_evidence);
+        let evidence =
+            first_evidence_line(search, &["Mixin apply failed", "Mixin", "@Inject", "mixin"])
+                .map(truncate_evidence);
         vec![fx(
             "error",
             "MIXIN_APPLY_FAILED",
@@ -478,13 +594,31 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
 fn check_missing_mods(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
     let mut out = Vec::new();
     let has = |s: &str| ctx.installed_mods.contains(&s.to_string());
-    if has("sodium") && !has("indium") && ctx.loader == "fabric" {
+    // Version-aware obsolete-dep gate: Sodium 0.6+ bundles the Fabric
+    // Rendering API (see knowledge::obsolete_deps), so "Indium is missing"
+    // must only fire for older Sodium. When the Sodium version is unknown we
+    // keep the historical (conservative) behavior and still warn.
+    let sodium_version = ctx
+        .installed_versions
+        .as_ref()
+        .and_then(|m| m.get("sodium"))
+        .map(|s| s.as_str());
+    let indium_obsolete = sodium_version
+        .map(|v| {
+            crate::knowledge::obsolete_deps::is_obsolete_dependency("sodium", Some(v), "indium")
+        })
+        .unwrap_or(false);
+    if has("sodium")
+        && !has("indium")
+        && !indium_obsolete
+        && ctx.loader == "fabric"
+    {
         out.push(fx(
             "error",
             "MISSING_INDIUM",
             "Indium is missing",
-            "Sodium on Fabric needs Indium for Fabric Renderer API.",
-            Some("Install Indium from Modrinth."),
+            "Sodium on Fabric needs Indium for Fabric Renderer API (Sodium below 0.6).",
+            Some("Install Indium from Modrinth (or update Sodium to 0.6+)."),
             &["https://modrinth.com/mod/indium"],
             vec![fix_action(
                 "installDependency",
@@ -520,6 +654,137 @@ fn check_missing_mods(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFin
             Some("Check Connector mod page for required dependencies."),
             &["https://modrinth.com/mod/connector"],
         ));
+    }
+    out
+}
+
+/// Deterministic "mod X requires version R of Y" diagnosis, verified in code.
+///
+/// The loader states both the constraint and (usually) the version it saw,
+/// so the fix never needs the AI: parse the requirement, check the installed
+/// version against it with [`crate::mod_version_req::version_satisfies`],
+/// and pin the precise fix. Only installed deps are handled here — missing
+/// ones belong to MISSING_DEPENDENCY (install button).
+fn check_dep_version_mismatch(
+    ctx: &AnalysisCtx,
+    combined: &str,
+) -> Vec<CrashAnalysisFinding> {
+    use crate::mod_version_req::{parse_dep_version_requirements, version_satisfies};
+    let mut out = Vec::new();
+    let reqs = parse_dep_version_requirements(combined);
+    if reqs.is_empty() {
+        return out;
+    }
+    for req in reqs.into_iter().take(4) {
+        let Some(dep_id) = ctx
+            .installed_mods
+            .iter()
+            .find(|m| m.eq_ignore_ascii_case(&req.dep_id))
+            .cloned()
+        else {
+            continue;
+        };
+        let installed_ver = ctx
+            .installed_versions
+            .as_ref()
+            .and_then(|m| m.get(&dep_id).or_else(|| m.get(&req.dep_id)))
+            .map(|s| s.as_str());
+        // Manifest first, loader testimony (`Actual version` / `wrong version
+        // is present`) second. `None` means "cannot verify" — the fix is
+        // still attached, but the executor re-verifies at apply time.
+        let verdict = installed_ver
+            .and_then(|v| version_satisfies(v, &req.constraint))
+            .or_else(|| {
+                req.found
+                    .as_deref()
+                    .and_then(|f| version_satisfies(f, &req.constraint))
+            });
+        let by = if req.requester.is_empty() {
+            String::new()
+        } else {
+            format!(" (required by `{}`)", req.requester)
+        };
+        let evidence = first_evidence_line(
+            combined,
+            &[
+                req.dep_id.as_str(),
+                "requires version",
+                "Expected range",
+                "wrong version is present",
+            ],
+        )
+        .map(truncate_evidence);
+        match verdict {
+            Some(false) => {
+                let have = installed_ver
+                    .or(req.found.as_deref())
+                    .unwrap_or("unknown");
+                out.push(fx(
+                    "error",
+                    "DEP_VERSION_MISMATCH",
+                    &format!("`{dep_id}` is the wrong version"),
+                    &format!(
+                        "`{dep_id}` {have} does not satisfy `{}`{by} — the loader refuses to start. The fix installs the newest compatible `{dep_id}` release matching `{}`.",
+                        req.constraint, req.constraint
+                    ),
+                    Some(
+                        &format!("Install `{dep_id}` matching `{}`.", req.constraint),
+                    ),
+                    &[],
+                    vec![fix_action_ver(
+                        "changeModVersion",
+                        &format!("Install `{dep_id}` {}", req.constraint),
+                        Some(&dep_id),
+                        Some(&req.constraint),
+                    )],
+                    evidence,
+                ));
+            }
+            Some(true) => {
+                // Manifest satisfies the constraint but the loader disagrees:
+                // the jar on disk drifted (manual swap / stale file) — re-fetch
+                // the tracked file, never pin a different version.
+                out.push(fx(
+                    "warning",
+                    "DEP_VERSION_MANIFEST_DRIFT",
+                    &format!("`{dep_id}` on disk differs from the manifest"),
+                    &format!(
+                        "The manifest says `{dep_id}` satisfies `{}`{by}, but the loader still rejects it — the jar on disk likely drifted. Re-download the tracked file.",
+                        req.constraint
+                    ),
+                    Some(&format!("Re-download `{dep_id}`.")),
+                    &[],
+                    vec![fix_action(
+                        "reinstallMod",
+                        &format!("Re-download `{dep_id}`"),
+                        Some(&dep_id),
+                    )],
+                    evidence,
+                ));
+            }
+            None => {
+                out.push(fx(
+                    "error",
+                    "DEP_VERSION_MISMATCH",
+                    &format!("`{dep_id}` may be the wrong version"),
+                    &format!(
+                        "The loader requires `{dep_id}` matching `{}`{by}, but the installed version is unknown. Applying checks the installed version first and skips when it already satisfies the requirement.",
+                        req.constraint
+                    ),
+                    Some(
+                        &format!("Install `{dep_id}` matching `{}`.", req.constraint),
+                    ),
+                    &[],
+                    vec![fix_action_ver(
+                        "changeModVersion",
+                        &format!("Install `{dep_id}` {}", req.constraint),
+                        Some(&dep_id),
+                        Some(&req.constraint),
+                    )],
+                    evidence,
+                ));
+            }
+        }
     }
     out
 }
@@ -611,13 +876,7 @@ fn check_module_resolution(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalys
             || lo.contains("classnotfoundexception")
             || lo.contains("module") && lo.contains("not found")
         {
-            let class = line
-                .split(": ")
-                .nth(1)
-                .unwrap_or("?")
-                .split_whitespace()
-                .next()
-                .unwrap_or("?");
+            let class = class_after_colon(line).unwrap_or("?");
             let cn = if class.len() > 200 {
                 "unknown class"
             } else {
@@ -787,9 +1046,10 @@ fn check_epic_fight_addons(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalys
     if !has_ef {
         return vec![];
     }
-    if combined.contains("EpicFight")
-        || combined.contains("epicfight")
-            && (combined.contains("NoSuchMethod") || combined.contains("NoSuchField"))
+    // NOTE: `&&` binds tighter than `||` — the Epic Fight mention alone must
+    // NOT fire (healthy logs list the mod). Require the API-break signal too.
+    if (combined.contains("EpicFight") || combined.contains("epicfight"))
+        && (combined.contains("NoSuchMethod") || combined.contains("NoSuchField"))
     {
         let addons: Vec<_> = ctx
             .installed_mods
@@ -983,11 +1243,36 @@ fn check_geckolib_oculus(ctx: &AnalysisCtx) -> Vec<CrashAnalysisFinding> {
     }
 }
 
+/// True when `line` (already lowercased) mentions `word` as a whole token.
+fn line_has_word(line_lower: &str, word: &str) -> bool {
+    line_lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
+        .any(|tok| {
+            tok == word
+                || tok.starts_with(&format!("{word}-"))
+                || tok.starts_with(&format!("{word}_"))
+        })
+}
+
 fn check_intel_driver(combined: &str) -> Vec<CrashAnalysisFinding> {
-    if combined.to_lowercase().contains("intel")
-        && (combined.to_lowercase().contains("driver") || combined.to_lowercase().contains("ig"))
-        && combined.to_lowercase().contains("crash")
-    {
+    // Per-line match: the old whole-log `intel && (driver || "ig") && crash`
+    // fired on any Intel machine whose log contained "crash" plus any word
+    // with "ig" in it (config, origin, signal…). Require the driver signal
+    // and intel on the SAME line, with word boundaries.
+    let hit = combined.lines().any(|line| {
+        let l = line.to_lowercase();
+        (l.contains("intel") || l.contains("igdkmd") || l.contains("igxelpicd") || l.contains("igd10"))
+            && (line_has_word(&l, "driver")
+                || l.contains("igdkmd")
+                || l.contains("igxelpicd")
+                || l.contains("opengl") && l.contains("error"))
+            && (l.contains("crash")
+                || l.contains("error")
+                || l.contains("exception")
+                || l.contains("failed")
+                || l.contains("fault"))
+    });
+    if hit {
         vec![f(
             "warning",
             "MODERN_INTEL_DRIVER",
@@ -1002,10 +1287,14 @@ fn check_intel_driver(combined: &str) -> Vec<CrashAnalysisFinding> {
 }
 
 fn check_macos_shader_driver(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
-    if ctx.os_name.to_lowercase().contains("mac")
-        && (combined.contains("shader") || combined.contains("GLSL"))
-        && combined.contains("error")
-    {
+    // Same-line requirement: shader info lines plus an unrelated "error"
+    // elsewhere in the log must not raise a driver finding.
+    let hit = combined.lines().any(|line| {
+        let l = line.to_lowercase();
+        (l.contains("shader") || l.contains("glsl"))
+            && (l.contains("error") || l.contains("failed") || l.contains("exception"))
+    });
+    if ctx.os_name.to_lowercase().contains("mac") && hit {
         vec![f(
             "warning",
             "MACOS_SHADER_DRIVER",
@@ -1055,7 +1344,21 @@ fn check_corrupted_mod_jar(combined: &str) -> Vec<CrashAnalysisFinding> {
 }
 
 fn check_watermedia_vlc(combined: &str) -> Vec<CrashAnalysisFinding> {
-    if combined.contains("WaterMedia") || combined.contains("vlcj") || combined.contains("VLC") {
+    // A mere mod-list mention of WaterMedia/vlcj must not raise an error —
+    // require a failure signal on the same line.
+    let hit = combined.lines().any(|line| {
+        let l = line.to_lowercase();
+        (l.contains("watermedia") || l.contains("vlcj"))
+            && (l.contains("error")
+                || l.contains("fail")
+                || l.contains("exception")
+                || l.contains("missing")
+                || l.contains("not found")
+                || l.contains("unsatisfiedlink"))
+            || line.contains("VLC")
+                && (l.contains("error") || l.contains("missing") || l.contains("not found"))
+    });
+    if hit {
         vec![f(
             "error",
             "WATERMEDIA_VLC",
@@ -1224,7 +1527,9 @@ fn check_render_stack_conflict(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAn
         && (lower.contains("tesselation") || lower.contains("shader") || lower.contains("iris"));
     let dh_mixin = lower.contains("noncullingfrustummixin")
         || lower.contains("mixins.oculus.compat.dh")
-        || (lower.contains("oculus") && lower.contains("distanthorizons") && lower.contains("mixin"));
+        || (lower.contains("oculus")
+            && lower.contains("distanthorizons")
+            && lower.contains("mixin"));
 
     if (tainted || field_break) && (has_embeddium || has_oculus || lower.contains("oculus")) {
         let mut fixes = Vec::new();
@@ -1304,11 +1609,7 @@ fn check_render_stack_conflict(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAn
                 })
                 .map(|s| s.as_str())
                 .unwrap_or("distanthorizons");
-            fixes.push(fix_action(
-                "updateMod",
-                "Update Distant Horizons",
-                Some(id),
-            ));
+            fixes.push(fix_action("updateMod", "Update Distant Horizons", Some(id)));
             fixes.push(fix_action(
                 "disableMod",
                 "Disable Distant Horizons to test",
@@ -1355,6 +1656,103 @@ fn check_render_stack_conflict(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAn
     out
 }
 
+/// Resource packs that fail to build a required core shader are NOT a crash:
+/// Minecraft logs the error, drops the selected resource packs and keeps
+/// running on vanilla resources. Surface it as an informational note instead
+/// of a scary GPU-crash signal, naming the missing shader programs so the
+/// user can tell which pack broke.
+fn check_resourcepack_shader_recoverable(
+    _ctx: &AnalysisCtx,
+    combined: &str,
+) -> Vec<CrashAnalysisFinding> {
+    let lower = combined.to_lowercase();
+    let caught = lower.contains("caught error loading resourcepacks");
+    let shader_programs_failed = lower.contains("failed to load required shader programs");
+    let shader_missing = lower.contains("could not find shader");
+    if !(caught || (shader_programs_failed && shader_missing)) {
+        return Vec::new();
+    }
+
+    // Collect missing program ids: list entries like
+    // ` - minecraft:core/rendertype_solid: …` and inline mentions like
+    // `Could not find shader minecraft:core/rendertype_solid`.
+    let mut shaders: Vec<String> = Vec::new();
+    for line in combined.lines() {
+        if let Some(id) = missing_shader_id_from_line(line) {
+            if !shaders.contains(&id) {
+                shaders.push(id);
+            }
+        }
+    }
+    let shader_note = match shaders.len() {
+        0 => String::new(),
+        1 => format!(" Missing shader program: {}.", shaders[0]),
+        n => {
+            let shown: Vec<String> = shaders.iter().take(8).cloned().collect();
+            format!(
+                " Missing shader programs: {}{}",
+                shown.join(", "),
+                if n > shown.len() { "…" } else { "" },
+            )
+        }
+    };
+
+    let mut description = String::from(
+        "The game could not build a required shader while loading a resource pack, so \
+         Minecraft disabled that pack and continued on vanilla resources. Nothing \
+         crashed — safe to ignore unless visuals look wrong; remove or update the \
+         pack to stop this message.",
+    );
+    description.push_str(&shader_note);
+
+    vec![fx(
+        "info",
+        "RESOURCEPACK_SHADER_RECOVERED",
+        "Resource pack skipped (game recovered)",
+        &description,
+        None,
+        &[],
+        vec![],
+        first_evidence_line(
+            combined,
+            &[
+                "Caught error loading resourcepacks",
+                "Failed to load required shader programs",
+                "Could not find shader",
+            ],
+        )
+        .map(truncate_evidence),
+    )]
+}
+
+/// Extract a namespaced shader id such as `minecraft:core/rendertype_solid`
+/// from a log line reporting a missing required shader program.
+fn missing_shader_id_from_line(line: &str) -> Option<String> {
+    const INLINE_NEEDLE: &str = "could not find shader ";
+    let lower = line.to_lowercase();
+    let rest = if let Some(i) = lower.find(INLINE_NEEDLE) {
+        &line[i + INLINE_NEEDLE.len()..]
+    } else {
+        let trimmed = line.trim().trim_start_matches("- ");
+        // List entries look like `- minecraft:core/rendertype_solid: …`.
+        if trimmed.starts_with("minecraft:") {
+            trimmed
+        } else {
+            return None;
+        }
+    };
+    let id: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '/' | '_' | '.' | '-'))
+        .collect();
+    // A real program id always carries a namespace and a path segment.
+    if id.contains(':') && id.contains('/') && !id.ends_with('.') {
+        Some(id)
+    } else {
+        None
+    }
+}
+
 fn check_mcreator_mods(mods: &[String]) -> Vec<CrashAnalysisFinding> {
     let mcreator = find_mcreator_mods(mods);
     if !mcreator.is_empty() {
@@ -1395,14 +1793,6 @@ pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<C
         return results;
     }
     let exact = format!("{}.class", fqn.replace('.', "/"));
-    let package_prefix = {
-        let slash = fqn.replace('.', "/");
-        if let Some((pkg, _)) = slash.rsplit_once('/') {
-            format!("{pkg}/")
-        } else {
-            String::new()
-        }
-    };
 
     for entry in std::fs::read_dir(mods_dir).into_iter().flatten().flatten() {
         let p = entry.path();
@@ -1417,18 +1807,12 @@ pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<C
             continue;
         };
         let names: Vec<String> = zip.file_names().map(|s| s.to_string()).collect();
-        let hit = names.iter().any(|n| n == &exact)
-            || (!package_prefix.is_empty()
-                && names
-                    .iter()
-                    .any(|n| n.starts_with(&package_prefix) && n.ends_with(".class")));
-        if !hit {
-            // Fallback: exact class basename somewhere in the jar (rare shading cases).
-            let simple = fqn.rsplit('.').next().unwrap_or(fqn);
-            let simple_class = format!("{simple}.class");
-            if !names.iter().any(|n| n.ends_with(&simple_class)) {
-                continue;
-            }
+        // Exact class-path match ONLY. The old same-simple-name fallback
+        // (`ends_with("{Simple}.class")`) attributed `com.foo.Bar` to any jar
+        // containing `org.other.Bar` — a wrong-mod false positive. A bare
+        // package-prefix match is likewise NOT used for the same reason.
+        if !names.iter().any(|n| n == &exact) {
+            continue;
         }
 
         let meta = crate::mod_scan::scan_mod_jar(&p).ok();
@@ -1444,6 +1828,66 @@ pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<C
             mod_name,
             file_name: Some(file_name),
         });
+    }
+    results
+}
+
+/// Finds several missing classes in one pass over the mod directory.
+///
+/// The single-class API opens every JAR for each query. Crash reports often
+/// contain multiple missing classes, so the batch variant opens each archive
+/// once and tests all requested classes against its entry list.
+pub fn find_classes_in_mods(
+    class_names: &[String],
+    mods_dir: &std::path::Path,
+) -> Vec<ClassMatch> {
+    if !mods_dir.is_dir() {
+        return Vec::new();
+    }
+    let queries: Vec<(String, String)> = class_names
+        .iter()
+        .map(|name| {
+            let fqn = name.trim().trim_end_matches(".class").to_string();
+            let slash = fqn.replace('.', "/");
+            (fqn, format!("{slash}.class"))
+        })
+        .filter(|(fqn, _)| !fqn.is_empty())
+        .collect();
+    let mut results = Vec::new();
+    for entry in std::fs::read_dir(mods_dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().map_or(true, |ext| ext != "jar") {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let Ok(file) = std::fs::File::open(&path) else { continue };
+        let Ok(zip) = zip::ZipArchive::new(file) else { continue };
+        let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+        let mut matched: Vec<String> = Vec::new();
+        for (fqn, exact) in &queries {
+            // Exact match only — see find_class_in_mods (simple-name fallback
+            // attributed missing classes to unrelated jars sharing a class name).
+            if names.iter().any(|name| name == exact) {
+                matched.push(fqn.clone());
+            }
+        }
+        if matched.is_empty() {
+            continue;
+        }
+        let meta = crate::mod_scan::scan_mod_jar(&path).ok();
+        let mod_id = meta
+            .as_ref()
+            .and_then(|m| m.mod_id.clone())
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| file_name.trim_end_matches(".jar").to_string());
+        for class_name in matched {
+            results.push(ClassMatch {
+                class_name: class_name.clone(),
+                mod_id: mod_id.clone(),
+                mod_name: mod_id.clone(),
+                file_name: Some(file_name.clone()),
+            });
+        }
     }
     results
 }
@@ -1484,25 +1928,35 @@ pub fn extract_blame_class_names(text: &str, limit: usize) -> Vec<String> {
             continue;
         }
         for prefix in re_candidates {
-            if let Some(rest) = trimmed
-                .strip_prefix(prefix)
-                .or_else(|| {
-                    let lower = trimmed.to_lowercase();
-                    let p = prefix.to_lowercase();
-                    if lower.contains(&p) {
-                        trimmed.split(prefix).nth(1)
+            if let Some(rest) = trimmed.strip_prefix(prefix).or_else(|| {
+                // Case-insensitive fallback: split at the byte offset found in
+                // the lowercased copy (`split(prefix)` with the original case
+                // fails exactly when the case differs — the case this branch
+                // exists for). Guard the boundary: Unicode lowercasing can
+                // shift byte offsets on non-ASCII lines.
+                let lower = trimmed.to_lowercase();
+                let p = prefix.to_lowercase();
+                lower.find(&p).and_then(|idx| {
+                    let at = idx + prefix.len();
+                    if at <= trimmed.len() && trimmed.is_char_boundary(at) {
+                        Some(&trimmed[at..])
                     } else {
                         None
                     }
                 })
-            {
+            }) {
                 let token = rest
                     .trim()
                     .split_whitespace()
                     .next()
                     .unwrap_or("")
                     .trim_matches(|c: char| c == ':' || c == '"' || c == '\'');
-                let class_fqn = token.replace('/', ".").split('$').next().unwrap_or(token).to_string();
+                let class_fqn = token
+                    .replace('/', ".")
+                    .split('$')
+                    .next()
+                    .unwrap_or(token)
+                    .to_string();
                 if class_fqn.contains('.')
                     && !class_fqn.starts_with("java.")
                     && seen.insert(class_fqn.clone())
@@ -1575,20 +2029,16 @@ fn find_classes_in_crashes(_ctx: &AnalysisCtx, combined: &str) -> Vec<ClassMatch
     let mut results = Vec::new();
     for line in combined.lines() {
         if line.contains("NoClassDefFoundError") || line.contains("ClassNotFoundException") {
-            if let Some(class) = line
-                .split(": ")
-                .nth(1)
-                .and_then(|s| s.split_whitespace().next())
-            {
-                if class.len() > 5 && class.len() < 200 && class.contains('.') {
-                    let _mods_dir = std::path::PathBuf::new(); // caller provides path
-                    results.push(ClassMatch {
-                        class_name: class.to_string(),
-                        mod_id: "?".into(),
-                        mod_name: "?".into(),
-                        file_name: None,
-                    });
-                }
+            // `rsplit` (last segment): `nth(1)` grabs the exception name on
+            // `Caused by: …NoClassDefFoundError: com/foo/Bar` lines.
+            if let Some(class) = class_after_colon(line) {
+                let _mods_dir = std::path::PathBuf::new(); // caller provides path
+                results.push(ClassMatch {
+                    class_name: class.to_string(),
+                    mod_id: "?".into(),
+                    mod_name: "?".into(),
+                    file_name: None,
+                });
             }
         }
     }
@@ -1681,7 +2131,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "DuplicateModsFoundException",
                 "Failed to build unique mod list",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let mut fixes = Vec::new();
         for m in mods.iter().take(4) {
             fixes.push(fix_action(
@@ -1689,11 +2140,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 &format!("Disable duplicate candidate `{m}`"),
                 Some(m),
             ));
-            fixes.push(fix_action(
-                "removeMod",
-                &format!("Remove `{m}`"),
-                Some(m),
-            ));
+            fixes.push(fix_action("removeMod", &format!("Remove `{m}`"), Some(m)));
         }
         out.push(fx(
             "critical",
@@ -1725,7 +2172,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "ModResolutionException",
                 "MissingDependency",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let mut fixes = Vec::new();
         let known_deps = [
             "fabric-api",
@@ -1746,7 +2194,11 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
             }
         }
         for dep in candidates {
-            if ctx.installed_mods.iter().any(|m| m.eq_ignore_ascii_case(&dep)) {
+            if ctx
+                .installed_mods
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case(&dep))
+            {
                 continue;
             }
             fixes.push(fix_action(
@@ -1755,8 +2207,22 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 Some(&dep),
             ));
         }
-        // Also offer updating the dependent mod(s) named in the log.
-        for m in match_mods_in_text(combined, &ctx.installed_mods).into_iter().take(3) {
+        // Also offer updating the dependent mod(s) named in the log — except
+        // deps with a parsed version requirement: those get the precise
+        // `changeModVersion` pin from DEP_VERSION_MISMATCH instead of a
+        // vague "update and hope" button.
+        let pinned: Vec<String> =
+            crate::mod_version_req::parse_dep_version_requirements(combined)
+                .into_iter()
+                .map(|r| r.dep_id)
+                .collect();
+        for m in match_mods_in_text(combined, &ctx.installed_mods)
+            .into_iter()
+            .take(3)
+        {
+            if pinned.iter().any(|p| p.eq_ignore_ascii_case(&m)) {
+                continue;
+            }
             fixes.push(fix_action(
                 "updateMod",
                 &format!("Update `{m}` (may change dependency range)"),
@@ -1783,7 +2249,9 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         || lower.contains("mod file is for fabric, but this is forge")
         || lower.contains("incompatiblemodsexception")
         || lower.contains("wrong loader")
-        || (lower.contains("quilt") && lower.contains("requires fabric") && lower.contains("missing"))
+        || (lower.contains("quilt")
+            && lower.contains("requires fabric")
+            && lower.contains("missing"))
     {
         let mods = match_mods_in_text(combined, &ctx.installed_mods);
         let evidence = first_evidence_line(
@@ -1795,13 +2263,18 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "IncompatibleModsException",
                 "wrong loader",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let mut fixes: Vec<_> = mods
             .iter()
             .take(4)
             .flat_map(|m| {
                 vec![
-                    fix_action("disableMod", &format!("Disable wrong-loader `{m}`"), Some(m)),
+                    fix_action(
+                        "disableMod",
+                        &format!("Disable wrong-loader `{m}`"),
+                        Some(m),
+                    ),
                     fix_action("removeMod", &format!("Remove `{m}`"), Some(m)),
                 ]
             })
@@ -1840,7 +2313,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "Unsupported Minecraft",
                 "incompatible with",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let mut fixes: Vec<_> = mods
             .iter()
             .take(4)
@@ -1887,7 +2361,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "AbstractMethodError",
                 "IncompatibleClassChangeError",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let fixes: Vec<_> = mods
             .iter()
             .take(5)
@@ -1927,7 +2402,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "Error loading mods",
                 "Failed to load mods",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let fixes: Vec<_> = mods
             .iter()
             .take(4)
@@ -1959,8 +2435,14 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
     {
         let evidence = first_evidence_line(
             combined,
-            &["duplicate", "classpath", "ASM", "LoaderUtil.verifyClasspath"],
-        ).map(truncate_evidence);
+            &[
+                "duplicate",
+                "classpath",
+                "ASM",
+                "LoaderUtil.verifyClasspath",
+            ],
+        )
+        .map(truncate_evidence);
         out.push(fx(
             "error",
             "DUPLICATE_CLASSPATH",
@@ -1978,14 +2460,27 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
     }
 
     // --- JEI / REI conflict ---
-    if (lower.contains("jei") && lower.contains("rei") && (lower.contains("duplicate") || lower.contains("conflict")))
+    if (lower.contains("jei")
+        && lower.contains("rei")
+        && (lower.contains("duplicate") || lower.contains("conflict")))
         || lower.contains("reiplugincompatibilities") && lower.contains("jei")
     {
         let mut fixes = Vec::new();
-        if ctx.installed_mods.iter().any(|m| m.eq_ignore_ascii_case("jei")) {
-            fixes.push(fix_action("disableMod", "Disable JEI (keep REI)", Some("jei")));
+        if ctx
+            .installed_mods
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case("jei"))
+        {
+            fixes.push(fix_action(
+                "disableMod",
+                "Disable JEI (keep REI)",
+                Some("jei"),
+            ));
         }
-        if ctx.installed_mods.iter().any(|m| m.eq_ignore_ascii_case("roughlyenoughitems") || m.eq_ignore_ascii_case("rei"))
+        if ctx
+            .installed_mods
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case("roughlyenoughitems") || m.eq_ignore_ascii_case("rei"))
         {
             fixes.push(fix_action(
                 "disableMod",
@@ -2032,11 +2527,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "Raise allocated memory, then relaunch."
             }),
             &[],
-            vec![fix_action(
-                "raiseMemory",
-                "Bump RAM to 6 GB",
-                None,
-            )],
+            vec![fix_action("raiseMemory", "Bump RAM to 6 GB", None)],
             first_evidence_line(
                 combined,
                 &[
@@ -2066,7 +2557,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "InvalidInjectionException",
                 "mixin",
             ],
-        ).map(truncate_evidence);
+        )
+        .map(truncate_evidence);
         let fixes: Vec<_> = mods
             .iter()
             .take(5)
@@ -2164,7 +2656,8 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
     // --- Fabric hard conflicts ("Incompatible mods found" / breaks / conflicts with) ---
     if lower.contains("incompatible mods found")
         || lower.contains("incompatible mod set")
-        || (lower.contains("conflicts with") && (lower.contains("mod ") || lower.contains("modresolution")))
+        || (lower.contains("conflicts with")
+            && (lower.contains("mod ") || lower.contains("modresolution")))
         || (lower.contains(" breaks ") && lower.contains("mod "))
     {
         let mods = match_mods_in_text(combined, &ctx.installed_mods);
@@ -2203,7 +2696,9 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
 
     // --- Non-unique Mixin config (two mods share the same mixins.json name) ---
     if lower.contains("non-unique mixin config") {
-        let evidence = first_evidence_line(combined, &["Non-unique Mixin config", "non-unique mixin"]).map(truncate_evidence);
+        let evidence =
+            first_evidence_line(combined, &["Non-unique Mixin config", "non-unique mixin"])
+                .map(truncate_evidence);
         let mut mods = match_mods_in_text(combined, &ctx.installed_mods);
         // Also pull "used by the mods A and B" tokens when present.
         if let Some(ev) = evidence.as_ref() {
@@ -2294,7 +2789,157 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         ));
     }
 
+    // --- Fabric HARD_DEP on a specific Java major ("depends java @ [>=N]" /
+    //     "requires version N or later of 'Java ...'") ---
+    // This is THE most common reason a modern pack refuses to start: the
+    // project was assigned an old JRE (often Java 8) while dozens of mods
+    // (fabric-api, c2me, lambdynlights, …) require Java 25+. Without this
+    // handling the crash used to fall through all the way to the remote
+    // AI-diagnose cascade (slow network round-trip) for what is a
+    // deterministic, one-action fix.
+    {
+        // Detect a Fabric-style Java requirement line.
+        let req = java_major_required(combined);
+        if let Some(req_major) = req {
+            let have = parse_java_major(&ctx.java_version);
+            let need_newer = match have {
+                Some(h) => req_major > h,
+                None => true, // unknown runtime → still want the prompt
+            };
+            if need_newer {
+                let demand = format!(
+                    "This project needs Java {req_major}+, but the assigned runtime is Java {}.",
+                    if have.is_some() {
+                        ctx.java_version.clone()
+                    } else {
+                        "unknown (looks old)".into()
+                    }
+                );
+                out.push(fx(
+                    "critical",
+                    "WRONG_JAVA_VERSION",
+                    "Selected Java is too old for the mods",
+                    format!(
+                        "The mods `depends java @ [>={req_major}]` — Fabric refuses to start until the project uses Java {req_major} or newer. {demand} Set the project's Java major to {req_major} (Settings → Java) and relaunch."
+                    )
+                    .as_str(),
+                    Some(
+                        &format!(
+                            "Switch the project to Java {req_major}+ in Settings → Java, then relaunch the pack."
+                        ),
+                    ),
+                    &["https://minefixtools.com/fixes/how-to-read-fabric-crash-reports"],
+                    vec![fix_action(
+                        "selectJava",
+                        &format!("Use Java {req_major}+ ({demand})"),
+                        None,
+                    )],
+                    first_evidence_line(
+                        combined,
+                        &["depends java", "requires version", "Java HotSpot"],
+                    )
+                    .map(truncate_evidence),
+                ));
+            }
+        }
+    }
+
     out
+}
+
+/// Required Java major parsed from crash/log text, any source.
+///
+/// Combines the Fabric `depends java @ [>=N]` hard-dependency pattern with the
+/// `UnsupportedClassVersionError` class-file major. This is the single source
+/// of truth the AI context, the `set_java` backfill, and the `selectJava` fix
+/// executor all share — previously each path re-derived (or guessed) it.
+pub fn required_java_major_from_text(combined: &str) -> Option<u32> {
+    if let Some(req) = java_major_required(combined) {
+        return Some(req);
+    }
+    extract_major(combined).map(class_major_to_java)
+}
+
+/// Class-file major → Java major, numeric. Majors below 52 (Java ≤ 7) are
+/// floored to 8: no modern selector can provision Java 5–7, and anything
+/// that old still needs *at least* a Java 8 runtime to even parse.
+fn class_major_to_java(m: u32) -> u32 {
+    match m {
+        0..=52 => 8,
+        53 => 9,
+        54 => 10,
+        55 => 11,
+        56 => 12,
+        57 => 13,
+        58 => 14,
+        59 => 15,
+        60 => 16,
+        61 => 17,
+        62 => 18,
+        63 => 19,
+        64 => 20,
+        65 => 21,
+        66 => 22,
+        67 => 23,
+        68 => 24,
+        _ => m.saturating_sub(44),
+    }
+}
+
+/// Extract the highest required Java major from a Fabric hard-dependency error
+/// ("HARD_DEP ... depends java @ [>=25]" or "requires version 25 or later of
+/// 'Java ...'"). Returns the first found bound; callers compare it to the
+/// runtime major.
+fn java_major_required(combined: &str) -> Option<u32> {
+    let lower = combined.to_lowercase();
+    // Pattern 1: "depends java @ [>=25]" / "[>=21]" etc.
+    if let Some(idx) = lower.find("depends java") {
+        let tail = &lower[idx..];
+        if let Some(gt) = tail.find(">=") {
+            let after = tail[gt + 2..].trim_start();
+            let num: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !num.is_empty() {
+                if let Ok(m) = num.parse::<u32>() {
+                    return Some(m);
+                }
+            }
+        }
+    }
+    // Pattern 2: "requires version 25 or later of 'Java ...'"
+    if let Some(idx) = lower.find("requires version") {
+        let tail = &lower[idx + "requires version".len()..];
+        let num: String = tail.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !num.is_empty() {
+            if let Ok(m) = num.parse::<u32>() {
+                return Some(m);
+            }
+        }
+    }
+    None
+}
+
+fn parse_java_major(v: &str) -> Option<u32> {
+    // "8", "17", "21", "25", maybe "1.8.0_345" or "17.0.10".
+    let trimmed = v.trim();
+    // Legacy `1.x` versioning: `1.8.0_345` is Java 8, not Java 1.
+    if let Some(rest) = trimmed.strip_prefix("1.") {
+        let minor: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(m) = minor.parse::<u32>() {
+            return Some(m);
+        }
+    }
+    if let Some(idx) = trimmed.find('.') {
+        return trimmed[..idx].parse::<u32>().ok();
+    }
+    // Tolerate `8u412`-style or trailing build suffixes: leading digits win.
+    let head: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !head.is_empty() {
+        return head.parse::<u32>().ok();
+    }
+    None
 }
 
 fn find_mcreator_mods(mods: &[String]) -> Vec<String> {
@@ -2371,14 +3016,46 @@ fn build_message(ctx: &AnalysisCtx, findings: &[CrashAnalysisFinding], platform:
 }
 
 /// Read the last `max_lines` of a log file as a single string.
+///
+/// Bounded: huge logs (100 MB+ latest.log) are read from the tail only
+/// (last 512 KiB window) instead of loading the whole file into memory.
 pub fn tail_log(path: &Path, max_lines: usize) -> String {
-    match std::fs::read_to_string(path) {
-        Ok(content) => {
-            let lines: Vec<&str> = content.lines().collect();
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL_WINDOW: u64 = 512 * 1024;
+    let content = (|| -> Option<String> {
+        let mut file = std::fs::File::open(path).ok()?;
+        let len = file.metadata().ok()?.len();
+        if len > TAIL_WINDOW * 2 {
+            file.seek(SeekFrom::Start(len - TAIL_WINDOW)).ok()?;
+            let mut buf = Vec::with_capacity(TAIL_WINDOW as usize + 1);
+            file.read_to_end(&mut buf).ok()?;
+            // Drop the partial first line (seek may land mid-line).
+            let text = String::from_utf8_lossy(&buf);
+            let start = text.find('\n').map(|i| i + 1).unwrap_or(0);
+            Some(text[start..].to_string())
+        } else {
+            std::fs::read_to_string(path).ok()
+        }
+    })();
+    match content {
+        Some(text) => {
+            let lines: Vec<&str> = text.lines().collect();
             let start = lines.len().saturating_sub(max_lines);
             lines[start..].join("\n")
         }
-        Err(_) => String::new(),
+        None => String::new(),
+    }
+}
+
+/// Severity ordering for the launch summarizer: >= 1 blocks the "clean exit"
+/// framing; 0 marks informational notes.
+fn launch_severity_rank(severity: &str) -> u8 {
+    match severity {
+        "critical" => 4,
+        "error" => 3,
+        "high" => 2,
+        "warning" | "medium" => 1,
+        _ => 0,
     }
 }
 
@@ -2397,10 +3074,14 @@ pub fn classify_launch_crash(
 ) -> LaunchErrorInfo {
     let tail = tail_log(log_path, 300);
     let analysis_ctx = AnalysisCtx {
-        crash_content: tail.lines().map(|s| s.to_string()).collect(),
+        // The tail must live in exactly ONE field: `run_full_analysis`
+        // concatenates all three, so stuffing the same text twice doubles
+        // every signal (and doubles the scan cost).
+        crash_content: Vec::new(),
         latest_log: tail.clone(),
         launcher_log: String::new(),
         installed_mods: installed_mods.to_vec(),
+        installed_versions: None,
         previous_mods: Vec::new(),
         java_version: java_version.to_string(),
         java_vendor: String::new(),
@@ -2413,9 +3094,36 @@ pub fn classify_launch_crash(
         total_ram_mb: 0,
         is_offline: false,
         win_events: Vec::new(),
+        combined_lines: std::cell::OnceCell::new(),
     };
 
     let report = run_full_analysis(&analysis_ctx);
+
+    // A clean exit (Some(0)) must never read as a crash. The production exit
+    // handler already returns before classification on success; this guard
+    // keeps direct callers honest. LaunchCrash stays reserved for non-zero
+    // exits.
+    if exit_code == Some(0) {
+        let has_blocking_finding = report
+            .findings
+            .iter()
+            .any(|f| launch_severity_rank(&f.severity) > 0);
+        if !has_blocking_finding {
+            let mut message = String::from("Game closed cleanly.");
+            if report
+                .findings
+                .iter()
+                .any(|f| f.code == "RESOURCEPACK_SHADER_RECOVERED")
+            {
+                message.push_str(" A resource pack was skipped after a shader load failure — see Diagnose for details.");
+            } else if let Some(note) = report.findings.first() {
+                message.push_str(&format!(" Note: {} — see Diagnose.", note.title));
+            } else {
+                message.push_str(" No issues spotted in the log.");
+            }
+            return LaunchErrorInfo::new(LaunchErrorKind::Unknown, message).with_log(log_path);
+        }
+    }
 
     let code_note = match exit_code {
         Some(c) if c != 0 => format!("Game closed (code {c}). "),
@@ -2428,17 +3136,21 @@ pub fn classify_launch_crash(
         message.push_str("Couldn't spot an obvious cause — hit Diagnose or open the log.");
     } else {
         // Surface the most severe findings (up to 2) + a concrete next step.
-        let severity_rank = |s: &str| match s {
-            "critical" => 4,
-            "error" => 3,
-            "high" => 2,
-            "warning" | "medium" => 1,
-            _ => 0,
-        };
         let mut ranked: Vec<&CrashAnalysisFinding> = report.findings.iter().collect();
-        ranked.sort_by(|a, b| severity_rank(&b.severity).cmp(&severity_rank(&a.severity)));
+        ranked.sort_by(|a, b| {
+            launch_severity_rank(&b.severity).cmp(&launch_severity_rank(&a.severity))
+        });
         let top = ranked.first().copied();
-        message.push_str("Likely: ");
+
+        // An info-only top finding is an observation, not a crash cause —
+        // avoid the scary "Likely:" framing for it.
+        let cause_prefix =
+            if launch_severity_rank(top.map(|f| f.severity.as_str()).unwrap_or("")) == 0 {
+                "Noticed: "
+            } else {
+                "Likely: "
+            };
+        message.push_str(cause_prefix);
         let shown = ranked.len().min(2);
         for (i, f) in ranked.iter().take(shown).enumerate() {
             if i > 0 {
@@ -2463,7 +3175,12 @@ pub fn classify_launch_crash(
         message.push('.');
     }
 
-    LaunchErrorInfo::new(LaunchErrorKind::LaunchCrash, message).with_log(log_path)
+    let kind = if exit_code == Some(0) {
+        LaunchErrorKind::Unknown
+    } else {
+        LaunchErrorKind::LaunchCrash
+    };
+    LaunchErrorInfo::new(kind, message).with_log(log_path)
 }
 
 #[cfg(test)]
@@ -2486,15 +3203,8 @@ mod tests {
             "crash.log",
             "java.lang.OutOfMemoryError: Java heap space\n\tat net.minecraft.server.MinecraftServer",
         );
-        let info = classify_launch_crash(
-            &log,
-            Some(1),
-            "1.20.1",
-            "17.0.1",
-            "fabric",
-            "0.15.0",
-            &[],
-        );
+        let info =
+            classify_launch_crash(&log, Some(1), "1.20.1", "17.0.1", "fabric", "0.15.0", &[]);
         assert_eq!(info.kind, LaunchErrorKind::LaunchCrash);
         assert!(!info.message.is_empty());
         assert!(info.retryable());
@@ -2506,8 +3216,7 @@ mod tests {
         let missing = std::env::temp_dir()
             .join("tuffbox_crash_test")
             .join("does_not_exist.log");
-        let info =
-            classify_launch_crash(&missing, Some(1), "1.20.1", "17", "vanilla", "", &[]);
+        let info = classify_launch_crash(&missing, Some(1), "1.20.1", "17", "vanilla", "", &[]);
         assert_eq!(info.kind, LaunchErrorKind::LaunchCrash);
         assert!(info.retryable());
         assert_eq!(info.log_path.as_deref(), Some(missing.to_str().unwrap()));
@@ -2525,6 +3234,110 @@ mod tests {
         assert!(info.message.contains("File locked by another process"));
     }
 
+    const RESOURCEPACK_RECOVERY_LOG: &str = r"[13:37:00] [Render thread/ERROR]: Caught error loading resourcepacks, removing all selected resourcepacks
+java.util.concurrent.CompletionException: java.lang.IllegalStateException: Failed to load required shader programs:
+ - minecraft:core/rendertype_solid: Could not find shader minecraft:core/rendertype_solid
+ - minecraft:core/rendertype_cutout: Could not find shader minecraft:core/rendertype_cutout
+Caused by: java.io.FileNotFoundException: minecraft:shaders/core/rendertype_solid.json
+[13:37:01] [Render thread/INFO]: Reloading ResourceManager: vanilla";
+
+    #[test]
+    fn resourcepack_recovery_exit_zero_reads_informational() {
+        let log = write_temp_log("resourcepack_recovery.log", RESOURCEPACK_RECOVERY_LOG);
+        let info = classify_launch_crash(&log, Some(0), "1.20.1", "17", "vanilla", "", &[]);
+        assert_ne!(info.kind, LaunchErrorKind::LaunchCrash);
+        assert!(info.message.starts_with("Game closed cleanly."));
+        assert!(!info.message.contains("Likely:"));
+        assert!(info.message.contains("resource pack was skipped"));
+    }
+
+    #[test]
+    fn resourcepack_recovery_adds_info_only_finding() {
+        let findings = check_resourcepack_shader_recoverable(&ctx(), RESOURCEPACK_RECOVERY_LOG);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, "info");
+        assert_eq!(findings[0].code, "RESOURCEPACK_SHADER_RECOVERED");
+        assert_eq!(findings[0].title, "Resource pack skipped (game recovered)");
+    }
+
+    #[test]
+    fn resourcepack_recovery_full_run_stays_informational_only() {
+        // Neutral environment: no Intel CPU/GPU, no render mods — so any
+        // warning+ finding here would come from the recovery lines themselves
+        // (conflict-phrase / render-stack escalation), which must not happen.
+        let c = AnalysisCtx {
+            installed_mods: Vec::new(),
+            cpu_name: String::new(),
+            gpu_names: Vec::new(),
+            total_ram_mb: 16384,
+            ..recovery_test_ctx()
+        };
+        let r = run_full_analysis(&c);
+        let non_info: Vec<_> = r
+            .findings
+            .iter()
+            .filter(|f| f.severity != "info")
+            .map(|f| format!("{}={}", f.code, f.severity))
+            .collect();
+        assert!(
+            non_info.is_empty(),
+            "recovery log must not raise warning+: {non_info:?}"
+        );
+    }
+
+    #[test]
+    fn resourcepack_recovery_nonzero_exit_keeps_crash_kind_mentions_recovery_first() {
+        let log = write_temp_log("resourcepack_recovery_exit1.log", RESOURCEPACK_RECOVERY_LOG);
+        let info = classify_launch_crash(&log, Some(1), "1.20.1", "17", "vanilla", "", &[]);
+        assert_eq!(info.kind, LaunchErrorKind::LaunchCrash);
+        assert!(info.retryable());
+        let recovery_pos = info
+            .message
+            .find("Resource pack skipped")
+            .expect("recovery mentioned");
+        assert!(recovery_pos < info.message.len());
+        assert!(!info.message.contains("Couldn't spot"));
+    }
+
+    #[test]
+    fn resourcepack_recovery_lists_missing_shaders() {
+        let findings = check_resourcepack_shader_recoverable(&ctx(), RESOURCEPACK_RECOVERY_LOG);
+        let description = &findings[0].description;
+        assert!(description.contains("minecraft:core/rendertype_solid"));
+        assert!(description.contains("minecraft:core/rendertype_cutout"));
+    }
+
+    #[test]
+    fn real_opengl_crash_is_not_marked_resourcepack_recovered() {
+        let log = "[Render thread/ERROR]: OpenGL debug message, id = 1282, GL_INVALID_OPERATION in BufferRenderer::draw";
+        assert!(check_resourcepack_shader_recoverable(&ctx(), log).is_empty());
+    }
+
+    fn recovery_test_ctx() -> AnalysisCtx {
+        AnalysisCtx {
+            crash_content: RESOURCEPACK_RECOVERY_LOG
+                .lines()
+                .map(String::from)
+                .collect(),
+            latest_log: String::new(),
+            launcher_log: String::new(),
+            installed_mods: Vec::new(),
+            installed_versions: None,
+            previous_mods: Vec::new(),
+            java_version: "17".into(),
+            java_vendor: String::new(),
+            os_name: "Windows 11".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0.15".into(),
+            cpu_name: String::new(),
+            gpu_names: Vec::new(),
+            total_ram_mb: 16384,
+            is_offline: false,
+            win_events: vec![],
+            combined_lines: std::cell::OnceCell::new(),
+        }
+    }
     fn ctx() -> AnalysisCtx {
         AnalysisCtx {
             crash_content: vec![
@@ -2539,6 +3352,7 @@ mod tests {
                 "create".into(),
                 "create_connected".into(),
             ],
+            installed_versions: None,
             previous_mods: vec!["sodium".into(), "create".into()],
             java_version: "17".into(),
             java_vendor: "Adoptium".into(),
@@ -2551,6 +3365,7 @@ mod tests {
             total_ram_mb: 32768,
             is_offline: false,
             win_events: vec![],
+            combined_lines: std::cell::OnceCell::new(),
         }
     }
     #[test]
@@ -2560,6 +3375,47 @@ mod tests {
             &(ctx().crash_content.join("\n") + "\n" + &ctx().latest_log)
         )
         .is_empty());
+    }
+
+    #[test]
+    fn sodium_06_without_indium_is_not_flagged() {
+        // Sodium 0.6+ ships the Fabric Rendering API itself — the legacy
+        // "Indium is missing" finding must not fire for it.
+        let mut c = ctx();
+        c.installed_mods = vec!["sodium".into()];
+        let mut version_map = std::collections::HashMap::new();
+        version_map.insert("sodium".to_string(), "0.6.13+mc1.21.4".to_string());
+        c.installed_versions = Some(version_map);
+        let findings = check_missing_mods(&c, "");
+        assert!(
+            !findings.iter().any(|f| f.code == "MISSING_INDIUM"),
+            "sodium 0.6+ must not raise MISSING_INDIUM: {:?}",
+            findings.iter().map(|f| &f.code).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sodium_05_without_indium_is_still_flagged() {
+        // Old Sodium really does need Indium — keep the diagnostic.
+        let mut c = ctx();
+        c.installed_mods = vec!["sodium".into()];
+        let mut version_map = std::collections::HashMap::new();
+        version_map.insert("sodium".to_string(), "0.5.8".to_string());
+        c.installed_versions = Some(version_map);
+        let findings = check_missing_mods(&c, "");
+        assert!(findings.iter().any(|f| f.code == "MISSING_INDIUM"));
+    }
+
+    #[test]
+    fn sodium_06_semver_from_manifest_is_not_flagged() {
+        // Manifest version strings are plain semver ("0.6.0") — no prefix games.
+        let mut c = ctx();
+        c.installed_mods = vec!["sodium".into()];
+        let mut version_map = std::collections::HashMap::new();
+        version_map.insert("sodium".to_string(), "0.6.0".to_string());
+        c.installed_versions = Some(version_map);
+        let findings = check_missing_mods(&c, "");
+        assert!(!findings.iter().any(|f| f.code == "MISSING_INDIUM"));
     }
     #[test]
     fn detects_intel() {
@@ -2597,7 +3453,72 @@ mod tests {
         assert!(hits.iter().any(|f| f.code == "DUPLICATE_MODS"));
         let f = hits.iter().find(|f| f.code == "DUPLICATE_MODS").unwrap();
         assert!(!f.fixes.is_empty());
-        assert!(f.fixes.iter().any(|a| a.kind == "disableMod" || a.kind == "removeMod"));
+        assert!(f
+            .fixes
+            .iter()
+            .any(|a| a.kind == "disableMod" || a.kind == "removeMod"));
+    }
+
+    #[test]
+    fn dep_version_mismatch_pins_precise_fix() {
+        let mut c = ctx();
+        c.installed_versions = Some(
+            [("sodium".to_string(), "0.5.0".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let log = "- Mod 'iris' requires version '0.6.0' of mod 'sodium', but only the wrong version is present: '0.5.0'!\nModResolutionException";
+        let hits = check_dep_version_mismatch(&c, log);
+        let f = hits
+            .iter()
+            .find(|f| f.code == "DEP_VERSION_MISMATCH")
+            .expect("mismatch finding");
+        let fix = f.fixes.iter().find(|a| a.kind == "changeModVersion").unwrap();
+        assert_eq!(fix.mod_id.as_deref(), Some("sodium"));
+        assert_eq!(fix.version.as_deref(), Some("0.6.0"));
+        // The generic vague update button must yield to the precise pin.
+        let generic = check_conflict_log_phrases(&c, log);
+        let missing = generic
+            .iter()
+            .find(|f| f.code == "MISSING_DEPENDENCY")
+            .expect("generic missing-dep finding");
+        assert!(
+            !missing.fixes.iter().any(|a| a.kind == "updateMod"
+                && a.mod_id.as_deref().is_some_and(|m| m.eq_ignore_ascii_case("sodium"))),
+            "vague updateMod(sodium) must be suppressed in favor of the pin"
+        );
+    }
+
+    #[test]
+    fn dep_version_manifest_drift_reinstalls_instead_of_pinning() {
+        let mut c = ctx();
+        c.installed_versions = Some(
+            [("sodium".to_string(), "0.6.13".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let log = "Mod ID: 'sodium', Requested by: 'iris', Expected range: '[0.6,)', Actual version: '0.5.0'";
+        let hits = check_dep_version_mismatch(&c, log);
+        let f = hits
+            .iter()
+            .find(|f| f.code == "DEP_VERSION_MANIFEST_DRIFT")
+            .expect("drift finding");
+        assert!(f.fixes.iter().any(|a| a.kind == "reinstallMod"));
+        assert!(!f.fixes.iter().any(|a| a.kind == "changeModVersion"));
+    }
+
+    #[test]
+    fn dep_version_skips_missing_and_java_pseudo_deps() {
+        let mut c = ctx();
+        // embeddium NOT installed → belongs to MISSING_DEPENDENCY, not here.
+        let log = "Mod \"oculus\" requires version \">=1.6\" of mod \"embeddium\" which is missing!";
+        assert!(check_dep_version_mismatch(&c, log).is_empty());
+        // Java requirement lines must never become mod pins.
+        let java = "requires version 25 or later of 'Java HotSpot(TM) 64-Bit Server VM' (java)";
+        assert!(check_dep_version_mismatch(&c, java).is_empty());
+        c.installed_mods.push("embeddium".into());
+        let hits = check_dep_version_mismatch(&c, log);
+        assert!(hits.iter().any(|f| f.code == "DEP_VERSION_MISMATCH"));
     }
 
     #[test]
@@ -2608,7 +3529,10 @@ mod tests {
             "Mod 'create' requires 'fabric-api' which is missing!\nModResolutionException\n".into();
         let hits = check_conflict_log_phrases(&c, &c.latest_log);
         assert!(hits.iter().any(|f| f.code == "MISSING_DEPENDENCY"));
-        let f = hits.iter().find(|f| f.code == "MISSING_DEPENDENCY").unwrap();
+        let f = hits
+            .iter()
+            .find(|f| f.code == "MISSING_DEPENDENCY")
+            .unwrap();
         assert!(f
             .fixes
             .iter()
@@ -2626,7 +3550,10 @@ mod tests {
             .iter()
             .find(|f| f.code == "NONUNIQUE_MIXIN_CONFIG")
             .unwrap();
-        assert!(f.fixes.iter().any(|a| a.mod_id.as_deref() == Some("thiccpackets")));
+        assert!(f
+            .fixes
+            .iter()
+            .any(|a| a.mod_id.as_deref() == Some("thiccpackets")));
     }
 
     #[test]
@@ -2696,10 +3623,8 @@ mod tests {
             let mut zip = zip::ZipWriter::new(file);
             let opts = zip::write::SimpleFileOptions::default();
             zip.start_file("fabric.mod.json", opts).unwrap();
-            zip.write_all(
-                br#"{"schemaVersion":1,"id":"coolmod","version":"1","authors":["Zed"]}"#,
-            )
-            .unwrap();
+            zip.write_all(br#"{"schemaVersion":1,"id":"coolmod","version":"1","authors":["Zed"]}"#)
+                .unwrap();
             zip.start_file("com/example/CoolClass.class", opts).unwrap();
             zip.write_all(&[0u8; 8]).unwrap();
             zip.finish().unwrap();
@@ -2708,11 +3633,207 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].mod_id, "coolmod");
         assert_eq!(hits[0].file_name.as_deref(), Some("coolmod-1.0.jar"));
+        let batch = find_classes_in_mods(
+            &["com.example.CoolClass".into(), "com.example.OtherClass".into()],
+            dir.path(),
+        );
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].class_name, "com.example.CoolClass");
 
         let names = extract_blame_class_names(
             "java.lang.NoClassDefFoundError: com/example/CoolClass\n\tat com.example.CoolClass.init(CoolClass.java:10)\n",
             5,
         );
         assert!(names.iter().any(|n| n == "com.example.CoolClass"));
+    }
+
+    #[test]
+    fn java_major_required_parses_hard_dep_pattern() {
+        assert_eq!(java_major_required("HARD_DEP fabric-api 0.159.0 {depends java @ [>=25]}"), Some(25));
+        assert_eq!(java_major_required("depends java @ [>=21]"), Some(21));
+        assert_eq!(java_major_required("depends minecraft @ [1.20.1]"), None);
+        assert_eq!(java_major_required("no java mention here"), None);
+    }
+
+    #[test]
+    fn java_major_required_parses_fabric_localized_phrase() {
+        let s = "requires version 25 or later of 'Java HotSpot(TM) 64-Bit Server VM' (java)";
+        assert_eq!(java_major_required(s), Some(25));
+    }
+
+    #[test]
+    fn wrong_java_heuristic_fires_when_runtime_too_old() {
+        let mut c = ctx(); // java_version "17"
+        c.latest_log = "Mod resolution failed\nImmediate reason: [HARD_DEP_INCOMPATIBLE_PRESELECTED animatica {depends java @ [>=25]}]\n".into();
+        let hits = check_conflict_log_phrases(&c, &c.latest_log);
+        assert!(hits.iter().any(|f| f.code == "WRONG_JAVA_VERSION"));
+    }
+
+    #[test]
+    fn wrong_java_heuristic_stays_quiet_when_runtime_satisfies() {
+        let mut c = ctx();
+        c.java_version = "25".into();
+        c.latest_log = "Mod resolution failed\n[HARD_DEP fabric-api {depends java @ [>=25]}]\n".into();
+        let hits = check_conflict_log_phrases(&c, &c.latest_log);
+        assert!(!hits.iter().any(|f| f.code == "WRONG_JAVA_VERSION"));
+    }
+
+    #[test]
+    fn parse_java_major_variants() {
+        assert_eq!(parse_java_major("17"), Some(17));
+        assert_eq!(parse_java_major("17.0.10"), Some(17));
+        assert_eq!(parse_java_major("8"), Some(8));
+        // Legacy `1.x` scheme: `1.8.0_345` is Java 8.
+        assert_eq!(parse_java_major("1.8.0_345"), Some(8));
+        assert_eq!(parse_java_major("1.7.0_80"), Some(7));
+        assert_eq!(parse_java_major("8u412"), Some(8));
+        assert_eq!(parse_java_major("xyz"), None);
+    }
+
+    #[test]
+    fn truncate_evidence_is_multibyte_safe() {
+        // 280-byte slicing used to panic on Cyrillic/emoji log lines.
+        let line = format!("ERROR {}", "Ж".repeat(400));
+        let out = truncate_evidence(&line);
+        assert!(out.len() <= 290);
+        assert!(out.ends_with('…'));
+        // Must be valid UTF-8 (no panic = no split surrogate).
+        assert!(out.is_char_boundary(out.len()));
+    }
+
+    #[test]
+    fn class_after_colon_picks_missing_class_not_exception() {
+        let line = "Caused by: java.lang.NoClassDefFoundError: com/example/CoolClass";
+        assert_eq!(
+            class_after_colon(line),
+            Some("com/example/CoolClass")
+        );
+        // Bare exception without a class → None (no invented evidence).
+        assert_eq!(class_after_colon("java.lang.NoClassDefFoundError"), None);
+    }
+
+    #[test]
+    fn module_resolution_names_missing_class_on_caused_by_lines() {
+        let log = "Caused by: java.lang.NoClassDefFoundError: com/example/CoolClass\n";
+        let hits = check_module_resolution(&ctx(), log);
+        assert_eq!(hits.len(), 1);
+        assert!(
+            hits[0].title.contains("CoolClass"),
+            "title must name the missing class, got: {}",
+            hits[0].title
+        );
+    }
+
+    #[test]
+    fn epic_fight_mention_alone_does_not_fire() {
+        let mut c = ctx();
+        c.installed_mods = vec!["epicfight".into()];
+        // Healthy log that merely lists the mod → quiet.
+        assert!(check_epic_fight_addons(&c, "Loading EpicFight 20.9.5 — done").is_empty());
+        // …but a real API break still fires.
+        assert!(!check_epic_fight_addons(
+            &c,
+            "EpicFight NoSuchMethodError: boom"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn java_version_check_ignores_unrelated_numbers() {
+        // 55 players online must not read as "class file version 55".
+        let plain = "[Server thread/INFO]: There are 55 of a max of 100 players online";
+        assert!(check_java_version(&ctx(), plain).is_empty());
+        // Real error → exactly ONE finding (no UNSUPPORTED + MISMATCH double).
+        let err = "java.lang.UnsupportedClassVersionError: BadClass has been compiled by a more recent version of the Java Runtime (class file version 65.0)";
+        let hits = check_java_version(&ctx(), err);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].code, "UNSUPPORTED_CLASS_VERSION");
+        assert!(hits[0].title.contains("Java 21"));
+        assert_eq!(m2j(53), "9");
+        assert_eq!(m2j(59), "15");
+        assert_eq!(m2j(69), "25");
+    }
+
+    #[test]
+    fn intel_driver_check_needs_same_line_signal() {
+        // "config" contains "ig" — with "intel" + "crash" elsewhere this used
+        // to false-positive on any Intel machine.
+        let noisy = "CPU: Intel i7\n[INFO]: loading config\n[ERROR]: crash while saving";
+        assert!(check_intel_driver(noisy).is_empty());
+        let real = "[ERROR]: crash in igdkmd64.sys Intel graphics driver fault";
+        assert!(!check_intel_driver(real).is_empty());
+    }
+
+    #[test]
+    fn watermedia_mention_alone_is_quiet() {
+        assert!(check_watermedia_vlc("[INFO]: Loaded WaterMedia 2.4.0").is_empty());
+        assert!(!check_watermedia_vlc(
+            "[ERROR]: WaterMedia failed: vlcj native library missing"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn macos_shader_check_needs_same_line_error() {
+        let mut c = ctx();
+        c.os_name = "macOS 15".into();
+        assert!(check_macos_shader_driver(&c, "[INFO]: shader pack loaded\n[ERROR]: disk slow").is_empty());
+        assert!(!check_macos_shader_driver(&c, "[ERROR]: shader compilation failed on mac").is_empty());
+    }
+
+    #[test]
+    fn blame_class_names_match_case_insensitively() {
+        let text = "caused by: java.lang.NoClassDefFoundError: com/example/CoolClass\n";
+        let names = extract_blame_class_names(text, 5);
+        assert!(
+            names.iter().any(|n| n == "com.example.CoolClass"),
+            "lowercase 'caused by:' must still attribute, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn class_finder_ignores_same_simple_name_other_package() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let jar = dir.path().join("unrelated-1.0.jar");
+        {
+            let file = std::fs::File::create(&jar).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("fabric.mod.json", opts).unwrap();
+            zip.write_all(br#"{"schemaVersion":1,"id":"unrelated","version":"1"}"#)
+                .unwrap();
+            // Same simple name, different package — must NOT match.
+            zip.start_file("org/other/CoolClass.class", opts).unwrap();
+            zip.write_all(&[0u8; 8]).unwrap();
+            zip.finish().unwrap();
+        }
+        assert!(find_class_in_mods("com.example.CoolClass", dir.path()).is_empty());
+        assert!(find_classes_in_mods(&["com.example.CoolClass".into()], dir.path()).is_empty());
+    }
+
+    #[test]
+    fn required_java_major_from_hard_dep_and_class_version() {
+        assert_eq!(
+            required_java_major_from_text("HARD_DEP fabric-api {depends java @ [>=25]}"),
+            Some(25)
+        );
+        assert_eq!(
+            required_java_major_from_text(
+                "java.lang.UnsupportedClassVersionError: X (class file version 65.0)"
+            ),
+            Some(21)
+        );
+        assert_eq!(required_java_major_from_text("no java hints here"), None);
+        assert_eq!(class_major_to_java(52), 8);
+        assert_eq!(class_major_to_java(61), 17);
+        assert_eq!(class_major_to_java(69), 25);
+    }
+
+    #[test]
+    fn required_mod_ids_helper_matches_quoted_deps() {
+        let log = "Mod 'create' requires 'flywheel' which is missing!\n";
+        let ids = required_mod_ids_from_text(log);
+        assert!(ids.iter().any(|id| id == "flywheel"), "{ids:?}");
     }
 }

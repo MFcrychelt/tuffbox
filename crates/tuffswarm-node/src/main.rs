@@ -2,11 +2,14 @@
 //!
 //! Same ExperienceCapsule schema as the HTTP hub. Desktop talks to `--control`
 //! (127.0.0.1) for publish/lookup; P2P gossip distributes signed capsules to peers.
-//! HTTP hub remains bootstrap/fallback at the launcher layer.
+//! Fog diagnose uses libp2p request-response + desktop poll of pending jobs.
 //!
 //! Non-goals: Tenso/gRPC tensors, pipeline LLM, RepOps/Verde, LoRA training.
 
 mod control;
+mod creation_jobs;
+mod diagnose;
+mod jobs;
 mod p2p;
 
 use anyhow::Context;
@@ -18,11 +21,13 @@ use tokio::sync::{mpsc, Mutex};
 use tracing_subscriber::EnvFilter;
 use tuffbox_core::swarm::CapsuleLibrary;
 
+use crate::creation_jobs::PendingCreationJobs;
+use crate::jobs::PendingJobs;
 use crate::p2p::{NodeCapability, P2pCommand, P2pHandle, SwarmOpts};
 
 #[derive(Debug, Parser)]
 #[command(name = "tuffswarm-node")]
-#[command(about = "TuffSwarm Phase C P2P node (Kademlia + capsule gossip)")]
+#[command(about = "TuffSwarm Phase C P2P node (Kademlia + capsule gossip + Fog diagnose)")]
 struct Args {
     /// libp2p listen multiaddr (default random high TCP port).
     #[arg(long, default_value = "/ip4/0.0.0.0/tcp/0")]
@@ -45,6 +50,12 @@ struct Args {
     /// Stub advertised VRAM (MB) for DHT capability record.
     #[arg(long, default_value_t = 0)]
     vram_mb: u32,
+    /// Advertise as Fog diagnose volunteer (DHT capability).
+    #[arg(long, default_value_t = false)]
+    diagnose_volunteer: bool,
+    /// Advertise as Creation Marketplace worker (DHT capability).
+    #[arg(long, default_value_t = false)]
+    creation_worker: bool,
 }
 
 #[tokio::main]
@@ -85,14 +96,34 @@ async fn main() -> anyhow::Result<()> {
             hex::encode(hasher.finalize())
         });
 
+    let diagnose_volunteer = args.diagnose_volunteer
+        || std::env::var("TUFFSWARM_DIAGNOSE_VOLUNTEER")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+    let creation_worker = args.creation_worker
+        || std::env::var("TUFFSWARM_CREATION_WORKER")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
     let capability = NodeCapability {
         vram_mb: args.vram_mb,
         rtt_ms: 0,
         version: env!("CARGO_PKG_VERSION").to_string(),
+        ollama_ready: diagnose_volunteer,
+        models: Vec::new(),
+        max_jobs: 1,
+        diagnose_volunteer,
+        creation_worker,
     };
+    let local_vram_mb = capability.vram_mb;
+    let local_max_jobs = capability.max_jobs;
+
+    let pending_jobs = Arc::new(Mutex::new(PendingJobs::new(capability.max_jobs)));
+    let pending_creation = Arc::new(Mutex::new(PendingCreationJobs::new(capability.max_jobs)));
 
     let (cmd_tx, cmd_rx) = mpsc::channel::<P2pCommand>(64);
     let (event_tx, mut event_rx) = mpsc::channel(64);
+    let gossip_stats = Arc::new(p2p::GossipStats::default());
 
     let opts = SwarmOpts {
         listen: args.listen.clone(),
@@ -101,8 +132,21 @@ async fn main() -> anyhow::Result<()> {
         relay_server: args.relay_server,
     };
     let lib_for_p2p = library.clone();
+    let pending_for_p2p = pending_jobs.clone();
+    let pending_creation_for_p2p = pending_creation.clone();
+    let gossip_for_p2p = gossip_stats.clone();
     tokio::spawn(async move {
-        if let Err(e) = p2p::run_swarm(opts, lib_for_p2p, cmd_rx, event_tx).await {
+        if let Err(e) = p2p::run_swarm(
+            opts,
+            lib_for_p2p,
+            pending_for_p2p,
+            pending_creation_for_p2p,
+            cmd_rx,
+            event_tx,
+            gossip_for_p2p,
+        )
+        .await
+        {
             tracing::error!(error = %e, "p2p swarm stopped");
         }
     });
@@ -132,7 +176,10 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let handle = P2pHandle { cmd_tx };
+    let handle = P2pHandle {
+        cmd_tx,
+        gossip_stats,
+    };
     let control_addr: SocketAddr = args
         .control
         .parse()
@@ -140,9 +187,23 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         %control_addr,
         token_set = !control_token.is_empty(),
+        diagnose_volunteer,
+        creation_worker,
+        relay_server = args.relay_server,
         "control HTTP (launcher bridge; /health open, /v1/* bearer)"
     );
-    control::serve(control_addr, library, handle, control_token).await?;
+    control::serve(
+        control_addr,
+        library,
+        handle,
+        pending_jobs,
+        pending_creation,
+        control_token,
+        args.relay_server,
+        local_vram_mb,
+        local_max_jobs,
+    )
+    .await?;
     Ok(())
 }
 

@@ -22,6 +22,12 @@ pub enum LockfileError {
     },
     #[error("unsupported lockfile schema version {version}; supported versions: {supported}")]
     UnsupportedSchemaVersion { version: String, supported: String },
+    #[error("failed to write lockfile {path}: {source}")]
+    Write {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +131,26 @@ impl TuffboxLockfile {
             },
             generated_at: rfc3339_now(),
         }
+    }
+
+    pub fn save_to_path(&self, path: impl AsRef<Path>) -> Result<(), LockfileError> {
+        let path_ref = path.as_ref();
+        let path_string = path_ref.display().to_string();
+        if let Some(parent) = path_ref.parent() {
+            fs::create_dir_all(parent).map_err(|source| LockfileError::Write {
+                path: path_string.clone(),
+                source,
+            })?;
+        }
+        let json = serde_json::to_string_pretty(self).map_err(|source| LockfileError::Parse {
+            path: path_string.clone(),
+            source,
+        })?;
+        fs::write(path_ref, json).map_err(|source| LockfileError::Write {
+            path: path_string,
+            source,
+        })?;
+        Ok(())
     }
 
     /// Re-hash jars on disk and drop lock entries whose files are missing
@@ -251,6 +277,37 @@ mod refresh_tests {
         assert_eq!(lock.mods.len(), 1);
         assert_eq!(lock.mods[0].id, "a");
         assert!(lock.mods[0].hashes.sha1.as_ref().unwrap().len() == 40);
+    }
+
+    #[test]
+    fn save_to_path_writes_pretty_json_beside_manifest_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("foo.tuffbox.lock.json");
+        let lock = TuffboxLockfile {
+            schema_version: CURRENT_LOCKFILE_SCHEMA_VERSION.into(),
+            project_id: "foo".into(),
+            project_version: "1.0.0".into(),
+            minecraft_version: "1.21.1".into(),
+            loader: LockedLoader {
+                kind: "fabric".into(),
+                version: "0.16.0".into(),
+            },
+            java_major: None,
+            mods: vec![],
+            graph: LockedGraph {
+                node_count: 0,
+                edge_count: 0,
+                edges: vec![],
+            },
+            generated_at: "t".into(),
+        };
+
+        lock.save_to_path(&path).unwrap();
+        let loaded = TuffboxLockfile::load_from_path(&path).unwrap();
+        assert_eq!(loaded.project_id, "foo");
+        assert_eq!(loaded.project_version, "1.0.0");
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains('\n'), "lockfile should be pretty-printed");
     }
 }
 

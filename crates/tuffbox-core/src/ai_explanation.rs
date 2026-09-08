@@ -6,7 +6,7 @@
 //! backend can use with any LLM provider (OpenAI, Anthropic, local).
 
 use crate::crash_assistant::CrashAnalysisFinding;
-use crate::crash_kb::{SimilarCaseHit, smart_excerpt};
+use crate::crash_kb::{smart_excerpt, SimilarCaseHit};
 use crate::project_ai_inventory::ProjectAiInventory;
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +41,95 @@ pub struct CrashAiContext {
     /// Full project inventory (mods, packs, datapacks, configs).
     #[serde(default)]
     pub inventory: Option<ProjectAiInventory>,
+    /// Live Diagnose group-test session (launcher facts, not hypotheses).
+    #[serde(default)]
+    pub group_test: Option<CrashAiGroupTest>,
+    /// COMP-style decode of the crash→launch trail (healthy ⇒ enabled are clean).
+    #[serde(default)]
+    pub trail_covering: Option<CrashAiTrailCovering>,
+    /// Required Java major parsed from the crash/log (Fabric `depends java`,
+    /// UnsupportedClassVersionError). When `Some`, the prompt renders a "Java
+    /// requirement" section telling the model to emit a `set_java` op.
+    #[serde(default)]
+    pub java_required_major: Option<u32>,
+    /// Real, MC+loader-compatible Modrinth versions for the top suspect mods
+    /// (newest first). The ONLY versions the model may pin in
+    /// `change_mod_version`. Empty when offline or when no suspects resolved.
+    #[serde(default)]
+    pub mod_version_options: Vec<CrashAiModVersions>,
+}
+
+/// Real available versions for one installed mod (see `CrashAiContext::mod_version_options`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashAiModVersions {
+    /// Installed mod slug.
+    pub id: String,
+    /// Currently installed version (may be empty if unknown).
+    #[serde(default)]
+    pub installed: String,
+    /// Modrinth `version_number`s, newest first, all compatible with the
+    /// project's MC version + loader. Empty = no compatible release found.
+    #[serde(default)]
+    pub available: Vec<String>,
+}
+
+/// Compact group-test snapshot for the Crash Planner prompt.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashAiGroupTest {
+    pub phase: String,
+    #[serde(default)]
+    pub covering: Vec<String>,
+    #[serde(default)]
+    pub known_clean: Vec<String>,
+    #[serde(default)]
+    pub defectives: Vec<String>,
+    #[serde(default)]
+    pub verified: bool,
+}
+
+impl CrashAiGroupTest {
+    pub fn from_session(session: &crate::mod_group_test::GroupTestSession) -> Self {
+        use crate::mod_group_test::GroupTestPhase;
+        let phase = match &session.phase {
+            GroupTestPhase::NeedCovering => "needCovering".into(),
+            GroupTestPhase::Testing => "testing".into(),
+            GroupTestPhase::VerifyAll => "verifyAll".into(),
+            GroupTestPhase::VerifyOne { index } => format!("verifyOne:{index}"),
+            GroupTestPhase::Done => "done".into(),
+            GroupTestPhase::Failed { reason } => format!("failed:{reason}"),
+        };
+        Self {
+            phase,
+            covering: session.covering.clone(),
+            known_clean: session.known_clean.clone(),
+            defectives: session.defectives.clone(),
+            verified: session.verified,
+        }
+    }
+}
+
+/// Decoded disable covering from the player trail (not a guessed single root cause).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashAiTrailCovering {
+    #[serde(default)]
+    pub clean: Vec<String>,
+    #[serde(default)]
+    pub covering: Vec<String>,
+    #[serde(default)]
+    pub explanation: String,
+}
+
+impl CrashAiTrailCovering {
+    pub fn from_decoded(decoded: &crate::mod_group_test::DecodedTrail) -> Self {
+        Self {
+            clean: decoded.clean.clone(),
+            covering: decoded.covering.clone(),
+            explanation: decoded.explanation.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +155,10 @@ pub struct CrashAiFinding {
     pub title: String,
     pub description: String,
     pub auto_fix: Option<String>,
+    /// `critical` | `error` | `warning` | `info` — carried so the prompt and
+    /// the heuristic fallback can tell real failures from informational notes.
+    #[serde(default)]
+    pub severity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,10 +202,53 @@ pub fn build_compact_crash_prompt(ctx: &CrashAiContext) -> String {
 
 /// True when the configured provider/model should use the compact Explain prompt.
 pub fn prefers_compact_crash_prompt(provider: &str, model: &str) -> bool {
-    if !provider.eq_ignore_ascii_case("ollama") {
+    prefers_compact_crash_prompt_for_endpoint(provider, "", model)
+}
+
+/// Endpoint-aware variant: small models served through an OpenAI-compatible
+/// *local* endpoint (LM Studio, llama.cpp server, …) need the compact prompt
+/// just like Ollama ones — the full 14 KB inventory dump overflows them.
+pub fn prefers_compact_crash_prompt_for_endpoint(
+    provider: &str,
+    endpoint: &str,
+    model: &str,
+) -> bool {
+    if !is_small_local_model(model) {
         return false;
     }
-    is_small_local_model(model)
+    if provider.eq_ignore_ascii_case("ollama") {
+        return true;
+    }
+    endpoint_looks_local(endpoint)
+}
+
+/// Heuristic: is this OpenAI-compatible endpoint served from this machine / LAN?
+fn endpoint_looks_local(endpoint: &str) -> bool {
+    let e = endpoint.trim().to_ascii_lowercase();
+    if e.is_empty() {
+        return false;
+    }
+    // Strip scheme for prefix checks (`rsplit().next()`: `Split<&str>` is
+    // not DoubleEndedIterator, so `split().next_back()` does not exist).
+    let host = e
+        .rsplit("://")
+        .next()
+        .unwrap_or(e.as_str())
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    host.starts_with("localhost")
+        || host.starts_with("127.")
+        || host.starts_with("0.0.0.0")
+        || host.starts_with("[::1]")
+        || host.starts_with("::1")
+        || host.starts_with("10.")
+        || host.starts_with("192.168.")
+        || host.starts_with("172.16.")
+        // Well-known local inference servers (LM Studio / llama.cpp / Ollama-alt-port).
+        || host.contains(":1234")
+        || host.contains(":8080")
+        || host.contains(":11434")
 }
 
 fn is_small_local_model(model: &str) -> bool {
@@ -136,7 +272,10 @@ fn is_small_local_model(model: &str) -> bool {
         "tinydolphin",
         "tinyllama",
     ];
-    if SMALL.iter().any(|s| m == *s || m.starts_with(&format!("{s}-"))) {
+    if SMALL
+        .iter()
+        .any(|s| m == *s || m.starts_with(&format!("{s}-")))
+    {
         return true;
     }
     // Heuristic: parameter tags under 7b.
@@ -184,7 +323,10 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
 
     p.push_str("## System Context\n");
     p.push_str(&format!("- Minecraft: {}\n", ctx.mc_version));
-    p.push_str(&format!("- Loader: {} {}\n", ctx.loader, ctx.loader_version));
+    p.push_str(&format!(
+        "- Loader: {} {}\n",
+        ctx.loader, ctx.loader_version
+    ));
     p.push_str(&format!("- Java: {}\n", ctx.java_version));
     p.push_str(&format!("- OS: {}\n", ctx.os));
     p.push_str(&format!(
@@ -200,6 +342,19 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
     }
     if !ctx.fingerprint_key.is_empty() {
         p.push_str(&format!("- Fingerprint: {}\n\n", ctx.fingerprint_key));
+    }
+
+    // Java requirement is actionable evidence, not decoration: when present
+    // the model MUST emit a set_java op (rule 12) instead of prose advice.
+    if let Some(required) = ctx.java_required_major {
+        p.push_str("## Java requirement (launcher-verified)\n");
+        p.push_str(&format!(
+            "- Required: Java {required}+ (parsed from crash/log: Fabric `depends java` or UnsupportedClassVersionError)\n"
+        ));
+        p.push_str(&format!("- Current runtime: {}\n", ctx.java_version));
+        p.push_str(&format!(
+            "Emit {{\"op\":\"set_java\",\"version\":\"{required}\",\"reason\":…}} as the FIRST action. Do not describe the switch in prose only.\n\n"
+        ));
     }
 
     if !ctx.culprit_details.is_empty() {
@@ -232,10 +387,70 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
         p.push('\n');
     }
 
+    if let Some(ref gt) = ctx.group_test {
+        p.push_str("## Group test (launcher facts — not hypotheses)\n");
+        if gt.verified {
+            p.push_str(
+                "Verified covering. Prefer disable_mod on each isolated defective. Do not invent a different single root cause.\n",
+            );
+        } else {
+            p.push_str(
+                "In progress. Do not blame known_clean. Do not treat the whole remaining covering as one root cause.\n",
+            );
+        }
+        p.push_str(&format!("- phase: {}\n", gt.phase));
+        p.push_str(&format!("- verified: {}\n", gt.verified));
+        if !gt.defectives.is_empty() {
+            p.push_str(&format!("- defectives: [{}]\n", gt.defectives.join(", ")));
+        }
+        if !gt.covering.is_empty() {
+            p.push_str(&format!("- covering: [{}]\n", gt.covering.join(", ")));
+        }
+        if !gt.known_clean.is_empty() {
+            p.push_str(&format!("- known_clean: [{}]\n", gt.known_clean.join(", ")));
+        }
+        p.push('\n');
+    }
+
+    if let Some(ref trail) = ctx.trail_covering {
+        p.push_str("## Player trail covering (decoded group tests)\n");
+        p.push_str(
+            "Healthy launch ⇒ every enabled mod is clean. Remaining disables are a covering, not proof of a single culprit. Do not collapse covering size > 1 into one mod.\n",
+        );
+        if !trail.explanation.is_empty() {
+            p.push_str(&format!("- {}\n", trail.explanation));
+        }
+        if !trail.covering.is_empty() {
+            p.push_str(&format!("- covering: [{}]\n", trail.covering.join(", ")));
+        }
+        if !trail.clean.is_empty() {
+            let shown: Vec<&String> = trail.clean.iter().take(24).collect();
+            p.push_str(&format!(
+                "- clean (enabled on healthy): [{}{}]\n",
+                shown
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if trail.clean.len() > 24 { ", …" } else { "" }
+            ));
+        }
+        p.push('\n');
+    }
+
     if !ctx.crash_assistant_findings.is_empty() {
         p.push_str("## Automated Analysis Results\n");
         for f in &ctx.crash_assistant_findings {
-            p.push_str(&format!("- [{}] {}: {}\n", f.code, f.title, f.description));
+            // Severity is load-bearing: without it the model treats info notes
+            // (MCreator detection, pack recovery) as crash causes.
+            if f.severity.trim().is_empty() {
+                p.push_str(&format!("- [{}] {}: {}\n", f.code, f.title, f.description));
+            } else {
+                p.push_str(&format!(
+                    "- [{}|{}] {}: {}\n",
+                    f.code, f.severity, f.title, f.description
+                ));
+            }
             if let Some(fix) = &f.auto_fix {
                 p.push_str(&format!("  Auto-fix: {fix}\n"));
             }
@@ -246,7 +461,12 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
     if !ctx.similar_cases.is_empty() {
         p.push_str("## Similar known cases (from local knowledge base)\n");
         p.push_str("Prefer these solutions when they match. Do not invent mods outside the project inventory.\n");
-        for (i, c) in ctx.similar_cases.iter().take(budget.similar_cases).enumerate() {
+        for (i, c) in ctx
+            .similar_cases
+            .iter()
+            .take(budget.similar_cases)
+            .enumerate()
+        {
             p.push_str(&format!(
                 "{}. score={:.2} source={} key={}\n   Solution: {}\n",
                 i + 1,
@@ -285,6 +505,25 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
                 ids.push(c.id.clone());
             }
         }
+        if let Some(ref gt) = ctx.group_test {
+            for id in gt
+                .defectives
+                .iter()
+                .chain(gt.covering.iter())
+                .chain(gt.known_clean.iter())
+            {
+                if !ids.iter().any(|x| x.eq_ignore_ascii_case(id)) {
+                    ids.push(id.clone());
+                }
+            }
+        }
+        if let Some(ref trail) = ctx.trail_covering {
+            for id in trail.covering.iter().chain(trail.clean.iter().take(12)) {
+                if !ids.iter().any(|x| x.eq_ignore_ascii_case(id)) {
+                    ids.push(id.clone());
+                }
+            }
+        }
         for d in missing_dep_hints_from_graph(&ctx.graph_diagnostics) {
             if !ids.iter().any(|x| x.eq_ignore_ascii_case(&d)) {
                 ids.push(d);
@@ -300,6 +539,28 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
         p.push('\n');
     }
 
+    if !ctx.mod_version_options.is_empty() {
+        p.push_str("## Available mod versions (real, from Modrinth — use ONLY these)\n");
+        p.push_str("Every entry below is compatible with this project's Minecraft version + loader. A change_mod_version \"version\" MUST be copied verbatim from the matching mod's list; never invent, shorten, or complete a version. If a mod has no entry here, use update_mod with null version (launcher resolves newest compatible).\n");
+        for m in &ctx.mod_version_options {
+            if m.available.is_empty() {
+                continue;
+            }
+            let installed = if m.installed.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" (installed: {})", m.installed.trim())
+            };
+            p.push_str(&format!(
+                "- {}{}: {}\n",
+                m.id,
+                installed,
+                m.available.join(", ")
+            ));
+        }
+        p.push('\n');
+    }
+
     if !ctx.graph_diagnostics.is_empty() {
         p.push_str("## Graph Diagnostics\n");
         for d in ctx.graph_diagnostics.iter().take(budget.graph_lines) {
@@ -310,11 +571,15 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
 
     if !ctx.recent_changes.is_empty() {
         p.push_str("## Recent Changes (may have caused the crash)\n");
-        for c in ctx.recent_changes.iter().take(if budget.include_full_inventory {
-            usize::MAX
-        } else {
-            6
-        }) {
+        for c in ctx
+            .recent_changes
+            .iter()
+            .take(if budget.include_full_inventory {
+                usize::MAX
+            } else {
+                6
+            })
+        {
             p.push_str(&format!("- {c}\n"));
         }
         p.push('\n');
@@ -340,6 +605,10 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
 (2) Isolate ONE primary problem, (3) Accept the risk on every action (risk + needsUserReview + confidence), \
 (4) Map decision to minimal `actions` with `op`.\n",
     );
+    p.push_str(
+        "Fact priority: verified group test covering > player-trail covering > culprits/KB. \
+Do not invent mods outside inventory. Do not collapse a covering of size > 1 into a single root-cause mod.\n",
+    );
     p.push_str(CRASH_JSON_SCHEMA_HINT);
     p.push_str(
         "\n\nFollow the system rules. Prefer `actions` with `op` fields over legacy recommended_actions.\n",
@@ -357,32 +626,82 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
 }
 
 /// Pull likely missing-dependency mod ids from graph diagnostic lines.
+///
+/// Only keeps plausible mod ids: quoted tokens win, CamelCase prose
+/// (`MissingDependency`) and diagnostic vocabulary are skipped. The old
+/// version pushed every 3+ char token — `MissingDependency`, `Graph`,
+/// `mandatory` — into the compact prompt's "relevant mod ids" AND into the
+/// install-allowlist, so a hallucinated `install_mod:missingdependency`
+/// could pass grounding.
 pub fn missing_dep_hints_from_graph(diags: &[String]) -> Vec<String> {
+    const STOPWORDS: &[&str] = &[
+        "missing",
+        "missingdependency",
+        "missingdependencies",
+        "missingmods",
+        "mandatory",
+        "optional",
+        "dependency",
+        "dependencies",
+        "requires",
+        "required",
+        "requirement",
+        "unmet",
+        "mod",
+        "mods",
+        "modid",
+        "version",
+        "range",
+        "minecraft",
+        "fabricloader",
+        "fabric",
+        "forge",
+        "neoforge",
+        "quilt",
+        "loader",
+        "which",
+        "with",
+        "from",
+        "that",
+        "this",
+        "have",
+        "needs",
+        "error",
+        "warning",
+        "info",
+        "graph",
+        "diagnostic",
+        "null",
+        "none",
+    ];
     let mut out = Vec::new();
     for line in diags {
         let lower = line.to_ascii_lowercase();
         if !(lower.contains("missing") || lower.contains("requires") || lower.contains("depend")) {
             continue;
         }
+        // Prefer quoted ids (`requires 'flywheel'`) — highest precision.
+        for id in quoted_tokens(line) {
+            if !out.iter().any(|x: &String| x.eq_ignore_ascii_case(&id)) {
+                out.push(id);
+            }
+        }
         for token in line.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
             let t = token.trim();
             if t.len() < 3 || t.len() > 64 {
                 continue;
             }
+            // Real mod ids are lowercase by convention (`fabric-api`); skip
+            // CamelCase prose glued from diagnostic words.
+            if t.chars().any(|c| c.is_ascii_uppercase()) {
+                continue;
+            }
             let tl = t.to_ascii_lowercase();
-            if matches!(
-                tl.as_str(),
-                "missing"
-                    | "dependency"
-                    | "requires"
-                    | "required"
-                    | "mod"
-                    | "error"
-                    | "warning"
-                    | "info"
-                    | "graph"
-                    | "null"
-            ) {
+            if STOPWORDS.contains(&tl.as_str()) {
+                continue;
+            }
+            // Residual glued forms (`dependencyx`) — never a mod id.
+            if tl.contains("missing") || tl.contains("depend") || tl.contains("requir") {
                 continue;
             }
             if !out.iter().any(|x: &String| x.eq_ignore_ascii_case(t)) {
@@ -391,6 +710,39 @@ pub fn missing_dep_hints_from_graph(diags: &[String]) -> Vec<String> {
         }
     }
     out.into_iter().take(16).collect()
+}
+
+/// `'quoted'` / `"quoted"` / `` `quoted` `` tokens — the precise way crash
+/// lines name mods (`Mod 'create' requires 'flywheel'`).
+fn quoted_tokens(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let q = bytes[i];
+        if q == b'\'' || q == b'"' || q == b'`' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j] != q {
+                j += 1;
+            }
+            if j < bytes.len() {
+                let inner = line[i + 1..j].trim();
+                if inner.len() >= 2
+                    && inner.len() <= 64
+                    && inner
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+                    && !inner.contains("..")
+                {
+                    out.push(inner.to_ascii_lowercase());
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
 }
 
 /// Context for post-resolution distill (user already fixed the crash).
@@ -502,6 +854,7 @@ pub fn findings_to_ai(findings: &[CrashAnalysisFinding]) -> Vec<CrashAiFinding> 
             title: f.title.clone(),
             description: f.description.clone(),
             auto_fix: f.auto_fix.clone(),
+            severity: f.severity.clone(),
         })
         .collect()
 }
@@ -539,13 +892,94 @@ mod tests {
             fingerprint_key: "test".into(),
             report_id: None,
             inventory: None,
+            group_test: None,
+            trail_covering: None,
+            java_required_major: None,
+            mod_version_options: vec![],
         };
         let prompt = build_compact_crash_prompt(&ctx);
         assert!(!prompt.starts_with("You are TuffBox"));
         assert!(prompt.contains("Relevant mod ids") || prompt.contains("indium"));
         assert!(prefers_compact_crash_prompt("ollama", "llama3.2:3b"));
         assert!(!prefers_compact_crash_prompt("ollama", "qwen2.5:7b"));
-        assert!(!prefers_compact_crash_prompt("openai-compatible", "gpt-4o-mini"));
+        assert!(!prefers_compact_crash_prompt(
+            "openai-compatible",
+            "gpt-4o-mini"
+        ));
+        // Small model behind a LOCAL OpenAI-compatible endpoint → compact.
+        assert!(prefers_compact_crash_prompt_for_endpoint(
+            "openai-compatible",
+            "http://127.0.0.1:1234/v1",
+            "qwen2.5-coder:1.5b"
+        ));
+        assert!(prefers_compact_crash_prompt_for_endpoint(
+            "openai-compatible",
+            "http://localhost:8080/v1",
+            "tinyllama"
+        ));
+        // Same small tag on a cloud endpoint → full prompt (server can take it).
+        assert!(!prefers_compact_crash_prompt_for_endpoint(
+            "openai-compatible",
+            "https://openrouter.ai/api/v1",
+            "qwen2.5:3b"
+        ));
+    }
+
+    #[test]
+    fn prompt_renders_java_requirement_and_version_options() {
+        let ctx = CrashAiContext {
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0.15".into(),
+            java_version: "17".into(),
+            os: "linux".into(),
+            installed_mods: vec!["sodium".into(), "iris".into()],
+            installed_mod_count: 2,
+            crash_report_excerpt: "HARD_DEP".into(),
+            latest_log_excerpt: String::new(),
+            suspected_mods: vec!["sodium".into()],
+            culprit_details: vec![],
+            crash_assistant_findings: vec![],
+            recent_changes: vec![],
+            graph_diagnostics: vec![],
+            similar_cases: vec![],
+            fingerprint_key: String::new(),
+            report_id: None,
+            inventory: None,
+            group_test: None,
+            trail_covering: None,
+            java_required_major: Some(25),
+            mod_version_options: vec![CrashAiModVersions {
+                id: "sodium".into(),
+                installed: "0.5.0".into(),
+                available: vec!["0.9.2+mc1.20.1".into(), "0.9.0+mc1.20.1".into()],
+            }],
+        };
+        for prompt in [build_crash_prompt(&ctx), build_compact_crash_prompt(&ctx)] {
+            assert!(prompt.contains("## Java requirement"), "{prompt}");
+            assert!(prompt.contains("set_java"), "{prompt}");
+            assert!(prompt.contains("\"25\""), "{prompt}");
+            assert!(prompt.contains("## Available mod versions"), "{prompt}");
+            assert!(prompt.contains("0.9.2+mc1.20.1"), "{prompt}");
+        }
+    }
+
+    #[test]
+    fn missing_dep_hints_skip_diagnostic_prose() {
+        let diags = vec![
+            "[Error] MissingDependency: sodium requires indium".to_string(),
+            "Mod 'create' requires 'flywheel' which is missing!".to_string(),
+        ];
+        let hints = missing_dep_hints_from_graph(&diags);
+        assert!(hints.iter().any(|h| h == "indium"), "{hints:?}");
+        assert!(hints.iter().any(|h| h == "flywheel"), "{hints:?}");
+        assert!(hints.iter().any(|h| h == "sodium"), "{hints:?}");
+        for bad in ["MissingDependency", "missingdependency", "Graph", "Error", "requires"] {
+            assert!(
+                !hints.iter().any(|h| h.eq_ignore_ascii_case(bad)),
+                "prose token leaked: {bad} in {hints:?}"
+            );
+        }
     }
 
     #[test]
@@ -577,6 +1011,10 @@ mod tests {
             fingerprint_key: "test".into(),
             report_id: Some("crash-2024".into()),
             inventory: None,
+            group_test: None,
+            trail_covering: None,
+            java_required_major: None,
+            mod_version_options: vec![],
         };
         let prompt = build_crash_prompt(&ctx);
         assert!(prompt.contains("iris"));
@@ -588,6 +1026,55 @@ mod tests {
         assert!(prompt.contains("Isolate the problem"));
         assert!(prompt.contains("Accept the risk"));
         assert!(prompt.contains("Map decision"));
+        assert!(prompt.contains("verified group test"));
+    }
+
+    #[test]
+    fn prompt_includes_group_test_and_trail_covering_not_toggle_spam() {
+        let ctx = CrashAiContext {
+            mc_version: "1.21.1".into(),
+            loader: "neoforge".into(),
+            loader_version: "21".into(),
+            java_version: "21".into(),
+            os: "Windows".into(),
+            installed_mods: vec!["foo".into(), "bar".into(), "baz".into()],
+            installed_mod_count: 3,
+            crash_report_excerpt: "java.lang.Error".into(),
+            latest_log_excerpt: "crash".into(),
+            suspected_mods: vec!["foo".into()],
+            culprit_details: vec![],
+            crash_assistant_findings: vec![],
+            recent_changes: vec!["Updated sodium".into()],
+            graph_diagnostics: vec![],
+            similar_cases: vec![],
+            fingerprint_key: "fp".into(),
+            report_id: None,
+            inventory: None,
+            group_test: Some(CrashAiGroupTest {
+                phase: "done".into(),
+                covering: vec![],
+                known_clean: vec!["bar".into()],
+                defectives: vec!["foo".into(), "baz".into()],
+                verified: true,
+            }),
+            trail_covering: Some(CrashAiTrailCovering {
+                clean: vec!["bar".into()],
+                covering: vec!["foo".into(), "baz".into()],
+                explanation: "Launch succeeded with these mods disabled: foo, baz.".into(),
+            }),
+            java_required_major: None,
+            mod_version_options: vec![],
+        };
+        let prompt = build_crash_prompt(&ctx);
+        assert!(prompt.contains("defectives: [foo, baz]"), "{prompt}");
+        assert!(prompt.contains("covering: [foo, baz]"), "{prompt}");
+        assert!(prompt.contains("known_clean: [bar]"));
+        assert!(prompt.contains("Verified covering"));
+        assert!(prompt.contains("Player trail covering"));
+        assert!(prompt.contains("Updated sodium"));
+        assert!(!prompt.contains("Enable foo"));
+        assert!(!prompt.contains("Disable bar"));
+        assert!(prompt.contains("Do not collapse a covering"));
     }
 
     #[test]

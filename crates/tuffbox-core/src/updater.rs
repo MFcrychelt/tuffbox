@@ -198,7 +198,8 @@ fn check_curseforge_update(
         3 => Some("alpha"),
         _ => None,
     };
-    let risk = classify_update(&module.version, &latest_version, channel).unwrap_or(UpdateRisk::Risky);
+    let risk =
+        classify_update(&module.version, &latest_version, channel).unwrap_or(UpdateRisk::Risky);
 
     Ok(Some(ModUpdate {
         mod_id: module.id.clone(),

@@ -70,7 +70,10 @@ impl CacheIndex {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into()))
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into()),
+        )
     }
 }
 

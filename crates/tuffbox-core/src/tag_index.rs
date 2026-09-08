@@ -19,11 +19,7 @@ pub struct TagIndex {
 }
 
 impl TagIndex {
-    pub fn build(
-        project_dir: &Path,
-        loader: LoaderKind,
-        extra_jars: &[PathBuf],
-    ) -> Self {
+    pub fn build(project_dir: &Path, loader: LoaderKind, extra_jars: &[PathBuf]) -> Self {
         let adapter: &dyn LoaderAdapter = match loader {
             LoaderKind::Fabric | LoaderKind::Quilt => &FabricAdapter,
             LoaderKind::Forge => &ForgeAdapter,
@@ -146,11 +142,7 @@ impl TagIndex {
 
     /// All known tag keys as `#namespace:path`, sorted.
     pub fn list_tag_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self
-            .entries
-            .keys()
-            .map(|k| format!("#{k}"))
-            .collect();
+        let mut ids: Vec<String> = self.entries.keys().map(|k| format!("#{k}")).collect();
         ids.sort();
         ids
     }

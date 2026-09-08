@@ -1,39 +1,51 @@
 <!-- Litube-inspired lite player: large modal + draggable/resizable mini window. -->
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
-  import { X, ExternalLink, PictureInPicture2, Maximize2, GripVertical } from "lucide-svelte";
+  import { X, ExternalLink, PictureInPicture2, Maximize2, GripVertical } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
 
-  export let videoId: string;
-  export let title = "";
-  /** Card rect on home — fly-open from here to center. */
-  export let originRect: DOMRect | null = null;
-  /** Start in floating mini window (skips modal). */
-  export let startMini = false;
-
-  const dispatch = createEventDispatcher<{ close: void }>();
+  let {
+    videoId,
+    title = "",
+    originRect = null,
+    startMini = false,
+    start = 0,
+    onclose,
+  }: {
+    videoId: string;
+    title?: string;
+    originRect?: DOMRect | null;
+    startMini?: boolean;
+    start?: number;
+    onclose?: () => void;
+  } = $props();
   const MINI_POS_KEY = "tuffbox-youtube-mini-pos";
   const MINI_SIZE_KEY = "tuffbox-youtube-mini-size";
   const MINI_W_DEFAULT = 440;
   const MINI_W_MIN = 280;
   const MINI_HEADER_H = 44;
 
-  let embedAlive = true;
-  let shellEl: HTMLDivElement | null = null;
-  let dialogEl: HTMLDivElement | null = null;
-  let backdropIn = false;
-  let dialogIn = false;
-  let backdropOut = false;
-  let dialogOut = false;
-  let closing = false;
-  let mode: "modal" | "mini" = startMini ? "mini" : "modal";
+  let embedAlive = $state(true);
+  let shellEl: HTMLDivElement | null = $state(null);
+  let dialogEl: HTMLDivElement | null = $state(null);
+  let backdropIn = $state(false);
+  let dialogIn = $state(false);
+  let backdropOut = $state(false);
+  let dialogOut = $state(false);
+  let closing = $state(false);
+  // startMini is a one-shot initial prop — snapshot at mount, not live.
+  let mode: "modal" | "mini" = $state(initialMode());
 
-  let miniX = 24;
-  let miniY = 24;
-  let miniW = MINI_W_DEFAULT;
-  let dragging = false;
-  let resizing = false;
+  function initialMode(): "modal" | "mini" {
+    return startMini ? "mini" : "modal";
+  }
+
+  let miniX = $state(24);
+  let miniY = $state(24);
+  let miniW = $state(MINI_W_DEFAULT);
+  let dragging = $state(false);
+  let resizing = $state(false);
   let dragDx = 0;
   let dragDy = 0;
   let resizeStartX = 0;
@@ -43,8 +55,23 @@
   let resizeFromLeft = false;
   let resizeFromTop = false;
 
-  $: embedSrc = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3`;
-  $: miniVideoH = Math.round((miniW * 9) / 16);
+  let embedLoaded = $state(false);
+  let embedError = $state(false);
+  let showEmbedTip = $state(false);
+  let embedTipDismissed = $state(false);
+  let embedLoadTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // start is a one-shot initial prop — snapshot at mount, not live.
+  const embedStart = Math.max(0, Math.floor(initialStart()));
+
+  function initialStart(): number {
+    return start || 0;
+  }
+  const embedSrc = $derived(
+    `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3` +
+      (embedStart > 0 ? `&start=${embedStart}` : ""),
+  );
+  const miniVideoH = $derived(Math.round((miniW * 9) / 16));
 
   function bodyPortal(node: HTMLElement) {
     document.body.appendChild(node);
@@ -55,7 +82,52 @@
     };
   }
 
+  function clearEmbedLoadTimer() {
+    if (embedLoadTimer !== undefined) {
+      clearTimeout(embedLoadTimer);
+      embedLoadTimer = undefined;
+    }
+  }
+
+  function resetEmbedLoadState() {
+    embedLoaded = false;
+    embedError = false;
+    showEmbedTip = false;
+    embedTipDismissed = false;
+  }
+
+  function startEmbedLoadWatch() {
+    clearEmbedLoadTimer();
+    resetEmbedLoadState();
+    if (!embedAlive) return;
+    embedLoadTimer = setTimeout(() => {
+      if (!embedLoaded && !embedTipDismissed && embedAlive) {
+        showEmbedTip = true;
+      }
+    }, 5000);
+  }
+
+  function onEmbedLoad() {
+    embedLoaded = true;
+    showEmbedTip = false;
+    clearEmbedLoadTimer();
+  }
+
+  function onEmbedError() {
+    embedError = true;
+    if (!embedTipDismissed && embedAlive) {
+      showEmbedTip = true;
+    }
+    clearEmbedLoadTimer();
+  }
+
+  function dismissEmbedTip() {
+    embedTipDismissed = true;
+    showEmbedTip = false;
+  }
+
   function destroyEmbed() {
+    clearEmbedLoadTimer();
     embedAlive = false;
   }
 
@@ -69,7 +141,8 @@
   }
 
   function miniWMax(): number {
-    return Math.max(MINI_W_MIN, Math.min(960, window.innerWidth - 16));
+    const vw = document.documentElement?.clientWidth ?? window.innerWidth;
+    return Math.max(MINI_W_MIN, Math.min(960, vw - 16));
   }
 
   function clampMiniW(w: number): number {
@@ -125,16 +198,21 @@
 
   function placeMiniDefault() {
     const pad = 20;
+    const vw = document.documentElement?.clientWidth ?? window.innerWidth;
+    const vh = document.documentElement?.clientHeight ?? window.innerHeight;
     const h = Math.round((miniW * 9) / 16) + MINI_HEADER_H;
-    miniX = Math.max(pad, window.innerWidth - miniW - pad);
-    miniY = Math.max(pad, window.innerHeight - h - pad);
+    miniX = Math.max(pad, vw - miniW - pad);
+    miniY = Math.max(pad, vh - h - pad);
   }
 
   function clampMiniPos() {
     const w = miniW;
     const h = Math.round((miniW * 9) / 16) + MINI_HEADER_H;
-    const maxX = Math.max(8, window.innerWidth - w - 8);
-    const maxY = Math.max(8, window.innerHeight - h - 8);
+    // Use documentElement for reliable viewport size (matches actual visible area).
+    const vw = document.documentElement?.clientWidth ?? window.innerWidth;
+    const vh = document.documentElement?.clientHeight ?? window.innerHeight;
+    const maxX = Math.max(8, vw - w - 8);
+    const maxY = Math.max(8, vh - h - 8);
     miniX = Math.min(maxX, Math.max(8, miniX));
     miniY = Math.min(maxY, Math.max(8, miniY));
   }
@@ -209,16 +287,16 @@
   function close() {
     if (closing) return;
     closing = true;
+    backdropIn = false;
     destroyEmbed();
 
-    const finish = () => dispatch("close");
+    const finish = () => onclose?.();
 
     if (mode === "mini" || prefersReducedMotion() || !dialogEl) {
       finish();
       return;
     }
 
-    backdropIn = false;
     backdropOut = true;
     dialogIn = false;
     dialogOut = true;
@@ -330,10 +408,20 @@
     void playOpenAnimation();
   });
 
+  $effect(() => {
+    if (!embedAlive) {
+      clearEmbedLoadTimer();
+      return;
+    }
+    videoId;
+    startEmbedLoadWatch();
+    return () => clearEmbedLoadTimer();
+  });
+
   onDestroy(destroyEmbed);
 </script>
 
-<svelte:window on:keydown={onKeydown} on:resize={onWinResize} />
+<svelte:window onkeydown={onKeydown} onresize={onWinResize} />
 
 <div
   bind:this={shellEl}
@@ -347,8 +435,8 @@
   aria-label={mode === "mini" ? title || "YouTube mini player" : undefined}
   style={mode === "mini" ? `left: ${miniX}px; top: ${miniY}px; width: ${miniW}px;` : undefined}
   use:bodyPortal
-  on:click={(e) => mode === "modal" && e.target === e.currentTarget && close()}
-  on:keydown={() => {}}
+  onclick={(e) => mode === "modal" && e.target === e.currentTarget && close()}
+  onkeydown={() => {}}
 >
   <div
     bind:this={dialogEl}
@@ -365,10 +453,10 @@
       class="yp-header"
       class:draggable={mode === "mini"}
       role={mode === "mini" ? "toolbar" : "banner"}
-      on:pointerdown={mode === "mini" ? onDragStart : undefined}
-      on:pointermove={mode === "mini" ? onDragMove : undefined}
-      on:pointerup={mode === "mini" ? onDragEnd : undefined}
-      on:pointercancel={mode === "mini" ? onDragEnd : undefined}
+      onpointerdown={mode === "mini" ? onDragStart : undefined}
+      onpointermove={mode === "mini" ? onDragMove : undefined}
+      onpointerup={mode === "mini" ? onDragEnd : undefined}
+      onpointercancel={mode === "mini" ? onDragEnd : undefined}
     >
       {#if mode === "mini"}
         <span class="yp-grip" aria-hidden="true"><GripVertical size={14} /></span>
@@ -376,23 +464,23 @@
       <h3 class="yp-title">{title || "YouTube"}</h3>
       <div class="yp-actions">
         {#if mode === "modal"}
-          <button type="button" class="yp-btn" on:click={toMini} title="Watch in a floating mini window while you work">
+          <button type="button" class="yp-btn" onclick={toMini} title="Watch in a floating mini window while you work">
             <PictureInPicture2 size={16} />
             <span>Mini player</span>
           </button>
-          <button type="button" class="yp-btn" on:click={openInBrowser}>
+          <button type="button" class="yp-btn" onclick={openInBrowser}>
             <ExternalLink size={16} />
             <span>Open in browser</span>
           </button>
         {:else}
-          <button type="button" class="yp-icon-btn" on:click={toModal} aria-label="Expand" title="Expand">
+          <button type="button" class="yp-icon-btn" onclick={toModal} aria-label="Expand" title="Expand">
             <Maximize2 size={16} />
           </button>
-          <button type="button" class="yp-icon-btn" on:click={openInBrowser} aria-label="Open in browser" title="Open in browser">
+          <button type="button" class="yp-icon-btn" onclick={openInBrowser} aria-label="Open in browser" title="Open in browser">
             <ExternalLink size={16} />
           </button>
         {/if}
-        <button type="button" class="yp-icon-btn" on:click={close} aria-label="Close">
+        <button type="button" class="yp-icon-btn" onclick={close} aria-label="Close">
           <X size={18} />
         </button>
       </div>
@@ -404,7 +492,21 @@
           title={title || "YouTube video"}
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowfullscreen
+          onload={onEmbedLoad}
+          onerror={onEmbedError}
         ></iframe>
+      {/if}
+      {#if showEmbedTip && embedAlive}
+        <div class="yp-embed-tip">
+          <span class="yp-embed-tip-text">Video not playing?</span>
+          <button type="button" class="yp-btn yp-embed-tip-btn" onclick={openInBrowser}>
+            <ExternalLink size={14} />
+            <span>Open in browser</span>
+          </button>
+          <button type="button" class="yp-icon-btn" onclick={dismissEmbedTip} aria-label="Dismiss tip">
+            <X size={16} />
+          </button>
+        </div>
       {/if}
     </div>
 
@@ -414,40 +516,40 @@
         class="yp-resize se"
         aria-label="Resize mini player"
         title="Drag to resize"
-        on:pointerdown={(e) => onResizeStart(e, false, false)}
-        on:pointermove={onResizeMove}
-        on:pointerup={onResizeEnd}
-        on:pointercancel={onResizeEnd}
+        onpointerdown={(e) => onResizeStart(e, false, false)}
+        onpointermove={onResizeMove}
+        onpointerup={onResizeEnd}
+        onpointercancel={onResizeEnd}
       ></button>
       <button
         type="button"
         class="yp-resize sw"
         aria-label="Resize mini player from bottom-left"
         title="Drag to resize"
-        on:pointerdown={(e) => onResizeStart(e, true, false)}
-        on:pointermove={onResizeMove}
-        on:pointerup={onResizeEnd}
-        on:pointercancel={onResizeEnd}
+        onpointerdown={(e) => onResizeStart(e, true, false)}
+        onpointermove={onResizeMove}
+        onpointerup={onResizeEnd}
+        onpointercancel={onResizeEnd}
       ></button>
       <button
         type="button"
         class="yp-resize ne"
         aria-label="Resize mini player from top-right"
         title="Drag to resize"
-        on:pointerdown={(e) => onResizeStart(e, false, true)}
-        on:pointermove={onResizeMove}
-        on:pointerup={onResizeEnd}
-        on:pointercancel={onResizeEnd}
+        onpointerdown={(e) => onResizeStart(e, false, true)}
+        onpointermove={onResizeMove}
+        onpointerup={onResizeEnd}
+        onpointercancel={onResizeEnd}
       ></button>
       <button
         type="button"
         class="yp-resize nw"
         aria-label="Resize mini player from top-left"
         title="Drag to resize"
-        on:pointerdown={(e) => onResizeStart(e, true, true)}
-        on:pointermove={onResizeMove}
-        on:pointerup={onResizeEnd}
-        on:pointercancel={onResizeEnd}
+        onpointerdown={(e) => onResizeStart(e, true, true)}
+        onpointermove={onResizeMove}
+        onpointerup={onResizeEnd}
+        onpointercancel={onResizeEnd}
       ></button>
     {/if}
   </div>
@@ -483,15 +585,18 @@
       );
     opacity: 0;
     transition: opacity 0.28s ease;
-    pointer-events: auto;
+    /* Invisible until .yp-in — must not steal clicks from the launcher. */
+    pointer-events: none;
   }
 
-  .yp-shell.yp-in {
+  .yp-shell.yp-in:not(.is-mini) {
     opacity: 1;
+    pointer-events: auto;
   }
 
   .yp-shell.yp-out {
     opacity: 0;
+    pointer-events: none;
   }
 
   /* Mini: no dimmed backdrop — developer keeps working underneath */
@@ -676,6 +781,36 @@
     width: 100%;
     height: 100%;
     border: 0;
+  }
+
+  .yp-embed-tip {
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-md, 8px);
+    border: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-secondary) 92%, #000);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+    z-index: 1;
+    max-width: calc(100% - 24px);
+  }
+
+  .yp-embed-tip-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+
+  .yp-embed-tip-btn {
+    padding: 5px 8px;
+    font-size: 11px;
   }
 
   .yp-resize {

@@ -1,10 +1,13 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Rocket, RefreshCw, Tag, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen, Save, UploadCloud } from "lucide-svelte";
+  import { Rocket, RefreshCw, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen, FolderTree, UploadCloud } from "@lucide/svelte";
   import { api } from "../lib/api";
   import { projectPath, projectInfo, recentProjects } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
+  import ReleaseMetrics from "./ReleaseMetrics.svelte";
+  import ChangelogEditor from "./ChangelogEditor.svelte";
+  import PublishPlatformsConfig from "./PublishPlatformsConfig.svelte";
 
   type Issue = { severity: "error" | "warning"; code: string; message: string; target?: string | null };
   type Artifact = { id: string; kind: string; path: string; createdAt: string; fileCount: number; overrideCount: number };
@@ -21,38 +24,49 @@
     uploadedFiles?: string[];
   };
 
-  let version = $projectInfo?.version ?? "1.0.0";
-  let changelog = "";
-  let issues: Issue[] = [];
-  let artifacts: Artifact[] = [];
-  let checklist: Record<string, boolean> = {
-    version: false,
-    validation: false,
-    artifacts: false,
-    changelog: false,
-    snapshot: false,
-  };
+  let version = $state($projectInfo?.version ?? "1.0.0");
+  let changelog = $state("");
+  let issues = $state<Issue[]>([]);
+  let artifacts = $state<Artifact[]>([]);
+  let checklist = $state<Record<string, boolean>>({
+      version: false,
+      validation: false,
+      artifacts: false,
+      changelog: false,
+      snapshot: false,
+      publish_target: false,
+  });
 
-  let publishConfig: PublishConfig = {
+  let publishConfig = $state<PublishConfig>({
     githubRepository: "",
     modrinthProjectId: "",
     curseforgeProjectId: "",
     curseforgeGameVersionIds: [],
-  };
-  let curseforgeGameVersionIdsText = "";
-  let configLoading = false;
-  let configSaving = false;
-  let publishingTarget: string | null = null;
-  let publishResults: Record<string, PublishResult> = {};
-  let publishErrors: Record<string, string> = {};
+  });
+  let curseforgeGameVersionIdsText = $state("");
+  let configLoading = $state(false);
+  let configSaving = $state(false);
+  let publishingTarget = $state<string | null>(null);
+  let publishResults = $state<Record<string, PublishResult>>({});
+  let publishErrors = $state<Record<string, string>>({});
+  let selectedTargets = $state<Record<string, boolean>>({ github: true, modrinth: true, curseforge: true });
 
-  let exportLoading: string | null = null;
-  let githubRelease: any = null;
-  let githubLoading = false;
-  let loading = false;
-  let error = "";
-  let message = "";
+  let exportLoading = $state<string | null>(null);
+  let githubRelease = $state<any>(null);
+  let githubLoading = $state(false);
+  let loading = $state(false);
+  let error = $state("");
+  let message = $state("");
   let lastLoadedPath: string | null = null;
+
+  const CHECKLIST_LABELS: Record<string, string> = {
+    version: "Version set",
+    validation: "No blocking errors",
+    artifacts: "Artifacts exported",
+    changelog: "Changelog written",
+    snapshot: "Snapshot created",
+    publish_target: "Publish target configured (GitHub repo or Modrinth project)",
+  };
 
   function parseGameVersionIds(text: string): number[] {
     return text
@@ -170,6 +184,16 @@
     }
   }
 
+  async function publishAllSelected() {
+    for (const target of ["github", "modrinth", "curseforge"]) {
+      if (selectedTargets[target] && canPublish(target)) await publish(target);
+    }
+  }
+
+  function showPublishSummary() {
+    message = `Dry-run: ${Object.entries(selectedTargets).filter(([, selected]) => selected).map(([target]) => target).join(", ") || "no channels selected"}.`;
+  }
+
   async function openPublishUrl(url?: string | null) {
     if (!url) return;
     try {
@@ -222,7 +246,7 @@
     }
   }
 
-  async function exportArtifact(kind: "mrpack" | "server" | "prism" | "curseforge") {
+  async function exportArtifact(kind: "mrpack" | "server" | "prism" | "curseforge" | "packwiz") {
     if (!$projectPath) return;
     exportLoading = kind;
     error = "";
@@ -232,7 +256,8 @@
       if (kind === "mrpack") result = await api.export.modrinthPack(null, $projectPath);
       else if (kind === "server") result = await api.export.serverPack(null, $projectPath);
       else if (kind === "prism") result = await api.export.prismInstance(null, $projectPath);
-      else result = await api.export.curseforgePack(null, $projectPath);
+      else if (kind === "curseforge") result = await api.export.curseforgePack(null, $projectPath);
+      else result = await api.export.packwizPack(null, $projectPath);
       message = `Exported ${kind}: ${result.path}`;
       await refresh();
     } catch (e) {
@@ -249,6 +274,11 @@
     } catch (e) {
       error = String(e);
     }
+  }
+
+  function incrementVersion(part: "patch" | "minor" | "major") {
+    const [major = 0, minor = 0, patch = 0] = version.split(".").map((value) => Number.parseInt(value, 10) || 0);
+    version = part === "major" ? `${major + 1}.0.0` : part === "minor" ? `${major}.${minor + 1}.0` : `${major}.${minor}.${patch + 1}`;
   }
 
   async function saveVersion() {
@@ -315,20 +345,35 @@
     void refresh();
   }
 
-  $: errorCount = issues.filter((issue) => issue.severity === "error").length;
-  $: warningCount = issues.filter((issue) => issue.severity === "warning").length;
-  $: checklist.version = Boolean(version.trim());
-  $: checklist.validation = errorCount === 0;
-  $: checklist.artifacts = artifacts.length > 0;
-  $: checklist.changelog = changelog.trim().length > 0;
-  $: releaseReady = Object.values(checklist).every(Boolean);
-  $: onProjectPathChange($projectPath);
+  const errorCount = $derived(issues.filter((issue) => issue.severity === "error").length);
+  const warningCount = $derived(issues.filter((issue) => issue.severity === "warning").length);
+  $effect(() => {
+    checklist.version = Boolean(version.trim());
+  });
+  $effect(() => {
+    checklist.validation = errorCount === 0;
+  });
+  $effect(() => {
+    checklist.artifacts = artifacts.length > 0;
+  });
+  $effect(() => {
+    checklist.changelog = changelog.trim().length > 0;
+  });
+  $effect(() => {
+    checklist.publish_target =
+      publishConfig.githubRepository.trim().length > 0 ||
+      publishConfig.modrinthProjectId.trim().length > 0;
+  });
+  const releaseReady = $derived(Object.values(checklist).every(Boolean));
+  $effect(() => {
+    onProjectPathChange($projectPath);
+  });
 </script>
 
-<div class="release-room">
+<div class="release-room bg-black/30 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] p-6">
   <div class="toolbar">
     <div class="title"><Rocket size={18} /> Release room</div>
-    <button class="ghost" on:click={refresh} disabled={!$projectPath || loading}>
+    <button class="ghost" onclick={refresh} disabled={!$projectPath || loading}>
       <RefreshCw size={16} class={loading ? "spin" : ""} /> Refresh
     </button>
   </div>
@@ -342,57 +387,31 @@
     <div class="layout">
       <section class="panel release-panel">
         <h2>Version & ship</h2>
-        <label>
-          Release version
-          <div class="version-row">
-            <input bind:value={version} placeholder="1.0.0" />
-            <button class="secondary" on:click={saveVersion} disabled={loading || !version.trim()}>
-              <Tag size={16} /> Save version
-            </button>
-          </div>
-        </label>
+        <ReleaseMetrics
+          bind:version
+          changedMods={warningCount + errorCount}
+          components={changelog.split("\n").filter(Boolean).length}
+          onSave={saveVersion}
+          onIncrement={incrementVersion}
+        />
 
-        <div class="scorecards">
-          <div class:error-card={errorCount > 0}><strong>{errorCount}</strong><span>blocking errors</span></div>
-          <div class:warning-card={warningCount > 0}><strong>{warningCount}</strong><span>warnings</span></div>
-          <div><strong>{changelog.split("\n").filter(Boolean).length}</strong><span>changelog lines</span></div>
-        </div>
-
-        <div class="publish-config">
-          <h3>Publish config</h3>
-          <p class="config-hint">Per-project IDs used by Publish. Tokens stay in Settings → Integrations.</p>
-          <label>
-            GitHub repository
-            <input bind:value={publishConfig.githubRepository} placeholder="owner/repository" />
-          </label>
-          <label>
-            Modrinth project id / slug
-            <input bind:value={publishConfig.modrinthProjectId} placeholder="project-slug" />
-          </label>
-          <label>
-            CurseForge project id
-            <input bind:value={publishConfig.curseforgeProjectId} placeholder="123456" />
-          </label>
-          <label>
-            CurseForge game version ids
-            <input bind:value={curseforgeGameVersionIdsText} placeholder="9008, 9990" />
-          </label>
-          <div class="target-actions">
-            <button class="secondary mini" on:click={savePublishConfig} disabled={configSaving || configLoading}>
-              <Save size={12} /> {configSaving ? "Saving…" : "Save config"}
-            </button>
-          </div>
-        </div>
+        <PublishPlatformsConfig
+          bind:config={publishConfig}
+          bind:gameVersionIdsText={curseforgeGameVersionIdsText}
+          configSaving={configSaving}
+          configLoading={configLoading}
+          onSave={savePublishConfig}
+        />
 
         <div class="publish-targets">
           <h3>Export & publish</h3>
           <div class="publish-target">
             <div><strong>Modrinth</strong><span>{targetState("modrinth")}</span></div>
             <div class="target-actions">
-              <button class="secondary mini" on:click={() => exportArtifact("mrpack")} disabled={!!exportLoading || errorCount > 0}>
+              <button class="secondary mini" onclick={() => exportArtifact("mrpack")} disabled={!!exportLoading || errorCount > 0}>
                 {exportLoading === "mrpack" ? "…" : "Export .mrpack"}
               </button>
-              <button class="mini" on:click={() => publish("modrinth")} disabled={!canPublish("modrinth")}>
+              <button class="mini" onclick={() => publish("modrinth")} disabled={!canPublish("modrinth")}>
                 <UploadCloud size={12} /> {publishingTarget === "modrinth" ? "Publishing…" : "Publish"}
               </button>
             </div>
@@ -401,7 +420,7 @@
               <small class="pub-ok">
                 id {publishResults.modrinth.id}
                 {#if publishResults.modrinth.url}
-                  · <button class="linkish" on:click={() => openPublishUrl(publishResults.modrinth.url)}>{publishResults.modrinth.url}</button>
+                  · <button class="linkish" onclick={() => openPublishUrl(publishResults.modrinth.url)}>{publishResults.modrinth.url}</button>
                 {/if}
               </small>
             {/if}
@@ -410,10 +429,10 @@
           <div class="publish-target">
             <div><strong>CurseForge</strong><span>{targetState("curseforge")}</span></div>
             <div class="target-actions">
-              <button class="secondary mini" on:click={() => exportArtifact("curseforge")} disabled={!!exportLoading || errorCount > 0}>
+              <button class="secondary mini" onclick={() => exportArtifact("curseforge")} disabled={!!exportLoading || errorCount > 0}>
                 {exportLoading === "curseforge" ? "…" : "Export zip"}
               </button>
-              <button class="mini" on:click={() => publish("curseforge")} disabled={!canPublish("curseforge")}>
+              <button class="mini" onclick={() => publish("curseforge")} disabled={!canPublish("curseforge")}>
                 <UploadCloud size={12} /> {publishingTarget === "curseforge" ? "Publishing…" : "Publish"}
               </button>
             </div>
@@ -422,7 +441,7 @@
               <small class="pub-ok">
                 id {publishResults.curseforge.id}
                 {#if publishResults.curseforge.url}
-                  · <button class="linkish" on:click={() => openPublishUrl(publishResults.curseforge.url)}>{publishResults.curseforge.url}</button>
+                  · <button class="linkish" onclick={() => openPublishUrl(publishResults.curseforge.url)}>{publishResults.curseforge.url}</button>
                 {/if}
               </small>
             {/if}
@@ -431,10 +450,10 @@
           <div class="publish-target">
             <div><strong>GitHub Releases</strong><span>{targetState("github")}</span></div>
             <div class="target-actions">
-              <button class="secondary mini" on:click={generateGithubRelease} disabled={githubLoading}>
+              <button class="secondary mini" onclick={generateGithubRelease} disabled={githubLoading}>
                 {githubLoading ? "…" : "Prepare notes"}
               </button>
-              <button class="mini" on:click={() => publish("github")} disabled={!canPublish("github")}>
+              <button class="mini" onclick={() => publish("github")} disabled={!canPublish("github")}>
                 <UploadCloud size={12} /> {publishingTarget === "github" ? "Publishing…" : "Publish"}
               </button>
             </div>
@@ -443,7 +462,7 @@
               <small class="pub-ok">
                 id {publishResults.github.id}
                 {#if publishResults.github.url}
-                  · <button class="linkish" on:click={() => openPublishUrl(publishResults.github.url)}>{publishResults.github.url}</button>
+                  · <button class="linkish" onclick={() => openPublishUrl(publishResults.github.url)}>{publishResults.github.url}</button>
                 {/if}
               </small>
             {/if}
@@ -456,7 +475,7 @@
             {#each Object.entries(checklist) as [key, done] (key)}
               <label class:done>
                 <input type="checkbox" bind:checked={checklist[key]} />
-                <span>{key}</span>
+                <span>{CHECKLIST_LABELS[key] ?? key}</span>
               </label>
             {/each}
             <div class="ready" class:ok={releaseReady}>{releaseReady ? "Ready to ship" : "Release not ready yet"}</div>
@@ -466,13 +485,16 @@
         <div class="quick-exports">
           <h3>Quick exports</h3>
           <div class="export-btns">
-            <button class="secondary mini" on:click={() => exportArtifact("server")} disabled={!!exportLoading}>
+            <button class="secondary mini" onclick={() => exportArtifact("server")} disabled={!!exportLoading}>
               <Server size={12} /> {exportLoading === "server" ? "…" : "Server pack"}
             </button>
-            <button class="secondary mini" on:click={() => exportArtifact("prism")} disabled={!!exportLoading}>
+            <button class="secondary mini" onclick={() => exportArtifact("prism")} disabled={!!exportLoading}>
               <Package size={12} /> {exportLoading === "prism" ? "…" : "Prism zip"}
             </button>
-            <button class="ghost mini" on:click={openProjectFolder}>
+            <button class="secondary mini" onclick={() => exportArtifact("packwiz")} disabled={!!exportLoading}>
+              <FolderTree size={12} /> {exportLoading === "packwiz" ? "…" : "Packwiz"}
+            </button>
+            <button class="ghost mini" onclick={openProjectFolder}>
               <FolderOpen size={12} /> Open folder
             </button>
           </div>
@@ -488,7 +510,7 @@
                 <strong>{artifact.kind}</strong>
                 <span>{artifact.path}</span>
                 <small>{artifact.fileCount} files · {artifact.overrideCount} overrides</small>
-                <button class="ghost mini" on:click={() => copyArtifactPath(artifact.path)}>Copy path</button>
+                <button class="ghost mini" onclick={() => copyArtifactPath(artifact.path)}>Copy path</button>
               </div>
             {/each}
           {/if}
@@ -512,7 +534,7 @@
           <div class="github-preview">
             <h4>GitHub Release notes: {githubRelease.tagName}</h4>
             <div class="github-actions">
-              <button class="secondary mini" on:click={copyReleaseBody}>Copy body</button>
+              <button class="secondary mini" onclick={copyReleaseBody}>Copy body</button>
               <span class="gh-meta">{githubRelease.artifactCount} artifacts · release.json saved</span>
             </div>
             <pre class="gh-body-preview">{githubRelease.body?.slice(0, 2000)}{githubRelease.body?.length > 2000 ? "..." : ""}</pre>
@@ -520,63 +542,62 @@
         {/if}
 
         <div class="release-actions">
-          <button class="secondary" on:click={createReleaseDraft} disabled={loading || !changelog.trim()}>
-            <Rocket size={16} /> Create release draft
-          </button>
-          <button on:click={createReleaseSnapshot} disabled={loading || errorCount > 0}>
-            <Camera size={16} /> Create release snapshot
-          </button>
-        </div>
+                  <button class="primary-emerald" onclick={createReleaseDraft} disabled={loading || !changelog.trim()}>
+                    <Rocket size={16} /> Create release draft
+                  </button>
+                  <button onclick={createReleaseSnapshot} disabled={loading || errorCount > 0}>
+                    <Camera size={16} /> Create release snapshot
+                  </button>
+                </div>
       </section>
 
-      <section class="panel changelog-panel">
-        <div class="changelog-header">
-          <div>
-            <h2>Changelog</h2>
-            <p>Generated from manifest, brief, diagnostics, mods and recent snapshots. Edit before publishing or creating a release snapshot.</p>
-          </div>
-          <button class="secondary" on:click={refresh} disabled={loading}>Regenerate</button>
-        </div>
-        <textarea bind:value={changelog} spellcheck="false"></textarea>
-      </section>
+      <ChangelogEditor bind:value={changelog} onRegenerate={refresh} onAi={generateGithubRelease} disabled={loading || githubLoading} />
+    </div>
+    <div class="sticky bottom-3 z-20 mt-4 flex flex-col gap-4 rounded-2xl border border-emerald-500/20 bg-neutral-950/90 p-4 shadow-[0_0_25px_rgba(16,185,129,0.12)] backdrop-blur-2xl lg:flex-row lg:items-center lg:justify-between">
+      <div class="flex flex-wrap gap-3 text-xs text-neutral-300">
+        {#each ["github", "modrinth", "curseforge"] as target}
+          <label class="flex items-center gap-2"><input type="checkbox" checked={selectedTargets[target]} onchange={(event) => selectedTargets = { ...selectedTargets, [target]: event.currentTarget.checked }} /> {target === "github" ? "GitHub" : target === "modrinth" ? "Modrinth" : "CurseForge"}</label>
+        {/each}
+      </div>
+      <div class="flex flex-wrap items-center gap-2"><button type="button" class="rounded-xl border border-white/10 px-4 py-3 text-sm text-neutral-200 hover:bg-white/10" onclick={showPublishSummary}>Предпросмотр перед отправкой</button><button type="button" class="rounded-xl bg-emerald-600 px-8 py-3 font-bold text-white shadow-[0_0_20px_rgba(16,185,129,0.35)] hover:bg-emerald-500" onclick={publishAllSelected} disabled={!!publishingTarget || errorCount > 0}>Опубликовать релиз во всех каналах</button></div>
     </div>
   {/if}
 </div>
 
 <style>
-  .release-room { max-width: none; width: 100%; }
+  .release-room { max-width: min(1240px, 100%); margin: 0 auto; width: 100%; }
   .toolbar, .title, .notice, .version-row, .changelog-header { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; margin-bottom: 16px; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .notice { gap: 10px; padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .layout { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 16px; }
-  .panel, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
-  .panel { padding: 18px; }
-  .release-panel { display: grid; gap: 18px; align-content: start; }
-  label { display: grid; gap: 8px; color: var(--text-secondary); font-weight: 700; }
-  .version-row { gap: 10px; }
-  .version-row input { flex: 1; }
-  .scorecards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-  .scorecards div { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 14px; padding: 12px; display: grid; gap: 3px; }
-  .scorecards strong { font-size: 24px; }
-  .scorecards span, .changelog-header p { color: var(--text-muted); font-size: 12px; }
-  .error-card { border-color: rgba(239, 68, 68, 0.35) !important; color: #fecaca; }
-  .warning-card { border-color: rgba(245, 158, 11, 0.35) !important; color: #fde68a; }
-  .release-checklist, .artifact-list, .publish-targets, .publish-config { display: grid; gap: 8px; }
-  .release-checklist-details { border: 1px solid var(--border-color); border-radius: var(--border-radius-md); background: var(--bg-tertiary); }
-  .release-checklist-details summary { padding: 10px 12px; cursor: pointer; color: var(--text-secondary); font-size: 14px; font-weight: 700; list-style: none; }
-  .release-checklist-details summary::-webkit-details-marker { display: none; }
-  .release-checklist-details .release-checklist { padding: 0 12px 12px; }
-  .release-checklist h3, .artifact-list h3, .publish-targets h3, .publish-config h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
-  .config-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
-  .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); text-transform: none; letter-spacing: 0; }
-  .release-checklist label.done { border-color: rgba(27, 217, 106, .28); }
-  .release-checklist input { width: auto; }
-  .ready { padding: 9px 10px; border-radius: var(--border-radius-md); color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-  .ready.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, .35); }
-  .publish-target { display: grid; gap: 8px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+    .panel { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--border-radius-lg); backdrop-filter: blur(20px); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35); }
+    .panel { padding: 18px; }
+    .release-panel { display: grid; gap: 18px; align-content: start; }
+    label { display: grid; gap: 8px; color: var(--text-secondary); font-weight: 700; }
+    .version-row { gap: 10px; }
+    .version-row input { flex: 1; }
+    .scorecards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .scorecards div { background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 12px; display: grid; gap: 3px; }
+    .scorecards strong { font-size: 24px; }
+    .scorecards span, .changelog-header p { color: var(--text-muted); font-size: 12px; }
+    .error-card { border-color: rgba(239, 68, 68, 0.35) !important; color: #fecaca; }
+    .warning-card { border-color: rgba(245, 158, 11, 0.35) !important; color: #fde68a; }
+    .release-checklist, .artifact-list, .publish-targets, .publish-config { display: grid; gap: 8px; }
+    .release-checklist-details { border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--border-radius-md); background: rgba(255, 255, 255, 0.03); }
+    .release-checklist-details summary { padding: 10px 12px; cursor: pointer; color: var(--text-secondary); font-size: 14px; font-weight: 700; list-style: none; }
+    .release-checklist-details summary::-webkit-details-marker { display: none; }
+    .release-checklist-details .release-checklist { padding: 0 12px 12px; }
+    .artifact-list h3, .publish-targets h3, .publish-config h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
+    .config-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+    .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--border-radius-md); text-transform: none; letter-spacing: 0; }
+    .release-checklist label.done { border-color: rgba(16, 185, 129, 0.35); }
+    .release-checklist input { width: auto; }
+    .ready { padding: 9px 10px; border-radius: var(--border-radius-md); color: var(--text-muted); background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .ready.ok { color: #34d399; border-color: rgba(16, 185, 129, 0.4); }
+    .publish-target { display: grid; gap: 8px; padding: 10px; border-radius: var(--border-radius-md); background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
   .publish-target > div:first-child { display: grid; gap: 3px; }
   .target-actions, .export-btns { display: flex; gap: 6px; flex-wrap: wrap; }
   .quick-exports { display: grid; gap: 8px; }
@@ -590,13 +611,30 @@
   .artifact-row strong { color: var(--text-primary); text-transform: uppercase; font-size: 12px; }
   .artifact-row span, .artifact-row small, .muted-box { color: var(--text-muted); font-size: 12px; word-break: break-all; }
   .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
+  .primary-emerald {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 9px 18px;
+    border: none;
+    border-radius: 999px;
+    background: #059669;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+  }
+  .primary-emerald:hover:not(:disabled) { background: #10b981; box-shadow: 0 0 20px rgba(16, 185, 129, 0.3); }
+  .primary-emerald:disabled { opacity: 0.5; cursor: default; }
   .release-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .issues { display: grid; gap: 8px; }
   .issue { display: grid; gap: 4px; padding: 12px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .issue.warning { border-color: rgba(245, 158, 11, 0.3); }
   .issue.error { border-color: rgba(239, 68, 68, 0.3); }
   .issue.ok { color: var(--accent-primary); display: flex; align-items: center; gap: 8px; }
-  .github-preview { margin-top: 14px; padding: 14px; border: 1px solid rgba(139,92,246,.25); border-radius: var(--border-radius-lg); background: rgba(139,92,246,.03); }
+  .github-preview { margin-top: 14px; padding: 14px; border: 1px solid color-mix(in srgb, var(--accent-secondary) 25%, transparent); border-radius: var(--border-radius-lg); background: color-mix(in srgb, var(--accent-secondary) 3%, transparent); }
   .github-preview h4 { color: var(--accent-secondary); margin: 0 0 8px; font-size: 14px; }
   .github-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
   .gh-meta { color: var(--text-muted); font-size: 11px; }
@@ -605,9 +643,9 @@
   .issue span { color: var(--text-muted); }
   code { color: var(--text-secondary); font-family: ui-monospace, monospace; }
   .changelog-panel { overflow: hidden; display: flex; flex-direction: column; min-height: 680px; }
-  .changelog-header { justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color); margin-bottom: 0; }
-  textarea { flex: 1; resize: none; min-height: 600px; border: 0; outline: none; background: #09090b; color: #e5e7eb; padding: 18px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height: 1.6; }
-  .empty { color: var(--text-muted); padding: 80px; text-align: center; }
+    .changelog-header { justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 0; }
+    textarea { flex: 1; resize: none; min-height: 600px; border: 0; outline: none; background: rgba(0, 0, 0, 0.35); color: #e5e7eb; padding: 18px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height: 1.6; }
+  /* (removed dead .empty rule — no element uses it) */
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }

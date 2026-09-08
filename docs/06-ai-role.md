@@ -6,13 +6,14 @@
 
 ИИ — это помощник для анализа логов, объяснений и генерации гипотез. Исполняет изменения только детерминированный код лаунчера после подтверждения пользователя.
 
-## Три контура (не смешивать контракты)
+## Четыре контура (не смешивать контракты)
 
 | Контур | Контракт | UI | Источник |
 |--------|----------|-----|----------|
 | **Create Mode** | `PackBrief` → `PackDraft` | Sidebar **Chats** | LLM + catalog assemble |
 | **Ideas** | `{ slug, count, name? }` | Content modal | Co-occurrence graph (**не** LLM) |
 | **Crash diagnose** | `ActionPlan` | IDE **Diagnose** | LLM / KB / swarm lookup |
+| **Tune Config Advisor** | `ActionPlan` (`edit_config` only) | IDE **Tune** AI sidebar | LLM + local hints + allowlisted web research |
 
 Общая грамматика для игрока:
 
@@ -21,8 +22,8 @@ Context → Proposal → Review (чекбоксы / risk) → Confirm → valida
 ```
 
 - ИИ / граф **предлагает**; игрок **решает**; лаунчер **исполняет**.
-- Create Mode **не** эмитит ActionPlan; Ideas **не** зовёт crash planner.
-- Review UI обязателен: ActionPlanReviewPanel / DraftConfirmPanel / Ideas checkboxes — **не** silent `window.confirm` как единственный шаг (confirm может остаться только для Test-launch prompt).
+- Create Mode **не** эмитит ActionPlan; Ideas **не** зовёт crash planner; Tune Advisor **не** ставит/удаляет моды.
+- Review UI обязателен: ActionPlanReviewPanel / TunePlanReview / DraftConfirmPanel / Ideas checkboxes — **не** silent `window.confirm` как единственный шаг (confirm может остаться только для Test-launch prompt).
 
 ## Dual-mode диагностика крашей
 
@@ -34,15 +35,26 @@ Context → Proposal → Review (чекбоксы / risk) → Confirm → valida
 | **`local`** | `POST /v1/crash/lookup` → top-N similar cases в prompt → Ollama / openai-compatible → тот же `ActionPlan`. |
 | **`kb_only`** | Только matched case → plan из `actions` кейса, без LLM. |
 
+При `swarm.enabled` + `p2p_enabled` между сильным KB/capsule short-circuit (L1) и LLM (L3)
+вставляется **L2 Fog volunteer** (см. Crash Diagnose Cascade в [`13-tuffswarm-network.md`](13-tuffswarm-network.md)).
+Режим `kb_only` остаётся без L2/L3 LLM.
+
+**L3 draft→verify (opt-in):** `ai.speculativeDecoding` + `ai.draftModel` (Settings → AI).
+Маленькая локальная draft-модель предлагает ActionPlan JSON → основная модель валидирует/переписывает.
+Не token-level `llama-cpp-2` (это отдельный будущий cargo feature); не в Fog node.
+
 Приватный корпус KB **никогда не шипится** в лаунчер. Builtin seed в клиенте — тонкий offline fallback.
 
 ```text
 Crash logs
 → local fingerprint + inventory
-→ DiagnoseMode router
-→ ActionPlan JSON (единый контракт)
+→ L1 strong KB/capsule hit? → ActionPlan
+→ else L2 Fog volunteer (opt-in P2P)? → ActionPlan
+→ else DiagnoseMode router (L3 server/local/heuristics) → ActionPlan
 → validate → UI confirm → snapshot → apply
 ```
+
+L3 Explain prompt includes Diagnose **group-test covering** and decoded **player-trail covering** as launcher facts (not raw enable/disable journal). Priority: verified group test > trail covering > culprits/KB.
 
 API (ваш сервер):
 
@@ -55,7 +67,7 @@ API (ваш сервер):
 - объяснение stacktrace;
 - гипотезы и ранжирование подозрительных модов;
 - предложение **структурированного** плана (`ActionPlan`);
-- помощь с config values (через `edit_config`);
+- помощь с config values (через `edit_config`) — контур **Tune Config Advisor** во вкладке Tune;
 - предложение **квестовых глав** (`QuestPlan`) для FTB Quests editor.
 
 ## Что делает код
@@ -80,7 +92,7 @@ API (ваш сервер):
 
 **AI Decision making** (порядок рассуждения перед JSON):
 
-1. **Understand the context** — только shared info из промпта (MC/loader/Java, inventory, culprits, findings, KB, graph, excerpts).
+1. **Understand the context** — только shared info из промпта (MC/loader/Java, inventory, **group-test covering**, **player-trail covering**, culprits, findings, KB, graph, excerpts). Приоритет фактов: verified group test > trail covering > culprits/KB. Не сжимать covering из нескольких модов в один «главный».
 2. **Isolate the problem** — одна primary root cause; ранний hard failure важнее cascading noise.
 3. **Accept the risk** — у каждого action явный `risk`; `needsUserReview` / `confidence` честные.
 4. **Map decision** — минимальный набор `actions` с `op`, reason ↔ isolated cause.
@@ -215,27 +227,87 @@ Fingerprint подставляется автоматически из теку�
 | Контур | Роль |
 |--------|------|
 | **AI Explain** | Диагностика текущего краша; может **читать** сеть (lookup/diagnose); **не** публикует капсулы |
-| **Resolution Distill** | После verified fix: сжать историю действий пользователя → показать план → **Confirm/Edit** → только тогда publish |
+| **Resolution Distill** | После verified fix: **group test** — `disable_mod` на isolated covering; **player trail** — decode (healthy ⇒ enabled чистые), шарить covering без выдуманного корня; **встроенный ИИ** — можно сжать в минимальный план → **Confirm/Edit** → только тогда publish |
 
 Authored export из Diagnostics («Save KB case») — прямой вход в capsule format для будущей сети.
 
+## Tune Config Advisor
+
+Отдельный контур во вкладке **Tune** (сайдбар Config AI). Промпт: `TUNE_CONFIG_SYSTEM_PROMPT` в `tuffbox_core::tune_config_ai`.
+
+```text
+Goal / chat
+→ TuneContext (inventory, open file, key hints from comments, deterministic templates)
+→ LLM draft ActionPlan (edit_config only) + unknownKeys / researchQueries
+→ optional allowlisted web research (Settings → AI → tuneWebResearch)
+→ refine → validate_tune_action_plan
+→ TunePlanReview (checkboxes + dry-run diff) → Confirm → apply_action_plan → snapshot
+```
+
+Правила:
+
+- Только `op: edit_config` (`json_merge` | `toml_set` | `properties_set` | `replace_file`).
+- Неизвестный ключ **не** выдумывается: research (Modrinth / wiki.gg / GitHub / …) или остаётся в `unknownKeys`.
+- Silent rewrite запрещён — всегда Review.
+- Optimize Pack «Use AI for configs» вызывает тот же advisor (goal `fps_client`).
+
+### Ручной чеклист
+
+1. Tune → AI → **Explain file** на открытом toml без сети — explanation, `actions=[]`.
+2. **FPS** chip — plan с `edit_config`, Review показывает diff, Apply → snapshot, буфер обновляется.
+3. **Fill unknowns** на редком моде — researchLog в UI; Settings → выключить web research → skip lookup.
+4. Rollback через Snapshots после Apply.
+
 ## Create Mode (PackBrief → PackDraft)
 
-Sidebar **Chats**: игрок описывает сборку → ИИ (или Quick assemble) предлагает `PackBrief` → лаунчер собирает `PackDraft` поиском по Modrinth (версии выбирает код, не LLM).
+Sidebar **Chats**: игрок описывает сборку → ИИ (или Quick assemble) предлагает `PackBrief` → лаунчер собирает `PackDraft` поиском по каталогам (версии / `file_id` / SHA выбирает **код**, не LLM).
+
+### Фазы пайплайна
+
+```text
+Intent → Catalog → Rank (optional) → Curate loop (pillars + co-occur) → InstallPreview → Confirm → Snapshot → install_pack_draft
+→ Open Content / Resolve
+```
+
+| Фаза | Кто | Контракт / данные |
+|------|-----|-------------------|
+| **Intent** | LLM (или Quick heuristic) | `{ reply, search, brief }` — `search.{loader,version,theme,keywords}` + `brief` (бюджеты `categories[]`, `mustHave[]`, `exclude[]`). Маркетинговые «categories» = `brief.categories[]` + `search.keywords`. |
+| **Catalog** | Launcher HTTP | Modrinth primary + CurseForge fallback/bridge → `PackDraft` / candidate pool (slug, name, desc — **не** jar URL). Progress: `phase=catalog`. |
+| **Rank** | LLM (опционально; Quick без Rank) | Кандидаты обратно в prompt (`CREATE_MODE_REFINE_PROMPT`) → только slugs / mustHave / exclude. Никогда URL / `file_id` / SHA. |
+| **Curate** | Launcher + LLM Reviewer | `curate_pack_loop`: gameplay **pillars** из brief/NL; co-occurrence priors из Supabase (`partners_for_mod` + MPI graph) + local trends; compact cards; verdict JSON; `launcher_score` владеет best; `is_complete` запрещён при unmet priority-1. Stop: `complete` / `stuck` / `pillars_unmet` / `max_iterations`. |
+| **InstallPreview** | Launcher | Resolve совместимых версий + hashes (MR/CF metadata) + dest path + skip-if-installed. |
+| **ConfirmInstall** | User + Launcher | DraftConfirmPanel → `confirmed: true` → snapshot → `install_pack_draft`. |
 
 ```text
 Описание
-→ PackBrief / Quick heuristic
-→ assemble_pack_draft
-→ DraftConfirmPanel (чекбоксы модов)
+→ Intent (PackBrief / Quick)
+→ Catalog (assemble_pack_draft)
+→ Rank with AI (optional) / Curate (recommended)
+→ InstallPreview (preview_pack_draft)
+→ DraftConfirmPanel
 → confirm → snapshot → install_pack_draft
 → Open Content / Resolve
 ```
 
+**Curation invariants**
+
+- Pillars first: QoL/performance-only packs are a failure even without conflicts.
+- Launcher recomputes pillar coverage; LLM `coverage_score` is tie-break only.
+- Role caps: performance+library ≲15%, support ≲20% of `targetCount`.
+- Co-occurrence prior даёт **slugs** для поиска/mustHave — не jar URL / `file_id`.
+- Per-iteration: keyword catalog (cached) → cheap `graph_hints` (duplicate / overload / common deps) → Reviewer.
+- Potato PC (`launcher_settings.potato_pc`): default maxIter=3, 24 cards, no SearchRole LLM, lighter hints, 120s budget.
+- Stop reasons: `complete` | `stuck` | `pillars_unmet` | `max_iterations` | `timeout` | `cancelled` | `empty_pool` | `ai_down`.
+- Cancel: `cancel_curate_pack_loop` (cooperative, between iterations).
+- `rank_pack_draft` = `curate_pack_loop(..., maxIterations=1)` (thin alias).
+- Session persist: `CreateChatSession.curation` restores pillar checklist after reload.
+- Core: `tuffbox_core::create_mode_curation`; command: `curate_pack_loop`.
+
 Жёсткие правила:
 
-- ИИ **не** эмитит ActionPlan и **не** выбирает `file_id`.
+- ИИ **не** эмитит ActionPlan и **не** выбирает `file_id` / jar URL / checksums.
 - Install только после явного Confirm (`confirmed: true`).
+- «Песочница» install = project mods path + provider download + snapshot rollback (отдельный FsScope API не требуется).
 - Creation Marketplace / remote GPU — отдельный Phase D, не этот путь.
 
 ## Ideas (Often installed together)

@@ -224,10 +224,7 @@ pub fn fetch_version_detail(url: &str) -> Result<VersionDetail, String> {
 }
 
 /// Looks up a version by ID in the manifest, returning its detail URL.
-pub fn find_version<'a>(
-    manifest: &'a VersionManifest,
-    id: &str,
-) -> Option<&'a VersionEntry> {
+pub fn find_version<'a>(manifest: &'a VersionManifest, id: &str) -> Option<&'a VersionEntry> {
     manifest.versions.iter().find(|v| v.id == id)
 }
 

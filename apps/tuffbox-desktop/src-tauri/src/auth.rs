@@ -3,22 +3,28 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 const KEYRING_SERVICE: &str = "dev.tuffbox.ide";
+/// Azure AD public client (device-code flow when microsoftonline is reachable).
 const MICROSOFT_CLIENT_ID: &str = "89484d4e-6ac2-4643-a786-21386f3269c5";
-/// Official Minecraft launcher public client — used for device code + auth-code URL login.
+/// Official Minecraft launcher public client — live.com auth-code / WebView login.
+const MS_LIVE_CLIENT_ID: &str = "00000000402b5328";
 const MS_OAUTH_TOKEN_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
 const MS_OAUTH_AUTHORIZE_URL: &str =
     "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
 const MS_OAUTH_DEVICE_CODE_URL: &str =
     "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
+const MS_LIVE_AUTHORIZE_URL: &str = "https://login.live.com/oauth20_authorize.srf";
+const MS_LIVE_TOKEN_URL: &str = "https://login.live.com/oauth20_token.srf";
 const MS_REDIRECT_NATIVE: &str = "https://login.microsoftonline.com/common/oauth2/nativeclient";
 const MS_REDIRECT_LIVE_DESKTOP: &str = "https://login.live.com/oauth20_desktop.srf";
 const MS_SCOPE: &str = "XboxLive.signin offline_access";
 const MC_PROFILE_URL: &str = "https://api.minecraftservices.com/minecraft/profile";
+const MS_AUTH_WINDOW_LABEL: &str = "ms-auth";
 
 // Mutex protecting concurrent reads/writes to auth.json and mc_accounts.json.
 // Lock is held only during file I/O (brief), so a std::sync::Mutex is fine
@@ -231,6 +237,31 @@ struct TextureInfo {
 
 // ─── Multi-account types ─────────────────────────────────────────
 
+/// Which Microsoft OAuth endpoint issued the refresh token.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MsOauthBackend {
+    #[default]
+    Azure,
+    Live,
+}
+
+impl MsOauthBackend {
+    fn client_id(self) -> &'static str {
+        match self {
+            Self::Azure => MICROSOFT_CLIENT_ID,
+            Self::Live => MS_LIVE_CLIENT_ID,
+        }
+    }
+
+    fn token_url(self) -> &'static str {
+        match self {
+            Self::Azure => MS_OAUTH_TOKEN_URL,
+            Self::Live => MS_LIVE_TOKEN_URL,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountEntry {
@@ -242,6 +273,9 @@ pub struct AccountEntry {
     /// Yggdrasil / authlib-injector API root (e.g. Ely.by, LittleSkin).
     #[serde(default)]
     pub authority: Option<String>,
+    /// Microsoft OAuth backend for refresh (`azure` device-code vs `live` WebView/paste).
+    #[serde(default)]
+    pub ms_oauth_backend: Option<MsOauthBackend>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -348,6 +382,15 @@ fn load_auth_state() -> AuthState {
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default()
+}
+
+/// Disk-only auth snapshot (no Microsoft refresh) for home bootstrap P0.
+pub(crate) fn cached_auth_state() -> AuthState {
+    let mut state = load_auth_state();
+    let accounts = load_accounts_file();
+    state.accounts = accounts.accounts;
+    state.active_account_uuid = accounts.active_account_uuid;
+    state
 }
 
 fn save_auth_state(state: &AuthState) -> Result<(), String> {
@@ -543,13 +586,29 @@ async fn fetch_skin_for_username(username: &str, source: &SkinSource) -> Option<
     }
 }
 
+/// Short-timeout client for cheap existence probes (capes can be dead URLs).
+fn probe_client() -> Result<Client, String> {
+    // Task: cape probes chained HEAD→GET with 8s timeouts made first load hang
+    // for tens of seconds when a host was slow/down. 4s is plenty for a probe.
+    Client::builder()
+        .timeout(Duration::from_secs(4))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
 /// Probe whether a remote URL returns an image (used for OptiFine / TL capes).
+///
+/// Uses HEAD first — it costs one round-trip instead of downloading the whole
+/// PNG. Falls back to a header-only GET (body is never read) for hosts that
+/// reject HEAD.
 async fn probe_image_url(url: &str) -> Option<String> {
-    let c = client().ok()?;
-    let resp = c.get(url).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
+    let c = probe_client().ok()?;
+    let resp = match c.head(url).send().await {
+        Ok(r) if r.status().is_success() => Some(r),
+        _ => c.get(url).send().await.ok(),
+    };
+    let resp = resp.filter(|r| r.status().is_success())?;
     let ct = resp
         .headers()
         .get("content-type")
@@ -574,13 +633,17 @@ async fn fetch_cape_optifine(username: &str) -> Option<String> {
 async fn fetch_cape_tlauncher(username: &str) -> Option<String> {
     let (_, cape) = fetch_tlauncher_textures(username).await;
     if let Some(url) = cape {
-        if probe_image_url(&url).await.is_some() {
-            return Some(url);
-        }
         return Some(url);
     }
-    let direct = format!(
+    let mut direct = format!(
         "https://auth.tlauncher.org/skin/fileservice/cloaks/cloak_{}.png",
+        username.to_lowercase()
+    );
+    if let Some(url) = probe_image_url(&direct).await {
+        return Some(url);
+    }
+    direct = format!(
+        "https://auth.tlauncher.org/skin/fileservice/capes/cape_{}.png",
         username.to_lowercase()
     );
     probe_image_url(&direct).await
@@ -645,6 +708,14 @@ async fn build_cape_catalog(
 ) -> CapeCatalog {
     let mut offers = Vec::new();
 
+    // Probe all external cape sources in parallel — this is the slow part and
+    // was previously done sequentially (twice, via resolve_display_cape).
+    let (mojang_session, optifine_url, tlauncher_url) = tokio::join!(
+        fetch_cape_mojang_session(uuid),
+        fetch_cape_optifine(username),
+        fetch_cape_tlauncher(username),
+    );
+
     for cape in mojang_owned {
         offers.push(CapeOffer {
             provider: CapeProvider::Mojang,
@@ -659,41 +730,61 @@ async fn build_cape_catalog(
         });
     }
     if mojang_owned.is_empty() {
-        if let Some(url) = fetch_cape_mojang_session(uuid).await {
+        if let Some(ref url) = mojang_session {
             offers.push(CapeOffer {
                 provider: CapeProvider::Mojang,
                 id: "mojang-session".into(),
                 label: "Mojang cape".into(),
-                url,
+                url: url.clone(),
                 can_activate: false,
                 active: selected == CapeProvider::Mojang,
             });
         }
     }
 
-    if let Some(url) = fetch_cape_optifine(username).await {
+    if let Some(ref url) = optifine_url {
         offers.push(CapeOffer {
             provider: CapeProvider::Optifine,
             id: "optifine".into(),
             label: "OptiFine cape".into(),
-            url,
+            url: url.clone(),
             can_activate: false,
             active: selected == CapeProvider::Optifine,
         });
     }
 
-    if let Some(url) = fetch_cape_tlauncher(username).await {
+    if let Some(ref url) = tlauncher_url {
         offers.push(CapeOffer {
             provider: CapeProvider::TLauncher,
             id: "tlauncher".into(),
             label: "TLauncher cape".into(),
-            url,
+            url: url.clone(),
             can_activate: false,
             active: selected == CapeProvider::TLauncher,
         });
     }
 
-    let display_url = resolve_display_cape(username, uuid, &selected, mojang_owned).await;
+    offers.push(CapeOffer {
+        provider: CapeProvider::None,
+        id: "none".into(),
+        label: "No cape".into(),
+        url: String::new(),
+        can_activate: true,
+        active: selected == CapeProvider::None,
+    });
+
+    // Derive the display URL from what we already probed — no second network pass.
+    let display_url = match &selected {
+        CapeProvider::None => None,
+        CapeProvider::Mojang => mojang_owned
+            .iter()
+            .find(|c| c.state.eq_ignore_ascii_case("ACTIVE"))
+            .map(|c| c.url.clone())
+            .or_else(|| mojang_owned.first().map(|c| c.url.clone()))
+            .or(mojang_session),
+        CapeProvider::Optifine => optifine_url,
+        CapeProvider::TLauncher => tlauncher_url,
+    };
 
     CapeCatalog {
         selected_provider: selected,
@@ -716,6 +807,9 @@ fn base64_decode(input: &str) -> Option<String> {
 pub struct DeviceCodeInfo {
     pub user_code: String,
     pub verification_uri: String,
+    /// One-click login URL (`verification_uri?otc=user_code`) — same trick MinecraftAuth uses.
+    /// Uses Mojang-approved public client IDs; no Azure app registration required.
+    pub login_url: String,
     pub message: String,
     pub expires_in: u64,
     /// Suggested poll interval in seconds (from Microsoft).
@@ -744,16 +838,40 @@ pub async fn start_device_code_flow() -> Result<(DeviceCodeInfo, String, u64), S
         .json()
         .await
         .map_err(|e| format!("device code parse failed: {e}"))?;
-    // Prefer the short microsoft.com/link page + separate user code UI (not the huge
-    // verification_uri_complete deep-link, which confuses copy/paste flows).
-    let verification_uri = data.verification_uri.clone();
+    let verification_uri = data
+        .verification_uri_complete
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| data.verification_uri.clone());
+    // Prefer Microsoft's complete URI when present; otherwise append ?otc= (MinecraftAuth style).
+    let login_url = if data
+        .verification_uri_complete
+        .as_deref()
+        .map(|u| !u.is_empty())
+        .unwrap_or(false)
+    {
+        verification_uri.clone()
+    } else {
+        format!(
+            "{}{}otc={}",
+            data.verification_uri,
+            if data.verification_uri.contains('?') {
+                "&"
+            } else {
+                "?"
+            },
+            urlencoding_encode(&data.user_code)
+        )
+    };
     let info = DeviceCodeInfo {
         user_code: data.user_code.clone(),
-        verification_uri: verification_uri.clone(),
+        verification_uri: data.verification_uri.clone(),
+        login_url: login_url.clone(),
         message: data.message.unwrap_or_else(|| {
             format!(
-                "Go to {} and enter code: {}",
-                data.verification_uri, data.user_code
+                "Open {} to sign in (code {})",
+                login_url, data.user_code
             )
         }),
         expires_in: data.expires_in,
@@ -1111,9 +1229,13 @@ pub async fn upload_minecraft_skin_bytes(
 
 pub async fn apply_minecraft_cape(mc_token: &str, cape_id: &str) -> Result<(), String> {
     let c = client()?;
+    // Modern Mojang Capes API: PUT /minecraft/profile/capes/active with a
+    // JSON body selecting the cape by id. The legacy
+    // `/capes/{id}/activate` path now returns 404 NOT_FOUND.
     let resp = c
-        .put(format!("{MC_PROFILE_URL}/capes/{cape_id}/activate"))
+        .put(format!("{MC_PROFILE_URL}/capes/active"))
         .bearer_auth(mc_token)
+        .json(&serde_json::json!({ "capeId": cape_id }))
         .send()
         .await
         .map_err(|e| format!("cape activate failed: {e}"))?;
@@ -1121,19 +1243,44 @@ pub async fn apply_minecraft_cape(mc_token: &str, cape_id: &str) -> Result<(), S
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
+        // 400 means the authenticated account does not own the requested cape.
+        if status.as_u16() == 400 {
+            return Err("This Minecraft account does not own that cape.".into());
+        }
         return Err(format!("cape activate error ({status}): {body}"));
+    }
+    Ok(())
+}
+
+/// Hide the currently active Mojang cape (DELETE /minecraft/profile/capes/active).
+pub async fn hide_minecraft_cape(mc_token: &str) -> Result<(), String> {
+    let c = client()?;
+    let resp = c
+        .delete(format!("{MC_PROFILE_URL}/capes/active"))
+        .bearer_auth(mc_token)
+        .send()
+        .await
+        .map_err(|e| format!("cape hide failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("cape hide error ({status}): {body}"));
     }
     Ok(())
 }
 
 // ─── Refresh token ───────────────────────────────────────────────
 
-pub async fn refresh_minecraft_token(refresh_token: &str) -> Result<TokenResponse, String> {
+pub async fn refresh_minecraft_token(
+    refresh_token: &str,
+    backend: MsOauthBackend,
+) -> Result<TokenResponse, String> {
     let c = client()?;
     let resp = c
-        .post(MS_OAUTH_TOKEN_URL)
+        .post(backend.token_url())
         .form(&[
-            ("client_id", MICROSOFT_CLIENT_ID),
+            ("client_id", backend.client_id()),
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
             ("scope", MS_SCOPE),
@@ -1157,9 +1304,33 @@ pub async fn refresh_minecraft_token(refresh_token: &str) -> Result<TokenRespons
     serde_json::from_value(body).map_err(|e| format!("token refresh parse failed: {e}"))
 }
 
-// ─── Authorization-code (paste URL) flow ─────────────────────────
+fn account_ms_oauth_backend(uuid: &str) -> Option<MsOauthBackend> {
+    load_accounts_file()
+        .accounts
+        .iter()
+        .find(|a| a.uuid == uuid)
+        .and_then(|a| a.ms_oauth_backend)
+}
 
+// ─── Authorization-code (paste URL / WebView) flow ───────────────
+
+/// Live.com authorize URL (public Minecraft launcher client) — WebView + paste fallback.
+pub fn microsoft_live_authorize_url() -> String {
+    format!(
+        "{MS_LIVE_AUTHORIZE_URL}?client_id={}&response_type=code&redirect_uri={}&scope={}&display=touch",
+        urlencoding_encode(MS_LIVE_CLIENT_ID),
+        urlencoding_encode(MS_REDIRECT_LIVE_DESKTOP),
+        urlencoding_encode(MS_SCOPE),
+    )
+}
+
+/// Prefer live.com (Azure may be blocked).
 pub fn microsoft_authorize_url() -> String {
+    microsoft_live_authorize_url()
+}
+
+#[allow(dead_code)]
+fn microsoft_azure_authorize_url() -> String {
     format!(
         "{MS_OAUTH_AUTHORIZE_URL}?client_id={}&response_type=code&redirect_uri={}&scope={}&prompt=select_account",
         urlencoding_encode(MICROSOFT_CLIENT_ID),
@@ -1194,11 +1365,14 @@ pub fn extract_oauth_code(input: &str) -> Result<(String, &'static str), String>
         if code.len() < 8 {
             return Err("Authorization code looks too short".into());
         }
-        return Ok((code.to_string(), MS_REDIRECT_NATIVE));
+        return Ok((code.to_string(), MS_REDIRECT_LIVE_DESKTOP));
     }
 
     let lower = trimmed.to_ascii_lowercase();
-    let redirect = if lower.contains("oauth20_desktop.srf") || lower.contains("login.live.com")
+    let redirect = if lower.contains("oauth20_desktop.srf")
+        || lower.contains("login.live.com")
+        || lower.contains("://live.com")
+        || lower.contains("://www.live.com")
     {
         MS_REDIRECT_LIVE_DESKTOP
     } else {
@@ -1247,6 +1421,24 @@ pub fn extract_oauth_code(input: &str) -> Result<(String, &'static str), String>
     Ok((code, redirect))
 }
 
+/// True when the WebView navigated to an OAuth redirect carrying `code` or `error`.
+fn is_ms_oauth_callback(url: &url::Url) -> bool {
+    let has_params = url
+        .query_pairs()
+        .any(|(k, _)| k == "code" || k == "error");
+    if !has_params {
+        return false;
+    }
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    let path = url.path().to_ascii_lowercase();
+    host == "login.live.com"
+        || host == "live.com"
+        || host.ends_with(".live.com")
+        || host.contains("microsoftonline.com")
+        || path.contains("oauth20_desktop.srf")
+        || path.contains("nativeclient")
+}
+
 fn urlencoding_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -1273,12 +1465,13 @@ fn urlencoding_decode(s: &str) -> String {
 pub async fn exchange_authorization_code(
     code: &str,
     redirect_uri: &str,
+    backend: MsOauthBackend,
 ) -> Result<TokenResponse, String> {
     let c = client()?;
     let resp = c
-        .post(MS_OAUTH_TOKEN_URL)
+        .post(backend.token_url())
         .form(&[
-            ("client_id", MICROSOFT_CLIENT_ID),
+            ("client_id", backend.client_id()),
             ("grant_type", "authorization_code"),
             ("code", code),
             ("redirect_uri", redirect_uri),
@@ -1309,6 +1502,8 @@ pub async fn exchange_authorization_code(
 #[serde(rename_all = "camelCase")]
 pub struct LoginResult {
     pub profile: McProfile,
+    /// Never returned to the webview — tokens stay in the OS keyring.
+    #[serde(skip_serializing)]
     pub mc_access_token: String,
 }
 
@@ -1324,7 +1519,10 @@ pub async fn complete_microsoft_login(ms_token: &str) -> Result<LoginResult, Str
 }
 
 /// MS access → Minecraft profile, then persist tokens + account list.
-async fn finalize_microsoft_token_login(token_resp: TokenResponse) -> Result<LoginResult, String> {
+async fn finalize_microsoft_token_login(
+    token_resp: TokenResponse,
+    backend: MsOauthBackend,
+) -> Result<LoginResult, String> {
     let login = complete_microsoft_login(&token_resp.access_token).await?;
 
     // Soft entitlement gate — warn via Err only when we are sure ownership is missing.
@@ -1346,7 +1544,7 @@ async fn finalize_microsoft_token_login(token_resp: TokenResponse) -> Result<Log
         save_token(&account_refresh_key(&login.profile.uuid), rt)?;
     } else {
         return Err(
-            "Microsoft did not return a refresh token. Try device-code login again (do not revoke offline_access)."
+            "Microsoft did not return a refresh token. Try signing in again (do not revoke offline_access)."
                 .into(),
         );
     }
@@ -1363,6 +1561,7 @@ async fn finalize_microsoft_token_login(token_resp: TokenResponse) -> Result<Log
         skin_source: SkinSource::Mojang,
         added_at: now_secs(),
         authority: None,
+        ms_oauth_backend: Some(backend),
     };
     add_account_to_list(&entry)?;
 
@@ -1401,8 +1600,20 @@ async fn finalize_microsoft_token_login(token_resp: TokenResponse) -> Result<Log
 
 pub async fn login_with_refresh_token(
     refresh_token: &str,
+    backend: Option<MsOauthBackend>,
 ) -> Result<(LoginResult, Option<String>), String> {
-    let token_resp = refresh_minecraft_token(refresh_token).await?;
+    let token_resp = match backend {
+        Some(b) => refresh_minecraft_token(refresh_token, b).await?,
+        None => match refresh_minecraft_token(refresh_token, MsOauthBackend::Azure).await {
+            Ok(t) => t,
+            Err(azure_err) => match refresh_minecraft_token(refresh_token, MsOauthBackend::Live)
+                .await
+            {
+                Ok(t) => t,
+                Err(_) => return Err(azure_err),
+            },
+        },
+    };
     let login = complete_microsoft_login(&token_resp.access_token).await?;
     Ok((login, token_resp.refresh_token))
 }
@@ -1421,18 +1632,37 @@ pub fn cached_skin_path(uuid: &str) -> PathBuf {
     skin_cache_dir().join(format!("{uuid}.png"))
 }
 
+const SKIN_CACHE_TTL: Duration = Duration::from_secs(86400);
+
+fn cache_file_fresh(path: &Path) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    let Ok(elapsed) = modified.elapsed() else {
+        return false;
+    };
+    elapsed < SKIN_CACHE_TTL
+}
+
+fn cached_skin_path_for_url(url: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(url.as_bytes());
+    skin_cache_dir().join(format!("url-{}.png", hex::encode(&hash[..16])))
+}
+
+fn encode_png_data_url(bytes: &[u8]) -> String {
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+    format!("data:image/png;base64,{}", engine.encode(bytes))
+}
+
 pub async fn download_and_cache_skin(skin_url: &str, uuid: &str) -> Result<PathBuf, String> {
     let path = cached_skin_path(uuid);
-    if path.exists() {
-        if let Ok(meta) = fs::metadata(&path) {
-            if let Ok(modified) = meta.modified() {
-                if let Ok(elapsed) = modified.elapsed() {
-                    if elapsed < Duration::from_secs(86400) {
-                        return Ok(path);
-                    }
-                }
-            }
-        }
+    if path.exists() && cache_file_fresh(&path) {
+        return Ok(path);
     }
 
     let c = client()?;
@@ -1448,6 +1678,8 @@ pub async fn download_and_cache_skin(skin_url: &str, uuid: &str) -> Result<PathB
     let dir = skin_cache_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    let url_path = cached_skin_path_for_url(skin_url);
+    let _ = fs::write(&url_path, &bytes);
     Ok(path)
 }
 
@@ -1468,6 +1700,15 @@ pub fn load_mc_access_token() -> Result<String, String> {
 // ─── Skin as base64 for 3D viewer ───────────────────────────────
 
 pub async fn fetch_skin_as_base64(url: &str) -> Result<String, String> {
+    let path = cached_skin_path_for_url(url);
+    if path.exists() && cache_file_fresh(&path) {
+        if let Ok(bytes) = fs::read(&path) {
+            if !bytes.is_empty() {
+                return Ok(encode_png_data_url(&bytes));
+            }
+        }
+    }
+
     let c = client()?;
     let bytes = c
         .get(url)
@@ -1478,9 +1719,10 @@ pub async fn fetch_skin_as_base64(url: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("skin fetch body failed: {e}"))?;
 
-    use base64::Engine;
-    let engine = base64::engine::general_purpose::STANDARD;
-    Ok(format!("data:image/png;base64,{}", engine.encode(&bytes)))
+    let dir = skin_cache_dir();
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(&path, &bytes);
+    Ok(encode_png_data_url(&bytes))
 }
 
 // ─── Multi-account helpers ───────────────────────────────────────
@@ -1558,7 +1800,7 @@ pub async fn mc_poll_device_code() -> Result<LoginResult, String> {
     let token_resp = poll_device_code_token_once(&device_code).await?;
 
     // Only clear after Xbox/MC chain succeeds — otherwise the user can retry poll.
-    let result = finalize_microsoft_token_login(token_resp).await?;
+    let result = finalize_microsoft_token_login(token_resp, MsOauthBackend::Azure).await?;
     let _ = clear_token("mc-device-code");
     let _ = clear_token("mc-device-interval");
     Ok(result)
@@ -1573,8 +1815,88 @@ pub fn mc_get_microsoft_login_url() -> Result<String, String> {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn mc_login_with_auth_url(url_or_code: String) -> Result<LoginResult, String> {
     let (code, redirect_uri) = extract_oauth_code(&url_or_code)?;
-    let token_resp = exchange_authorization_code(&code, redirect_uri).await?;
-    finalize_microsoft_token_login(token_resp).await
+    let backend = if redirect_uri == MS_REDIRECT_LIVE_DESKTOP {
+        MsOauthBackend::Live
+    } else {
+        MsOauthBackend::Azure
+    };
+    let token_resp = exchange_authorization_code(&code, redirect_uri, backend).await?;
+    finalize_microsoft_token_login(token_resp, backend).await
+}
+
+/// Open an in-app WebView for Microsoft login; intercept live.com redirect and finish auth.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mc_start_microsoft_webview_auth(app: AppHandle) -> Result<LoginResult, String> {
+    if let Some(existing) = app.get_webview_window(MS_AUTH_WINDOW_LABEL) {
+        let _ = existing.close();
+    }
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<(String, String), String>>();
+    let tx = Arc::new(Mutex::new(Some(tx)));
+
+    let auth_url = microsoft_live_authorize_url();
+    let parsed: url::Url = auth_url
+        .parse()
+        .map_err(|e| format!("invalid auth URL: {e}"))?;
+
+    let tx_nav = Arc::clone(&tx);
+    let app_nav = app.clone();
+    let tx_close = Arc::clone(&tx);
+
+    let auth_window = WebviewWindowBuilder::new(
+        &app,
+        MS_AUTH_WINDOW_LABEL,
+        WebviewUrl::External(parsed),
+    )
+    .title("Sign in with Microsoft")
+    .inner_size(500.0, 650.0)
+    .resizable(false)
+    .center()
+    .on_navigation(move |url| {
+        if !is_ms_oauth_callback(&url) {
+            return true;
+        }
+        match extract_oauth_code(url.as_str()) {
+            Ok((code, redirect)) => {
+                if let Ok(mut guard) = tx_nav.lock() {
+                    if let Some(sender) = guard.take() {
+                        let _ = sender.send(Ok((code, redirect.to_string())));
+                    }
+                }
+            }
+            Err(e) => {
+                if let Ok(mut guard) = tx_nav.lock() {
+                    if let Some(sender) = guard.take() {
+                        let _ = sender.send(Err(e));
+                    }
+                }
+            }
+        }
+        if let Some(w) = app_nav.get_webview_window(MS_AUTH_WINDOW_LABEL) {
+            let _ = w.close();
+        }
+        false
+    })
+    .build()
+    .map_err(|e| format!("Failed to open Microsoft login window: {e}"))?;
+
+    auth_window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed) {
+            if let Ok(mut guard) = tx_close.lock() {
+                if let Some(sender) = guard.take() {
+                    let _ = sender.send(Err("Microsoft login cancelled".into()));
+                }
+            }
+        }
+    });
+
+    let (code, redirect_uri) = rx
+        .await
+        .map_err(|_| "Microsoft login cancelled".to_string())??;
+
+    let token_resp =
+        exchange_authorization_code(&code, &redirect_uri, MsOauthBackend::Live).await?;
+    finalize_microsoft_token_login(token_resp, MsOauthBackend::Live).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1619,6 +1941,7 @@ pub async fn mc_offline_login(
         skin_source: skin_source.clone(),
         added_at: now_secs(),
         authority: None,
+        ms_oauth_backend: None,
     };
     add_account_to_list(&entry)?;
 
@@ -1661,7 +1984,8 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
     if should_refresh {
         if let Some(ref uuid) = state.active_account_uuid {
             if let Ok(refresh_token) = load_token(&account_refresh_key(uuid)) {
-                match login_with_refresh_token(&refresh_token).await {
+                let backend = account_ms_oauth_backend(uuid);
+                match login_with_refresh_token(&refresh_token, backend).await {
                     Ok((login, new_refresh)) => {
                         let mut profile = login.profile.clone();
                         // Keep the selected display cape provider (OptiFine / TLauncher / …)
@@ -1755,7 +2079,8 @@ pub async fn mc_refresh_profile() -> Result<McProfile, String> {
     if state.login_type == LoginType::Microsoft {
         if let Some(ref uuid) = state.active_account_uuid {
             let refresh_token = load_token(&account_refresh_key(uuid))?;
-            let (login, new_refresh) = login_with_refresh_token(&refresh_token).await?;
+            let backend = account_ms_oauth_backend(uuid);
+            let (login, new_refresh) = login_with_refresh_token(&refresh_token, backend).await?;
             save_token(&account_access_key(uuid), &login.mc_access_token)?;
             save_token("mc-access-token", &login.mc_access_token)?;
             if let Some(rt) = new_refresh {
@@ -2073,6 +2398,7 @@ pub async fn mc_yggdrasil_login(
         skin_source: skin_source.clone(),
         added_at: now_secs(),
         authority: Some(authority),
+        ms_oauth_backend: None,
     };
     add_account_to_list(&entry)?;
     set_active_account(&auth.uuid)?;
@@ -2151,7 +2477,10 @@ pub async fn mc_switch_account(uuid: String) -> Result<AuthState, String> {
             let mut profile = None;
             let mut expires = None;
             if let Ok(refresh_token) = load_token(&account_refresh_key(&uuid)) {
-                if let Ok((login, new_refresh)) = login_with_refresh_token(&refresh_token).await {
+                let backend = entry.ms_oauth_backend;
+                if let Ok((login, new_refresh)) =
+                    login_with_refresh_token(&refresh_token, backend).await
+                {
                     let _ = save_token(&account_access_key(&uuid), &login.mc_access_token);
                     let _ = save_token("mc-access-token", &login.mc_access_token);
                     if let Some(rt) = new_refresh {
@@ -2301,6 +2630,7 @@ pub async fn mc_switch_account(uuid: String) -> Result<AuthState, String> {
 pub async fn mc_remove_account(uuid: String) -> Result<AuthState, String> {
     let state = load_auth_state();
     let was_active = state.active_account_uuid.as_deref() == Some(uuid.as_str());
+    invalidate_cape_cache(&uuid);
     let _ = clear_token(&account_refresh_key(&uuid));
     let _ = clear_token(&account_access_key(&uuid));
     remove_account_from_list(&uuid)?;
@@ -2323,26 +2653,110 @@ pub async fn mc_remove_account(uuid: String) -> Result<AuthState, String> {
     Ok(load_auth_state())
 }
 
+// ─── Cape catalog cache ─────────────────────────────────────────
+
+/// Capes are re-discovered from Mojang / OptiFine / TLauncher — a handful of
+/// network round-trips. Cache the catalog per UUID so re-opening the Me tab is
+/// instant; the next cold load refreshes it.
+const CAPE_CACHE_TTL_SECS: u64 = 600; // 10 min
+
+fn cape_cache_path(uuid: &str) -> PathBuf {
+    dirs::cache_dir()
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("TuffBox")
+        .join("capes")
+        .join(format!("{uuid}.json"))
+}
+
+#[derive(Debug, Deserialize)]
+struct CapeCacheEnvelope {
+    #[serde(default)]
+    saved_at: u64,
+    catalog: CapeCatalog,
+}
+
+fn load_cape_cache(uuid: &str) -> Option<CapeCatalog> {
+    let raw = fs::read_to_string(cape_cache_path(uuid)).ok()?;
+    let env: CapeCacheEnvelope = serde_json::from_str(&raw).ok()?;
+    if now_secs().saturating_sub(env.saved_at) >= CAPE_CACHE_TTL_SECS {
+        return None;
+    }
+    Some(env.catalog)
+}
+
+/// Stale-while-revalidate helper: any cached catalog regardless of age.
+fn load_cape_cache_any_age(uuid: &str) -> Option<CapeCatalog> {
+    let raw = fs::read_to_string(cape_cache_path(uuid)).ok()?;
+    serde_json::from_str(&raw).ok().map(|env: CapeCacheEnvelope| env.catalog)
+}
+
+fn save_cape_cache(uuid: &str, catalog: &CapeCatalog) {
+    let path = cape_cache_path(uuid);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let env = serde_json::json!({ "savedAt": now_secs(), "catalog": catalog });
+    let Ok(bytes) = serde_json::to_vec(&env) else {
+        return;
+    };
+    let _ = fs::write(&path, bytes);
+}
+
+fn invalidate_cape_cache(uuid: &str) {
+    let _ = fs::remove_file(cape_cache_path(uuid));
+}
+
 /// Discover capes from Mojang / OptiFine / TLauncher for the active profile.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn mc_list_capes() -> Result<CapeCatalog, String> {
     let state = load_auth_state();
     let profile = state.profile.ok_or("Not logged in")?;
-    Ok(build_cape_catalog(
+    // Task: capes "load forever". Two mitigations:
+    // 1. Fresh cache → instant return (unchanged).
+    // 2. Stale cache → return it immediately and refresh in the background;
+    //    the UI gets data at once instead of waiting on external probes.
+    if let Some(cached) = load_cape_cache_any_age(&profile.uuid) {
+        let fresh = load_cape_cache(&profile.uuid).is_some();
+        if !fresh {
+            let username = profile.name.clone();
+            let uuid = profile.uuid.clone();
+            let provider = state.cape_provider.clone();
+            let owned = profile.capes.clone();
+            tokio::spawn(async move {
+                let catalog =
+                    build_cape_catalog(&username, &uuid, provider, &owned).await;
+                save_cape_cache(&uuid, &catalog);
+            });
+        }
+        return Ok(cached);
+    }
+    let catalog = build_cape_catalog(
         &profile.name,
         &profile.uuid,
         state.cape_provider,
         &profile.capes,
     )
-    .await)
+    .await;
+    save_cape_cache(&profile.uuid, &catalog);
+    Ok(catalog)
 }
 
 /// Select which cape provider is shown on the skin preview (only one).
 #[tauri::command(rename_all = "camelCase")]
 pub async fn mc_set_cape_provider(provider: CapeProvider) -> Result<AuthState, String> {
     let mut state = load_auth_state();
+
+    // "None" deactivates the active Mojang cape so it is truly hidden in-game.
+    if provider == CapeProvider::None {
+        if let Ok(token) = load_mc_access_token() {
+            let _ = hide_minecraft_cape(&token).await;
+        }
+    }
+
     state.cape_provider = provider.clone();
     if let Some(ref mut profile) = state.profile {
+        invalidate_cape_cache(&profile.uuid);
         profile.cape_url = resolve_display_cape(
             &profile.name,
             &profile.uuid,
@@ -2405,6 +2819,7 @@ pub async fn mc_upload_skin_file(path: String, variant: String) -> Result<AuthSt
 pub async fn mc_logout() -> Result<AuthState, String> {
     let state = load_auth_state();
     if let Some(uuid) = state.active_account_uuid.clone() {
+        invalidate_cape_cache(&uuid);
         let _ = clear_token(&account_access_key(&uuid));
         let _ = clear_token(&account_refresh_key(&uuid));
         let _ = remove_account_from_list(&uuid);
@@ -2440,6 +2855,7 @@ pub async fn mc_apply_cape(cape_id: String) -> Result<AuthState, String> {
     // Refresh Mojang profile so ACTIVE cape updates, then re-apply display provider.
     let mut state = load_auth_state();
     if let Ok(mut profile) = fetch_mc_profile(&access_token).await {
+        invalidate_cape_cache(&profile.uuid);
         if let Some(ref skin_url) = profile.skin_url {
             let _ = download_and_cache_skin(skin_url, &profile.uuid).await;
         }
@@ -2480,7 +2896,11 @@ mod tests {
     fn auth_state_serializes() {
         let state = AuthState::default();
         let json = serde_json::to_string(&state).unwrap();
-        assert!(json.contains("logged_in"));
+        // AuthState uses rename_all = "camelCase".
+        assert!(
+            json.contains("loggedIn"),
+            "expected camelCase loggedIn in {json}"
+        );
     }
 
     #[test]
@@ -2488,6 +2908,19 @@ mod tests {
         let a = cached_skin_path("abc123");
         let b = cached_skin_path("abc123");
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn skin_url_cache_path_is_deterministic() {
+        let a = cached_skin_path_for_url("https://textures.minecraft.net/texture/abc");
+        let b = cached_skin_path_for_url("https://textures.minecraft.net/texture/abc");
+        let c = cached_skin_path_for_url("https://textures.minecraft.net/texture/xyz");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert!(a
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("url-") && n.ends_with(".png")));
     }
 
     #[test]
@@ -2524,6 +2957,7 @@ mod tests {
             skin_source: SkinSource::Mojang,
             added_at: 12345,
             authority: None,
+            ms_oauth_backend: Some(MsOauthBackend::Live),
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("uuid"));

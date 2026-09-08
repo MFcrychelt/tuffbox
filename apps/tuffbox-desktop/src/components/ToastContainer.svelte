@@ -1,16 +1,43 @@
 <script lang="ts">
+  import type { Component } from "svelte";
   import { toasts, type Toast } from "../lib/toast";
-  import { X, CheckCircle2, AlertTriangle, Info, AlertCircle } from "lucide-svelte";
+  import { X, CheckCircle2, AlertTriangle, Info, AlertCircle, Copy } from "@lucide/svelte";
   import { fly, fade } from "svelte/transition";
-  import { onMount, onDestroy } from "svelte";
+  import { copyText } from "../lib/clipboard";
 
-  function icon(t: string) { if(t==="success")return CheckCircle2; if(t==="error")return AlertCircle; if(t==="warning")return AlertTriangle; return Info; }
-  function clr(t: string): string { if(t==="success")return "#1bd96a"; if(t==="error")return "#f87171"; if(t==="warning")return "#fbbf24"; return "#93c5fd"; }
+  function icon(t: string): Component<{ size?: number; color?: string }> {
+    if (t === "success") return CheckCircle2;
+    if (t === "error") return AlertCircle;
+    if (t === "warning") return AlertTriangle;
+    return Info;
+  }
+  function clr(t: string): string {
+    if (t === "success") return "var(--accent-primary)";
+    if (t === "error") return "#f87171";
+    if (t === "warning") return "#fbbf24";
+    return "#93c5fd";
+  }
 
-  let now = Date.now();
-  let interval: ReturnType<typeof setInterval>;
-  onMount(() => { interval = setInterval(() => { now = Date.now(); }, 100); });
-  onDestroy(() => { clearInterval(interval); });
+  let copiedId = $state<number | null>(null);
+
+  async function copyDetails(t: Toast) {
+    try {
+      await copyText(t.message);
+      copiedId = t.id;
+      setTimeout(() => { if (copiedId === t.id) copiedId = null; }, 1500);
+    } catch {
+      // clipboard unavailable — leave the toast visible for manual selection
+    }
+  }
+
+  let now = $state(Date.now());
+
+  $effect(() => {
+    const interval = setInterval(() => {
+      now = Date.now();
+    }, 100);
+    return () => clearInterval(interval);
+  });
 
   function progress(t: Toast): number {
     if (t.duration <= 0) return 1;
@@ -20,20 +47,31 @@
 </script>
 <div class="tc">
   {#each $toasts as t (t.id)}
+    {@const Icon = icon(t.type)}
     <div
       class="t {t.type} tb-toast-enter"
       style="--tc:{clr(t.type)}; --progress:{progress(t)}"
       in:fly={{ y: 12, duration: 220 }}
       out:fade={{ duration: 140 }}
     >
-      <span class="ti"><svelte:component this={icon(t.type)} size={16} color="var(--tc)" /></span>
+      <span class="ti"><Icon size={16} color="var(--tc)" /></span>
       <span class="tm">{t.message}</span>
+      {#if t.type === "error"}
+        <button
+          class="ta copy"
+          onclick={() => void copyDetails(t)}
+          title="Copy error details"
+          aria-label="Copy error details"
+        >
+          {#if copiedId === t.id}<CheckCircle2 size={12} />{:else}<Copy size={12} /> Copy{/if}
+        </button>
+      {/if}
       {#if t.actions}
         {#each t.actions as a}
-          <button class="ta" on:click={() => { a.run(); toasts.dismiss(t.id); }}>{a.label}</button>
+          <button class="ta" onclick={() => { a.run(); toasts.dismiss(t.id); }}>{a.label}</button>
         {/each}
       {/if}
-      <button class="tx" on:click={() => toasts.dismiss(t.id)}><X size={12} /></button>
+      <button class="tx" onclick={() => toasts.dismiss(t.id)}><X size={12} /></button>
       {#if t.duration > 0}
         <div class="progress-bar" style="--tc:{clr(t.type)}; width: {((1 - progress(t)) * 100)}%"></div>
       {/if}
@@ -85,6 +123,18 @@
     cursor: pointer;
   }
   .ta:hover { filter: brightness(1.1); }
+
+  .ta.copy {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .ta.copy:hover {
+    background: color-mix(in srgb, var(--tc) 25%, var(--bg-hover));
+    filter: none;
+  }
 
   .tx {
     flex-shrink: 0;

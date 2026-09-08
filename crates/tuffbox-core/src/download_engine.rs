@@ -122,6 +122,10 @@ fn download_client() -> Result<&'static reqwest::blocking::Client, DownloadEngin
             .timeout(Duration::from_secs(600))
             .connect_timeout(Duration::from_secs(20))
             .tcp_keepalive(Duration::from_secs(15))
+            .tcp_nodelay(true)
+            // Modrinth CDN (and most mod jars) come from a handful of hosts —
+            // raise per-host connection pool so parallel streams don't queue.
+            .pool_max_idle_per_host(32)
             .user_agent(concat!("TuffBox/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("download client")
@@ -129,11 +133,42 @@ fn download_client() -> Result<&'static reqwest::blocking::Client, DownloadEngin
 }
 
 /// Resume-friendly download to `dest` via `{dest}.tuffbox.part`.
+/// Wraps the single-attempt transfer with bounded retries (Modrinth-style):
+/// transient HTTP/stall failures resume from the `.part` bytes instead of
+/// failing the whole file. Checksum mismatches are NOT retried here — the
+/// caller has a hash-lookup redirect fallback for that.
 pub fn download_resumable(
     url: &str,
     dest: &Path,
     expected: Option<(&str, ChecksumKind)>,
-    mut progress: Option<Box<dyn FnMut(u64, u64) + Send>>,
+    progress: Option<Box<dyn FnMut(u64, u64) + Send>>,
+    stall_timeout: Option<Duration>,
+) -> Result<(), DownloadEngineError> {
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut progress = progress;
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        match download_resumable_once(url, dest, expected, &mut progress, stall_timeout) {
+            Ok(()) => return Ok(()),
+            // Transient failures: the .part file survives, so the next attempt
+            // resumes from what already landed (Range request).
+            Err(e @ (DownloadEngineError::Http(_) | DownloadEngineError::Stalled { .. }))
+                if attempt < MAX_ATTEMPTS =>
+            {
+                std::thread::sleep(Duration::from_millis(400 * (1 << (attempt - 1))));
+                let _ = e;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn download_resumable_once(
+    url: &str,
+    dest: &Path,
+    expected: Option<(&str, ChecksumKind)>,
+    progress: &mut Option<Box<dyn FnMut(u64, u64) + Send>>,
     stall_timeout: Option<Duration>,
 ) -> Result<(), DownloadEngineError> {
     let stall = stall_timeout.unwrap_or(DEFAULT_STALL);

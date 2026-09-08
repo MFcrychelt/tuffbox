@@ -1,20 +1,16 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
   import {
     X,
-    LogIn,
-    LogOut,
     Plus,
     User,
     Globe,
     Monitor,
-    Check,
     Trash2,
     ArrowLeftRight,
     Shield,
-    Palette,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { api } from "../lib/api";
+  import { focusInit } from "../lib/focusInit";
   import {
     authState,
     skinPath,
@@ -25,23 +21,25 @@
   } from "../lib/store";
   import { toasts } from "../lib/toast";
 
-  const dispatch = createEventDispatcher();
+  let { onclose }: { onclose?: () => void } = $props();
 
-  let mode: "list" | "add-select" | "add-offline" | "add-yggdrasil" = "list";
-  let accounts: AccountEntry[] = [];
-  let activeUuid: string | null = null;
-  let offlineUsername = "";
-  let offlineSkinSource: SkinSource = "mojang";
-  let yggPresets: YggdrasilPreset[] = [];
-  let yggPresetId = "elyby";
-  let yggAuthority = "";
-  let yggUsername = "";
-  let yggPassword = "";
-  let busy = false;
-  let errorMsg = "";
+  let mode = $state<"list" | "add-select" | "add-offline" | "add-yggdrasil">("list");
+  let accounts = $state<AccountEntry[]>([]);
+  let activeUuid = $state<string | null>(null);
+  let offlineUsername = $state("");
+  let offlineSkinSource = $state<SkinSource>("mojang");
+  let yggPresets = $state<YggdrasilPreset[]>([]);
+  let yggPresetId = $state("elyby");
+  let yggAuthority = $state("");
+  let yggUsername = $state("");
+  let yggPassword = $state("");
+  let busy = $state(false);
+  let errorMsg = $state("");
 
-  $: accounts = $authState.accounts;
-  $: activeUuid = $authState.activeAccountUuid;
+  $effect(() => {
+    accounts = $authState.accounts;
+    activeUuid = $authState.activeAccountUuid;
+  });
 
   async function loadAccounts() {
     try {
@@ -135,37 +133,20 @@
     busy = true;
     errorMsg = "";
     try {
-      const info = await api.mcAuth.startDeviceCode();
-      try {
-        const { open } = await import("@tauri-apps/plugin-shell");
-        await open(info.verificationUri);
-      } catch {}
-
-      const deadline = Date.now() + 15 * 60 * 1000;
-      while (Date.now() < deadline) {
+      const result = await api.mcAuth.startMicrosoftWebviewAuth();
+      await loadAccounts();
+      if (result.profile.uuid) {
         try {
-          const result = await api.mcAuth.pollDeviceCode();
-          await loadAccounts();
-          if (result.profile.uuid) {
-            try {
-              skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
-            } catch {}
-          }
-          toasts.success(`Added ${result.profile.name}`);
-          mode = "list";
-          return;
-        } catch (e) {
-          const msg = String(e);
-          if (msg.includes("authorization_pending") || msg.includes("slow_down")) {
-            await new Promise((r) => setTimeout(r, 3500));
-            continue;
-          }
-          throw e;
-        }
+          skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
+        } catch {}
       }
-      errorMsg = "Login timed out";
+      toasts.success(`Added ${result.profile.name}`);
+      mode = "list";
     } catch (e) {
-      errorMsg = String(e);
+      const msg = String(e);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        errorMsg = msg;
+      }
     } finally {
       busy = false;
     }
@@ -231,17 +212,17 @@
   }
 
   function close() {
-    dispatch("close");
+    onclose?.();
   }
 </script>
 
-<!-- svelte-ignore a11y-click-events-have-key-events -->
-<!-- svelte-ignore a11y-no-static-element-interactions -->
-<div class="overlay" on:click|self={close}>
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="overlay" onclick={(e) => e.target === e.currentTarget && close()}>
   <div class="modal">
     <div class="modal-header">
       {#if mode !== "list"}
-        <button class="back-btn" on:click={() => (mode = "list")} aria-label="Back">
+        <button class="back-btn" onclick={() => (mode = "list")} aria-label="Back">
           <ArrowLeftRight size={16} />
         </button>
       {/if}
@@ -254,7 +235,7 @@
           {:else}Add Offline Account{/if}
         </h3>
       </div>
-      <button class="close-btn" on:click={close} aria-label="Close">
+      <button class="close-btn" onclick={close} aria-label="Close">
         <X size={18} />
       </button>
     </div>
@@ -265,7 +246,7 @@
           <div class="empty-accounts">
             <User size={32} />
             <p>No accounts added yet</p>
-            <button class="accent-btn" on:click={() => (mode = "add-select")}>
+            <button class="accent-btn" onclick={() => (mode = "add-select")}>
               <Plus size={16} /> Add Account
             </button>
           </div>
@@ -313,7 +294,7 @@
                   {#if account.uuid !== activeUuid}
                     <button
                       class="icon-btn small"
-                      on:click={() => switchAccount(account.uuid)}
+                      onclick={() => switchAccount(account.uuid)}
                       disabled={busy}
                       title="Switch to this account"
                     >
@@ -322,7 +303,7 @@
                   {/if}
                   <button
                     class="icon-btn small danger"
-                    on:click={() => removeAccount(account.uuid)}
+                    onclick={() => removeAccount(account.uuid)}
                     disabled={busy}
                     title="Remove account"
                   >
@@ -333,22 +314,22 @@
             {/each}
           </div>
 
-          <button class="accent-btn full-width" on:click={() => (mode = "add-select")}>
+          <button class="accent-btn full-width" onclick={() => (mode = "add-select")}>
             <Plus size={16} /> Add Account
           </button>
         {/if}
 
       {:else if mode === "add-select"}
         <div class="add-options">
-          <button class="add-option" on:click={startMicrosoftAdd} disabled={busy}>
+          <button class="add-option" onclick={startMicrosoftAdd} disabled={busy}>
             <div class="option-icon ms"><Globe size={20} /></div>
             <div class="option-info">
               <span class="option-title">Microsoft Account</span>
-              <span class="option-desc">Online play, skins, Realms</span>
+              <span class="option-desc">Sign in in a popup — online play, skins, Realms</span>
             </div>
           </button>
 
-          <button class="add-option" on:click={() => (mode = "add-offline")} disabled={busy}>
+          <button class="add-option" onclick={() => (mode = "add-offline")} disabled={busy}>
             <div class="option-icon offline"><User size={20} /></div>
             <div class="option-info">
               <span class="option-title">Offline Account</span>
@@ -356,7 +337,7 @@
             </div>
           </button>
 
-          <button class="add-option" on:click={openYggdrasil} disabled={busy}>
+          <button class="add-option" onclick={openYggdrasil} disabled={busy}>
             <div class="option-icon ygg"><Shield size={20} /></div>
             <div class="option-info">
               <span class="option-title">Ely.by / LittleSkin / Custom</span>
@@ -366,14 +347,14 @@
         </div>
 
       {:else if mode === "add-yggdrasil"}
-        <form class="offline-form" on:submit|preventDefault={addYggdrasil}>
+        <form class="offline-form" onsubmit={(e) => { e.preventDefault(); addYggdrasil(); }}>
           <div class="skin-source-grid ygg-presets">
             {#each yggPresets as preset}
               <button
                 type="button"
                 class="source-option"
                 class:active={yggPresetId === preset.id}
-                on:click={() => selectYggPreset(preset.id)}
+                onclick={() => selectYggPreset(preset.id)}
                 disabled={busy}
               >
                 {preset.label}
@@ -392,7 +373,7 @@
 
           <label class="field">
             <span>Email / Username</span>
-            <input bind:value={yggUsername} placeholder="account@example.com" autofocus disabled={busy} />
+            <input bind:value={yggUsername} placeholder="account@example.com" use:focusInit disabled={busy} />
           </label>
 
           <label class="field">
@@ -410,14 +391,14 @@
         </form>
 
       {:else if mode === "add-offline"}
-        <form class="offline-form" on:submit|preventDefault={addOffline}>
+        <form class="offline-form" onsubmit={(e) => { e.preventDefault(); addOffline(); }}>
           <label class="field">
             <span>Username</span>
             <input
               bind:value={offlineUsername}
               placeholder="Enter username"
               maxlength={16}
-              autofocus
+              use:focusInit
               disabled={busy}
             />
           </label>
@@ -425,16 +406,16 @@
           <label class="field">
             <span>Skin Source</span>
             <div class="skin-source-grid">
-              <button type="button" class="source-option" class:active={offlineSkinSource === "mojang"} on:click={() => (offlineSkinSource = "mojang")}>
+              <button type="button" class="source-option" class:active={offlineSkinSource === "mojang"} onclick={() => (offlineSkinSource = "mojang")}>
                 <Monitor size={14} /> Mojang
               </button>
-              <button type="button" class="source-option" class:active={offlineSkinSource === "elyby"} on:click={() => (offlineSkinSource = "elyby")}>
+              <button type="button" class="source-option" class:active={offlineSkinSource === "elyby"} onclick={() => (offlineSkinSource = "elyby")}>
                 <Globe size={14} /> Ely.by
               </button>
-              <button type="button" class="source-option" class:active={offlineSkinSource === "tlauncher"} on:click={() => (offlineSkinSource = "tlauncher")}>
+              <button type="button" class="source-option" class:active={offlineSkinSource === "tlauncher"} onclick={() => (offlineSkinSource = "tlauncher")}>
                 <Globe size={14} /> TLauncher
               </button>
-              <button type="button" class="source-option" class:active={offlineSkinSource === "offline"} on:click={() => (offlineSkinSource = "offline")}>
+              <button type="button" class="source-option" class:active={offlineSkinSource === "offline"} onclick={() => (offlineSkinSource = "offline")}>
                 <User size={14} /> None
               </button>
             </div>
@@ -498,7 +479,7 @@
     background: var(--bg-primary); border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md); transition: all 0.15s;
   }
-  .account-item.active { border-color: var(--accent-primary); background: rgba(27, 217, 106, 0.04); }
+  .account-item.active { border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 4%, transparent); }
 
   .account-avatar {
     width: 36px; height: 36px; border-radius: var(--border-radius-sm);
@@ -507,8 +488,14 @@
     flex-shrink: 0;
   }
   .account-avatar.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
-  .account-avatar.off { border: 1px solid rgba(245, 158, 11, 0.35); color: #fde68a; }
-  .account-avatar.ygg { background: rgba(168, 85, 247, 0.18); color: #e9d5ff; }
+  .account-avatar.off {
+    border: 1px solid var(--badge-offline-border, rgba(245, 158, 11, 0.35));
+    color: var(--badge-offline-fg, #fde68a);
+  }
+  .account-avatar.ygg {
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.18));
+    color: var(--badge-ygg-fg, #e9d5ff);
+  }
 
   .account-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .account-name { font-weight: 700; font-size: 13px; color: var(--text-primary); }
@@ -516,7 +503,8 @@
     font-family: var(--font-minecraft);
     font-size: 10px;
     letter-spacing: 0.4px;
-    text-shadow: 1px 1px 0 #3f3f3f;
+    color: var(--mc-nick-color, var(--text-primary));
+    text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
   .account-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
@@ -524,14 +512,23 @@
     font-size: 10px; font-weight: 800; text-transform: uppercase;
     padding: 1px 6px; border-radius: 4px;
   }
-  .type-pill.mojang { color: #93c5fd; background: rgba(59, 130, 246, 0.15); }
-  .type-pill.offline { color: #fde68a; background: rgba(245, 158, 11, 0.12); }
-  .type-pill.ygg { color: #e9d5ff; background: rgba(168, 85, 247, 0.15); }
+  .type-pill.mojang {
+    color: var(--badge-ms-fg, #93c5fd);
+    background: var(--badge-ms-bg, rgba(59, 130, 246, 0.15));
+  }
+  .type-pill.offline {
+    color: var(--badge-offline-fg, #fde68a);
+    background: var(--badge-offline-bg, rgba(245, 158, 11, 0.12));
+  }
+  .type-pill.ygg {
+    color: var(--badge-ygg-fg, #e9d5ff);
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.15));
+  }
   .skin-src { font-size: 10px; color: var(--text-muted); }
 
   .active-badge {
     font-size: 10px; font-weight: 700; color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.12); padding: 1px 5px; border-radius: 4px;
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent); padding: 1px 5px; border-radius: 4px;
   }
 
   .account-actions { display: flex; gap: 4px; }
@@ -557,7 +554,7 @@
     border-radius: var(--border-radius-lg); cursor: pointer; text-align: left;
     transition: all 0.15s ease; width: 100%; color: var(--text-primary);
   }
-  .add-option:hover { border-color: var(--accent-primary); background: rgba(27, 217, 106, 0.04); }
+  .add-option:hover { border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 4%, transparent); }
   .add-option:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .option-icon {
@@ -566,7 +563,10 @@
   }
   .option-icon.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
   .option-icon.offline { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-color); }
-  .option-icon.ygg { background: rgba(168, 85, 247, 0.2); color: #e9d5ff; }
+  .option-icon.ygg {
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.2));
+    color: var(--badge-ygg-fg, #e9d5ff);
+  }
 
   .ygg-presets { grid-template-columns: repeat(3, 1fr); margin-bottom: 4px; }
 
@@ -598,7 +598,7 @@
   .source-option:hover { border-color: var(--text-muted); color: var(--text-primary); }
   .source-option.active {
     border-color: var(--accent-primary); color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.06);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
 
   .error-msg {
@@ -611,7 +611,7 @@
   .accent-btn {
     display: flex; align-items: center; justify-content: center; gap: 6px;
     padding: 10px 16px; border-radius: var(--border-radius-md);
-    background: var(--accent-primary); color: #000; border: none;
+    background: var(--accent-primary); color: var(--on-accent, #000); border: none;
     font-size: 13px; font-weight: 700; cursor: pointer;
     transition: all 0.15s;
   }

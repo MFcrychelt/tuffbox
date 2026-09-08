@@ -2,6 +2,7 @@
  * Svelte action that traps keyboard focus within the node.
  * Tab / Shift+Tab cycles through focusable elements inside.
  * Escape key fires the optional `onEscape` callback.
+ * On destroy, restores focus to the element that was active before the trap mounted.
  *
  * Usage:
  *   <div use:trapFocus={{ onEscape: () => close() }}>
@@ -12,6 +13,9 @@ export function trapFocus(
 ) {
   let opts = options ?? {};
   const selector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  const previouslyFocused =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
   function getFocusable(): HTMLElement[] {
     return Array.from(node.querySelectorAll<HTMLElement>(selector)).filter(
@@ -69,6 +73,13 @@ export function trapFocus(
     },
     destroy() {
       node.removeEventListener("keydown", handleKey);
+      if (
+        previouslyFocused &&
+        document.contains(previouslyFocused) &&
+        typeof previouslyFocused.focus === "function"
+      ) {
+        previouslyFocused.focus({ preventScroll: true });
+      }
     },
   };
 }

@@ -112,10 +112,7 @@ fn ingredient_to_display(ing: &crate::unified::recipe::UnifiedIngredient) -> Ing
 
 /// Fill `alts` for tag ingredients from an offline [`TagIndex`] so the UI can
 /// cycle member icons. Nested one_of entries are expanded recursively.
-pub fn expand_layout_tags(
-    layout: &mut RecipeLayout,
-    tags: &crate::tag_index::TagIndex,
-) {
+pub fn expand_layout_tags(layout: &mut RecipeLayout, tags: &crate::tag_index::TagIndex) {
     for slot in &mut layout.grid {
         if let Some(ing) = slot {
             expand_ingredient_tags(ing, tags);
@@ -124,10 +121,7 @@ pub fn expand_layout_tags(
     expand_ingredient_tags(&mut layout.output, tags);
 }
 
-fn expand_ingredient_tags(
-    ing: &mut IngredientDisplay,
-    tags: &crate::tag_index::TagIndex,
-) {
+fn expand_ingredient_tags(ing: &mut IngredientDisplay, tags: &crate::tag_index::TagIndex) {
     if let Some(alts) = ing.alts.as_mut() {
         for alt in alts.iter_mut() {
             expand_ingredient_tags(alt, tags);

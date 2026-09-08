@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -53,6 +54,10 @@ pub struct SnapshotMeta {
     /// `launcher` | `ai` | `user` | `scan`
     #[serde(default)]
     pub actor: Option<String>,
+    /// Relative managed files that existed at snapshot time. Rollback deletes
+    /// extras under the same top-level folders (e.g. `mods/`).
+    #[serde(default)]
+    pub managed_files: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +86,8 @@ pub struct Snapshot {
     pub actions_summary: Vec<String>,
     #[serde(default)]
     pub actor: Option<String>,
+    #[serde(default)]
+    pub managed_files: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -158,17 +165,26 @@ impl SnapshotStore {
             None
         };
 
+        let mut files_to_copy: Vec<PathBuf> = changed_files
+            .iter()
+            .map(|p| p.as_ref().to_path_buf())
+            .collect();
+        for managed in &meta.managed_files {
+            if !files_to_copy.iter().any(|p| p == managed) {
+                files_to_copy.push(managed.clone());
+            }
+        }
+
         let mut copied_changed_files = Vec::new();
         let changed_files_dir = snapshot_dir.join("changed_files");
-        for relative_path in changed_files {
-            let relative = relative_path.as_ref();
+        for relative in &files_to_copy {
             let src = self.project_dir.join(relative);
             let dst = changed_files_dir.join(relative);
             if let Some(parent) = dst.parent() {
                 fs::create_dir_all(parent).map_err(SnapshotError::ReadMetadata)?;
             }
             copy_file(&src, &dst)?;
-            copied_changed_files.push(relative.to_path_buf());
+            copied_changed_files.push(relative.clone());
         }
 
         let snapshot = Snapshot {
@@ -187,6 +203,7 @@ impl SnapshotStore {
             operation: meta.operation,
             actions_summary: meta.actions_summary,
             actor: meta.actor,
+            managed_files: meta.managed_files,
         };
 
         let meta_path = snapshot_dir.join("snapshot.json");
@@ -306,7 +323,7 @@ impl SnapshotStore {
         copy_file(&snapshot.manifest_path, &manifest_dst)?;
 
         if let Some(lockfile_path) = &snapshot.lockfile_path {
-            let lockfile_dst = self.project_dir.join("project.tuffbox.lock.json");
+            let lockfile_dst = manifest_dst.with_extension("lock.json");
             copy_file(lockfile_path, &lockfile_dst)?;
         }
 
@@ -321,6 +338,10 @@ impl SnapshotStore {
                 })?;
             }
             copy_file(&src, &dst)?;
+        }
+
+        if !snapshot.managed_files.is_empty() {
+            remove_unmanaged_files(&self.project_dir, &snapshot.managed_files)?;
         }
 
         Ok(snapshot)
@@ -338,6 +359,70 @@ fn find_project_manifest(project_dir: &Path) -> Option<PathBuf> {
                 .map(|name| name.ends_with(".tuffbox.json"))
                 .unwrap_or(false)
         })
+}
+
+fn remove_unmanaged_files(
+    project_dir: &Path,
+    managed_files: &[PathBuf],
+) -> Result<(), SnapshotError> {
+    let allowed: HashSet<String> = managed_files
+        .iter()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    let mut roots = HashSet::new();
+    for path in managed_files {
+        if let Some(root) = path.components().next() {
+            roots.insert(root.as_os_str().to_os_string());
+        }
+    }
+    for root in roots {
+        let root_path = project_dir.join(&root);
+        if root_path.is_dir() {
+            delete_unmanaged_tree(&root_path, project_dir, &allowed)?;
+        } else if root_path.is_file() {
+            let rel = root.to_string_lossy().replace('\\', "/");
+            if !allowed.contains(&rel) {
+                fs::remove_file(&root_path).map_err(|source| SnapshotError::Restore {
+                    path: root_path,
+                    source,
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn delete_unmanaged_tree(
+    dir: &Path,
+    project_dir: &Path,
+    allowed: &HashSet<String>,
+) -> Result<(), SnapshotError> {
+    for entry in fs::read_dir(dir).map_err(SnapshotError::ReadMetadata)? {
+        let entry = entry.map_err(SnapshotError::ReadMetadata)?;
+        let path = entry.path();
+        if path.is_dir() {
+            delete_unmanaged_tree(&path, project_dir, allowed)?;
+            if fs::read_dir(&path)
+                .map(|mut it| it.next().is_none())
+                .unwrap_or(false)
+            {
+                let _ = fs::remove_dir(&path);
+            }
+        } else if path.is_file() {
+            let rel = path
+                .strip_prefix(project_dir)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !allowed.contains(&rel) {
+                fs::remove_file(&path).map_err(|source| SnapshotError::Restore {
+                    path: path.clone(),
+                    source,
+                })?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn files_differ(left: &Path, right: &Path) -> std::io::Result<bool> {
@@ -493,5 +578,79 @@ mod tests {
 
         store.delete(&snapshot.id).unwrap();
         assert!(store.get(&snapshot.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn rollback_restores_lockfile_beside_custom_manifest_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().to_path_buf();
+        let manifest_path = project_dir.join("foo.tuffbox.json");
+        let lockfile_path = project_dir.join("foo.tuffbox.lock.json");
+        fs::write(&manifest_path, "{\"schemaVersion\":\"0.1.0\"}").unwrap();
+        fs::write(&lockfile_path, "{\"schemaVersion\":\"0.1.0\",\"mods\":[]}").unwrap();
+
+        let store = SnapshotStore::new(&project_dir);
+        let snapshot = store
+            .create(
+                "before-update",
+                "manual",
+                &manifest_path,
+                Some(&lockfile_path),
+                &[] as &[&Path],
+            )
+            .unwrap();
+
+        fs::write(
+            &lockfile_path,
+            "{\"schemaVersion\":\"0.1.0\",\"mods\":[\"new\"]}",
+        )
+        .unwrap();
+        store.rollback(&snapshot.id).unwrap();
+
+        let restored = fs::read_to_string(&lockfile_path).unwrap();
+        assert!(
+            restored.contains("\"mods\":[]"),
+            "lockfile should restore beside foo.tuffbox.json, got: {restored}"
+        );
+        assert!(
+            !project_dir.join("project.tuffbox.lock.json").is_file(),
+            "rollback must not write the hardcoded project.tuffbox.lock.json path"
+        );
+    }
+
+    #[test]
+    fn rollback_removes_files_added_after_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().to_path_buf();
+        let manifest_path = project_dir.join("foo.tuffbox.json");
+        fs::write(&manifest_path, "{\"schemaVersion\":\"0.1.0\"}").unwrap();
+        fs::create_dir_all(project_dir.join("mods")).unwrap();
+        fs::write(project_dir.join("mods/kept.jar"), b"old").unwrap();
+
+        let store = SnapshotStore::new(&project_dir);
+        let snapshot = store
+            .create_with_meta(
+                "before-pull",
+                "github_pack_update",
+                &manifest_path,
+                None::<&Path>,
+                &["mods/kept.jar" as &str],
+                SnapshotMeta {
+                    operation: "github_pack_update".into(),
+                    managed_files: vec![PathBuf::from("mods/kept.jar")],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        fs::write(project_dir.join("mods/kept.jar"), b"mutated").unwrap();
+        fs::write(project_dir.join("mods/added.jar"), b"new").unwrap();
+        store.rollback(&snapshot.id).unwrap();
+
+        assert_eq!(fs::read(project_dir.join("mods/kept.jar")).unwrap(), b"old");
+        assert!(
+            !project_dir.join("mods/added.jar").is_file(),
+            "files added after the snapshot must be removed on rollback"
+        );
     }
 }

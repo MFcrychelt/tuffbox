@@ -1,3 +1,5 @@
+mod dataset_ftb_quests;
+
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -37,6 +39,11 @@ enum Command {
     Modrinth {
         #[command(subcommand)]
         command: ModrinthCommand,
+    },
+    /// CurseForge provider / dataset commands.
+    Curseforge {
+        #[command(subcommand)]
+        command: CurseforgeCommand,
     },
     /// Launch a test instance.
     Launch {
@@ -257,6 +264,35 @@ enum ModrinthCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum CurseforgeCommand {
+    /// Collect FTB Quests `.snbt` from popular CurseForge modpacks into a local dataset.
+    ///
+    /// Downloads each modpack `.zip` into RAM only (never written to disk), extracts
+    /// files under `config/ftbquests/` / `overrides/config/ftbquests/`, and saves
+    /// them as `[slug]_[name].snbt` under the output directory.
+    ///
+    /// Default search: modpacks in the CurseForge **Quests** category (`4478`),
+    /// sorted by downloads. Packs without FTB Quests SNBT are skipped.
+    CollectQuests {
+        /// Max number of most-downloaded modpacks to process.
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+        /// Directory for extracted `.snbt` files.
+        #[arg(long, default_value = "./dataset/raw")]
+        out: PathBuf,
+        /// Max concurrent zip downloads (lower = less RAM).
+        #[arg(long, default_value_t = 3)]
+        concurrency: usize,
+        /// Optional CurseForge search filter (name/author).
+        #[arg(long)]
+        query: Option<String>,
+        /// Category: `quests` (default, id 4478), numeric category id, or `none`.
+        #[arg(long, default_value = "quests")]
+        category: String,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -307,8 +343,11 @@ fn main() -> anyhow::Result<()> {
                 save_manifest(&manifest_path, &manifest)?;
                 if let Some(removed) = removed {
                     if let Some(file_name) = removed.file_name {
-                        if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&manifest_path) {
-                            let content_dir = tuffbox_core::content_dir_for(&instance_dir, removed.content_type);
+                        if let Some(instance_dir) =
+                            tuffbox_core::instance_dir_for_manifest(&manifest_path)
+                        {
+                            let content_dir =
+                                tuffbox_core::content_dir_for(&instance_dir, removed.content_type);
                             if let Err(e) = std::fs::remove_file(content_dir.join(&file_name)) {
                                 eprintln!("warning: could not delete file {file_name}: {e}");
                             }
@@ -437,6 +476,39 @@ fn main() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&versions)?);
             }
         },
+        Command::Curseforge { command } => match command {
+            CurseforgeCommand::CollectQuests {
+                limit,
+                out,
+                concurrency,
+                query,
+                category,
+            } => {
+                let category_id = dataset_ftb_quests::parse_category_arg(&category)?;
+                let stats = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .context("start tokio runtime")?
+                    .block_on(dataset_ftb_quests::collect_ftb_quests(
+                        dataset_ftb_quests::CollectOptions {
+                            limit,
+                            out_dir: out.clone(),
+                            concurrency,
+                            query,
+                            category_id,
+                        },
+                    ))?;
+                println!(
+                    "Done. modpacks={} ok={} skipped={} failed={} snbt_written={} out={}",
+                    stats.modpacks_found,
+                    stats.modpacks_ok,
+                    stats.modpacks_skipped,
+                    stats.modpacks_failed,
+                    stats.snbt_written,
+                    out.display()
+                );
+            }
+        },
         Command::Launch { manifest, profile } => {
             let manifest_path = manifest.clone();
             let manifest = load_manifest(manifest)?;
@@ -446,11 +518,13 @@ fn main() -> anyhow::Result<()> {
                 .iter()
                 .find(|p| p.id == profile_id)
                 .with_context(|| {
-                    let available: Vec<_> = manifest.profiles.iter().map(|p| p.id.as_str()).collect();
+                    let available: Vec<_> =
+                        manifest.profiles.iter().map(|p| p.id.as_str()).collect();
                     format!("profile '{profile_id}' not found; available: {available:?}")
                 })?;
 
-            let java = if let Some(java_path) = manifest.java.as_ref().and_then(|j| j.path.clone()) {
+            let java = if let Some(java_path) = manifest.java.as_ref().and_then(|j| j.path.clone())
+            {
                 tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path))?
             } else {
                 tuffbox_core::TestLauncher::find_java_for_minecraft(&manifest.minecraft.version)?
@@ -480,10 +554,16 @@ fn main() -> anyhow::Result<()> {
             // launch, so `tuffbox launch` never silently starts vanilla.
             let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &game_dir);
             if !sync_report.downloaded.is_empty() {
-                println!("Downloaded {} missing mod file(s).", sync_report.downloaded.len());
+                println!(
+                    "Downloaded {} missing mod file(s).",
+                    sync_report.downloaded.len()
+                );
             }
             for failure in &sync_report.failed {
-                eprintln!("warning: failed to prepare mod '{}': {}", failure.mod_id, failure.error);
+                eprintln!(
+                    "warning: failed to prepare mod '{}': {}",
+                    failure.mod_id, failure.error
+                );
             }
 
             let options = tuffbox_core::LaunchOptions {
@@ -494,13 +574,27 @@ fn main() -> anyhow::Result<()> {
                 quick_play_type: None,
                 quick_play_value: None,
             };
-            let (mut cmd, log_path) =
-                tuffbox_core::TestLauncher::build_command(&manifest, profile, &options, &java, &launcher_dir, &progress, None, None, None, None)?;
+            let (mut cmd, log_path) = tuffbox_core::TestLauncher::build_command(
+                &manifest,
+                profile,
+                &options,
+                &java,
+                &launcher_dir,
+                &progress,
+                None,
+                None,
+                None,
+                None,
+            )?;
             let mut child = cmd.spawn()?;
             let status = child.wait()?;
             let result = tuffbox_core::LaunchResult {
                 exit_code: status.code(),
                 log_path,
+                pid: None,
+                instance_id: None,
+                profile_id: None,
+                started_at: None,
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
@@ -582,13 +676,9 @@ fn run_world_command(command: WorldCommand) -> anyhow::Result<()> {
                 tuffbox_core::region_edit::list_present_chunks(&world, Some(&dim)).map_err(estr)?
             };
             let sels = tuffbox_core::region_edit::chunk_refs_to_selections(&refs);
-            let n = tuffbox_core::region_edit::change_world_chunks(
-                &world,
-                &sels,
-                &change,
-                Some(&dim),
-            )
-            .map_err(estr)?;
+            let n =
+                tuffbox_core::region_edit::change_world_chunks(&world, &sels, &change, Some(&dim))
+                    .map_err(estr)?;
             println!("changed {n} chunks in {}", world.display());
         }
         WorldCommand::Filter {
@@ -641,8 +731,9 @@ fn run_world_command(command: WorldCommand) -> anyhow::Result<()> {
             dim,
             radius,
         } => {
-            let mut hits = tuffbox_core::region_edit::select_world_by_query(&world, &query, Some(&dim))
-                .map_err(estr)?;
+            let mut hits =
+                tuffbox_core::region_edit::select_world_by_query(&world, &query, Some(&dim))
+                    .map_err(estr)?;
             if radius > 0 {
                 hits = tuffbox_core::region_edit::expand_chunk_refs(&hits, radius);
             }
@@ -751,8 +842,7 @@ fn run_world_command(command: WorldCommand) -> anyhow::Result<()> {
             println!("cleared {n} cache file(s) for {}", world.display());
         }
         WorldCommand::Purge { world, dim } => {
-            let n =
-                tuffbox_core::region::purge_world_regions(&world, Some(&dim)).map_err(estr)?;
+            let n = tuffbox_core::region::purge_world_regions(&world, Some(&dim)).map_err(estr)?;
             println!("purged {n} region file(s) in {}", world.display());
         }
     }
@@ -767,7 +857,11 @@ fn add_mod_from_modrinth(
     let provider = tuffbox_core::ModrinthProvider::new();
     let project = provider.get_project(mod_id)?;
 
-    if manifest.mods.iter().any(|m| m.id == project.slug || m.source.project_id.as_deref() == Some(&project.id)) {
+    if manifest
+        .mods
+        .iter()
+        .any(|m| m.id == project.slug || m.source.project_id.as_deref() == Some(&project.id))
+    {
         anyhow::bail!("mod {} is already in the project", project.slug);
     }
 
@@ -783,12 +877,10 @@ fn add_mod_from_modrinth(
         .next()
         .with_context(|| format!("no compatible version found for {mod_id}"))?;
 
-    let file = ProviderFileInfo::select_file_for_loader(
-        &version,
-        &loader_slug(&manifest.loader.kind),
-    )
-    .cloned()
-    .with_context(|| format!("no primary file for version {}", version.id))?;
+    let file =
+        ProviderFileInfo::select_file_for_loader(&version, &loader_slug(&manifest.loader.kind))
+            .cloned()
+            .with_context(|| format!("no primary file for version {}", version.id))?;
 
     let dependencies = provider.resolve_dependencies(&version.id)?;
 
@@ -800,7 +892,9 @@ fn add_mod_from_modrinth(
             project.client_side.as_deref(),
             project.server_side.as_deref(),
         ),
-        Some(other) => anyhow::bail!("invalid side '{other}'; expected: client, server, both, auto"),
+        Some(other) => {
+            anyhow::bail!("invalid side '{other}'; expected: client, server, both, auto")
+        }
     };
 
     let mod_spec = build_mod_spec(&project, &version, file, dependencies, side);
@@ -847,12 +941,10 @@ fn update_mod_from_modrinth(manifest: &mut ProjectManifest, mod_id: &str) -> any
         .next()
         .with_context(|| format!("no compatible version found for {project_id}"))?;
 
-    let file = ProviderFileInfo::select_file_for_loader(
-        &version,
-        &loader_slug(&manifest.loader.kind),
-    )
-    .cloned()
-    .with_context(|| format!("no primary file for version {}", version.id))?;
+    let file =
+        ProviderFileInfo::select_file_for_loader(&version, &loader_slug(&manifest.loader.kind))
+            .cloned()
+            .with_context(|| format!("no primary file for version {}", version.id))?;
 
     let dependencies = provider.resolve_dependencies(&version.id)?;
     let side = manifest.mods[index].side;
@@ -890,7 +982,9 @@ fn build_mod_spec(
         side,
         dependencies,
         status: vec!["ok".to_string()],
-        content_type: tuffbox_core::manifest::ContentType::from_modrinth_project_type(&project.project_type),
+        content_type: tuffbox_core::manifest::ContentType::from_modrinth_project_type(
+            &project.project_type,
+        ),
         authors: project
             .author
             .as_ref()
@@ -935,12 +1029,23 @@ fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> 
 /// failures are printed but don't abort the CLI command, since the
 /// manifest write already succeeded and diagnostics/graph will still flag
 /// missing files.
-fn download_project_mods(manifest_path: &Path, manifest: &ProjectManifest) -> tuffbox_core::ModSyncReport {
-    let instance_dir = tuffbox_core::instance_dir_for_manifest(manifest_path)
-        .unwrap_or_else(|| manifest_path.parent().map(|p| p.to_path_buf()).unwrap_or_default());
+fn download_project_mods(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> tuffbox_core::ModSyncReport {
+    let instance_dir =
+        tuffbox_core::instance_dir_for_manifest(manifest_path).unwrap_or_else(|| {
+            manifest_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default()
+        });
     let report = tuffbox_core::ensure_project_mods_downloaded(manifest, &instance_dir);
     for failure in &report.failed {
-        eprintln!("warning: failed to download mod {}: {}", failure.mod_id, failure.error);
+        eprintln!(
+            "warning: failed to download mod {}: {}",
+            failure.mod_id, failure.error
+        );
     }
     report
 }

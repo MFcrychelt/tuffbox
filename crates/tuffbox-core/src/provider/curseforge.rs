@@ -64,6 +64,7 @@ impl CurseForgeProvider {
     }
 
     /// Search CurseForge content (mods / resource packs / shaders / datapacks).
+    #[allow(clippy::too_many_arguments)]
     pub fn search_content(
         &self,
         class_id: u32,
@@ -73,6 +74,7 @@ impl CurseForgeProvider {
         offset: u32,
         page_size: u32,
         sort_field: Option<u32>,
+        category_id: Option<u32>,
     ) -> Result<CurseForgeSearchPage, ProviderError> {
         let sort_field = sort_field.unwrap_or(2);
         let mut path = format!(
@@ -92,6 +94,9 @@ impl CurseForgeProvider {
         if let Some(loader) = mod_loader_type {
             path.push_str(&format!("&modLoaderType={loader}"));
         }
+        if let Some(cat) = category_id {
+            path.push_str(&format!("&categoryId={cat}"));
+        }
         let resp: CfData<Vec<CfMod>> = self.get_json(&path)?;
         Ok(CurseForgeSearchPage {
             hits: resp.data.into_iter().map(Into::into).collect(),
@@ -107,7 +112,16 @@ impl CurseForgeProvider {
         offset: u32,
         page_size: u32,
     ) -> Result<CurseForgeSearchPage, ProviderError> {
-        self.search_content(CLASS_MODPACK, query, game_version, None, offset, page_size, None)
+        self.search_content(
+            CLASS_MODPACK,
+            query,
+            game_version,
+            None,
+            offset,
+            page_size,
+            None,
+            None,
+        )
     }
 
     pub fn class_id_for_project_type(project_type: &str) -> u32 {
@@ -132,6 +146,29 @@ impl CurseForgeProvider {
         }
     }
 
+    /// Categories for a CurseForge class id (`GET /categories?gameId&classId`).
+    /// Returns `(id, name, parentCategoryId)` sorted by name.
+    pub fn list_categories(&self, class_id: u32) -> Result<Vec<(u32, String, Option<u32>)>, ProviderError> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CfCategoryRaw {
+            id: u32,
+            name: String,
+            parent_category_id: Option<u32>,
+        }
+        let path = format!(
+            "/categories?gameId={MINECRAFT_GAME_ID}&classId={class_id}"
+        );
+        let resp: CfData<Vec<CfCategoryRaw>> = self.get_json(&path)?;
+        let mut out: Vec<(u32, String, Option<u32>)> = resp
+            .data
+            .into_iter()
+            .map(|c| (c.id, c.name, c.parent_category_id))
+            .collect();
+        out.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        Ok(out)
+    }
+
     /// Prefer a file that mentions both the Minecraft version and loader
     /// (CurseForge folds loader names into `gameVersions`).
     pub fn pick_best_file<'a>(
@@ -152,10 +189,7 @@ impl CurseForgeProvider {
             other => other,
         };
         let matches_gv = |f: &&CurseForgeFileInfo| {
-            gv.is_empty()
-                || f.game_versions
-                    .iter()
-                    .any(|v| v.eq_ignore_ascii_case(gv))
+            gv.is_empty() || f.game_versions.iter().any(|v| v.eq_ignore_ascii_case(gv))
         };
         let matches_loader = |f: &&CurseForgeFileInfo| {
             loader.is_empty()
@@ -173,6 +207,35 @@ impl CurseForgeProvider {
     pub fn get_mod(&self, mod_id: u64) -> Result<CurseForgeSearchHit, ProviderError> {
         let resp: CfData<CfMod> = self.get_json(&format!("/mods/{mod_id}"))?;
         Ok(resp.data.into())
+    }
+
+    /// External links of a CurseForge project (issues / source / wiki /
+    /// discord / donation), from the `links` object of `GET /mods/{id}`.
+    pub fn get_mod_links(&self, mod_id: u64) -> Result<CurseForgeLinks, ProviderError> {
+        #[derive(Debug, Clone, Default, Deserialize)]
+        #[serde(rename_all = "camelCase", default)]
+        struct CfLinksRaw {
+            issues_url: Option<String>,
+            source_url: Option<String>,
+            wiki_url: Option<String>,
+            discord_url: Option<String>,
+            donate_url: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct LinksData {
+            #[serde(default)]
+            links: CfLinksRaw,
+        }
+        let resp: LinksData = self.get_json(&format!("/mods/{mod_id}"))?;
+        let l = resp.links;
+        let clean = |s: Option<String>| s.filter(|v| !v.trim().is_empty());
+        Ok(CurseForgeLinks {
+            issues_url: clean(l.issues_url),
+            source_url: clean(l.source_url),
+            wiki_url: clean(l.wiki_url),
+            discord_url: clean(l.discord_url),
+            donate_url: clean(l.donate_url),
+        })
     }
 
     /// HTML description body for a CurseForge project (overview page).
@@ -438,6 +501,53 @@ pub struct CurseForgeSearchHit {
     pub class_id: Option<u32>,
 }
 
+/// External links of a CurseForge project, surfaced on the catalog sidebar.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct CurseForgeLinks {
+    pub issues_url: Option<String>,
+    pub source_url: Option<String>,
+    pub wiki_url: Option<String>,
+    pub discord_url: Option<String>,
+    pub donate_url: Option<String>,
+}
+
+/// Map a CurseForge category display name to a Modrinth-style slug so graph
+/// clustering can share one taxonomy (`Armor, Tools, and Weapons` → `equipment`).
+pub fn normalize_mod_category(name: &str) -> String {
+    let slug: String = name
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| match c {
+            '&' | '+' | ',' | '/' => ' ',
+            other => other,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-");
+
+    match slug.as_str() {
+        "adventure-and-rpg" => "adventure".into(),
+        "api-and-library" => "library".into(),
+        "armor-tools-and-weapons" => "equipment".into(),
+        "cosmetic" => "social".into(),
+        "map-and-information" => "management".into(),
+        "performance" => "optimization".into(),
+        "utility-qol" => "utility".into(),
+        "world-gen" | "world-generation" => "worldgen".into(),
+        "farming" => "food".into(),
+        "redstone" | "automation" | "energy" | "processing" => "technology".into(),
+        "energy-fluid-and-item-transport" | "player-transport" => "transportation".into(),
+        "biomes" | "dimensions" | "structures" | "ores-and-resources" => "worldgen".into(),
+        "bug-fixes" | "server-utility" | "miscellaneous" | "education" => "utility".into(),
+        "genetics" => "game-mechanics".into(),
+        "mcreator" => "library".into(),
+        "twitch-integration" => "social".into(),
+        other => other.to_string(),
+    }
+}
+
 /// CurseForge file dependency relation types (API `relationType`).
 /// 1 EmbeddedLibrary, 2 OptionalDependency, 3 RequiredDependency,
 /// 4 Tool, 5 Incompatible, 6 Include.
@@ -469,6 +579,9 @@ pub struct CurseForgeFileInfo {
     /// True when CurseForge withheld the CDN URL (author distribution restrictions).
     pub blocked: bool,
     pub class_id: Option<u32>,
+    /// Optional file changelog text (CF only populates it on file endpoints).
+    #[serde(default)]
+    pub changelog: Option<String>,
     #[serde(default)]
     pub dependencies: Vec<CurseForgeFileDependency>,
 }
@@ -673,6 +786,8 @@ struct CfFile {
     #[serde(default)]
     file_date: Option<String>,
     #[serde(default)]
+    changelog: Option<String>,
+    #[serde(default)]
     dependencies: Vec<CfFileDependencyRaw>,
 }
 
@@ -748,6 +863,7 @@ impl From<CfFile> for CurseForgeFileInfo {
             game_versions: f.game_versions,
             hashes: ProviderFileHashes { sha1, sha512 },
             file_date: f.file_date,
+            changelog: f.changelog.filter(|c| !c.trim().is_empty()),
             blocked,
             class_id: None,
             dependencies,
@@ -888,7 +1004,9 @@ mod tests {
         // Prism/GDLauncher: files/{id/1000}/{id%1000}/{name}
         let urls = curseforge_cdn_urls(5_432_101, "My Pack-1.0.zip");
         assert!(urls[0].contains("/files/5432/101/"));
-        assert!(urls[0].contains("My%20Pack-1.0.zip") || urls[0].ends_with("My Pack-1.0.zip") == false);
+        assert!(
+            urls[0].contains("My%20Pack-1.0.zip") || urls[0].ends_with("My Pack-1.0.zip") == false
+        );
         assert!(urls.iter().any(|u| u.contains("mediafilez.forgecdn.net")));
         assert!(urls.iter().any(|u| u.contains("edge.forgecdn.net")));
     }
@@ -927,6 +1045,7 @@ mod tests {
             file_date: None,
             blocked: true,
             class_id: None,
+            changelog: None,
         };
         let urls = info.resolved_download_urls();
         assert!(!urls.is_empty());

@@ -6,6 +6,8 @@
 
 **TuffSwarm (федеративная сеть):** не реализована. Foundation — локальный ActionPlan, Crash KB / authored export и opt-in remote KB client. Архитектура сети: [`13-tuffswarm-network.md`](13-tuffswarm-network.md).
 
+**GitHub Pack Transport:** `crates/tuffbox-core/src/github_pack/` — schema v2 transport envelope (signed metadata + manifest), Release asset materialization with hash/size checks, atomic stage-then-promote install, pinned-signer updates (no unsigned downgrade), and commit-SHA-pinned apply with snapshot rollback. Desktop commands + UI: `github_pack_commands.rs`, `GithubPackTransport.svelte`, `GithubPackUpdateBanner.svelte`. Контракт: [`15-github-pack-transport.md`](15-github-pack-transport.md).
+
 Добавлен Rust workspace:
 
 ```text

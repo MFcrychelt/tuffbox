@@ -67,7 +67,10 @@ pub struct SimilarCaseHit {
 }
 
 pub fn user_kb_path(project_dir: &Path) -> PathBuf {
-    project_dir.join(".tuffbox").join("crash_kb").join("cases.jsonl")
+    project_dir
+        .join(".tuffbox")
+        .join("crash_kb")
+        .join("cases.jsonl")
 }
 
 pub fn author_export_dir(project_dir: &Path) -> PathBuf {
@@ -136,11 +139,11 @@ pub fn fingerprint_from_text_with_blame(
     let key = format!(
         "{}|{}|{}|{}|{}|{}",
         normalize_token(&exception),
-        frames.first().map(|s| normalize_token(s)).unwrap_or_default(),
-        mod_file
-            .as_deref()
-            .map(normalize_token)
+        frames
+            .first()
+            .map(|s| normalize_token(s))
             .unwrap_or_default(),
+        mod_file.as_deref().map(normalize_token).unwrap_or_default(),
         mc_major,
         loader,
         blame_part
@@ -194,7 +197,12 @@ fn scrub_windows_users(text: &str) -> String {
                 let mut name_end = name_start;
                 while name_end < bytes.len() {
                     let c = bytes[name_end];
-                    if c == b'\\' || c == b'/' || c == b' ' || c == b'\t' || c == b'\n' || c == b'\r'
+                    if c == b'\\'
+                        || c == b'/'
+                        || c == b' '
+                        || c == b'\t'
+                        || c == b'\n'
+                        || c == b'\r'
                     {
                         break;
                     }
@@ -289,8 +297,8 @@ pub fn builtin_seed() -> Vec<CrashCase> {
             "UnsupportedClassVersionError",
             &["java.lang.UnsupportedClassVersionError"],
             &["wrong java", "class file version"],
-            "Minecraft/mod requires a newer Java. Install the Java version required by your MC version (17 for 1.18–1.20.4, 21 for 1.20.5+) and point TuffBox at it.",
-            vec![action("config_change", None, "Switch project Java to the required major version", "low")],
+            "Minecraft/mod requires a newer Java. Read the required major from the crash itself (Fabric `depends java` bound or class file version — mods often need MORE than the MC floor) and switch the project runtime to it.",
+            vec![action("set_java", None, "Switch project Java to the required major version", "low")],
         ),
         case(
             "builtin-mixin-apply",
@@ -455,7 +463,10 @@ pub fn upsert_user_case(project_dir: &Path, case: &CrashCase) -> Result<PathBuf,
     } else {
         Vec::new()
     };
-    if let Some(slot) = existing.iter_mut().find(|c| c.fingerprint.key == case.fingerprint.key) {
+    if let Some(slot) = existing
+        .iter_mut()
+        .find(|c| c.fingerprint.key == case.fingerprint.key)
+    {
         slot.success_count = slot.success_count.saturating_add(case.success_count);
         slot.fail_count = slot.fail_count.saturating_add(case.fail_count);
         if !case.solution.is_empty() {
@@ -501,7 +512,10 @@ pub fn record_feedback(
     suspected_mods: &[String],
 ) -> Result<PathBuf, String> {
     let mut case = CrashCase {
-        id: format!("user-{}", fingerprint.key.chars().take(24).collect::<String>()),
+        // Full-key-derived id: the old 24-char prefix collided across
+        // different crashes sharing an exception/frame prefix, so feedback
+        // for crash B overwrote the case for crash A on upsert.
+        id: format!("user-{}", feedback_case_slug(&fingerprint.key)),
         fingerprint: fingerprint.clone(),
         symptoms: Vec::new(),
         suspected_mods: suspected_mods.to_vec(),
@@ -517,6 +531,67 @@ pub fn record_feedback(
         case.solution = "User confirmed this AI explanation helped.".into();
     }
     upsert_user_case(project_dir, &case)
+}
+
+/// Fingerprint keys match exactly, or on all segments but the trailing blame
+/// suffix (same soft rule as `score_case`: older cases without blame ids
+/// still hit the same crash). Used to gate L1 short-circuit: a merely similar
+/// crash must never skip AI with a wrong fix.
+pub fn fingerprint_keys_match(current: &str, candidate: &str) -> bool {
+    if current.is_empty() || candidate.is_empty() {
+        return false;
+    }
+    if current == candidate {
+        return true;
+    }
+    trunc_fp_key(current) == trunc_fp_key(candidate)
+}
+
+/// Fingerprint key without the trailing `|blame` segment (free function, not
+/// a closure: a closure's single inferred signature cannot serve the two
+/// different borrow lifetimes of `current` and `candidate`).
+fn trunc_fp_key(k: &str) -> &str {
+    k.rsplit_once('|').map(|(h, _)| h).unwrap_or(k)
+}
+
+/// Filesystem/JSON-friendly slug of a full fingerprint key (all segments, not
+/// just the exception prefix) for user-feedback case ids.
+fn feedback_case_slug(key: &str) -> String {
+    let slug: String = key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Collapse runs of `-` and trim — keep up to 96 chars (full key coverage).
+    let mut out = String::with_capacity(slug.len().min(96));
+    let mut prev_dash = false;
+    for c in slug.chars() {
+        if c == '-' {
+            if prev_dash || out.is_empty() {
+                continue;
+            }
+            prev_dash = true;
+        } else {
+            prev_dash = false;
+        }
+        out.push(c);
+        if out.len() >= 96 {
+            break;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "case".to_string()
+    } else {
+        out
+    }
 }
 
 /// Rank cases by similarity to the fingerprint + free-text haystack.
@@ -538,6 +613,11 @@ pub fn search_similar(
     scored
         .into_iter()
         .map(|(score, c)| {
+            // Additive weights (exception 0.55 + frames + blame + symptoms…)
+            // can exceed 1.0; an unclamped `score=2.40` misleads the LLM
+            // prompt ("score" reads as a 0–1 similarity) and lets mediocre
+            // matches pass the STRONG threshold downstream.
+            let score = score.clamp(0.0, 1.0);
             let actions = if !c.launcher_actions.is_empty() {
                 crate::action_plan::plan_to_legacy_ai_actions(&crate::action_plan::ActionPlan {
                     schema_version: crate::action_plan::ACTION_PLAN_SCHEMA_VERSION,
@@ -593,6 +673,8 @@ pub fn save_authored_case(
                     "disable" | "disable_mod" => "disable_mod".into(),
                     "config_change" | "edit_config" => "edit_config".into(),
                     "reinstall" | "reinstall_mod" => "reinstall_mod".into(),
+                    "set_java" | "setjava" | "select_java" | "selectjava"
+                    | "auto_java" | "autojava" => "set_java".into(),
                     other => other.to_string(),
                 },
                 mod_id: a.mod_id.clone(),
@@ -837,8 +919,14 @@ fn score_case(case: &CrashCase, fp: &CrashFingerprint, hay: &str) -> f64 {
 }
 
 fn jaccard_tokens(a: &str, b: &str) -> f64 {
-    let ta: HashSet<&str> = a.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| t.len() > 2).collect();
-    let tb: HashSet<&str> = b.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| t.len() > 2).collect();
+    let ta: HashSet<&str> = a
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| t.len() > 2)
+        .collect();
+    let tb: HashSet<&str> = b
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| t.len() > 2)
+        .collect();
     if ta.is_empty() || tb.is_empty() {
         return 0.0;
     }
@@ -854,7 +942,13 @@ fn jaccard_tokens(a: &str, b: &str) -> f64 {
 fn normalize_token(s: &str) -> String {
     s.to_ascii_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '/' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '/' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .trim_matches('_')
         .to_string()
@@ -908,12 +1002,7 @@ fn extract_top_frames(text: &str, n: usize) -> Vec<String> {
         if t.starts_with("at ") {
             let frame = t.trim_start_matches("at ").trim();
             // Drop line numbers: Foo.bar(Foo.java:12) → Foo.bar
-            let cleaned = frame
-                .split('(')
-                .next()
-                .unwrap_or(frame)
-                .trim()
-                .to_string();
+            let cleaned = frame.split('(').next().unwrap_or(frame).trim().to_string();
             if !cleaned.is_empty() {
                 frames.push(cleaned);
             }
@@ -947,7 +1036,9 @@ fn extract_mod_file(text: &str) -> Option<String> {
 fn extract_mixin(text: &str) -> Option<String> {
     for line in text.lines() {
         let lower = line.to_ascii_lowercase();
-        if lower.contains("mixin") && (lower.contains("apply") || lower.contains("failed") || lower.contains("@mixin")) {
+        if lower.contains("mixin")
+            && (lower.contains("apply") || lower.contains("failed") || lower.contains("@mixin"))
+        {
             return Some(line.trim().chars().take(200).collect());
         }
     }
@@ -980,7 +1071,10 @@ pub fn smart_excerpt(text: &str, max_len: usize) -> String {
     if chunk.len() <= max_len {
         return chunk;
     }
-    format!("{}... (truncated)", truncate_at_char_boundary(&chunk, max_len))
+    format!(
+        "{}... (truncated)",
+        truncate_at_char_boundary(&chunk, max_len)
+    )
 }
 
 /// Truncate to at most `max_len` bytes without splitting a UTF-8 codepoint.
@@ -1019,7 +1113,10 @@ mod tests {
     fn fingerprints_exception() {
         let text = "Description: Unexpected error\njava.lang.NoClassDefFoundError: com/example/Foo\n\tat com.example.Bar.run(Bar.java:10)\nMod File: sodium.jar\n";
         let fp = fingerprint_from_text(text, "1.20.1", "fabric");
-        assert!(fp.exception.to_lowercase().contains("noclassdef") || fp.exception.contains("Unexpected"));
+        assert!(
+            fp.exception.to_lowercase().contains("noclassdef")
+                || fp.exception.contains("Unexpected")
+        );
         assert!(!fp.frames.is_empty());
         assert_eq!(fp.mc_major, "1.20");
     }
@@ -1034,7 +1131,10 @@ mod tests {
         );
         let hits = search_similar(&cases, &fp, "java heap space oom", 3);
         assert!(!hits.is_empty());
-        assert!(hits[0].solution.to_lowercase().contains("ram") || hits[0].solution.to_lowercase().contains("memory"));
+        assert!(
+            hits[0].solution.to_lowercase().contains("ram")
+                || hits[0].solution.to_lowercase().contains("memory")
+        );
     }
 
     #[test]

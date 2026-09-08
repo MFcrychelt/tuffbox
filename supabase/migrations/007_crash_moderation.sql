@@ -17,9 +17,10 @@ create policy admin_config_deny_all
   with check (false);
 revoke all on table public.admin_config from anon, authenticated;
 
--- Default secret — change via: update admin_config set value = '...' where key = 'moderation_secret';
+-- Default secret — MUST be changed after deploy (see 015_security_hardening.sql).
+-- Do not ship a known default in production.
 insert into public.admin_config (key, value)
-values ('moderation_secret', 'tuffbox-mod-change-me')
+values ('moderation_secret', '')
 on conflict (key) do nothing;
 
 alter table public.experience_capsules

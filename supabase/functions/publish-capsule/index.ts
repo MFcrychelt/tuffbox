@@ -4,6 +4,12 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import * as ed from "https://esm.sh/@noble/ed25519@2.1.0";
+import { sha512 } from "https://esm.sh/@noble/hashes@1.4.0/sha512.js";
+
+// @noble/ed25519@2.x is dependency-free by default; sync/async verify needs SHA-512 wired.
+ed.etc.sha512Sync = (...m: Uint8Array[]) => sha512(ed.etc.concatBytes(...m));
+ed.etc.sha512Async = (...m: Uint8Array[]) =>
+  Promise.resolve(sha512(ed.etc.concatBytes(...m)));
 
 const KNOWN_OPS = new Set([
   "install_mod",
@@ -211,7 +217,16 @@ Deno.serve(async (req) => {
   }
 
   const msg = new TextEncoder().encode(contentHash);
-  const ok = await ed.verify(sig, msg, pk);
+  let ok = false;
+  try {
+    ok = await ed.verify(sig, msg, pk);
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    return jsonResponse(400, {
+      error: "signature verify error",
+      detail,
+    });
+  }
   if (!ok) {
     return jsonResponse(400, { error: "signature verify failed" });
   }

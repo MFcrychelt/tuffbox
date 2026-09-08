@@ -9,6 +9,7 @@ use crate::crash::FixAction;
 use crate::graph::NodeId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
 pub const ACTION_PLAN_SCHEMA_VERSION: u32 = 1;
 
@@ -25,8 +26,8 @@ You do NOT apply fixes. You propose an ActionPlan for the launcher.
 AI Decision making — follow these steps IN ORDER before emitting JSON:
 
 1) Understand the context (shared info)
-   - Use ONLY facts from the prompt: MC/loader/Java/OS, inventory, culprits, Crash Assistant findings, similar KB cases, graph diagnostics, recent changes, crash/log excerpts.
-   - Treat launcher culprits + high-score KB cases as shared ground truth. Do not invent mods, versions, or paths outside that context.
+   - Use ONLY facts from the prompt: MC/loader/Java/OS, inventory, group-test covering, player-trail covering, culprits, Crash Assistant findings, similar KB cases, graph diagnostics, recent changes, crash/log excerpts.
+   - Fact priority: verified group test > trail covering > culprits/KB. Do not invent mods, versions, or paths. Do not collapse a multi-mod covering into one "main" culprit.
 
 2) Isolate the problem
    - Name ONE primary root cause (and at most 1–2 tightly related secondary causes).
@@ -40,21 +41,24 @@ AI Decision making — follow these steps IN ORDER before emitting JSON:
    - Lower confidence when the stack is ambiguous or context is incomplete. Never hide uncertainty.
 
 4) Map decision
-   - Map the isolated cause to the smallest set of launcher ops (install_mod, remove_mod, disable_mod, update_mod, change_mod_version, reinstall_mod, edit_config).
+   - Map the isolated cause to the smallest set of launcher ops (install_mod, remove_mod, disable_mod, update_mod, change_mod_version, reinstall_mod, edit_config, set_java).
    - Each action’s reason must link back to the isolated problem; no speculative drive-by fixes.
    - Order actions: safest confirmation step first, then the fix.
 
 Hard rules:
 1. Prefer matchedCaseIds / similar known cases when score is high.
-2. Every mutating action MUST include modId (except pure edit_config).
+2. Every mutating action MUST include modId (except pure edit_config and set_java, which carry no mod).
 3. Only reference mods that appear in inventory OR are explicit missing dependencies named in the crash.
 4. Prefer disable_mod before remove_mod; prefer exact version when known.
 5. For edit_config: path relative to instance; patch must be minimal; never rewrite whole unrelated files.
 6. confidence 0.0–1.0; lower if no KB match or ambiguous stacktrace.
 7. Do not invent Modrinth project IDs; omit projectId if unknown (launcher resolves by modId).
 8. Never invent version numbers or file paths. If the exact version is unknown, set "version" and "path" to null (launcher resolves). Do not use placeholders like 1.2.3, 0.0.1, or /game/mods/….
-9. If a mod is a suspected culprit / already installed, prefer disable_mod or remove_mod — never install_mod for that mod.
-10. Return JSON only. No markdown fences."#;
+9. If a mod is a suspected culprit AND already installed, prefer disable_mod or remove_mod — never install_mod for that culprit. Missing dependencies named in the crash stay install_mod (they are not culprits).
+10. Conflict claims need a concrete signal. A remove_mod/disable_mod justified by "conflict" is allowed ONLY when grounded in (a) explicit conflicts metadata for the mod present in inventory, (b) a crash/log signal (mixin class collision, duplicate registry, packet clash), or (c) a matched KB case (matchedCaseIds). Category/keyword overlap is NOT a conflict — "both touch message systems", "another modded message system", "potential conflict with other mods" must NOT trigger removal. In that case keep the mods only in suspectedMods with confidence < 0.5 and needsUserReview true, or prefer edit_config to disable the overlapping feature.
+11. Version conflicts are fixed with VERSIONS, not removal. When an API-break signal (NoSuchMethodError/NoSuchFieldError/Mixin apply failed on a render/shader/class target) implicates two mods that are designed to work together (classic: Iris + old Sodium, Oculus + mismatched Embeddium), the fix is update_mod (null version = launcher picks newest compatible) or change_mod_version pinned to a version from the "Available mod versions" list — NEVER remove/disable one side as the first step. change_mod_version "version" MUST be copied verbatim from that list; if the list has no entry for the mod, use update_mod with null version instead of inventing one.
+12. Java mismatch is fixed with the set_java OP, not prose. When the "Java requirement" section shows required > current (Fabric `depends java`, UnsupportedClassVersionError), emit {"op":"set_java","version":"<required major>","reason":…} as the FIRST action (risk low — the launcher picks an installed runtime or provisions one). Never describe the Java switch only in humanExplanation.
+13. Return JSON only. No markdown fences."#;
 
 /// Post-resolution distill: compress a user's trial-and-error fix path into a
 /// minimal ActionPlan suitable for sharing as an ExperienceCapsule.
@@ -69,7 +73,10 @@ Rules:
 5. Set source to "distill", needsUserReview to true (beta human confirm before network share).
 6. confidence 0.0–1.0 based on how clear the causal path is.
 7. Every mutating action MUST include modId (except pure edit_config).
-8. Return JSON only. No markdown fences."#;
+8. suspectedMods = culprits that needed disable/remove — NEVER list a mod you install_mod as a missing dependency.
+9. If the efficient fix was installing a missing dependency, keep op install_mod (do not flip to disable).
+10. If the efficient fix was switching Java (timeline shows "Selected Java N"), keep op set_java with version "N" (the major from the timeline, not the MC floor).
+11. Return JSON only. No markdown fences."#;
 
 pub const ACTION_PLAN_JSON_SCHEMA_HINT: &str = r#"Return ONLY valid JSON with this schema:
 {
@@ -81,11 +88,11 @@ pub const ACTION_PLAN_JSON_SCHEMA_HINT: &str = r#"Return ONLY valid JSON with th
   "source": "kb"|"ai"|"hybrid"|null,
   "matchedCaseIds": string[]|null,
   "actions": [{
-    "op": "install_mod"|"remove_mod"|"disable_mod"|"update_mod"|"change_mod_version"|"reinstall_mod"|"edit_config",
+    "op": "install_mod"|"remove_mod"|"disable_mod"|"update_mod"|"change_mod_version"|"reinstall_mod"|"edit_config"|"set_java",
     "modId": string|null,
     "provider": "modrinth"|"curseforge"|null,
     "projectId": string|null,
-    "version": string|null,
+    "version": string|null (REQUIRED for change_mod_version: copy verbatim from "Available mod versions"; for set_java: Java major like "21"),
     "path": string|null,
     "patchType": "json_merge"|"toml_set"|"properties_set"|"replace_file"|null,
     "patch": object|string|null,
@@ -104,6 +111,7 @@ pub const KNOWN_OPS: &[&str] = &[
     "change_mod_version",
     "reinstall_mod",
     "edit_config",
+    "set_java",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -205,9 +213,45 @@ impl DiagnoseMode {
 /// Parse ActionPlan JSON. Also accepts legacy CrashAiResponse shape and normalizes it.
 pub fn parse_action_plan(json_str: &str) -> Result<ActionPlan, String> {
     let trimmed = strip_fences(json_str);
-    let v: Value =
-        serde_json::from_str(trimmed).map_err(|e| format!("Invalid ActionPlan JSON: {e}"))?;
+    // Small local models often wrap the object in prose
+    // ("Here is the plan: ```json {...} ``` …"). Fall back to the embedded
+    // {...} span instead of failing the whole diagnose run.
+    let direct: Result<Value, _> = serde_json::from_str(trimmed);
+    let v = match direct {
+        Ok(v) => v,
+        Err(first_err) => {
+            if let Some(embedded) = extract_embedded_json(trimmed) {
+                serde_json::from_str(embedded)
+                    .map_err(|e| format!("Invalid ActionPlan JSON: {e}"))?
+            } else {
+                return Err(format!("Invalid ActionPlan JSON: {first_err}"));
+            }
+        }
+    };
     parse_action_plan_value(&v)
+}
+
+/// Largest `{…}` span in `s` (first `{` to last `}`), if balanced enough.
+fn extract_embedded_json(s: &str) -> Option<&str> {
+    let start = s.find('{')?;
+    let end = s.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    let span = &s[start..=end];
+    // Sanity: braces must roughly balance, otherwise we'd hand serde garbage.
+    let (mut open, mut close) = (0usize, 0usize);
+    for c in span.chars() {
+        match c {
+            '{' => open += 1,
+            '}' => close += 1,
+            _ => {}
+        }
+    }
+    if open == 0 || open != close {
+        return None;
+    }
+    Some(span)
 }
 
 pub fn parse_action_plan_value(v: &Value) -> Result<ActionPlan, String> {
@@ -314,6 +358,8 @@ fn legacy_action_type_to_op(action_type: &str) -> String {
         "config_change" | "edit_config" | "config" => "edit_config".into(),
         "reinstall" | "reinstall_mod" => "reinstall_mod".into(),
         "change_mod_version" | "change_version" => "change_mod_version".into(),
+        "set_java" | "setjava" | "select_java" | "selectjava" | "switch_java" | "auto_java"
+        | "autojava" => "set_java".into(),
         other => other.to_string(),
     }
 }
@@ -330,11 +376,99 @@ pub struct GroundingResult {
     pub notes: Vec<String>,
 }
 
+/// Dedupe actions that target the same mod with the same op (LLMs / KB merges
+/// often repeat e.g. `install_mod:indium`). Only exact op+target collisions
+/// collapse; keep the first entry, borrow reason/risk from the duplicate when
+/// the first lacks them.
+fn dedupe_actions(actions: Vec<LauncherAction>) -> Vec<LauncherAction> {
+    let mut out: Vec<LauncherAction> = Vec::with_capacity(actions.len());
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut idx = 0;
+    for a in actions {
+        let key = action_dedupe_key(&a);
+        let Some(key) = key else {
+            out.push(a);
+            idx += 1;
+            continue;
+        };
+        if let Some(&first) = seen.get(&key) {
+            if out[first].reason.is_none() && a.reason.is_some() {
+                out[first].reason = a.reason.clone();
+            }
+            if out[first].risk.is_empty() && !a.risk.is_empty() {
+                out[first].risk = a.risk.clone();
+            }
+            continue;
+        }
+        seen.insert(key, idx);
+        out.push(a);
+        idx += 1;
+    }
+    out
+}
+
+/// Stable identity for an action within a plan: op + mod/project id (or path).
+fn action_dedupe_key(a: &LauncherAction) -> Option<String> {
+    let op = a.op.trim().to_ascii_lowercase();
+    let id = a
+        .mod_id
+        .as_deref()
+        .or(a.project_id.as_deref())
+        .map(str::trim)
+        .map(|s| s.to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+    match id {
+        Some(id) => Some(format!("{op}:{id}")),
+        None => {
+            let path = a.path.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            path.map(|p| format!("{op}:path:{p}"))
+        }
+    }
+}
+
 /// Normalize placeholders / polarity, then ground against inventory + missing deps.
 pub fn ground_action_plan(
+    plan: ActionPlan,
+    inventory_mod_ids: &[String],
+    missing_dep_ids: &[String],
+) -> GroundingResult {
+    // Parse-time / general grounding does NOT apply the speculative-conflict
+    // guard: co-occurrence evidence is unknown here, and running it early would
+    // downgrade remove→disable before the diagnose path can suppress the claim
+    // with real co-occurrence data. The guard runs only in the compat-aware
+    // grounding below.
+    ground_action_plan_core(plan, inventory_mod_ids, missing_dep_ids, &[], false)
+}
+
+/// Like [`ground_action_plan`], plus co-occurrence negative evidence.
+///
+/// `compat` lists mod pairs known to co-exist in working packs. When a
+/// speculative conflict claim is between such a pair, the claim is *suppressed*
+/// (the mods demonstrably coexist) rather than downgraded — avoiding the
+/// false-positive removal the plain guard would otherwise trigger.
+///
+/// This is the variant the crash-diagnose flow must call, so the guard sees
+/// full context (inventory + co-occurrence) in one pass.
+pub fn ground_action_plan_with_compat(
+    plan: ActionPlan,
+    inventory_mod_ids: &[String],
+    missing_dep_ids: &[String],
+    compat: &[CoexistingPair],
+) -> GroundingResult {
+    ground_action_plan_core(plan, inventory_mod_ids, missing_dep_ids, compat, true)
+}
+
+/// Core grounding shared by the public variants.
+///
+/// `apply_conflict_guard` enables the speculative-conflict guard. It is OFF for
+/// parse-time grounding (co-occurrence unknown) and ON for the diagnose path,
+/// which supplies `compat`.
+fn ground_action_plan_core(
     mut plan: ActionPlan,
     inventory_mod_ids: &[String],
     missing_dep_ids: &[String],
+    compat: &[CoexistingPair],
+    apply_conflict_guard: bool,
 ) -> GroundingResult {
     let mut notes = Vec::new();
     plan.confidence = plan.confidence.clamp(0.0, 1.0);
@@ -358,6 +492,14 @@ pub fn ground_action_plan(
         .filter(|s| !s.is_empty())
         .collect();
     let has_inventory = !inventory_l.is_empty();
+    let is_distill = plan
+        .source
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("distill") || s.starts_with("distill"));
+
+    // Co-occurrence negative evidence + the set of mods this plan implicates.
+    let compat_map = build_compat_map(compat);
+    let plan_mod_ids = plan_mod_id_set(&plan);
 
     let mut kept = Vec::with_capacity(plan.actions.len());
     for mut a in plan.actions.drain(..) {
@@ -383,12 +525,32 @@ pub fn ground_action_plan(
         let id_l = a
             .mod_id
             .as_deref()
+            .or(a.project_id.as_deref())
             .map(|s| s.trim().to_ascii_lowercase())
             .filter(|s| !s.is_empty());
 
+        // AI sometimes invents install targets from vanilla resource locations
+        // (e.g. minecraft:builtin/entity → minecraftbuiltinentity).
         if a.op == "install_mod" {
             if let Some(ref id) = id_l {
-                if suspected.iter().any(|s| s == id) {
+                if is_invented_vanilla_resource_mod_id(id) {
+                    notes.push(format!(
+                        "dropped install_mod:{id} — looks like a vanilla resource path, not a mod"
+                    ));
+                    continue;
+                }
+            }
+        }
+
+        if a.op == "install_mod" {
+            if let Some(ref id) = id_l {
+                let is_suspect = suspected.iter().any(|s| s == id);
+                let in_inv = inventory_l.iter().any(|s| s == id);
+                let in_missing = missing_l.iter().any(|s| s == id);
+                // Polarity flip install→disable only when the mod is an installed
+                // culprit. Distill / missing-deps must keep install_mod — rewriting
+                // a successful install into disable is how peers get broken capsules.
+                if is_suspect && in_inv && !in_missing && !is_distill {
                     a.op = "disable_mod".into();
                     let note = "rewrote install→disable: mod is a suspected culprit";
                     notes.push(format!("{id}: {note}"));
@@ -399,8 +561,8 @@ pub fn ground_action_plan(
                     if a.risk.eq_ignore_ascii_case("low") {
                         a.risk = "medium".into();
                     }
-                } else if has_inventory && inventory_l.iter().any(|s| s == id) {
-                    // Already installed and not a suspect → reinstall instead of install.
+                } else if has_inventory && in_inv && !in_missing && !is_distill {
+                    // Already installed and not a missing dep → reinstall instead of install.
                     a.op = "reinstall_mod".into();
                     let note = "rewrote install→reinstall: mod already in inventory";
                     notes.push(format!("{id}: {note}"));
@@ -408,6 +570,61 @@ pub fn ground_action_plan(
                         Some(r) if !r.is_empty() => format!("{r} ({note})"),
                         _ => note.into(),
                     });
+                }
+            }
+        }
+
+        // Speculative-conflict guard. A remove/disable justified only by
+        // category/keyword overlap (e.g. "both touch message systems",
+        // "potential conflict with other mods") is the classic LLM
+        // false-positive. Without a matched KB case it must not be trusted as
+        // a confident removal: downgrade remove→disable (reversible), force
+        // manual review, and cap confidence. Concrete conflicts (mixin/registry/
+        // metadata) are not caught here and pass through.
+        //
+        // Negative evidence: if this mod is observed co-occurring widely with
+        // another mod the plan itself implicates (suspected/targeted), the pair
+        // demonstrably coexists in working packs — so the claim is *suppressed*
+        // rather than downgraded.
+        if apply_conflict_guard && matches!(a.op.as_str(), "remove_mod" | "disable_mod") {
+            if let Some(ref reason) = a.reason {
+                if is_speculative_conflict_reason(reason) && plan.matched_case_ids.is_empty() {
+                    let id_l = a
+                        .mod_id
+                        .as_deref()
+                        .map(|s| s.trim().to_ascii_lowercase())
+                        .filter(|s| !s.is_empty());
+                    let has_compat = id_l.as_ref().map_or(false, |id| {
+                        plan_mod_ids.iter().any(|other| {
+                            other != id && compat_count(&compat_map, id, other).is_some()
+                        })
+                    });
+                    if has_compat {
+                        let note = "suppressed speculative conflict: co-occurrence evidence shows these mods coexist in working packs — not a hard conflict";
+                        notes.push(format!(
+                            "{}: {}",
+                            a.mod_id.as_deref().unwrap_or(&a.op),
+                            note
+                        ));
+                    } else {
+                        if a.op == "remove_mod" {
+                            a.op = "disable_mod".into();
+                        }
+                        plan.needs_user_review = true;
+                        if plan.confidence > 0.5 {
+                            plan.confidence = 0.4;
+                        }
+                        let note = "downgraded: conflict claim was speculative (category/keyword overlap, no concrete signal) — verify before removing";
+                        notes.push(format!(
+                            "{}: {}",
+                            a.mod_id.as_deref().unwrap_or(&a.op),
+                            note
+                        ));
+                        a.reason = Some(match a.reason.take() {
+                            Some(r) if !r.is_empty() => format!("{r} ({note})"),
+                            _ => note.into(),
+                        });
+                    }
                 }
             }
         }
@@ -429,6 +646,8 @@ pub fn ground_action_plan(
                 let in_missing = missing_l.iter().any(|s| s == id);
                 let in_suspect = suspected.iter().any(|s| s == id);
                 let allowed = match a.op.as_str() {
+                    // Distill shares the efficient fix for peers who still lack the mod.
+                    "install_mod" if is_distill => true,
                     "install_mod" => {
                         if missing_l.is_empty() {
                             // No explicit missing list → keep installs of mods not already present
@@ -452,7 +671,37 @@ pub fn ground_action_plan(
 
         kept.push(a);
     }
-    plan.actions = kept;
+    plan.actions = dedupe_actions(kept);
+
+    // Distill: never keep install targets in suspectedMods (they are the fix, not culprits).
+    if is_distill {
+        let install_ids: Vec<String> = plan
+            .actions
+            .iter()
+            .filter(|a| a.op == "install_mod")
+            .filter_map(|a| {
+                a.mod_id
+                    .as_deref()
+                    .map(|s| s.trim().to_ascii_lowercase())
+                    .filter(|s| !s.is_empty())
+            })
+            .collect();
+        if !install_ids.is_empty() {
+            let before = plan.suspected_mods.len();
+            plan.suspected_mods.retain(|s| {
+                !install_ids
+                    .iter()
+                    .any(|id| id == &s.trim().to_ascii_lowercase())
+            });
+            if plan.suspected_mods.len() != before {
+                notes.push(
+                    "cleared suspectedMods entries that are install_mod targets (fix ≠ culprit)"
+                        .into(),
+                );
+            }
+        }
+    }
+
     GroundingResult { plan, notes }
 }
 
@@ -477,10 +726,7 @@ pub fn overlay_crash_assistant_findings(
         .auto_fix
         .clone()
         .unwrap_or_else(|| java.description.clone());
-    let java_note = format!(
-        "Crash Assistant [{}]: {} — {}",
-        java.code, java.title, auto
-    );
+    let java_note = format!("Crash Assistant [{}]: {} — {}", java.code, java.title, auto);
 
     let only_mod_churn = !plan.actions.is_empty()
         && plan.actions.iter().all(|a| {
@@ -552,6 +798,134 @@ fn is_invented_mod_path(path: Option<&str>) -> bool {
         && segs.iter().any(|s| is_placeholder_version(Some(s)))
 }
 
+/// Detects a "conflict" claim that is actually just category/keyword overlap
+/// rather than a concrete, grounded conflict.
+///
+/// A real conflict must be anchored in a concrete signal — an explicit
+/// `conflicts` metadata entry, a crash/log symptom (mixin class collision,
+/// duplicate registry, packet clash), or a matched KB case. Claims built only
+/// from shared subject matter ("both touch message systems", "another modded
+/// message system", "potential conflict with other mods") are the classic
+/// LLM false-positive pattern and must not justify removing a mod.
+fn is_speculative_conflict_reason(reason: &str) -> bool {
+    let r = reason.to_ascii_lowercase();
+    let claims_conflict =
+        r.contains("conflict") || r.contains("incompatible") || r.contains("clash");
+    if !claims_conflict {
+        return false;
+    }
+    // Concrete signals mean a real, grounded conflict — not speculation.
+    let grounded_markers = [
+        "mixin",
+        "registry",
+        "packet",
+        "metadata",
+        "duplicate",
+        "class ",
+        "mod id",
+    ];
+    if grounded_markers.iter().any(|m| r.contains(m)) {
+        return false;
+    }
+    let overlap_markers = [
+        "potential conflict",
+        "may conflict",
+        "could conflict",
+        "might conflict",
+        "other mod",
+        "message system",
+        "similar mod",
+        "same category",
+        "multiple mod",
+        "overlap",
+    ];
+    overlap_markers.iter().any(|m| r.contains(m))
+}
+
+/// Two mod slugs known to co-occur frequently in *working* packs.
+///
+/// Used as **negative evidence** against a speculative conflict claim: if the
+/// AI says "mod A conflicts with other message-system mods" and A is actually
+/// observed co-existing widely with the other implicated mod, that co-occurrence
+/// is strong evidence they are NOT a hard conflict — so the claim is suppressed
+/// instead of blindly downgraded.
+#[derive(Debug, Clone)]
+pub struct CoexistingPair {
+    pub a: String,
+    pub b: String,
+    /// Number of observed co-occurrences (higher = stronger evidence).
+    pub count: u64,
+}
+
+/// Minimum co-occurrence count before a pair qualifies as negative evidence.
+const MIN_COEXIST_COUNT: u64 = 5;
+
+/// Normalize a set of [`CoexistingPair`]s into an order-independent lookup map.
+fn build_compat_map(compat: &[CoexistingPair]) -> HashMap<(String, String), u64> {
+    let mut m: HashMap<(String, String), u64> = HashMap::new();
+    for p in compat {
+        let a = p.a.trim().to_ascii_lowercase();
+        let b = p.b.trim().to_ascii_lowercase();
+        if a.is_empty() || b.is_empty() || a == b {
+            continue;
+        }
+        let (x, y) = if a <= b { (a, b) } else { (b, a) };
+        let e = m.entry((x, y)).or_insert(0);
+        *e = (*e).max(p.count);
+    }
+    m
+}
+
+/// Order-independent co-occurrence count for `(x, y)`, if it meets the floor.
+fn compat_count(map: &HashMap<(String, String), u64>, x: &str, y: &str) -> Option<u64> {
+    let x = x.trim().to_ascii_lowercase();
+    let y = y.trim().to_ascii_lowercase();
+    if x.is_empty() || y.is_empty() || x == y {
+        return None;
+    }
+    let (a, b) = if x <= y { (x, y) } else { (y, x) };
+    map.get(&(a, b))
+        .copied()
+        .filter(|&c| c >= MIN_COEXIST_COUNT)
+}
+
+/// All mod slugs referenced by a plan: action targets + suspected mods.
+/// Used to test speculative-conflict claims against co-occurrence evidence
+/// (a claim is between the plan's own implicated mods).
+fn plan_mod_id_set(plan: &ActionPlan) -> HashSet<String> {
+    let mut s: HashSet<String> = plan
+        .suspected_mods
+        .iter()
+        .map(|x| x.trim().to_ascii_lowercase())
+        .filter(|x| !x.is_empty())
+        .collect();
+    for a in &plan.actions {
+        if let Some(id) = a.mod_id.as_deref().or(a.project_id.as_deref()) {
+            let l = id.trim().to_ascii_lowercase();
+            if !l.is_empty() {
+                s.insert(l);
+            }
+        }
+    }
+    s
+}
+
+/// Compacted vanilla resource locations mistaken for Modrinth slugs
+/// (`minecraft:builtin/entity` → `minecraftbuiltinentity`).
+pub fn is_invented_vanilla_resource_mod_id(id: &str) -> bool {
+    let compact: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if !compact.starts_with("minecraft") || compact == "minecraft" {
+        return false;
+    }
+    compact.contains("builtin")
+        || compact.contains("rendertype")
+        || (compact.contains("core") && compact.contains("entity"))
+}
+
 /// Structural validation before apply. Unknown ops are errors (not applied).
 pub fn validate_action_plan(plan: &ActionPlan) -> ActionPlanValidation {
     validate_action_plan_with_inventory(plan, &[], &[])
@@ -562,6 +936,18 @@ pub fn validate_action_plan_with_inventory(
     plan: &ActionPlan,
     inventory_mod_ids: &[String],
     missing_dep_ids: &[String],
+) -> ActionPlanValidation {
+    validate_action_plan_with_inventory_and_compat(plan, inventory_mod_ids, missing_dep_ids, &[])
+}
+
+/// Like [`validate_action_plan_with_inventory`], plus co-occurrence negative
+/// evidence. A speculative-conflict warning is suppressed when the implicated
+/// mods are observed co-existing widely in working packs.
+pub fn validate_action_plan_with_inventory_and_compat(
+    plan: &ActionPlan,
+    inventory_mod_ids: &[String],
+    missing_dep_ids: &[String],
+    compat: &[CoexistingPair],
 ) -> ActionPlanValidation {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
@@ -584,6 +970,7 @@ pub fn validate_action_plan_with_inventory(
         .filter(|s| !s.is_empty())
         .collect();
     let has_inventory = !inventory_l.is_empty();
+    let compat_map = build_compat_map(compat);
 
     for (i, a) in plan.actions.iter().enumerate() {
         let label = format!("actions[{i}]");
@@ -664,12 +1051,61 @@ pub fn validate_action_plan_with_inventory(
                     errors.push(format!("{label}: edit_config requires patch"));
                 }
             }
+            "set_java" => {
+                match a.version.as_deref().unwrap_or("").trim().parse::<u32>() {
+                    Ok(major) if (8..=99).contains(&major) => {}
+                    _ => errors.push(format!(
+                        "{label}: set_java requires version = Java major (8-99), e.g. \"21\""
+                    )),
+                }
+                if a.mod_id.as_deref().map_or(false, |s| !s.trim().is_empty()) {
+                    warnings.push(format!("{label}: set_java ignores modId"));
+                }
+            }
             _ => {}
         }
         match a.risk.to_ascii_lowercase().as_str() {
             "low" | "medium" | "high" => {}
             other => warnings.push(format!("{label}: unusual risk '{other}'")),
         }
+
+        // Speculative-conflict guard: flag remove/disable actions whose reason
+        // cites only category/keyword overlap rather than a concrete conflict
+        // signal (mixin/registry/metadata) or a matched KB case.
+        if matches!(a.op.as_str(), "remove_mod" | "disable_mod") {
+            if let Some(reason) = a.reason.as_deref() {
+                if is_speculative_conflict_reason(reason) && plan.matched_case_ids.is_empty() {
+                    let id_l = a
+                        .mod_id
+                        .as_deref()
+                        .map(|s| s.trim().to_ascii_lowercase())
+                        .filter(|s| !s.is_empty());
+                    let has_compat = id_l.as_ref().map_or(false, |id| {
+                        plan_mod_id_set(plan).iter().any(|other| {
+                            other != id && compat_count(&compat_map, id, other).is_some()
+                        })
+                    });
+                    if !has_compat {
+                        warnings.push(format!(
+                            "{label}: remove/disable cites only speculative overlap ('{reason}') — no explicit conflict metadata, crash signal, or matched KB case. Verify manually; prefer disable_mod + edit_config, or move to suspectedMods with low confidence."
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Two java switches in one plan means the AI hedged — keep the first (the
+    // executor keeps it too) and fail loudly instead of racing runtimes.
+    let java_count = plan
+        .actions
+        .iter()
+        .filter(|a| a.op == "set_java")
+        .count();
+    if java_count > 1 {
+        errors.push(format!(
+            "plan has {java_count} set_java actions — keep only the required one"
+        ));
     }
 
     ActionPlanValidation {
@@ -679,7 +1115,42 @@ pub fn validate_action_plan_with_inventory(
     }
 }
 
-/// Map a single launcher action to Crash Assistant FixAction (mod ops only).
+/// Backfill missing `set_java` versions from the crash-derived required major.
+///
+/// The prompt tells the AI to copy the major from the "Java requirement"
+/// section, but small models still emit `set_java` with a null version.
+/// Rather than rejecting the plan (the version is *known* — it was in the
+/// context), fill it in and record a note. Call after grounding, before
+/// [`validate_action_plan`].
+pub fn backfill_java_action_versions(
+    plan: &mut ActionPlan,
+    required: Option<u32>,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    let Some(major) = required else {
+        return notes;
+    };
+    for (i, a) in plan.actions.iter_mut().enumerate() {
+        if a.op != "set_java" {
+            continue;
+        }
+        let missing = a
+            .version
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none();
+        if missing {
+            a.version = Some(major.to_string());
+            notes.push(format!(
+                "actions[{i}]: set_java version backfilled to Java {major} from crash evidence"
+            ));
+        }
+    }
+    notes
+}
+
+/// Map a single launcher action to Crash Assistant FixAction (mod ops + java).
 pub fn launcher_action_to_fix_action(action: &LauncherAction) -> Option<FixAction> {
     let mod_id = action
         .mod_id
@@ -690,18 +1161,49 @@ pub fn launcher_action_to_fix_action(action: &LauncherAction) -> Option<FixActio
         "disable_mod" => "disableMod",
         "remove_mod" => "removeMod",
         "reinstall_mod" => "reinstallMod",
-        "update_mod" | "change_mod_version" => "updateMod",
+        // Version-pinned updates are handled by apply_action_plan + commit_single_mod_update.
+        // Bare update_mod (no version) maps to latest-compatible here.
+        "update_mod" => "updateMod",
         "install_mod" => "installDependency",
+        "set_java" => "selectJava",
+        // Version-pinned updates ALSO route through the executor now (the
+        // `changeModVersion` arm resolves ranges like `[0.6,)` to the newest
+        // satisfying release). apply_action_plan handles pins directly, but
+        // fix-all batch / history replay reach them via this mapping.
+        "change_mod_version" => "changeModVersion",
         _ => return None,
     };
-    let label = action
-        .reason
-        .clone()
-        .unwrap_or_else(|| format!("{} {}", action.op, mod_id.as_deref().unwrap_or("")));
+    let label = action.reason.clone().unwrap_or_else(|| {
+        if action.op == "set_java" {
+            match action.version.as_deref().map(str::trim) {
+                Some(v) if !v.is_empty() => format!("Use Java {v}"),
+                _ => "Use a compatible Java runtime".to_string(),
+            }
+        } else if action.op == "change_mod_version" {
+            match action.version.as_deref().map(str::trim) {
+                Some(v) if !v.is_empty() => format!(
+                    "Install {} {}",
+                    mod_id.as_deref().unwrap_or("mod"),
+                    v
+                ),
+                _ => format!("Install {}", mod_id.as_deref().unwrap_or("mod")),
+            }
+        } else {
+            format!("{} {}", action.op, mod_id.as_deref().unwrap_or(""))
+        }
+    });
+    // Carry the pin only for version-targeting kinds — anything else must
+    // not inherit a stale version into the executor.
+    let version = if kind == "changeModVersion" {
+        action.version.clone()
+    } else {
+        None
+    };
     Some(FixAction {
         kind: kind.into(),
         label,
         mod_id,
+        version,
     })
 }
 
@@ -762,6 +1264,9 @@ pub fn action_plan_to_change_plan(plan: &ActionPlan) -> ChangePlan {
                     actions.push(ChangeAction::EditConfig { path, patch });
                 }
             }
+            // set_java has no ChangePlan equivalent (that model is mod-graph
+            // only); it is applied directly by apply_action_plan instead.
+            "set_java" => {}
             _ => {}
         }
     }
@@ -770,6 +1275,7 @@ pub fn action_plan_to_change_plan(plan: &ActionPlan) -> ChangePlan {
         risk: max_risk,
         actions,
         requires_snapshot: true,
+        options: Vec::new(),
     }
 }
 
@@ -781,6 +1287,64 @@ pub fn encode_edit_config_patch(action: &LauncherAction) -> String {
         "reason": action.reason,
     });
     envelope.to_string()
+}
+
+/// Policy veto: NEVER auto-apply remove/disable/update of content or library
+/// mods when a replaceable (optimization / bridge / legacy / duplicate) side is
+/// a plausible candidate in the same crash. Removes such risky actions from the
+/// plan and flips the plan to `needs_user_review` so the choice stays with the
+/// user. Returns true when a veto fired.
+pub fn veto_content_vs_optimization(plan: &mut ActionPlan) -> bool {
+    let is_action_on_mod = |a: &LauncherAction| -> bool {
+        matches!(a.op.as_str(), "remove_mod" | "disable_mod" | "update_mod") && a.mod_id.is_some()
+    };
+    let risky = |a: &LauncherAction| -> bool {
+        let Some(id) = a.mod_id.as_deref() else {
+            return false;
+        };
+        let cat = crate::mod_category::classify(id, "");
+        // Content / library / tech-magic are "keep" sides; only vetoed when a
+        // safe-to-disable alternative exists somewhere in the plan/suspects.
+        !crate::mod_category::is_safe_to_disable(cat)
+    };
+    let has_replaceable = plan.actions.iter().any(|a| {
+        a.mod_id
+            .as_deref()
+            .map(|id| {
+                crate::mod_category::is_safe_to_disable(crate::mod_category::classify(id, ""))
+            })
+            .unwrap_or(false)
+    }) || plan
+        .suspected_mods
+        .iter()
+        .any(|id| crate::mod_category::is_safe_to_disable(crate::mod_category::classify(id, "")));
+    if !has_replaceable {
+        return false;
+    }
+    let affected: Vec<LauncherAction> = plan
+        .actions
+        .iter()
+        .filter(|a| is_action_on_mod(a) && risky(a))
+        .cloned()
+        .collect();
+    if affected.is_empty() {
+        return false;
+    }
+    plan.actions.retain(|a| !(is_action_on_mod(a) && risky(a)));
+    plan.needs_user_review = true;
+    let note = affected
+        .iter()
+        .map(|a| format!("{} {}", a.op, a.mod_id.as_deref().unwrap_or("?")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let extra = plan.additional_context.get_or_insert_with(String::new);
+    if !extra.is_empty() {
+        extra.push('\n');
+    }
+    extra.push_str(&format!(
+        "POLICY_VETO: dropped auto-action(s) against content/library mods ({note}) because a replaceable optimization/bridge alternative exists — left for the user to choose."
+    ));
+    true
 }
 
 /// Apply a config patch to file contents. Pure function for EditConfig apply.
@@ -819,7 +1383,9 @@ pub fn apply_config_patch(
                 .unwrap_or("")
                 .to_ascii_lowercase();
             match (other, ext.as_str()) {
-                (_, "json" | "json5") => apply_config_patch(current, relative_path, "json_merge", patch),
+                (_, "json" | "json5") => {
+                    apply_config_patch(current, relative_path, "json_merge", patch)
+                }
                 (_, "toml") => apply_config_patch(current, relative_path, "toml_set", patch),
                 (_, "properties" | "cfg") => {
                     apply_config_patch(current, relative_path, "properties_set", patch)
@@ -885,7 +1451,10 @@ fn set_toml_path(doc: &mut toml::Value, path: &str, value: toml::Value) -> Resul
         }
         let table = cur.as_table_mut().unwrap();
         if !table.contains_key(*part) {
-            table.insert((*part).to_string(), toml::Value::Table(toml::map::Map::new()));
+            table.insert(
+                (*part).to_string(),
+                toml::Value::Table(toml::map::Map::new()),
+            );
         }
         cur = table.get_mut(*part).unwrap();
     }
@@ -994,9 +1563,7 @@ pub fn plan_from_launcher_actions(
         confidence: score.clamp(0.0, 1.0),
         suspected_mods: suspected_mods.to_vec(),
         needs_user_review: score < 0.9
-            || actions
-                .iter()
-                .any(|a| a.risk.eq_ignore_ascii_case("high")),
+            || actions.iter().any(|a| a.risk.eq_ignore_ascii_case("high")),
         source: Some("kb".into()),
         matched_case_ids: vec![case_id.to_string()],
         actions,
@@ -1008,19 +1575,38 @@ pub fn plan_from_launcher_actions(
 pub fn plan_to_legacy_ai_actions(plan: &ActionPlan) -> Vec<AiAction> {
     plan.actions
         .iter()
-        .map(|a| AiAction {
-            action_type: match a.op.as_str() {
-                "install_mod" => "install".into(),
-                "remove_mod" => "remove".into(),
-                "disable_mod" => "disable".into(),
-                "update_mod" | "change_mod_version" => "update".into(),
-                "edit_config" => "config_change".into(),
-                "reinstall_mod" => "update".into(),
-                other => other.into(),
-            },
-            mod_id: a.mod_id.clone(),
-            description: a.reason.clone().unwrap_or_default(),
-            risk: a.risk.clone(),
+        .map(|a| {
+            // Keep the version pin visible: AiAction has no version field, so a
+            // change_mod_version/update pin or set_java major would silently
+            // vanish from KB feedback/distill text. Suffix it instead.
+            let mut description = a.reason.clone().unwrap_or_default();
+            if let Some(v) = a.version.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                if matches!(
+                    a.op.as_str(),
+                    "change_mod_version" | "update_mod" | "set_java"
+                ) {
+                    if a.op == "set_java" {
+                        description = format!("{description} (Java {v})").trim().to_string();
+                    } else {
+                        description = format!("{description} (→ {v})").trim().to_string();
+                    }
+                }
+            }
+            AiAction {
+                action_type: match a.op.as_str() {
+                    "install_mod" => "install".into(),
+                    "remove_mod" => "remove".into(),
+                    "disable_mod" => "disable".into(),
+                    "update_mod" | "change_mod_version" => "update".into(),
+                    "edit_config" => "config_change".into(),
+                    "reinstall_mod" => "update".into(),
+                    "set_java" => "set_java".into(),
+                    other => other.into(),
+                },
+                mod_id: a.mod_id.clone(),
+                description,
+                risk: a.risk.clone(),
+            }
         })
         .collect()
 }
@@ -1060,6 +1646,126 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_json_wrapped_in_prose_and_fences() {
+        let wrapped = "Here is the plan:\n```json\n{\"schemaVersion\": 1, \"humanExplanation\": \"Missing Indium\", \"confidence\": 0.9, \"suspectedMods\": [\"sodium\"], \"needsUserReview\": true, \"actions\": [{\"op\":\"install_mod\",\"modId\":\"indium\",\"reason\":\"Install Indium\",\"risk\":\"low\"}]}\n```\nHope it helps!";
+        let plan = parse_action_plan(wrapped).unwrap();
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].mod_id.as_deref(), Some("indium"));
+    }
+
+    fn java_plan(versions: &[Option<&str>]) -> ActionPlan {
+        ActionPlan {
+            schema_version: ACTION_PLAN_SCHEMA_VERSION,
+            human_explanation: "Needs newer Java".into(),
+            confidence: 0.9,
+            suspected_mods: vec![],
+            needs_user_review: false,
+            source: Some("ai".into()),
+            matched_case_ids: vec![],
+            actions: versions
+                .iter()
+                .map(|v| LauncherAction {
+                    op: "set_java".into(),
+                    mod_id: None,
+                    provider: None,
+                    project_id: None,
+                    version: (*v).map(|s| s.to_string()),
+                    path: None,
+                    patch_type: None,
+                    patch: None,
+                    reason: Some("Switch to Java 21".into()),
+                    risk: "low".into(),
+                })
+                .collect(),
+            additional_context: None,
+        }
+    }
+
+    #[test]
+    fn set_java_validates_and_backfills() {
+        let good = java_plan(&[Some("21")]);
+        let v = validate_action_plan(&good);
+        assert!(v.ok, "{:?}", v.errors);
+
+        let bad_version = java_plan(&[Some("twenty-one")]);
+        let v = validate_action_plan(&bad_version);
+        assert!(!v.ok);
+
+        let missing = java_plan(&[None]);
+        assert!(!validate_action_plan(&missing).ok);
+
+        let dup = java_plan(&[Some("21"), Some("25")]);
+        let v = validate_action_plan(&dup);
+        assert!(!v.ok);
+
+        let mut plan = java_plan(&[None]);
+        let notes = backfill_java_action_versions(&mut plan, Some(25));
+        assert_eq!(plan.actions[0].version.as_deref(), Some("25"));
+        assert_eq!(notes.len(), 1);
+        assert!(validate_action_plan(&plan).ok);
+
+        // No crash evidence → no backfill, still invalid.
+        let mut plan = java_plan(&[None]);
+        assert!(backfill_java_action_versions(&mut plan, None).is_empty());
+        assert!(!validate_action_plan(&plan).ok);
+    }
+
+    #[test]
+    fn set_java_maps_to_select_java_and_legacy() {
+        let plan = java_plan(&[Some("21")]);
+        let fix = launcher_action_to_fix_action(&plan.actions[0]).unwrap();
+        assert_eq!(fix.kind, "selectJava");
+        assert!(fix.label.contains("Java 21"));
+
+        let legacy = plan_to_legacy_ai_actions(&plan);
+        assert_eq!(legacy[0].action_type, "set_java");
+        assert!(legacy[0].description.contains("Java 21"));
+
+        // Variant spellings normalize to the op (also pre-KB "auto_java").
+        for variant in ["setjava", "select_java", "selectjava", "auto_java"] {
+            assert_eq!(legacy_action_type_to_op(variant), "set_java");
+        }
+    }
+
+    #[test]
+    fn kb_java_seed_yields_backfillable_set_java() {
+        // End-to-end for the KB short-circuit: the legacy "set_java" seed
+        // action becomes a version-less op that crash evidence backfills
+        // into a valid, applicable plan.
+        let seed = AiAction {
+            action_type: "set_java".into(),
+            mod_id: None,
+            description: "Switch project Java to the required major version".into(),
+            risk: "low".into(),
+        };
+        let mut plan = plan_from_kb_hit("Needs newer Java", &[], &[seed], "builtin-java-version", 0.95);
+        assert_eq!(plan.actions[0].op, "set_java");
+        assert!(!validate_action_plan(&plan).ok);
+        backfill_java_action_versions(&mut plan, Some(21));
+        let v = validate_action_plan(&plan);
+        assert!(v.ok, "{:?}", v.errors);
+    }
+
+    #[test]
+    fn legacy_descriptions_keep_version_pins() {
+        let mut plan = java_plan(&[]);
+        plan.actions.push(LauncherAction {
+            op: "change_mod_version".into(),
+            mod_id: Some("sodium".into()),
+            provider: None,
+            project_id: None,
+            version: Some("0.9.2+mc1.20.1".into()),
+            path: None,
+            patch_type: None,
+            patch: None,
+            reason: Some("Pin Sodium for Iris".into()),
+            risk: "medium".into(),
+        });
+        let legacy = plan_to_legacy_ai_actions(&plan);
+        assert!(legacy[0].description.contains("0.9.2+mc1.20.1"));
+    }
+
+    #[test]
     fn parses_new_schema() {
         let json = r#"{
           "schemaVersion": 1,
@@ -1089,7 +1795,62 @@ mod tests {
     }
 
     #[test]
-    fn strips_placeholder_version_and_flips_install_on_suspect() {
+    fn dedupes_repeated_actions_for_same_mod() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Missing Indium",
+          "confidence": 0.9,
+          "suspectedMods": ["sodium"],
+          "needsUserReview": true,
+          "actions": [
+            {"op":"install_mod","modId":"indium","risk":"low"},
+            {"op":"install_mod","modId":"Indium","reason":"Indium is required by Sodium"}
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        assert_eq!(
+            plan.actions.len(),
+            1,
+            "duplicate install_mod:indium must collapse"
+        );
+        let a = &plan.actions[0];
+        assert_eq!(a.op, "install_mod");
+        assert_eq!(a.mod_id.as_deref(), Some("indium"));
+        assert_eq!(
+            a.reason.as_deref(),
+            Some("Indium is required by Sodium"),
+            "missing reason should be borrowed from the duplicate"
+        );
+        assert_eq!(a.risk, "low", "risk from the kept entry stays");
+    }
+
+    #[test]
+    fn keeps_distinct_ops_on_same_mod_and_distinct_paths() {
+        let plan = parse_action_plan(
+            r#"{
+              "schemaVersion": 1,
+              "humanExplanation": "Mix",
+              "confidence": 0.6,
+              "suspectedMods": ["sodium"],
+              "needsUserReview": true,
+              "actions": [
+                {"op":"update_mod","modId":"sodium","reason":"update"},
+                {"op":"disable_mod","modId":"sodium","reason":"disable"},
+                {"op":"edit_config","path":"config/example.toml"},
+                {"op":"edit_config","path":"config/other.toml"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.actions.len(),
+            4,
+            "different ops on the same mod and different config paths must stay"
+        );
+    }
+
+    #[test]
+    fn strips_placeholder_version_and_flips_install_on_installed_suspect() {
         let json = r#"{
           "schemaVersion": 1,
           "humanExplanation": "Critters crashed",
@@ -1108,14 +1869,118 @@ mod tests {
           ]
         }"#;
         let plan = parse_action_plan(json).unwrap();
-        assert_eq!(plan.actions[0].op, "disable_mod");
+        // Parse-time grounding has no inventory → keep install (do not blind-flip).
+        assert_eq!(plan.actions[0].op, "install_mod");
         assert_eq!(plan.actions[0].version, None);
         assert_eq!(plan.actions[0].path, None);
-        assert!(plan.actions[0]
+
+        let grounded = ground_action_plan(plan, &["crittersandcompanions".into()], &[]);
+        assert_eq!(grounded.plan.actions[0].op, "disable_mod");
+        assert!(grounded.plan.actions[0]
             .reason
             .as_deref()
             .unwrap_or("")
             .contains("install→disable"));
+    }
+
+    #[test]
+    fn distill_keeps_install_even_if_mod_listed_as_suspect() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Missing dependency; installing placeholder-api fixed it.",
+          "confidence": 0.95,
+          "source": "distill",
+          "suspectedMods": ["placeholder-api"],
+          "needsUserReview": true,
+          "actions": [
+            {
+              "op":"install_mod",
+              "modId":"placeholder-api",
+              "reason":"Resolving missing dependency to initialize the game successfully.",
+              "risk":"low"
+            }
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        assert_eq!(plan.actions[0].op, "install_mod");
+        let grounded =
+            ground_action_plan(plan, &["placeholder-api".into(), "fabric-api".into()], &[]);
+        assert_eq!(grounded.plan.actions[0].op, "install_mod");
+        assert!(!grounded.notes.iter().any(|n| n.contains("install→disable")));
+    }
+
+    #[test]
+    fn missing_dep_install_not_flipped_to_disable() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Need Indium",
+          "confidence": 0.9,
+          "suspectedMods": ["indium"],
+          "needsUserReview": true,
+          "actions": [
+            {"op":"install_mod","modId":"indium","reason":"Missing dep","risk":"low"}
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        let grounded = ground_action_plan(plan, &["sodium".into()], &["indium".into()]);
+        assert_eq!(grounded.plan.actions[0].op, "install_mod");
+    }
+
+    #[test]
+    fn drops_invented_vanilla_resource_install_ids() {
+        assert!(is_invented_vanilla_resource_mod_id(
+            "minecraftbuiltinentity"
+        ));
+        assert!(is_invented_vanilla_resource_mod_id(
+            "minecraft-rendertype-text"
+        ));
+        assert!(!is_invented_vanilla_resource_mod_id("minecraft"));
+        assert!(!is_invented_vanilla_resource_mod_id("indium"));
+
+        // Bypass parse_action_plan (it already grounds via normalize_plan).
+        let plan = ActionPlan {
+            schema_version: 1,
+            human_explanation: "Shaders failed".into(),
+            confidence: 0.6,
+            suspected_mods: vec![],
+            needs_user_review: true,
+            source: None,
+            matched_case_ids: vec![],
+            actions: vec![
+                LauncherAction {
+                    op: "install_mod".into(),
+                    mod_id: Some("minecraftbuiltinentity".into()),
+                    provider: None,
+                    project_id: None,
+                    version: None,
+                    path: None,
+                    patch_type: None,
+                    patch: None,
+                    reason: Some("Missing entity shader".into()),
+                    risk: "low".into(),
+                },
+                LauncherAction {
+                    op: "install_mod".into(),
+                    mod_id: Some("indium".into()),
+                    provider: None,
+                    project_id: None,
+                    version: None,
+                    path: None,
+                    patch_type: None,
+                    patch: None,
+                    reason: Some("Real missing dep".into()),
+                    risk: "low".into(),
+                },
+            ],
+            additional_context: None,
+        };
+        let grounded = ground_action_plan(plan, &["sodium".into()], &["indium".into()]);
+        assert_eq!(grounded.plan.actions.len(), 1);
+        assert_eq!(grounded.plan.actions[0].mod_id.as_deref(), Some("indium"));
+        assert!(grounded
+            .notes
+            .iter()
+            .any(|n| n.contains("minecraftbuiltinentity") && n.contains("vanilla resource")));
     }
 
     #[test]
@@ -1178,6 +2043,7 @@ mod tests {
             title: "Needs Java 24".into(),
             description: "class 68".into(),
             auto_fix: Some("Install Java 24+".into()),
+            severity: "error".into(),
         }];
         let out = overlay_crash_assistant_findings(plan, &findings);
         assert!(out.needs_user_review);
@@ -1256,5 +2122,258 @@ mod tests {
         let f = launcher_action_to_fix_action(&a).unwrap();
         assert_eq!(f.kind, "disableMod");
         assert_eq!(f.mod_id.as_deref(), Some("oculus"));
+    }
+
+    #[test]
+    fn maps_version_pin_to_fix_action() {
+        let a = LauncherAction {
+            op: "change_mod_version".into(),
+            mod_id: Some("sodium".into()),
+            provider: None,
+            project_id: None,
+            version: Some("[0.6,)".into()),
+            path: None,
+            patch_type: None,
+            patch: None,
+            reason: None,
+            risk: "medium".into(),
+        };
+        let f = launcher_action_to_fix_action(&a).unwrap();
+        assert_eq!(f.kind, "changeModVersion");
+        assert_eq!(f.mod_id.as_deref(), Some("sodium"));
+        assert_eq!(f.version.as_deref(), Some("[0.6,)"));
+        assert!(f.label.contains("[0.6,)"));
+        // Non-version kinds must not inherit a stale pin.
+        let mut b = a.clone();
+        b.op = "update_mod".into();
+        let g = launcher_action_to_fix_action(&b).unwrap();
+        assert_eq!(g.kind, "updateMod");
+        assert_eq!(g.version, None);
+    }
+
+    #[test]
+    fn detects_speculative_conflict_reason() {
+        // Real, grounded conflicts are NOT flagged.
+        assert!(!is_speculative_conflict_reason(
+            "Mixin conflict: both patch net.minecraft.client.renderer"
+        ));
+        assert!(!is_speculative_conflict_reason(
+            "Conflicts with Embeddium per Create's conflicts metadata"
+        ));
+        assert!(!is_speculative_conflict_reason(
+            "Duplicate registry entry crash"
+        ));
+        // Category/keyword overlap IS flagged.
+        assert!(is_speculative_conflict_reason(
+            "Potential conflict with other modded message systems"
+        ));
+        assert!(is_speculative_conflict_reason(
+            "May conflict with similar mods in the same category"
+        ));
+    }
+
+    #[test]
+    fn grounds_speculative_conflict_remove_to_disable() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Message mods might clash.",
+          "confidence": 0.8,
+          "suspectedMods": ["serversidehorror", "fake_death_messages"],
+          "needsUserReview": false,
+          "actions": [
+            {"op":"remove_mod","modId":"serversidehorror","reason":"Potential conflict with other modded message systems","risk":"medium"},
+            {"op":"disable_mod","modId":"fake_death_messages","reason":"Potential conflict with other mods","risk":"medium"}
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        // Diagnose path: compat-aware grounding applies the speculative guard
+        // (here with no co-occurrence data → downgrade, not suppress).
+        let grounded = ground_action_plan_with_compat(
+            plan,
+            &["serversidehorror".into(), "fake_death_messages".into()],
+            &[],
+            &[],
+        );
+        // remove→disable downgrade, confidence capped, manual review forced.
+        assert_eq!(grounded.plan.actions[0].op, "disable_mod");
+        assert!(grounded.plan.needs_user_review);
+        assert!(grounded.plan.confidence <= 0.5);
+        assert!(grounded
+            .notes
+            .iter()
+            .any(|n| n.contains("downgraded: conflict claim was speculative")));
+
+        let v = validate_action_plan_with_inventory(
+            &grounded.plan,
+            &["serversidehorror".into(), "fake_death_messages".into()],
+            &[],
+        );
+        assert!(v.warnings.iter().any(|w| w.contains("speculative overlap")));
+    }
+
+    #[test]
+    fn matched_kb_case_bypasses_speculative_guard() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Known clash.",
+          "confidence": 0.9,
+          "suspectedMods": ["serversidehorror"],
+          "matchedCaseIds": ["case-msg-clash"],
+          "needsUserReview": true,
+          "actions": [
+            {"op":"remove_mod","modId":"serversidehorror","reason":"Potential conflict with other mods","risk":"medium"}
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        let grounded = ground_action_plan(plan, &["serversidehorror".into()], &[]);
+        // matched case → trust the removal, no speculative downgrade.
+        assert_eq!(grounded.plan.actions[0].op, "remove_mod");
+        assert!(!grounded
+            .notes
+            .iter()
+            .any(|n| n.contains("downgraded: conflict claim was speculative")));
+    }
+
+    #[test]
+    fn coexisting_pair_suppresses_speculative_conflict() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Message mods might clash.",
+          "confidence": 0.8,
+          "suspectedMods": ["serversidehorror", "fake_death_messages"],
+          "needsUserReview": false,
+          "actions": [
+            {"op":"remove_mod","modId":"serversidehorror","reason":"Potential conflict with other modded message systems","risk":"medium"},
+            {"op":"disable_mod","modId":"fake_death_messages","reason":"Potential conflict with other mods","risk":"medium"}
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        // Negative evidence: these two co-occur widely in working packs.
+        let compat = vec![
+            CoexistingPair {
+                a: "serversidehorror".into(),
+                b: "fake_death_messages".into(),
+                count: 42,
+            },
+            // A low-count pair must NOT count as evidence.
+            CoexistingPair {
+                a: "serversidehorror".into(),
+                b: "fake_death_messages".into(),
+                count: 2,
+            },
+        ];
+        let grounded = ground_action_plan_with_compat(
+            plan,
+            &["serversidehorror".into(), "fake_death_messages".into()],
+            &[],
+            &compat,
+        );
+        // Suppressed: keep removal as-is, no downgrade note, confidence intact.
+        assert_eq!(grounded.plan.actions[0].op, "remove_mod");
+        assert!(!grounded.plan.needs_user_review);
+        assert!(grounded.plan.confidence > 0.5);
+        assert!(grounded
+            .notes
+            .iter()
+            .any(|n| n.contains("suppressed speculative conflict")));
+        assert!(!grounded
+            .notes
+            .iter()
+            .any(|n| n.contains("downgraded: conflict claim was speculative")));
+
+        let v = validate_action_plan_with_inventory_and_compat(
+            &grounded.plan,
+            &["serversidehorror".into(), "fake_death_messages".into()],
+            &[],
+            &compat,
+        );
+        assert!(!v.warnings.iter().any(|w| w.contains("speculative overlap")));
+    }
+
+    #[test]
+    fn coexisting_pair_with_unrelated_mod_does_not_suppress() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Message mods might clash.",
+          "confidence": 0.8,
+          "suspectedMods": ["serversidehorror", "fake_death_messages"],
+          "needsUserReview": false,
+          "actions": [
+            {"op":"remove_mod","modId":"serversidehorror","reason":"Potential conflict with other modded message systems","risk":"medium"}
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        // Co-occurrence is with a mod NOT implicated by this plan → no suppression.
+        let compat = vec![CoexistingPair {
+            a: "serversidehorror".into(),
+            b: "some_other_mod".into(),
+            count: 99,
+        }];
+        let grounded = ground_action_plan_with_compat(
+            plan,
+            &["serversidehorror".into(), "fake_death_messages".into()],
+            &[],
+            &compat,
+        );
+        assert_eq!(grounded.plan.actions[0].op, "disable_mod");
+        assert!(grounded
+            .notes
+            .iter()
+            .any(|n| n.contains("downgraded: conflict claim was speculative")));
+    }
+
+    #[test]
+    fn vetoes_content_removal_when_optimization_alternative_exists() {
+        let plan = parse_action_plan(
+            r#"{
+              "schemaVersion": 1,
+              "humanExplanation": "spb-revamped breaks the renderer.",
+              "confidence": 0.85,
+              "suspectedMods": ["spb-revamped", "sodium"],
+              "needsUserReview": false,
+              "actions": [
+                {"op":"remove_mod","modId":"spb-revamped","reason":"AI: replace spb","risk":"medium"},
+                {"op":"disable_mod","modId":"sodium","reason":"AI: disable render mod","risk":"low"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let mut plan = plan;
+        let fired = veto_content_vs_optimization(&mut plan);
+        assert!(
+            fired,
+            "veto should fire for content removal with optimisation alternative"
+        );
+        // Content removal dropped; optimisation disable kept.
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].op, "disable_mod");
+        assert_eq!(plan.actions[0].mod_id.as_deref(), Some("sodium"));
+        assert!(plan.needs_user_review);
+        assert!(plan
+            .additional_context
+            .as_deref()
+            .unwrap_or("")
+            .contains("POLICY_VETO"));
+    }
+
+    #[test]
+    fn no_veto_without_replaceable_alternative() {
+        let plan = parse_action_plan(
+            r#"{
+              "schemaVersion": 1,
+              "humanExplanation": "sodium no longer needed.",
+              "confidence": 0.6,
+              "suspectedMods": ["sodium"],
+              "needsUserReview": false,
+              "actions": [
+                {"op":"disable_mod","modId":"sodium","reason":"AI choice","risk":"low"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let mut plan = plan;
+        // Disabling the optimisation mod itself is fine — no content side threatened.
+        assert!(!veto_content_vs_optimization(&mut plan));
+        assert_eq!(plan.actions.len(), 1);
     }
 }

@@ -485,7 +485,14 @@ pub fn write_chunk_editor(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as u32)
         .unwrap_or(0);
-    save_chunk_raw(&dir, data.region_x, data.region_z, data.index, &new_blob, ts)
+    save_chunk_raw(
+        &dir,
+        data.region_x,
+        data.region_z,
+        data.index,
+        &new_blob,
+        ts,
+    )
 }
 
 /// Applies NBT Changer fields to selected chunks.
@@ -535,14 +542,17 @@ pub fn change_world_chunks(
                 }
             }
             if change.delete_entities {
-                if clear_named_lists(&mut nbt, &[
-                    "Entities",
-                    "entities",
-                    "TileEntities",
-                    "tile_entities",
-                    "block_entities",
-                    "blockEntities",
-                ]) {
+                if clear_named_lists(
+                    &mut nbt,
+                    &[
+                        "Entities",
+                        "entities",
+                        "TileEntities",
+                        "tile_entities",
+                        "block_entities",
+                        "blockEntities",
+                    ],
+                ) {
                     dirty = true;
                 }
                 // Also clear entities MCA entry for this chunk.
@@ -764,11 +774,10 @@ fn delete_sections(root: &mut NbtNode, spec: &str) -> bool {
                 continue;
             }
             let before = list.children.len();
-            list.children
-                .retain(|sec| match section_y(sec) {
-                    Some(y) => !y_in_ranges(y, &ranges),
-                    None => true,
-                });
+            list.children.retain(|sec| match section_y(sec) {
+                Some(y) => !y_in_ranges(y, &ranges),
+                None => true,
+            });
             if list.children.len() != before {
                 dirty = true;
             }
@@ -1239,7 +1248,8 @@ fn pattern_matches(entry: &NbtNode, pat: &BlockPattern) -> bool {
         None => true,
         Some(need) => {
             let have = palette_entry_props(entry);
-            need.iter().all(|(k, v)| have.get(k).map(|x| x == v).unwrap_or(false))
+            need.iter()
+                .all(|(k, v)| have.get(k).map(|x| x == v).unwrap_or(false))
         }
     }
 }
@@ -1438,7 +1448,9 @@ pub fn write_selection_csv(chunks: &[ChunkRef], inverted: bool) -> String {
     }
     let mut by: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for c in chunks {
-        by.entry((c.region_x, c.region_z)).or_default().push(c.index);
+        by.entry((c.region_x, c.region_z))
+            .or_default()
+            .push(c.index);
     }
     let mut keys: Vec<_> = by.keys().copied().collect();
     keys.sort();
@@ -1576,8 +1588,10 @@ pub fn parse_change_fields(fields: &str) -> Result<NbtChangeRequest, String> {
                     Some(val.parse().map_err(|_| format!("bad DataVersion: {val}"))?);
             }
             "LightPopulated" => {
-                req.light_populated =
-                    Some(val.parse().map_err(|_| format!("bad LightPopulated: {val}"))?);
+                req.light_populated = Some(
+                    val.parse()
+                        .map_err(|_| format!("bad LightPopulated: {val}"))?,
+                );
             }
             "LastUpdate" => {
                 req.last_update = Some(val.parse().map_err(|_| format!("bad LastUpdate: {val}"))?);
@@ -1628,8 +1642,12 @@ pub fn list_present_chunks(
         if parts.len() < 3 || parts[0] != "r" {
             continue;
         }
-        let Ok(rx) = parts[1].parse::<i32>() else { continue };
-        let Ok(rz) = parts[2].parse::<i32>() else { continue };
+        let Ok(rx) = parts[1].parse::<i32>() else {
+            continue;
+        };
+        let Ok(rz) = parts[2].parse::<i32>() else {
+            continue;
+        };
         regions.push((rx, rz));
     }
     resolve_full_regions(world_dir, &regions, Some(dim))
@@ -1716,8 +1734,12 @@ pub fn filter_world_chunks_advanced(
             if parts.len() < 3 || parts[0] != "r" {
                 continue;
             }
-            let Ok(rx) = parts[1].parse::<i32>() else { continue };
-            let Ok(rz) = parts[2].parse::<i32>() else { continue };
+            let Ok(rx) = parts[1].parse::<i32>() else {
+                continue;
+            };
+            let Ok(rz) = parts[2].parse::<i32>() else {
+                continue;
+            };
             for index in 0..1024 {
                 all.push((rx, rz, index));
             }
@@ -1783,9 +1805,7 @@ pub fn filter_world_chunks_advanced(
         if !palette_needles.is_empty() {
             let ok = palette_needles.iter().any(|n| {
                 let want = normalize_block_name(n);
-                palette_names
-                    .iter()
-                    .any(|p| p == &want || p.contains(n))
+                palette_names.iter().any(|p| p == &want || p.contains(n))
             });
             if !ok {
                 continue;
@@ -1804,9 +1824,17 @@ pub fn filter_world_chunks_advanced(
 fn collect_entity_ids(root: &NbtNode) -> Vec<String> {
     let mut out = Vec::new();
     for name in ["Entities", "entities"] {
-        if let Some(list) = root.children.iter().find(|c| c.name == name && c.tag_type == 9) {
+        if let Some(list) = root
+            .children
+            .iter()
+            .find(|c| c.name == name && c.tag_type == 9)
+        {
             for ent in &list.children {
-                if let Some(id) = ent.children.iter().find(|c| c.name == "id" || c.name == "Id") {
+                if let Some(id) = ent
+                    .children
+                    .iter()
+                    .find(|c| c.name == "id" || c.name == "Id")
+                {
                     if let Some(Value::String(s)) = &id.value {
                         out.push(s.clone());
                     }
@@ -1820,7 +1848,11 @@ fn collect_entity_ids(root: &NbtNode) -> Vec<String> {
 fn collect_structure_keys(root: &NbtNode) -> Vec<String> {
     let mut out = Vec::new();
     for name in ["structures", "Structures"] {
-        if let Some(structures) = root.children.iter().find(|c| c.name == name && c.tag_type == 10) {
+        if let Some(structures) = root
+            .children
+            .iter()
+            .find(|c| c.name == name && c.tag_type == 10)
+        {
             for child in &structures.children {
                 if child.tag_type == 10 {
                     for k in &child.children {
@@ -1836,7 +1868,10 @@ fn collect_structure_keys(root: &NbtNode) -> Vec<String> {
 fn collect_palette_names(root: &NbtNode) -> Vec<String> {
     let mut out = Vec::new();
     for sections_name in ["sections", "Sections"] {
-        if let Some(list) = root.children.iter().find(|c| c.name == sections_name && c.tag_type == 9)
+        if let Some(list) = root
+            .children
+            .iter()
+            .find(|c| c.name == sections_name && c.tag_type == 9)
         {
             for section in &list.children {
                 if let Some(bs) = section.children.iter().find(|c| c.name == "block_states") {
@@ -2160,12 +2195,8 @@ pub fn extract_overlay_extras(nbt: &[u8]) -> ChunkMetaExtras {
             ("Biomes", 11) => {
                 let len = read_i32(nbt, &mut pos) as usize;
                 if len > 0 && pos + 4 <= nbt.len() {
-                    biome_id = i32::from_be_bytes([
-                        nbt[pos],
-                        nbt[pos + 1],
-                        nbt[pos + 2],
-                        nbt[pos + 3],
-                    ]);
+                    biome_id =
+                        i32::from_be_bytes([nbt[pos], nbt[pos + 1], nbt[pos + 2], nbt[pos + 3]]);
                 }
                 pos += len * 4;
             }
@@ -2303,7 +2334,9 @@ fn sample_heightmap_in_compound(nbt: &[u8], pos: &mut usize) -> Option<i16> {
         if *pos + nlen > nbt.len() {
             return found;
         }
-        let name = std::str::from_utf8(&nbt[*pos..*pos + nlen]).unwrap_or("").to_string();
+        let name = std::str::from_utf8(&nbt[*pos..*pos + nlen])
+            .unwrap_or("")
+            .to_string();
         *pos += nlen;
         if t == 12
             && found.is_none()
@@ -2427,9 +2460,7 @@ fn parse_one_clause(s: &str) -> Result<(MapClause, &str), String> {
         let after = rest[end + 1..].trim_start();
         (value, after)
     } else {
-        let end = rest
-            .find(|c: char| c.is_whitespace())
-            .unwrap_or(rest.len());
+        let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
         let mut value = rest[..end].to_string();
         // Stop at AND/OR if glued somehow
         let upper = value.to_ascii_uppercase();
@@ -2444,14 +2475,7 @@ fn parse_one_clause(s: &str) -> Result<(MapClause, &str), String> {
         (value, after)
     };
 
-    Ok((
-        MapClause {
-            field,
-            op,
-            value,
-        },
-        after,
-    ))
+    Ok((MapClause { field, op, value }, after))
 }
 
 fn status_code_from_name(s: &str) -> Option<i64> {

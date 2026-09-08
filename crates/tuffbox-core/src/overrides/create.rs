@@ -26,10 +26,11 @@ impl ModOverride for CreateOverride {
         vec![OreConfigMapping {
             resource_name: "zinc".to_string(),
             config_file: "config/create-common.toml".to_string(),
-            enabled_key: "worldgen.disableZincOre".to_string(),
+            enabled_key: "disableZincOre".to_string(),
             vein_size_key: None,
             min_height_key: None,
             max_height_key: None,
+            enabled_inverted: true,
         }]
     }
 

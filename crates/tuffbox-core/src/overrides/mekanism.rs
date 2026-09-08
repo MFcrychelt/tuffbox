@@ -46,6 +46,7 @@ impl ModOverride for MekanismOverride {
                 vein_size_key: Some("tin.perChunk".to_string()),
                 min_height_key: Some("tin.bottomOffset".to_string()),
                 max_height_key: Some("tin.topOffset".to_string()),
+                enabled_inverted: false,
             },
             OreConfigMapping {
                 resource_name: "osmium".to_string(),
@@ -54,6 +55,7 @@ impl ModOverride for MekanismOverride {
                 vein_size_key: Some("osmium.perChunk".to_string()),
                 min_height_key: Some("osmium.bottomOffset".to_string()),
                 max_height_key: Some("osmium.topOffset".to_string()),
+                enabled_inverted: false,
             },
             OreConfigMapping {
                 resource_name: "lead".to_string(),
@@ -62,6 +64,7 @@ impl ModOverride for MekanismOverride {
                 vein_size_key: Some("lead.perChunk".to_string()),
                 min_height_key: None,
                 max_height_key: None,
+                enabled_inverted: false,
             },
             OreConfigMapping {
                 resource_name: "uranium".to_string(),
@@ -70,6 +73,7 @@ impl ModOverride for MekanismOverride {
                 vein_size_key: Some("uranium.perChunk".to_string()),
                 min_height_key: None,
                 max_height_key: None,
+                enabled_inverted: false,
             },
             OreConfigMapping {
                 resource_name: "fluorite".to_string(),
@@ -78,6 +82,7 @@ impl ModOverride for MekanismOverride {
                 vein_size_key: None,
                 min_height_key: None,
                 max_height_key: None,
+                enabled_inverted: false,
             },
         ]
     }

@@ -1,4 +1,10 @@
 {
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/tuffbox-desktop",
+    "quest-editor-web"
+  ],
   "dependencies": {
     "ecc-universal": "^2.0.0"
   }

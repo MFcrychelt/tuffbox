@@ -1,34 +1,72 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
+  let {
+    open = $bindable(false),
+    source = "ai",
+    explanation = "",
+    hasDestructive = false,
+    rows = $bindable([]),
+    needsAck = false,
+    acknowledged = $bindable(false),
+    canApply = false,
+    selectedCount = 0,
+    busy = false,
+    networkTrust = null,
+    warnings = [],
+    onCancel,
+    onConfirm,
+  }: {
+    open?: boolean;
+    source?: "ai" | "network" | "fix-all";
+    explanation?: string;
+    hasDestructive?: boolean;
+    rows?: {
+      key: string;
+      selected: boolean;
+      op: string;
+      modId: string | null;
+      path: string | null;
+      version?: string | null;
+      patchPreview: string | null;
+      reason: string;
+      risk: string;
+      diffKind?: "add" | "remove" | "change" | "other";
+      destructive?: boolean;
+      problemTitle?: string | null;
+      raw: any;
+    }[];
+    needsAck?: boolean;
+    acknowledged?: boolean;
+    canApply?: boolean;
+    selectedCount?: number;
+    busy?: boolean;
+    networkTrust?: {
+      trustPercent: number | null;
+      keeps: number | null;
+      discards: number | null;
+      mc: string | null;
+      loader: string | null;
+    } | null;
+    warnings?: string[];
+    onCancel?: () => void;
+    onConfirm?: () => void;
+  } = $props();
 
-  /** ActionPlan review modal (replaces window.confirm) — pure presentation.
-   *  Parent (Diagnostics.svelte) owns building/applying the plan; this
-   *  component only lets the user pick which rows to apply and acknowledge
-   *  destructive plans, then reports back via events. */
-  export let open = false;
-  export let source: "ai" | "network" = "ai";
-  export let explanation = "";
-  export let hasDestructive = false;
-  export let rows: {
-    key: string;
-    selected: boolean;
-    op: string;
-    modId: string | null;
-    path: string | null;
-    patchPreview: string | null;
-    reason: string;
-    risk: string;
-    diffKind?: "add" | "remove" | "change" | "other";
-    destructive?: boolean;
-    raw: any;
-  }[] = [];
-  export let needsAck = false;
-  export let acknowledged = false;
-  export let canApply = false;
-  export let selectedCount = 0;
-  export let busy = false;
-
-  const dispatch = createEventDispatcher<{ cancel: void; confirm: void }>();
+  const showTrust = $derived(
+    source === "network" &&
+      !!networkTrust &&
+      (networkTrust.trustPercent != null ||
+        networkTrust.keeps != null ||
+        networkTrust.discards != null ||
+        networkTrust.mc != null ||
+        networkTrust.loader != null),
+  );
+  const modalTitle = $derived(
+    source === "fix-all"
+      ? "Review fixes"
+      : source === "network"
+        ? "Review network ActionPlan"
+        : "Review AI ActionPlan",
+  );
 </script>
 
 {#if open}
@@ -36,22 +74,54 @@
     class="modal-backdrop"
     role="button"
     tabindex="-1"
-    on:click|self={() => dispatch("cancel")}
-    on:keydown={() => {}}
+    onclick={(e) => e.target === e.currentTarget && onCancel?.()}
+    onkeydown={() => {}}
   >
     <div class="modal plan-review-modal" role="dialog" aria-modal="true">
       <div class="modal-header">
         <div>
-          <h2>{source === "network" ? "Review network ActionPlan" : "Review AI ActionPlan"}</h2>
+          <h2>{modalTitle}</h2>
           <p>Snapshot will be created first. Uncheck actions you do not want applied.</p>
         </div>
-        <button class="icon-btn" type="button" on:click={() => dispatch("cancel")} aria-label="Close">×</button>
+        <button class="icon-btn" type="button" onclick={() => onCancel?.()} aria-label="Close">×</button>
       </div>
       <p class="plan-review-expl">{explanation}</p>
-      {#if source === "network" && hasDestructive}
+      {#if showTrust && networkTrust}
+        <div class="trust-card-line">
+          {#if networkTrust.trustPercent != null}
+            <span class="trust-chip">Trust {networkTrust.trustPercent}%</span>
+          {/if}
+          {#if networkTrust.keeps != null}
+            <span class="trust-chip">Keeps {networkTrust.keeps}</span>
+          {/if}
+          {#if networkTrust.discards != null}
+            <span class="trust-chip">Discards {networkTrust.discards}</span>
+          {/if}
+          {#if networkTrust.mc}
+            <span class="trust-chip">MC {networkTrust.mc}</span>
+          {/if}
+          {#if networkTrust.loader}
+            <span class="trust-chip">{networkTrust.loader}</span>
+          {/if}
+        </div>
+      {/if}
+      {#if (source === "network" || source === "fix-all") && hasDestructive}
         <p class="plan-review-warn">
           This plan includes destructive actions (disable/remove). A snapshot will be created first — use Restore on the home screen if something breaks.
         </p>
+      {/if}
+      {#if warnings && warnings.length}
+        <div class="plan-review-warnings" role="note" aria-label="Plan validation warnings">
+          <strong>Validation warnings ({warnings.length}) — review before applying:</strong>
+          <ul>
+            {#each warnings.slice(0, 8) as w}
+              <li>{w}</li>
+            {/each}
+          </ul>
+          {#if warnings.length > 8}
+            <p class="more">+{warnings.length - 8} more…</p>
+          {/if}
+        </div>
       {/if}
       <div class="plan-review-list">
         {#each rows as row (row.key)}
@@ -64,8 +134,12 @@
                 </span>
                 <strong>{row.op}</strong>
                 {#if row.modId}<code>{row.modId}</code>{/if}
+                {#if row.version}<code>{row.op === "set_java" ? `Java ${row.version}` : `→ ${row.version}`}</code>{/if}
                 <span class="risk-pill">{row.risk}</span>
               </div>
+              {#if row.problemTitle}
+                <p class="problem-ref">From: {row.problemTitle}</p>
+              {/if}
               {#if row.reason}<p>{row.reason}</p>{/if}
               {#if row.patchPreview}
                 <pre class="patch-preview">{row.patchPreview}</pre>
@@ -77,16 +151,18 @@
       {#if needsAck}
         <label class="plan-review-ack">
           <input type="checkbox" bind:checked={acknowledged} />
-          I reviewed these actions (required — plan flagged needsUserReview)
+          {source === "fix-all"
+            ? "I reviewed these fixes including any destructive steps"
+            : "I reviewed these actions (required — plan flagged needsUserReview)"}
         </label>
       {/if}
       <div class="plan-review-actions">
-        <button class="ghost" type="button" on:click={() => dispatch("cancel")}>Cancel</button>
+        <button class="ghost" type="button" onclick={() => onCancel?.()}>Cancel</button>
         <button
           class="primary"
           type="button"
           disabled={!canApply || busy}
-          on:click={() => dispatch("confirm")}
+          onclick={() => onConfirm?.()}
         >
           Apply {selectedCount} action{selectedCount === 1 ? "" : "s"} (snapshot first)
         </button>
@@ -148,6 +224,38 @@
   .plan-review-modal h2 { margin: 0 0 4px; font-size: 16px; }
   .plan-review-modal p { margin: 0; font-size: 13px; color: var(--text-muted); }
   .plan-review-expl { margin: 0 0 12px !important; color: var(--text-secondary) !important; }
+  .plan-review-warnings {
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    font-size: 12px;
+    color: #fde68a;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.28);
+  }
+  .plan-review-warnings ul { margin: 6px 0 0; padding-left: 18px; }
+  .plan-review-warnings li { margin: 2px 0; overflow-wrap: anywhere; }
+  .plan-review-warnings .more { margin: 4px 0 0; font-size: 11px; }
+  .trust-card-line {
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0 0 12px;
+  }
+  .trust-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+  }
   .plan-review-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
   .plan-review-row {
     display: flex;
@@ -161,6 +269,12 @@
   }
   .plan-review-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .plan-review-body p { margin: 4px 0 0; font-size: 12px; color: var(--text-secondary); }
+  .problem-ref {
+    margin: 0 0 2px !important;
+    font-size: 11px !important;
+    color: var(--text-muted) !important;
+    font-weight: 600;
+  }
   .patch-preview {
     margin: 6px 0 0;
     padding: 8px;

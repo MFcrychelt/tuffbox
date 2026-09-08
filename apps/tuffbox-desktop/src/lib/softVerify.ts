@@ -5,7 +5,9 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { get } from "svelte/store";
 import { getAuthSnapshot } from "./supabaseAuth";
+import { projectPath } from "./store";
 import { toasts } from "./toast";
 
 export type SoftVerifyOutcome = {
@@ -97,18 +99,16 @@ async function onOutcome(payload: SoftVerifyOutcome) {
   if (vote === "confirm" && toastAllowed()) {
     markToastShown();
     toasts.success(
-      "Fix looks stable — thanks for helping TuffSwarm soft-verify.",
+      "Soft-verify confirmed this fix (passive Keep if signed in).",
       10000,
-      ids.length
-        ? [
-            {
-              label: "Keep for network",
-              run: () => {
-                void castVotes(ids, "confirm");
-              },
-            },
-          ]
-        : undefined,
+      [
+        {
+          label: "Open Crash Votes",
+          run: () => {
+            window.dispatchEvent(new CustomEvent("tuffbox:open-crash-votes"));
+          },
+        },
+      ],
     );
   } else if (vote === "reject" && payload.reason === "rollback") {
     toasts.warning("Crash fix rolled back — recorded as Discard for the network.");
@@ -117,10 +117,14 @@ async function onOutcome(payload: SoftVerifyOutcome) {
   }
 }
 
-async function onLaunchCrash() {
-  // Best-effort: if a crash-fix soft-verify was in flight, mark failure.
-  // Path is not always on the crash payload; banner command uses project store
-  // via callers that know the path — Dashboard/App also call report explicitly.
+async function onLaunchCrash(payload?: { path?: string } | null) {
+  // Fallback if registerLaunchCrashListener missed the path — both are idempotent.
+  const path =
+    (payload?.path && String(payload.path).trim()) ||
+    get(projectPath)?.trim() ||
+    "";
+  if (!path) return;
+  await reportSoftVerifyCrash(path);
 }
 
 /** Register global soft-verify listeners once (call from App onMount). */
@@ -134,8 +138,9 @@ export function registerSoftVerifyListeners(): () => void {
   }).then((u) => {
     unlistenOutcome = u;
   });
-  void listen("launch-crashed", () => {
-    void onLaunchCrash();
+  void listen("launch-crashed", (event) => {
+    const payload = (event.payload ?? {}) as { path?: string };
+    void onLaunchCrash(payload);
   }).then((u) => {
     unlistenCrash = u;
   });

@@ -1,16 +1,21 @@
 <script lang="ts">
-  import { ArrowLeft, Save, Cpu, Container, Coffee, Terminal, Search, Database, RefreshCw, AlertTriangle } from "lucide-svelte";
+  import { ArrowLeft, Save, Cpu, Container, Coffee, Terminal, Search, Database, RefreshCw, AlertTriangle, FileCog, User } from "@lucide/svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { projectInfo, projectPath, recentProjects } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import JavaPickerModal from "./JavaPickerModal.svelte";
 
-  export let onBack: () => void = () => {};
-  export let showBack = true;
-  export let stayAfterSave = false;
+  let {
+    onBack = () => {},
+    showBack = true,
+    stayAfterSave = false,
+  }: {
+    onBack?: () => void;
+    showBack?: boolean;
+    stayAfterSave?: boolean;
+  } = $props();
 
-  const memoryMarks = [1024, 2048, 4096, 6144, 8192, 12288, 16384];
   const loaders = [
     { id: "vanilla", label: "Vanilla" },
     { id: "fabric", label: "Fabric" },
@@ -19,27 +24,27 @@
     { id: "quilt", label: "Quilt" },
   ];
 
-  let memory = $projectInfo?.memoryMb ?? 4096;
-  let jvmArgs = ($projectInfo?.jvmArgs ?? ["-XX:+UseG1GC"]).join(" ");
-  let javaPath = $projectInfo?.javaPath ?? "Auto-detect";
-  let javaVersion = "";
-  let playerName = $projectInfo?.playerName ?? "Player";
+  let memory = $state($projectInfo?.memoryMb ?? 4096);
+  let jvmArgs = $state(($projectInfo?.jvmArgs ?? ["-XX:+UseG1GC"]).join(" "));
+  let javaPath = $state($projectInfo?.javaPath ?? "Auto-detect");
+  let javaVersion = $state("");
+  let playerName = $state($projectInfo?.playerName ?? "Player");
 
-  let mcVersion = $projectInfo?.minecraftVersion ?? "";
-  let loader = $projectInfo?.loaderKind ?? "vanilla";
-  let loaderVersion = $projectInfo?.loaderVersion ?? "";
+  let mcVersion = $state($projectInfo?.minecraftVersion ?? "");
+  let loader = $state($projectInfo?.loaderKind ?? "vanilla");
+  let loaderVersion = $state($projectInfo?.loaderVersion ?? "");
 
-  let mcVersions: { id: string; popular: boolean }[] = [];
-  let loaderVersions: { id: string; stable: boolean }[] = [];
-  let showJavaPicker = false;
-  let saving = false;
-  let loading = false;
-  let error = "";
+  let mcVersions = $state<{ id: string; popular: boolean }[]>([]);
+  let loaderVersions = $state<{ id: string; stable: boolean }[]>([]);
+  let showJavaPicker = $state(false);
+  let saving = $state(false);
+  let loading = $state(false);
+  let error = $state("");
 
   // Schema status
-  let schemaVersion = "";
-  let schemaNeedsMigration = false;
-  let schemaLoading = false;
+  let schemaVersion = $state("");
+  let schemaNeedsMigration = $state(false);
+  let schemaLoading = $state(false);
 
   async function loadSchemaStatus() {
     if (!$projectPath) return;
@@ -52,6 +57,69 @@
       schemaVersion = "?";
     } finally {
       schemaLoading = false;
+    }
+  }
+
+  // ── Shared options.txt sync (docs/17) ─────────────────────────────────
+  let optionsManaged = $state(false);
+  let optionsGroup = $state("");
+  let optionsHasTemplate = $state(false);
+  let optionsBusy = $state(false);
+
+  async function loadOptionsStatus() {
+    if (!$projectPath) return;
+    try {
+      const s: any = await invoke("options_sync_status", { path: $projectPath });
+      optionsManaged = s.managed ?? false;
+      optionsGroup = s.groupId ?? "";
+      optionsHasTemplate = s.hasGroupTemplate ?? false;
+    } catch {
+      /* status stays at defaults */
+    }
+  }
+
+  async function enableOptionsSync() {
+    if (!$projectPath) return;
+    optionsBusy = true;
+    error = "";
+    try {
+      const imported: boolean = await invoke("options_sync_enable", { path: $projectPath });
+      if (!imported && !optionsHasTemplate) {
+        error = "Enabled, but this version group has no template yet — current options.txt will be adopted on first launch.";
+      }
+      await loadOptionsStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      optionsBusy = false;
+    }
+  }
+
+  async function disableOptionsSync() {
+    if (!$projectPath) return;
+    optionsBusy = true;
+    error = "";
+    try {
+      await invoke("options_sync_disable", { path: $projectPath });
+      await loadOptionsStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      optionsBusy = false;
+    }
+  }
+
+  async function pushOptionsToGroup() {
+    if (!$projectPath) return;
+    optionsBusy = true;
+    error = "";
+    try {
+      await invoke("options_sync_push", { path: $projectPath });
+      await loadOptionsStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      optionsBusy = false;
     }
   }
 
@@ -72,23 +140,41 @@
   onMount(async () => {
     loading = true;
     error = "";
-    try {
-      // All fetches are independent and run in parallel.
-      const [versions] = await Promise.all([
-        invoke("get_minecraft_versions"),
-        detectJavaPreview(),
-        loadSchemaStatus(),
-        loadLoaderVersions(),
-      ]);
-      mcVersions = versions as { id: string; popular: boolean }[];
-    } catch (e) {
-      error = `${e}`;
-    } finally {
-      loading = false;
-    }
+    // Independent fetches start in parallel, but the form is usable as soon
+    // as the current project's settings are known — the dropdown options
+    // (MC versions / loader versions) stream in afterwards without blocking
+    // the page behind a dimmed overlay.
+    const localFill = (async () => {
+      try {
+        const info = await invoke("validate_project", { path: $projectPath });
+        applyProjectInfo(info as any);
+      } catch {
+        /* keep the seeded $projectInfo defaults */
+      }
+    })();
+    void detectJavaPreview();
+    void loadSchemaStatus();
+    void loadOptionsStatus();
+    void (async () => {
+      try {
+        const versions = (await invoke("get_minecraft_versions")) as {
+          id: string;
+          popular: boolean;
+        }[];
+        mcVersions = versions;
+        // MC list arrived: loader versions can now resolve against the
+        // selected Minecraft version.
+        await loadLoaderVersions();
+      } catch (e) {
+        error = `${e}`;
+      } finally {
+        loading = false;
+      }
+    })();
+    await localFill;
   });
 
-  let loadingLoader = false;
+  let loadingLoader = $state(false);
   async function loadLoaderVersions() {
     if (loadingLoader) return;
     if (loader === "vanilla") {
@@ -121,6 +207,25 @@
     }
   }
 
+  /** Seed the form fields from a validated project manifest. */
+  function applyProjectInfo(info: {
+    minecraftVersion?: string;
+    loaderKind?: string;
+    loaderVersion?: string;
+    memoryMb?: number;
+    jvmArgs?: string[];
+    javaPath?: string | null;
+    playerName?: string | null;
+  }) {
+    if (info.minecraftVersion) mcVersion = info.minecraftVersion;
+    if (info.loaderKind) loader = info.loaderKind;
+    if (info.loaderVersion) loaderVersion = info.loaderVersion;
+    if (info.memoryMb) memory = info.memoryMb;
+    if (info.jvmArgs?.length) jvmArgs = info.jvmArgs.join(" ");
+    if (info.javaPath) javaPath = info.javaPath;
+    if (info.playerName) playerName = info.playerName;
+  }
+
   async function save() {
     if (!$projectPath) return;
     saving = true;
@@ -137,6 +242,7 @@
         playerName: playerName.trim() || null,
       });
       const info = await invoke("validate_project", { path: $projectPath });
+      applyProjectInfo(info as any);
       projectInfo.set(info as any);
       recentProjects.updateInfo($projectPath, info as any);
       if (!stayAfterSave) onBack();
@@ -147,8 +253,8 @@
     }
   }
 
-  async function onJavaSelected(event: CustomEvent<string>) {
-    javaPath = event.detail;
+  async function onJavaSelected(path: string) {
+    javaPath = path;
     await detectJavaPreview();
   }
 
@@ -157,9 +263,11 @@
     return `${mb} MB`;
   }
 
-  $: if (mcVersions.length > 0 && loader !== "vanilla" && loaderVersions.length === 0) {
-    loadLoaderVersions();
-  }
+  $effect(() => {
+    if (mcVersions.length > 0 && loader !== "vanilla" && loaderVersions.length === 0) {
+      loadLoaderVersions();
+    }
+  });
 
   function onLoaderChange() {
     loaderVersions = [];
@@ -174,183 +282,205 @@
   }
 </script>
 
-<div class="settings-page">
-  <header class="page-header">
-    {#if showBack}
-      <button class="ghost back" on:click={onBack}>
-        <ArrowLeft size={18} />
-        Back
-      </button>
-    {/if}
-    <h1>Instance Settings</h1>
+<div class="settings-page w-full">
+  <header class="page-header flex items-center justify-between gap-4 mb-6">
+    <div class="flex items-center gap-3 min-w-0">
+      {#if showBack}
+        <button class="ghost back flex items-center gap-2 px-3 h-10 shrink-0" onclick={onBack}>
+          <ArrowLeft size={18} />
+          Back
+        </button>
+      {/if}
+      <div class="min-w-0">
+        <h1 class="text-xl font-bold text-[color:var(--text-primary)] leading-tight truncate">Instance Settings</h1>
+                <p class="text-xs text-[color:var(--text-muted)] mt-0.5 truncate">Runtime, memory, Java and project preferences for the active instance.</p>
+      </div>
+    </div>
   </header>
 
   {#if $projectPath}
     {#if loading}
-      <div class="loading">
-        <RefreshCw size={18} class="spin" />
-        Loading instance settings…
-      </div>
+      <div class="loading flex items-center gap-2.5 px-4 h-11 mb-4 rounded-2xl bg-[color:var(--bg-secondary)] border border-[color:var(--border-color)] backdrop-blur-xl">
+              <RefreshCw size={16} class="spin" />
+              <span class="text-sm text-[color:var(--text-secondary)]">Loading instance settings…</span>
+            </div>
     {/if}
-    <div class="settings-groups" class:dimmed={loading}>
-      <div class="section-group">
-        <h2 class="section-heading">Runtime</h2>
-        <div class="settings-grid">
-      <section class="card">
-        <div class="card-title">
-          <Container size={18} />
-          <h3>Game</h3>
-        </div>
-        <div class="field">
-          <label for="mc-version">Minecraft version</label>
-          <select id="mc-version" bind:value={mcVersion} on:change={onMcVersionChange}>
-            {#each mcVersions as v}
-              <option value={v.id}>
-                {v.id}{#if v.popular} ★{/if}
-              </option>
-            {/each}
-          </select>
-        </div>
-        <div class="field-row">
-          <div class="field">
-            <label for="loader-kind">Loader</label>
-            <select id="loader-kind" bind:value={loader} on:change={onLoaderChange}>
-              {#each loaders as l}
-                <option value={l.id}>{l.label}</option>
-              {/each}
-            </select>
-          </div>
-          <div class="field">
-            <label for="loader-version">Loader version</label>
-            {#if loader === "vanilla"}
-              <input id="loader-version" value="-" disabled />
-            {:else}
-              <select id="loader-version" bind:value={loaderVersion}>
-                {#each loaderVersions as v}
-                  <option value={v.id}>{v.id}{#if v.stable} (stable){/if}</option>
+    <div class="settings-groups flex flex-col gap-7 mb-6" class:dimmed={loading}>
+      <!-- ── Runtime ─────────────────────────────────────────────── -->
+      <section>
+        <h2 class="section-label mb-3">Runtime</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <article class="glass-card rounded-2xl p-5 flex flex-col gap-4">
+            <h3 class="card-head"><Container size={16} /> Game</h3>
+            <div class="field">
+              <label for="mc-version">Minecraft version</label>
+              <select id="mc-version" bind:value={mcVersion} onchange={onMcVersionChange}>
+                {#each mcVersions as v}
+                  <option value={v.id}>
+                    {v.id}{#if v.popular} ★{/if}
+                  </option>
                 {/each}
               </select>
-            {/if}
-          </div>
-        </div>
-      </section>
-
-      <section class="card">
-        <div class="card-title">
-          <Coffee size={18} />
-          <h3>Java</h3>
-        </div>
-        <div class="field">
-          <label for="java-path">Java executable</label>
-          <div class="input-row">
-            <input id="java-path" bind:value={javaPath} readonly />
-            <button class="icon-btn" on:click={() => (showJavaPicker = true)} aria-label="Search Java">
-              <Search size={18} />
-            </button>
-          </div>
-          {#if javaVersion}
-            <div class="java-preview">{javaVersion}</div>
-          {/if}
-        </div>
-      </section>
-
-      <section class="card wide">
-        <div class="card-title">
-          <Cpu size={18} />
-          <h3>Memory</h3>
-        </div>
-        <div class="memory-control">
-          <div class="memory-value">{formatMemory(memory)}</div>
-          <input
-            type="range"
-            min={1024}
-            max={16384}
-            step={512}
-            bind:value={memory}
-            class="memory-slider"
-          />
-          <div class="memory-marks">
-            {#each memoryMarks as mark}
-              <button
-                class="mark"
-                class:active={memory === mark}
-                on:click={() => (memory = mark)}
-              >
-                {formatMemory(mark)}
-              </button>
-            {/each}
-          </div>
-        </div>
-      </section>
-
-      <section class="card wide">
-        <div class="card-title">
-          <Terminal size={18} />
-          <h3>JVM Arguments</h3>
-        </div>
-        <div class="field">
-          <textarea bind:value={jvmArgs} rows={4}></textarea>
-        </div>
-      </section>
-        </div>
-      </div>
-
-      <div class="section-group">
-        <h2 class="section-heading">Project</h2>
-        <div class="settings-grid">
-      <section class="card">
-        <div class="card-title">
-          <Terminal size={18} />
-          <h3>Player</h3>
-        </div>
-        <div class="field">
-          <label for="player-name">Player name (offline test launches)</label>
-          <input id="player-name" bind:value={playerName} placeholder="Player" maxlength="16" />
-          <p class="field-hint">
-            Used for test runs. TuffBox derives a stable offline UUID from this name
-            (same algorithm vanilla uses), so the same name always maps to the same
-            in-game identity across launches.
-          </p>
-        </div>
-      </section>
-
-      <section class="card wide">
-        <div class="card-title">
-          <Database size={18} />
-          <h3>Project schema</h3>
-        </div>
-        <div class="schema-info">
-          <div class="schema-row">
-            <span>Schema version</span>
-            <code>{schemaVersion || "..."}</code>
-          </div>
-          {#if schemaNeedsMigration}
-            <div class="schema-warning">
-              <AlertTriangle size={16} />
-              <span>Schema migration available. This will normalize your manifest to the current format.</span>
             </div>
-            <button class="secondary" on:click={migrateSchema} disabled={saving}>
-              <RefreshCw size={16} />
-              {saving ? "Migrating..." : "Migrate schema"}
-            </button>
-          {:else if schemaVersion}
-            <div class="schema-ok">✓ Schema is up to date</div>
-          {/if}
+            <div class="grid grid-cols-2 gap-3">
+              <div class="field">
+                <label for="loader-kind">Loader</label>
+                <select id="loader-kind" bind:value={loader} onchange={onLoaderChange}>
+                  {#each loaders as l}
+                    <option value={l.id}>{l.label}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="field">
+                <label for="loader-version">Loader version</label>
+                {#if loader === "vanilla"}
+                  <input id="loader-version" value="-" disabled />
+                {:else}
+                  <select id="loader-version" bind:value={loaderVersion}>
+                    {#each loaderVersions as v}
+                      <option value={v.id}>{v.id}{#if v.stable} (stable){/if}</option>
+                    {/each}
+                  </select>
+                {/if}
+              </div>
+            </div>
+          </article>
+
+          <article class="glass-card rounded-2xl p-5 flex flex-col gap-4">
+            <h3 class="card-head"><Coffee size={16} /> Java</h3>
+            <div class="field">
+              <label for="java-path">Java executable</label>
+              <div class="flex gap-2">
+                <input id="java-path" bind:value={javaPath} readonly class="flex-1 min-w-0" />
+                <button class="icon-btn" onclick={() => (showJavaPicker = true)} aria-label="Search Java">
+                  <Search size={16} />
+                </button>
+              </div>
+              {#if javaVersion}
+                <p class="java-preview">{javaVersion}</p>
+              {/if}
+            </div>
+          </article>
+
+          <article class="glass-card rounded-2xl p-5 md:col-span-2">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div class="memory-block flex flex-col justify-center">
+                <div class="mb-4 flex items-center justify-between gap-3">
+                  <h3 class="card-head"><Cpu size={16} /> Memory</h3>
+                  <span class="memory-value">{formatMemory(memory)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={1024}
+                  max={16384}
+                  step={256}
+                  bind:value={memory}
+                  class="range-slider w-full accent-[color:var(--accent-primary)]"
+                  aria-label="Memory allocation"
+                />
+                <div class="mt-2.5 flex justify-between text-xs text-[color:var(--text-muted)]">
+                  <span>{formatMemory(1024)}</span>
+                  <span>{formatMemory(16384)}</span>
+                </div>
+              </div>
+
+              <div class="jvm-block flex flex-col">
+                <h3 class="card-head mb-3"><Terminal size={16} /> JVM Arguments</h3>
+                <div class="field flex-1">
+                  <textarea
+                    bind:value={jvmArgs}
+                    rows={5}
+                    wrap="off"
+                    placeholder="-XX:+UseG1GC"
+                    spellcheck="false"
+                  ></textarea>
+                </div>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
+
+      <!-- ── Project ─────────────────────────────────────────────── -->
+      <section>
+        <h2 class="section-label mb-3">Project</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <article class="glass-card rounded-2xl p-5 flex flex-col gap-4">
+            <h3 class="card-head"><User size={16} /> Player</h3>
+            <div class="field">
+              <label for="player-name">Player name (offline test launches)</label>
+              <input id="player-name" bind:value={playerName} placeholder="Player" maxlength="16" />
+              <p class="field-hint">
+                Used for test runs. TuffBox derives a stable offline UUID from this name
+                (same algorithm vanilla uses), so the same name always maps to the same
+                in-game identity across launches.
+              </p>
+            </div>
+          </article>
+
+          <article class="glass-card rounded-2xl p-5 flex flex-col gap-3">
+            <h3 class="card-head"><Database size={16} /> Project schema</h3>
+            <div class="schema-info">
+              <div class="schema-row">
+                <span>Schema version</span>
+                <code>{schemaVersion || "..."}</code>
+              </div>
+              {#if schemaNeedsMigration}
+                <div class="schema-warning">
+                  <AlertTriangle size={15} />
+                  <span>Schema migration available. This will normalize your manifest to the current format.</span>
+                </div>
+                <button class="secondary self-start" onclick={migrateSchema} disabled={saving}>
+                  <RefreshCw size={15} />
+                  {saving ? "Migrating..." : "Migrate schema"}
+                </button>
+              {:else if schemaVersion}
+                <div class="schema-ok">✓ Schema is up to date</div>
+              {/if}
+            </div>
+          </article>
+
+          <article class="glass-card rounded-2xl p-5 md:col-span-2 flex flex-col gap-3">
+            <h3 class="card-head"><FileCog size={16} /> Shared options.txt</h3>
+            <div class="schema-info">
+              <div class="schema-row">
+                <span>Status</span>
+                <code>{optionsManaged ? `Shared (${optionsGroup})` : "Independent"}</code>
+              </div>
+              <p class="field-hint">
+                Shared projects of the same Minecraft version keep one options.txt:
+                your in-game settings sync between them. Edits you make in-game always
+                win; backups are created before any automatic change.
+              </p>
+              <div class="flex flex-wrap gap-3">
+                {#if optionsManaged}
+                  <button class="secondary" onclick={disableOptionsSync} disabled={optionsBusy}>
+                    {optionsBusy ? "Working..." : "Use independent options"}
+                  </button>
+                  <button class="secondary" onclick={pushOptionsToGroup} disabled={optionsBusy}>
+                    Push current to group
+                  </button>
+                {:else}
+                  <button class="secondary" onclick={enableOptionsSync} disabled={optionsBusy}>
+                    {optionsBusy ? "Working..." : "Share options across projects"}
+                  </button>
+                {/if}
+              </div>
+            </div>
+          </article>
         </div>
-      </div>
+      </section>
     </div>
 
     {#if error}
-      <div class="error">{error}</div>
+      <div class="error bg-[rgba(239,68,68,0.12)] text-[#ef4444] px-3 py-2.5 rounded-xl text-[13px] mb-4">{error}</div>
     {/if}
 
-    <div class="actions">
+    <div class="actions flex justify-end gap-3">
       {#if showBack}
-        <button class="secondary" on:click={onBack}>Cancel</button>
+        <button class="secondary" onclick={onBack}>Cancel</button>
       {/if}
-      <button on:click={save} disabled={saving}>
+      <button class="save-btn" onclick={save} disabled={saving}>
         <Save size={16} />
         {saving ? "Saving..." : "Save changes"}
       </button>
@@ -363,108 +493,55 @@
 {#if showJavaPicker}
   <JavaPickerModal
     current={javaPath === "Auto-detect" ? "" : javaPath}
-    on:close={() => (showJavaPicker = false)}
-    on:selected={onJavaSelected}
+    onclose={() => (showJavaPicker = false)}
+    onselected={onJavaSelected}
   />
 {/if}
 
 <style>
-  .settings-page {
-    max-width: none;
-    width: 100%;
-  }
+  /* .settings-page layout moved to Tailwind utilities */
 
-  .page-header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 24px;
-  }
-
-  .page-header h1 {
-    font-size: 24px;
-    font-weight: 800;
-  }
-
-  .back {
-    padding: 8px 12px;
-  }
-
-  .settings-groups {
-    display: flex;
-    flex-direction: column;
-    gap: 28px;
-    margin-bottom: 24px;
-  }
-
+  /* While dropdown options stream in, the form stays visible and clickable —
+     only a light veil hints that lists are still loading. No full lock-out:
+     blocking the whole panel behind pointer-events:none was why Setup felt
+     "stuck" until every network fetch resolved. */
   .settings-groups.dimmed {
-    opacity: 0.5;
-    pointer-events: none;
+    opacity: 0.85;
+    transition: opacity var(--motion-fast) var(--ease-out);
   }
 
-  .section-group {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
+  /* Glass morphism shell for every card on this page. Radius is applied from
+     Tailwind (rounded-2xl) so it stays token-aware for the CI border-radius gate. */
+  .glass-card {
+      background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+      -webkit-backdrop-filter: blur(22px) saturate(150%);
+      backdrop-filter: blur(22px) saturate(150%);
+      border: 1px solid var(--border-color);
+      box-shadow:
+        inset 0 1px 0 color-mix(in srgb, var(--text-muted) 10%, transparent),
+        0 14px 44px rgba(3, 6, 10, 0.18);
+    }
 
-  .section-heading {
-    font-size: 13px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
-    margin: 0;
-    padding-bottom: 4px;
-    border-bottom: 1px solid var(--border-color);
-  }
+    .section-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      letter-spacing: 0.01em;
+    }
 
-  .settings-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 20px;
-  }
+    .card-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
 
-  .settings-grid.dimmed {
-    opacity: 0.5;
-    pointer-events: none;
-  }
-
-  .loading {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--text-muted);
-    padding: 14px 16px;
-    margin-bottom: 16px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-  }
-
-  .card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    padding: 24px;
-  }
-
-  .card.wide {
-    grid-column: 1 / -1;
-  }
-
-  .card-title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--text-secondary);
-    margin-bottom: 20px;
-  }
-
-  .card-title h3 {
-    font-size: 16px;
-    color: var(--text-primary);
-  }
+    /* Delicate emerald accent for card icons — matches the memory value glow. */
+    .card-head :global(svg) {
+      color: var(--accent-primary);
+    }
 
   .field {
     display: flex;
@@ -477,19 +554,13 @@
     margin-bottom: 0;
   }
 
-  .field-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-  }
-
   label {
-    font-size: 12px;
-    color: var(--text-secondary);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-  }
+      font-size: 13px;
+      color: var(--text-secondary);
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: 0;
+    }
 
   input,
   select {
@@ -499,6 +570,7 @@
     background: var(--bg-elevated);
     color: var(--text-primary);
     font-size: 14px;
+    transition: border-color var(--motion-fast) ease;
   }
 
   input:focus,
@@ -516,18 +588,10 @@
     opacity: 0.6;
   }
 
-  .input-row {
-    display: flex;
-    gap: 8px;
-  }
-
-  .input-row input {
-    flex: 1;
-  }
-
   .icon-btn {
     width: 40px;
     height: 40px;
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -544,118 +608,65 @@
   }
 
   .java-preview {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-top: 4px;
-  }
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
 
-  .field-hint {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin: 6px 0 0;
-    line-height: 1.4;
-  }
+    .field-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin: 6px 0 0;
+      line-height: 1.45;
+    }
 
   textarea {
-    font-family: ui-monospace, monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
     background: var(--bg-elevated);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     padding: 12px;
     color: var(--text-primary);
-    font-size: 13px;
     resize: vertical;
     outline: none;
+    /* Never wrap long JVM flags onto broken lines — scroll horizontally. */
+    white-space: pre;
+    overflow-x: auto;
+    overflow-wrap: normal;
+    word-break: normal;
+    min-height: 96px;
+    flex: 1;
   }
 
   textarea:focus {
     border-color: var(--accent-primary);
   }
 
-  .memory-control {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
   .memory-value {
-    font-size: 32px;
-    font-weight: 900;
-    text-align: center;
-  }
+      font-size: 20px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--accent-primary);
+      text-shadow: 0 0 18px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    }
 
-  .memory-slider {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 100%;
-    height: 8px;
-    background: var(--bg-elevated);
-    border-radius: 4px;
-    outline: none;
-  }
-
-  .memory-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 22px;
-    height: 22px;
-    background: var(--accent-primary);
-    border-radius: 50%;
+  .range-slider {
+    height: 24px;
     cursor: pointer;
-    box-shadow: 0 0 12px rgba(27, 217, 106, 0.4);
   }
 
-  .memory-slider::-moz-range-thumb {
-    width: 22px;
-    height: 22px;
-    background: var(--accent-primary);
-    border-radius: 50%;
-    cursor: pointer;
-    border: none;
-  }
-
-  .memory-marks {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .mark {
-    padding: 6px 12px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 600;
-    border-radius: var(--border-radius-sm);
-  }
-
-  .mark.active {
-    background: var(--accent-primary);
-    color: #000;
-    border-color: var(--accent-primary);
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-  }
-
-  .error {
-    background: rgba(239, 68, 68, 0.12);
-    color: #ef4444;
-    padding: 10px 12px;
-    border-radius: var(--border-radius-md);
-    font-size: 13px;
-    margin-bottom: 16px;
-  }
+  .save-btn {
+      box-shadow:
+        0 0 14px color-mix(in srgb, var(--accent-primary) 35%, transparent),
+        inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    }
 
   .schema-info { display: grid; gap: 12px; }
   .schema-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--bg-tertiary); border-radius: var(--border-radius-md); border: 1px solid var(--border-color); }
   .schema-row span { color: var(--text-muted); font-size: 13px; }
   .schema-row code { font-family: ui-monospace, monospace; font-size: 14px; color: var(--accent-primary); }
-  .schema-warning { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); color: #fcd34d; font-size: 13px; }
-  .schema-ok { color: var(--accent-primary); font-size: 13px; padding: 10px 14px; background: rgba(27,217,106,0.06); border-radius: 10px; border: 1px solid rgba(27,217,106,0.20); }
+  .schema-warning { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent-warning) 8%, transparent); border: 1px solid color-mix(in srgb, var(--accent-warning) 25%, transparent); color: var(--accent-warning); font-size: 13px; }
+  .schema-ok { color: var(--accent-primary); font-size: 13px; padding: 10px 14px; background: color-mix(in srgb, var(--accent-primary) 6%, transparent); border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent-primary) 20%, transparent); }
 </style>

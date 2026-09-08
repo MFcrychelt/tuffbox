@@ -32,4 +32,8 @@ pub struct OreConfigMapping {
     pub vein_size_key: Option<String>,
     pub min_height_key: Option<String>,
     pub max_height_key: Option<String>,
+    /// When `true`, the enabled_key is a *disable* flag (`true` = ore is OFF).
+    /// The scanner inverts the value before passing it to the frontend.
+    #[allow(dead_code)]
+    pub enabled_inverted: bool,
 }

@@ -52,7 +52,10 @@ fn entry_size(path: &Path) -> u64 {
 }
 
 /// Lists packs in `project_dir/{folder}` (`resourcepacks` or `shaderpacks`).
-pub fn list_content_packs(project_dir: &Path, folder: &str) -> Result<Vec<ContentPackEntry>, String> {
+pub fn list_content_packs(
+    project_dir: &Path,
+    folder: &str,
+) -> Result<Vec<ContentPackEntry>, String> {
     let dir = project_dir.join(folder);
     if !dir.is_dir() {
         return Ok(vec![]);
@@ -170,10 +173,7 @@ mod tests {
 
     #[test]
     fn lists_and_toggles_zip_pack() {
-        let dir = std::env::temp_dir().join(format!(
-            "tuffbox_packs_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("tuffbox_packs_{}", std::process::id()));
         let rp = dir.join("resourcepacks");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&rp).unwrap();
@@ -185,17 +185,13 @@ mod tests {
         assert!(listed[0].enabled);
         assert_eq!(listed[0].name, "CoolPack");
 
-        let disabled = set_content_pack_enabled(&dir, "resourcepacks", "CoolPack.zip", false).unwrap();
+        let disabled =
+            set_content_pack_enabled(&dir, "resourcepacks", "CoolPack.zip", false).unwrap();
         assert!(!disabled.enabled);
         assert!(disabled.file_name.ends_with(".disabled"));
 
-        let enabled = set_content_pack_enabled(
-            &dir,
-            "resourcepacks",
-            &disabled.file_name,
-            true,
-        )
-        .unwrap();
+        let enabled =
+            set_content_pack_enabled(&dir, "resourcepacks", &disabled.file_name, true).unwrap();
         assert!(enabled.enabled);
 
         let _ = fs::remove_dir_all(&dir);
