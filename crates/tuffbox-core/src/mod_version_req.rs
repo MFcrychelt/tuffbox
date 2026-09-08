@@ -395,6 +395,12 @@ pub fn version_satisfies(installed: &str, constraint: &str) -> Option<bool> {
     if t.is_empty() || t.len() > 256 {
         return None;
     }
+    // Digit-less installed versions (`nogits`, `unknown`) are unparseable:
+    // "cannot verify", never a verdict (comparing them as 0.0.0 would raise
+    // bogus "verified wrong" findings).
+    if !installed.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
     // `||` alternatives: satisfied when any arm holds.
     if t.contains("||") {
         let mut any_unknown = false;
