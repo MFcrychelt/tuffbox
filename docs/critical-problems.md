@@ -51,30 +51,34 @@
 - **Влияние:** мёртв весь Advanced surface: triage, group test, conflicts/jars
   фиксы, heuristic plan, author KB, performance phases. Это ровно те
   инструменты, ради которых существует Diagnose.
-- **Статус:** не исправлено.
-- **План:** переписать wiring на `on*`-пропсы (имена уже есть в деструктуризации
-  `$props()`), типизировать пропсы вместо `any`, покрыть smoke-тестом
-  «Advanced рендерится без исключений». Параллельно добить 6 type-only ошибок
-  в `Diagnostics.svelte:3211,3229,3237,3239` (implicit `any`: `id`, `outcome`,
-  `{modId, idx}`, `{modId, fileName}`) — рантайм не ломают, но держат
-  `svelte-check` красным.
+- **Статус:** исправлено (2026-09-08, коммит `2352ea0`).
+- **Что сделано:** wiring переписан на прямой `on*`-passthrough (13 замен),
+  4 implicit-`any` колбэка в `Diagnostics.svelte` аннотированы.
+  `svelte-check`: 21 ошибка → **0 ошибок** (warnings 79 — baseline).
+  Регресс-защита — P0-4 (svelte-check в CI ловит ровно этот класс багов
+  «Cannot find name»). Полная типизация 60+ пропсов вместо `any` отложена
+  в P1 (см. P1-1).
 
-## P0-3. `master` красный: `cargo test` падает
+## P0-3. `master` красный: `cargo test` падает (master — устаревший снапшот)
 
-- **Симптом:** workflow `Rust` на `master` (run 33952497628, 2 дня назад):
-  шаг `Build` ✓, шаг `Run tests` ✗. Предыдущие запуски на `master` — тоже
-  красные. В feature-ветке последний прогон зелёный, более ранние падали
-  на том же шаге — возможен flaky тест.
-- **Причина:** точный падающий тест не установлен — в песочнице нет Rust
-  toolchain, а логи CI недоступны (обрыв соединения к results-receiver).
-- **Влияние:** нет доверия к `master`, релизиться не с чего, регрессии не
-  ловятся. 715 Rust-тестов есть, но их сигнал игнорируется.
-- **Статус:** не исправлено (требуется прогон с toolchain).
-- **План:** поставить Rust toolchain, прогнать `cargo test` на `master`,
-  зафиксировать падающие тесты; flaky/network-зависимые — пометить `#[ignore]`
-  с причиной (прецедент уже есть: `versions.rs`, `provider/modrinth.rs`)
-  либо отвязать от сети. Заодно впервые скомпилировать новый
-  `tuffbox-core/src/mod_version_req.rs` и тесты `changeModVersion`.
+- **Симптом:** workflow `Rust` на `master` (run 33952497628): шаг `Build` ✓,
+  шаг `Run tests` ✗. Все запуски на `master` красные.
+- **Разбор (2026-09-08):** `master` — один коммит без общей истории с рабочей
+  линией (572 файла дельты, 289 тестов против 712 в ветке). Искать падающий
+  тест в этом замёрзшем снапшоте нецелесообразно: его заменит мёрж.
+  Актуальная линия (`feat/github-pack-transport`, PR #6) имеет зелёный
+  прогон `cargo test` от 2026-09-06 (run 34036880876, SUCCESS) — но он не
+  покрывает Rust-код, добавленный уже в arena-ветке (`mod_version_req.rs`,
+  детектор `check_dep_version_mismatch`, `changeModVersion`), который нигде
+  ни разу не компилировался (в песочнице нет toolchain: rustup/crates.io
+  заблокированы на уровне TLS; логи CI из песочницы недоступны).
+- **Влияние:** нет доверия к `master`, релизиться не с чего.
+- **Статус:** в работе — требуется CI-сигнал по текущему коду.
+- **План:** PR arena → master (ветка — строгий суперсет PR #6: feat HEAD не
+  двигался с форка) → смотреть шаги Build/Run tests → чинить по факту.
+  После зелёного мёржа PR #6 закрыть как superseded. Flaky/network-тесты
+  при необходимости — `#[ignore]` с причиной (прецеденты: `versions.rs`,
+  `provider/modrinth.rs`).
 
 ## P0-4. В CI нет ворот качества — всё вышеупомянутое мёржится молча
 
@@ -120,20 +124,14 @@
 - Крупнейшие модули ядра: `crash.rs` (4789), `quest_plan.rs` (3846),
   `crash_assistant.rs` (3839). Детали — `docs/diagnostics-audit.md`.
 
-### P1-3. Остатки BUG_REPORT.md (2026-07-20) — сверить и закрыть
-- Bug 1 (OreGenVisualizer, infinite retry, HIGH): файл переписан на Svelte 5,
-  `loadWorlds`/`lastWorldsPath` исчезли — **требует подтверждения**, что
-  нового цикла нет.
-- Bug 2 (`launching` сбрасывается мгновенно): переведено на стор
-  `$isLaunching` + `launchHoldPath` — **вероятно исправлено**, нужен рантайм-чек.
-- Bug 3 (flashTimer): **исправлено** (`onDestroy` чистит таймер).
-- Bug 4 (SkinPreview3D race): переписано (`loadSkinFromCachedPath`), явной
-  отмены/поколений не видно — **проверить гонку при быстрой смене скинов**.
-- Bug 5 (theme desync): вынесено в `lib/themes.ts` — **вероятно исправлено**.
-- Bug 6 (ExportBuilder до projectInfo): fallback `?? "modpack"` остался,
-  но добавлен пересчёт при готовности info — **частично**, сверить UX.
-- Bug 7 (double compute): **исправлено** (`$derived`).
-- Bug 8 (unused import): **исправлено**.
+### P1-3. BUG_REPORT.md (2026-07-20) — закрыт
+- Все 8 багов исправлены пакетным коммитом `33b9f93` («fix(frontend):
+  BUG_REPORT batch 1-8», 2026-08-25), принадлежность текущей ветке
+  подтверждена через историю. Состояние кода сверено с текстом коммита
+  (finally-guard, спиннер по `process-exited`, `onDestroy`-чистка,
+  generation counter, theme store, пересчёт имён, `$derived`,
+  удалённый импорт). Дополнительно `ea1b82f` закрыл тот же Bug-2 паттерн
+  в IdeNextBar/Diagnostics. Остался только опциональный рантайм-чек Bug 2/4/6.
 
 ### P1-4. Прочее из свежих аудитов (не дублировать, track-ссылки)
 - Нет единого `DiagnosticsSnapshot`/fingerprint — UI может смешивать graph и
