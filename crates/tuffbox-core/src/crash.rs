@@ -169,6 +169,11 @@ pub struct FixAction {
     pub kind: String,
     pub label: String,
     pub mod_id: Option<String>,
+    /// Exact version or version range for `changeModVersion`
+    /// (e.g. `0.6.0`, `[0.6,)`, `>=1.2`). The executor resolves the newest
+    /// compatible release satisfying it. `None` for all other fix kinds.
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1602,6 +1607,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: "raiseMemory".into(),
                 label: "Raise allocated memory to 6 GB".into(),
                 mod_id: None,
+                version: None,
             }),
             fixes: vec![],
         });
@@ -1641,6 +1647,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: "acceptEula".into(),
                 label: "Accept EULA (set eula.txt eula=true)".into(),
                 mod_id: None,
+                version: None,
             }),
             fixes: vec![],
         });
@@ -1664,6 +1671,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: "changePort".into(),
                 label: "Use port 25566 instead".into(),
                 mod_id: None,
+                version: None,
             }),
             fixes: vec![],
         });
@@ -1689,6 +1697,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                     kind: "reinstallMod".into(),
                     label: format!("Re-download {}", s.name),
                     mod_id: Some(s.id.clone()),
+                    version: None,
                 }),
                 fixes: vec![],
         });
@@ -1731,6 +1740,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: "autoJava".into(),
                 label: "Auto-select a compatible Java runtime".into(),
                 mod_id: None,
+                version: None,
             }),
             fixes: vec![],
         });
@@ -1756,6 +1766,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: "disableMod".into(),
                 label: format!("Disable {}", s.name),
                 mod_id: Some(s.id.clone()),
+                version: None,
             }),
             fixes: vec![],
         });
@@ -1778,6 +1789,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: "disableMod".into(),
                 label: format!("Disable {}", s.name),
                 mod_id: Some(s.id.clone()),
+                version: None,
             }),
             fixes: vec![],
         });
@@ -1842,6 +1854,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                     kind: "installDependency".into(),
                     label: format!("Install {id}"),
                     mod_id: Some(id.clone()),
+                    version: None,
                 })
                 .collect();
 
@@ -1882,6 +1895,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: kind.into(),
                 label: format!("{verb} {}", s.name),
                 mod_id: Some(s.id.clone()),
+                version: None,
             });
         }
         push(DiagnosisHint {
@@ -1917,6 +1931,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: "updateMod".into(),
                 label: format!("Update {}", s.name),
                 mod_id: Some(s.id.clone()),
+                version: None,
             }),
             fixes: vec![],
         });
@@ -1957,6 +1972,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: "updateLoader".into(),
                 label: "Update mod loader".into(),
                 mod_id: None,
+                version: None,
             }),
             fixes: vec![],
         });
@@ -2004,6 +2020,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                         kind: "disableMod".into(),
                         label: format!("Disable {}", s.name),
                         mod_id: Some(s.id.clone()),
+                        version: None,
                     })
             }),
             fixes: vec![],
@@ -2036,6 +2053,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: "updateMod".into(),
                 label: format!("Update {}", s.name),
                 mod_id: Some(s.id.clone()),
+                version: None,
             }),
             fixes: vec![],
         });
@@ -2073,6 +2091,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 kind: kind.to_string(),
                 label: format!("{} {}", fix_verb(kind), s.name),
                 mod_id: Some(s.id.clone()),
+                version: None,
             })
             .collect();
     }

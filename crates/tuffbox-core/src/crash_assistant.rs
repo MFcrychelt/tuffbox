@@ -97,6 +97,7 @@ pub fn run_full_analysis(ctx: &AnalysisCtx) -> CrashAnalysisReport {
     findings.extend(check_java_version(ctx, &combined));
     findings.extend(check_mixins(ctx, &combined));
     findings.extend(check_missing_mods(ctx, &combined));
+    findings.extend(check_dep_version_mismatch(ctx, &combined));
     findings.extend(check_intel_cpu(ctx));
     findings.extend(check_integrated_gpu(ctx));
     findings.extend(check_offline(ctx));
@@ -197,10 +198,21 @@ fn fx(
 }
 
 fn fix_action(kind: &str, label: &str, mod_id: Option<&str>) -> crate::crash::FixAction {
+    fix_action_ver(kind, label, mod_id, None)
+}
+
+/// Fix action with an exact version / version range (for `changeModVersion`).
+fn fix_action_ver(
+    kind: &str,
+    label: &str,
+    mod_id: Option<&str>,
+    version: Option<&str>,
+) -> crate::crash::FixAction {
     crate::crash::FixAction {
         kind: kind.into(),
         label: label.into(),
         mod_id: mod_id.map(|s| s.into()),
+        version: version.map(|s| s.into()),
     }
 }
 
@@ -642,6 +654,137 @@ fn check_missing_mods(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFin
             Some("Check Connector mod page for required dependencies."),
             &["https://modrinth.com/mod/connector"],
         ));
+    }
+    out
+}
+
+/// Deterministic "mod X requires version R of Y" diagnosis, verified in code.
+///
+/// The loader states both the constraint and (usually) the version it saw,
+/// so the fix never needs the AI: parse the requirement, check the installed
+/// version against it with [`crate::mod_version_req::version_satisfies`],
+/// and pin the precise fix. Only installed deps are handled here — missing
+/// ones belong to MISSING_DEPENDENCY (install button).
+fn check_dep_version_mismatch(
+    ctx: &AnalysisCtx,
+    combined: &str,
+) -> Vec<CrashAnalysisFinding> {
+    use crate::mod_version_req::{parse_dep_version_requirements, version_satisfies};
+    let mut out = Vec::new();
+    let reqs = parse_dep_version_requirements(combined);
+    if reqs.is_empty() {
+        return out;
+    }
+    for req in reqs.into_iter().take(4) {
+        let Some(dep_id) = ctx
+            .installed_mods
+            .iter()
+            .find(|m| m.eq_ignore_ascii_case(&req.dep_id))
+            .cloned()
+        else {
+            continue;
+        };
+        let installed_ver = ctx
+            .installed_versions
+            .as_ref()
+            .and_then(|m| m.get(&dep_id).or_else(|| m.get(&req.dep_id)))
+            .map(|s| s.as_str());
+        // Manifest first, loader testimony (`Actual version` / `wrong version
+        // is present`) second. `None` means "cannot verify" — the fix is
+        // still attached, but the executor re-verifies at apply time.
+        let verdict = installed_ver
+            .and_then(|v| version_satisfies(v, &req.constraint))
+            .or_else(|| {
+                req.found
+                    .as_deref()
+                    .and_then(|f| version_satisfies(f, &req.constraint))
+            });
+        let by = if req.requester.is_empty() {
+            String::new()
+        } else {
+            format!(" (required by `{}`)", req.requester)
+        };
+        let evidence = first_evidence_line(
+            combined,
+            &[
+                req.dep_id.as_str(),
+                "requires version",
+                "Expected range",
+                "wrong version is present",
+            ],
+        )
+        .map(truncate_evidence);
+        match verdict {
+            Some(false) => {
+                let have = installed_ver
+                    .or(req.found.as_deref())
+                    .unwrap_or("unknown");
+                out.push(fx(
+                    "error",
+                    "DEP_VERSION_MISMATCH",
+                    &format!("`{dep_id}` is the wrong version"),
+                    &format!(
+                        "`{dep_id}` {have} does not satisfy `{}`{by} — the loader refuses to start. The fix installs the newest compatible `{dep_id}` release matching `{}`.",
+                        req.constraint, req.constraint
+                    ),
+                    Some(
+                        &format!("Install `{dep_id}` matching `{}`.", req.constraint),
+                    ),
+                    &[],
+                    vec![fix_action_ver(
+                        "changeModVersion",
+                        &format!("Install `{dep_id}` {}", req.constraint),
+                        Some(&dep_id),
+                        Some(&req.constraint),
+                    )],
+                    evidence,
+                ));
+            }
+            Some(true) => {
+                // Manifest satisfies the constraint but the loader disagrees:
+                // the jar on disk drifted (manual swap / stale file) — re-fetch
+                // the tracked file, never pin a different version.
+                out.push(fx(
+                    "warning",
+                    "DEP_VERSION_MANIFEST_DRIFT",
+                    &format!("`{dep_id}` on disk differs from the manifest"),
+                    &format!(
+                        "The manifest says `{dep_id}` satisfies `{}`{by}, but the loader still rejects it — the jar on disk likely drifted. Re-download the tracked file.",
+                        req.constraint
+                    ),
+                    Some(&format!("Re-download `{dep_id}`.")),
+                    &[],
+                    vec![fix_action(
+                        "reinstallMod",
+                        &format!("Re-download `{dep_id}`"),
+                        Some(&dep_id),
+                    )],
+                    evidence,
+                ));
+            }
+            None => {
+                out.push(fx(
+                    "error",
+                    "DEP_VERSION_MISMATCH",
+                    &format!("`{dep_id}` may be the wrong version"),
+                    &format!(
+                        "The loader requires `{dep_id}` matching `{}`{by}, but the installed version is unknown. Applying checks the installed version first and skips when it already satisfies the requirement.",
+                        req.constraint
+                    ),
+                    Some(
+                        &format!("Install `{dep_id}` matching `{}`.", req.constraint),
+                    ),
+                    &[],
+                    vec![fix_action_ver(
+                        "changeModVersion",
+                        &format!("Install `{dep_id}` {}", req.constraint),
+                        Some(&dep_id),
+                        Some(&req.constraint),
+                    )],
+                    evidence,
+                ));
+            }
+        }
     }
     out
 }
@@ -2064,11 +2207,22 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 Some(&dep),
             ));
         }
-        // Also offer updating the dependent mod(s) named in the log.
+        // Also offer updating the dependent mod(s) named in the log — except
+        // deps with a parsed version requirement: those get the precise
+        // `changeModVersion` pin from DEP_VERSION_MISMATCH instead of a
+        // vague "update and hope" button.
+        let pinned: Vec<String> =
+            crate::mod_version_req::parse_dep_version_requirements(combined)
+                .into_iter()
+                .map(|r| r.dep_id)
+                .collect();
         for m in match_mods_in_text(combined, &ctx.installed_mods)
             .into_iter()
             .take(3)
         {
+            if pinned.iter().any(|p| p.eq_ignore_ascii_case(&m)) {
+                continue;
+            }
             fixes.push(fix_action(
                 "updateMod",
                 &format!("Update `{m}` (may change dependency range)"),
@@ -3303,6 +3457,68 @@ Caused by: java.io.FileNotFoundException: minecraft:shaders/core/rendertype_soli
             .fixes
             .iter()
             .any(|a| a.kind == "disableMod" || a.kind == "removeMod"));
+    }
+
+    #[test]
+    fn dep_version_mismatch_pins_precise_fix() {
+        let mut c = ctx();
+        c.installed_versions = Some(
+            [("sodium".to_string(), "0.5.0".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let log = "- Mod 'iris' requires version '0.6.0' of mod 'sodium', but only the wrong version is present: '0.5.0'!\nModResolutionException";
+        let hits = check_dep_version_mismatch(&c, log);
+        let f = hits
+            .iter()
+            .find(|f| f.code == "DEP_VERSION_MISMATCH")
+            .expect("mismatch finding");
+        let fix = f.fixes.iter().find(|a| a.kind == "changeModVersion").unwrap();
+        assert_eq!(fix.mod_id.as_deref(), Some("sodium"));
+        assert_eq!(fix.version.as_deref(), Some("0.6.0"));
+        // The generic vague update button must yield to the precise pin.
+        let generic = check_conflict_log_phrases(&c, log);
+        let missing = generic
+            .iter()
+            .find(|f| f.code == "MISSING_DEPENDENCY")
+            .expect("generic missing-dep finding");
+        assert!(
+            !missing.fixes.iter().any(|a| a.kind == "updateMod"
+                && a.mod_id.as_deref().is_some_and(|m| m.eq_ignore_ascii_case("sodium"))),
+            "vague updateMod(sodium) must be suppressed in favor of the pin"
+        );
+    }
+
+    #[test]
+    fn dep_version_manifest_drift_reinstalls_instead_of_pinning() {
+        let mut c = ctx();
+        c.installed_versions = Some(
+            [("sodium".to_string(), "0.6.13".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let log = "Mod ID: 'sodium', Requested by: 'iris', Expected range: '[0.6,)', Actual version: '0.5.0'";
+        let hits = check_dep_version_mismatch(&c, log);
+        let f = hits
+            .iter()
+            .find(|f| f.code == "DEP_VERSION_MANIFEST_DRIFT")
+            .expect("drift finding");
+        assert!(f.fixes.iter().any(|a| a.kind == "reinstallMod"));
+        assert!(!f.fixes.iter().any(|a| a.kind == "changeModVersion"));
+    }
+
+    #[test]
+    fn dep_version_skips_missing_and_java_pseudo_deps() {
+        let mut c = ctx();
+        // embeddium NOT installed → belongs to MISSING_DEPENDENCY, not here.
+        let log = "Mod \"oculus\" requires version \">=1.6\" of mod \"embeddium\" which is missing!";
+        assert!(check_dep_version_mismatch(&c, log).is_empty());
+        // Java requirement lines must never become mod pins.
+        let java = "requires version 25 or later of 'Java HotSpot(TM) 64-Bit Server VM' (java)";
+        assert!(check_dep_version_mismatch(&c, java).is_empty());
+        c.installed_mods.push("embeddium".into());
+        let hits = check_dep_version_mismatch(&c, log);
+        assert!(hits.iter().any(|f| f.code == "DEP_VERSION_MISMATCH"));
     }
 
     #[test]

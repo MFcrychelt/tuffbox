@@ -39,6 +39,7 @@ pub mod mod_group_test;
 pub mod mod_index_cache;
 pub mod mod_scan;
 pub mod mod_suggest;
+pub mod mod_version_req;
 pub mod modpack_index;
 pub mod options_sync;
 pub mod murmur2;

@@ -9,6 +9,7 @@ export type FixAction = {
   kind: string;
   label: string;
   modId: string | null;
+  version?: string | null;
 };
 
 export type Problem = {
@@ -228,12 +229,13 @@ export type BuildProblemsInput = {
   } | null;
 };
 
-function normalizeFixAction(a: FixAction | { kind: string; label: string; modId?: string | null; mod_id?: string | null }): FixAction {
+function normalizeFixAction(a: FixAction | { kind: string; label: string; modId?: string | null; mod_id?: string | null; version?: string | null }): FixAction {
   const modId = a.modId ?? (a as { mod_id?: string | null }).mod_id ?? null;
   return {
     kind: a.kind,
     label: a.label,
     modId: modId ? String(modId) : null,
+    version: a.version ?? null,
   };
 }
 
@@ -723,7 +725,7 @@ export function collectFixAllActions(problems: Problem[]): FixAllActionRow[] {
   }
   const order = (kind: string) => {
     if (kind.includes("install")) return 0;
-    if (kind.includes("update") || kind === "reinstallMod") return 1;
+    if (kind.includes("update") || kind === "reinstallMod" || kind === "changeModVersion") return 1;
     if (kind === "raiseMemory" || kind === "autoJava" || kind === "acceptEula" || kind === "changePort")
       return 2;
     if (kind.includes("remove") || kind === "disableMod") return 3;

@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
-  import { X, Loader2, CheckCircle2, AlertTriangle, Pause, Play } from "@lucide/svelte";
+  import { X, Loader2, CheckCircle2, AlertTriangle, Pause, Play, CircleX } from "@lucide/svelte";
   import { toasts } from "../lib/toast";
 
   type BackgroundTask = {
@@ -156,8 +156,11 @@
               <Play size={14} />
             </button>
           {:else if t.status === "running" && !isOllamaPull(t.id)}
-            <button type="button" class="ghost" title="Cancel task" onclick={() => cancelTask(t.id)}>
-              <X size={14} />
+            <!-- Cancel (stop the task) and Dismiss (hide the card) are different
+                 actions — they used to share the same X icon, rendering two
+                 identical crosses. Cancel now uses a distinct stopped-circle. -->
+            <button type="button" class="ghost danger" title="Cancel task" onclick={() => cancelTask(t.id)}>
+              <CircleX size={14} />
             </button>
           {/if}
           <button type="button" class="ghost" title="Dismiss" onclick={() => dismiss(t.id)}>
@@ -192,17 +195,18 @@
   }
   .task {
     pointer-events: auto;
-    background: var(--surface, #1a1a1e);
-    border: 1px solid var(--border, #333);
-    border-radius: var(--border-radius-sm);
+    background: var(--bg-elevated, #1a1a1e);
+    border: 1px solid var(--border-color, #333);
+    border-radius: var(--border-radius-sm, 8px);
     padding: 10px 12px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    color: var(--text-primary, inherit);
   }
   .task.failed {
-    border-color: #c44;
+    border-color: var(--accent-danger, #c44);
   }
   .task.paused {
-    border-color: #64748b;
+    border-color: var(--text-muted, #64748b);
   }
   .row {
     display: flex;
@@ -220,21 +224,29 @@
     cursor: pointer;
     opacity: 0.7;
     padding: 2px;
+    border-radius: 4px;
+  }
+  .ghost:hover {
+    opacity: 1;
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  }
+  .ghost.danger:hover {
+    color: var(--accent-danger, #f88);
   }
   .bar {
     margin-top: 8px;
     height: 4px;
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
     border-radius: 2px;
     overflow: hidden;
   }
   .fill {
     height: 100%;
-    background: var(--accent, #6cf);
+    background: var(--accent-primary, #6cf);
     transition: width 0.2s ease;
   }
   .paused .fill {
-    background: #94a3b8;
+    background: var(--text-muted, #94a3b8);
   }
   :global(html.potato-pc) .fill {
     transition: none;
@@ -244,9 +256,10 @@
     margin-top: 4px;
     opacity: 0.75;
     font-size: 11px;
+    color: var(--text-secondary, inherit);
   }
   .err {
-    color: #f88;
+    color: var(--accent-danger, #f88);
   }
   :global(.spin) {
     animation: spin 0.9s linear infinite;

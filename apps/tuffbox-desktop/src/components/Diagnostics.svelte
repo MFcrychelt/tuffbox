@@ -131,6 +131,7 @@
     kind: string;
     label: string;
     modId: string | null;
+    version?: string | null;
   };
 
   type CrashDiagnosis = {
@@ -2339,6 +2340,9 @@
       kind: action.kind,
       label: action.label,
       modId: fixActionModId(action),
+      // Version pins (changeModVersion) must survive the round-trip —
+      // dropping them would turn a precise pin into a rejected action.
+      version: action.version ?? null,
     };
   }
 

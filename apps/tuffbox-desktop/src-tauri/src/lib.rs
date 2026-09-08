@@ -3108,6 +3108,76 @@ fn select_java_for_project(manifest_path: &Path, major: Option<u32>) -> Result<S
     Ok(format!("Selected Java {} ({})", best.major, best.path))
 }
 
+/// Resolve + apply a version constraint for one installed mod (the
+/// `changeModVersion` fix arm, shared with version-pinned plan actions).
+///
+/// Fully code-driven: verifies the installed version first (already
+/// satisfying ⇒ no-op success, never churn), then installs the newest
+/// MC+loader-compatible Modrinth release satisfying `constraint`
+/// (`0.6.0`, `[0.6,)`, `>=1.2`, …). Downgrades work the same way — the
+/// constraint, not "latest", picks the target.
+fn change_mod_version_inner(
+    app: &tauri::AppHandle,
+    manifest_path: &Path,
+    mod_id: &str,
+    constraint: &str,
+) -> Result<String, String> {
+    let mut manifest =
+        ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
+    let entry = manifest
+        .mods
+        .iter()
+        .find(|m| m.id.eq_ignore_ascii_case(mod_id))
+        .cloned()
+        .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
+    if !entry.version.trim().is_empty() {
+        if let Some(true) = tuffbox_core::mod_version_req::version_satisfies(
+            &entry.version,
+            constraint,
+        ) {
+            return Ok(format!(
+                "{} {} already satisfies {} — no change needed",
+                entry.id, entry.version, constraint
+            ));
+        }
+    }
+    let project_id = entry
+        .source
+        .project_id
+        .clone()
+        .unwrap_or_else(|| mod_id.to_string());
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let query = ProviderSearchQuery {
+        query: None,
+        minecraft_version: Some(manifest.minecraft.version.clone()),
+        loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
+        ..Default::default()
+    };
+    let mut versions = provider
+        .get_versions(&project_id, &query)
+        .map_err(|e| format!("failed to list versions for {mod_id}: {e}"))?;
+    versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
+    let picked = versions
+        .into_iter()
+        .find(|v| {
+            tuffbox_core::mod_version_req::version_satisfies(&v.version_number, constraint)
+                == Some(true)
+        })
+        .ok_or_else(|| {
+            format!("no {mod_id} release for this Minecraft + loader satisfies {constraint}")
+        })?;
+    let picked_number = picked.version_number.clone();
+    let picked_id = picked.id.clone();
+    update_mod_from_modrinth(manifest_path, &mut manifest, mod_id, Some(picked_id.as_str()))
+        .map_err(|e| e.to_string())?;
+    match commit_single_mod_update(app, manifest_path, &mut manifest, &entry, false) {
+        Ok(_) => Ok(format!(
+            "changed {mod_id} to {picked_number} (satisfies {constraint})"
+        )),
+        Err(e) => Err(e),
+    }
+}
+
 /// Crash + log text used to re-derive the required Java major when the
 /// `selectJava` button is pressed without an explicit version.
 fn java_evidence_haystack(project_dir: &Path) -> String {
@@ -3261,6 +3331,22 @@ fn execute_fix_action_inner(
             save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
             Ok(format!("Selected Java {} ({})", best.major, best.path))
         }
+        // Crash Assistant DEP_VERSION_MISMATCH button: install the newest
+        // release satisfying the loader-stated constraint (exact or range).
+        "changeModVersion" => {
+            if mod_id.is_empty() {
+                return Err("changeModVersion requires a mod id".into());
+            }
+            let constraint = action.version.clone().unwrap_or_default();
+            if constraint.trim().is_empty() {
+                return Err("changeModVersion requires a version or range".into());
+            }
+            if !skip_snapshot {
+                auto_snapshot(&manifest_path, "fix-change-mod-version")
+                    .map_err(|e| e.to_string())?;
+            }
+            change_mod_version_inner(app, &manifest_path, &mod_id, constraint.trim())
+        }
         // Crash Assistant WRONG_JAVA_VERSION button + set_java plan op. Unlike
         // autoJava (MC-version floor), this honors the crash-derived required
         // major — passing None makes the helper re-derive it from the
@@ -3278,7 +3364,7 @@ fn execute_fix_action_inner(
 fn fix_action_batch_order(kind: &str) -> u8 {
     match kind {
         "installDependency" | "installAllMissing" | "installMissingForMod" => 0,
-        "updateMod" | "reinstallMod" | "updateLoader" => 1,
+        "updateMod" | "reinstallMod" | "updateLoader" | "changeModVersion" => 1,
         "raiseMemory" | "autoJava" | "selectJava" | "acceptEula" | "changePort" => 2,
         "disableMod" | "removeMod" | "removeWrongJar" => 3,
         _ => 2,
@@ -3425,16 +3511,20 @@ fn fix_action_to_launcher_action(
         "changePort" => "change_port",
         "autoJava" => "auto_java",
         "selectJava" => "set_java",
+        "changeModVersion" => "change_mod_version",
         other => other,
     };
     // selectJava history entries keep the resolved major so re-apply replays
     // the same runtime choice (summary shape: "Selected Java {major} ({path})").
+    // changeModVersion entries keep the constraint for the same reason.
     let version = if op == "set_java" {
         summary
             .strip_prefix("Selected Java ")
             .and_then(|rest| rest.split_whitespace().next())
             .filter(|v| v.parse::<u32>().is_ok())
             .map(|v| v.to_string())
+    } else if op == "change_mod_version" {
+        action.version.clone()
     } else {
         None
     };
@@ -7891,7 +7981,21 @@ async fn apply_action_plan(
                         Err(e) => errors.push(e),
                     }
                 }
-                Err(e) => errors.push(e.to_string()),
+                Err(e) => {
+                    // Exact lookup missed — the "version" may be a loader
+                    // constraint (`[0.6,)`, `>=1.2`) from a rules pin or
+                    // history replay. Resolve the newest satisfying release
+                    // instead of failing (also a no-op when already met).
+                    match change_mod_version_inner(
+                        &app,
+                        &manifest_path,
+                        &mod_id,
+                        version.as_str(),
+                    ) {
+                        Ok(msg) => applied.push(msg),
+                        Err(_) => errors.push(e.to_string()),
+                    }
+                }
             }
             continue;
         }

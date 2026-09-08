@@ -1166,6 +1166,11 @@ pub fn launcher_action_to_fix_action(action: &LauncherAction) -> Option<FixActio
         "update_mod" => "updateMod",
         "install_mod" => "installDependency",
         "set_java" => "selectJava",
+        // Version-pinned updates ALSO route through the executor now (the
+        // `changeModVersion` arm resolves ranges like `[0.6,)` to the newest
+        // satisfying release). apply_action_plan handles pins directly, but
+        // fix-all batch / history replay reach them via this mapping.
+        "change_mod_version" => "changeModVersion",
         _ => return None,
     };
     let label = action.reason.clone().unwrap_or_else(|| {
@@ -1174,14 +1179,31 @@ pub fn launcher_action_to_fix_action(action: &LauncherAction) -> Option<FixActio
                 Some(v) if !v.is_empty() => format!("Use Java {v}"),
                 _ => "Use a compatible Java runtime".to_string(),
             }
+        } else if action.op == "change_mod_version" {
+            match action.version.as_deref().map(str::trim) {
+                Some(v) if !v.is_empty() => format!(
+                    "Install {} {}",
+                    mod_id.as_deref().unwrap_or("mod"),
+                    v
+                ),
+                _ => format!("Install {}", mod_id.as_deref().unwrap_or("mod")),
+            }
         } else {
             format!("{} {}", action.op, mod_id.as_deref().unwrap_or(""))
         }
     });
+    // Carry the pin only for version-targeting kinds — anything else must
+    // not inherit a stale version into the executor.
+    let version = if kind == "changeModVersion" {
+        action.version.clone()
+    } else {
+        None
+    };
     Some(FixAction {
         kind: kind.into(),
         label,
         mod_id,
+        version,
     })
 }
 
@@ -2100,6 +2122,33 @@ mod tests {
         let f = launcher_action_to_fix_action(&a).unwrap();
         assert_eq!(f.kind, "disableMod");
         assert_eq!(f.mod_id.as_deref(), Some("oculus"));
+    }
+
+    #[test]
+    fn maps_version_pin_to_fix_action() {
+        let a = LauncherAction {
+            op: "change_mod_version".into(),
+            mod_id: Some("sodium".into()),
+            provider: None,
+            project_id: None,
+            version: Some("[0.6,)".into()),
+            path: None,
+            patch_type: None,
+            patch: None,
+            reason: None,
+            risk: "medium".into(),
+        };
+        let f = launcher_action_to_fix_action(&a).unwrap();
+        assert_eq!(f.kind, "changeModVersion");
+        assert_eq!(f.mod_id.as_deref(), Some("sodium"));
+        assert_eq!(f.version.as_deref(), Some("[0.6,)"));
+        assert!(f.label.contains("[0.6,)"));
+        // Non-version kinds must not inherit a stale pin.
+        let mut b = a.clone();
+        b.op = "update_mod".into();
+        let g = launcher_action_to_fix_action(&b).unwrap();
+        assert_eq!(g.kind, "updateMod");
+        assert_eq!(g.version, None);
     }
 
     #[test]
