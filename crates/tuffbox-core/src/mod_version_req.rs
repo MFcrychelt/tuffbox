@@ -248,12 +248,14 @@ fn parse_forge_range_line(lower: &str) -> Option<DepVersionReq> {
     let found = key_quoted(lower, "actual version")
         .map(|v| v.trim().to_string())
         .filter(|v| v.chars().any(|c| c.is_ascii_digit()) && v.len() <= 64);
+    // Computed before the literal moves `found` (E0382 otherwise).
+    let missing = found.is_none() && lower.contains("missing");
     Some(DepVersionReq {
         requester,
         dep_id,
         constraint,
         found,
-        missing: found.is_none() && lower.contains("missing"),
+        missing,
     })
 }
 
