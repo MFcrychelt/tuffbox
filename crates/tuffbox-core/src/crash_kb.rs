@@ -544,8 +544,14 @@ pub fn fingerprint_keys_match(current: &str, candidate: &str) -> bool {
     if current == candidate {
         return true;
     }
-    let trunc = |k: &str| k.rsplit_once('|').map(|(h, _)| h).unwrap_or(k);
-    trunc(current) == trunc(candidate)
+    trunc_fp_key(current) == trunc_fp_key(candidate)
+}
+
+/// Fingerprint key without the trailing `|blame` segment (free function, not
+/// a closure: a closure's single inferred signature cannot serve the two
+/// different borrow lifetimes of `current` and `candidate`).
+fn trunc_fp_key(k: &str) -> &str {
+    k.rsplit_once('|').map(|(h, _)| h).unwrap_or(k)
 }
 
 /// Filesystem/JSON-friendly slug of a full fingerprint key (all segments, not

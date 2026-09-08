@@ -228,10 +228,11 @@ fn endpoint_looks_local(endpoint: &str) -> bool {
     if e.is_empty() {
         return false;
     }
-    // Strip scheme for prefix checks.
+    // Strip scheme for prefix checks (`rsplit().next()`: `Split<&str>` is
+    // not DoubleEndedIterator, so `split().next_back()` does not exist).
     let host = e
-        .split("://")
-        .next_back()
+        .rsplit("://")
+        .next()
         .unwrap_or(e.as_str())
         .split(['/', '?', '#'])
         .next()
