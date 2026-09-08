@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
-  import { X, Loader2, CheckCircle2, AlertTriangle, Pause, Play } from "@lucide/svelte";
+  import { Ban, Loader2, CheckCircle2, AlertTriangle, Pause, Play, X } from "@lucide/svelte";
   import { toasts } from "../lib/toast";
 
   type BackgroundTask = {
@@ -156,13 +156,15 @@
               <Play size={14} />
             </button>
           {:else if t.status === "running" && !isOllamaPull(t.id)}
-            <button type="button" class="ghost" title="Cancel task" onclick={() => cancelTask(t.id)}>
+            <button type="button" class="ghost danger-action" title="Cancel task" aria-label="Cancel task" onclick={() => cancelTask(t.id)}>
+              <Ban size={14} />
+            </button>
+          {/if}
+          {#if t.status !== "running" && t.status !== "cancelRequested"}
+            <button type="button" class="ghost" title="Dismiss" aria-label="Dismiss task" onclick={() => dismiss(t.id)}>
               <X size={14} />
             </button>
           {/if}
-          <button type="button" class="ghost" title="Dismiss" onclick={() => dismiss(t.id)}>
-            <X size={14} />
-          </button>
         </div>
         {#if (t.status === "running" || t.status === "paused") && t.progress != null}
           <div class="bar"><div class="fill" style={`width: ${Math.round((t.progress || 0) * 100)}%`}></div></div>
@@ -219,8 +221,19 @@
     color: inherit;
     cursor: pointer;
     opacity: 0.7;
-    padding: 2px;
+    padding: 4px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
+  .ghost:hover,
+  .ghost:focus-visible {
+    opacity: 1;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    outline: none;
+  }
+  .danger-action { color: var(--accent-danger, #ef4444); }
   .bar {
     margin-top: 8px;
     height: 4px;

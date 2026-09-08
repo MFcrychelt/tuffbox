@@ -33,3 +33,18 @@
   </div>
   <p class="m-0 flex items-center gap-2 text-[11px] text-neutral-500"><ShieldCheck size={13} class="text-emerald-400" /> Logs, backups, and private tokens are excluded from the manifest.</p>
 </section>
+
+<style>
+  section {
+    border-color: var(--border-color) !important;
+    background: color-mix(in srgb, var(--bg-secondary) 72%, transparent) !important;
+  }
+  section :global(h2), section :global(button), section :global(div) { color: var(--text-primary); }
+  section :global(p), section :global(span) { color: var(--text-muted); }
+  section :global(.text-emerald-300), section :global(.text-emerald-400) { color: var(--accent-primary); }
+  section > div:nth-of-type(2) {
+    border-color: var(--border-color) !important;
+    background: color-mix(in srgb, var(--bg-primary) 72%, transparent) !important;
+  }
+  section :global(button:hover) { background: var(--bg-hover); }
+</style>
