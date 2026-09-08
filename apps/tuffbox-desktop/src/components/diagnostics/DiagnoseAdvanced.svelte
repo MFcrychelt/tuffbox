@@ -88,11 +88,11 @@
           cascadingBanner={null}
           sourceHint=""
           onJumpLine={onJumpLine}
-          onDisableMod={fixDisableMod}
+          onDisableMod={onDisableMod}
           onUpdateMod={onUpdateMod}
-          onToggleBisect={toggleBisect}
-          onFindClass={runClassFinder}
-          onFindDependents={runFindDependents}
+          onToggleBisect={onToggleBisect}
+          onFindClass={onFindClass}
+          onFindDependents={onFindDependents}
           onOpenSnapshots={onOpenSnapshots}
         />
 
@@ -119,11 +119,11 @@
           fixingIdx={fixingIdx}
           duplicateJarFixing={duplicateJarFixing}
           wrongLoaderFixing={wrongLoaderFixing}
-          onFixMissingDependency={({ modId, idx }) => fixMissingDependency(modId, idx)}
-          onFixDeduplicate={fixDeduplicate}
-          onKeepOneDuplicateJar={({ modId, fileName }) => keepOneDuplicateJar(modId, fileName)}
-          onDisableWrongJar={disableWrongJar}
-          onRemoveWrongJar={removeWrongJar}
+          onFixMissingDependency={onFixMissingDependency}
+          onFixDeduplicate={onFixDeduplicate}
+          onKeepOneDuplicateJar={onKeepOneDuplicateJar}
+          onDisableWrongJar={onDisableWrongJar}
+          onRemoveWrongJar={onRemoveWrongJar}
         />
 
         <DiagnoseToolsResults
@@ -132,7 +132,7 @@
           bind:aiShowPrompt
           bind:selectedOption={selectedFixOption}
           applying={applying}
-          onApplyPlan={() => void applyFix()}
+          onApplyPlan={onApplyPlan}
           bind:authorOpen
           bind:authorId
           bind:authorSolution
@@ -143,9 +143,9 @@
           authorBusy={authorBusy}
           authorExportPreview={authorExportPreview}
           authorMessage={authorMessage}
-          onSaveAuthor={() => void saveAuthorCase()}
-          onCopyAuthorExport={() => void copyAuthorExport()}
-          onOpenAuthorFolder={() => void openAuthorExportFolder()}
+          onSaveAuthor={onSaveAuthor}
+          onCopyAuthorExport={onCopyAuthorExport}
+          onOpenAuthorFolder={onOpenAuthorFolder}
         />
 </div>
 

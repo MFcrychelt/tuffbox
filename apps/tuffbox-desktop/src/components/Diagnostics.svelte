@@ -3208,7 +3208,7 @@
         bisectMods={bisectMods}
         onJumpLine={() => void openEvidence()}
         onDisableMod={fixDisableMod}
-        onUpdateMod={async (id) => {
+        onUpdateMod={async (id: string) => {
           if (!id) return;
           try { await applyFixBatchOrThrow([{ kind: "updateMod", label: `Update ${id}`, modId: id }]); message = `Update requested for ${id}`; }
           catch (err) { error = String(err); }
@@ -3226,7 +3226,7 @@
         launching={launching}
         onStartGroupTest={() => void startGroupTest()}
         onGroupTestLaunch={() => void runTest()}
-        onReportGroupTest={(outcome) => void reportGroupTest(outcome)}
+        onReportGroupTest={(outcome: "healthy" | "crash") => void reportGroupTest(outcome)}
         onCancelGroupTest={() => void cancelGroupTest()}
         graphDiagnostics={graphDiagnostics}
         duplicateJarGroups={duplicateJarGroups}
@@ -3234,9 +3234,9 @@
         fixingIdx={fixingIdx}
         duplicateJarFixing={duplicateJarFixing}
         wrongLoaderFixing={wrongLoaderFixing}
-        onFixMissingDependency={({ modId, idx }) => fixMissingDependency(modId, idx)}
+        onFixMissingDependency={({ modId, idx }: { modId: string; idx: number }) => fixMissingDependency(modId, idx)}
         onFixDeduplicate={fixDeduplicate}
-        onKeepOneDuplicateJar={({ modId, fileName }) => keepOneDuplicateJar(modId, fileName)}
+        onKeepOneDuplicateJar={({ modId, fileName }: { modId: string; fileName: string }) => keepOneDuplicateJar(modId, fileName)}
         onDisableWrongJar={disableWrongJar}
         onRemoveWrongJar={removeWrongJar}
         plan={plan}
