@@ -104,6 +104,7 @@
   }
 
   let reducedMotion = $state(localStorage.getItem("tuffbox-reduced-motion") === "1");
+  let diagnoseDebugLog = $state(localStorage.getItem("tuffbox-diagnose-debug-log") === "1");
   let glassEffects = $state(readStoredGlass());
   let shortcuts = $state<any[]>([]);
   let shortcutsOpen = $state(false);
@@ -1108,6 +1109,12 @@
     void persistLauncher({ potatoPc: reducedMotion });
   }
 
+  function toggleDiagnoseDebugLog() {
+    diagnoseDebugLog = !diagnoseDebugLog;
+    localStorage.setItem("tuffbox-diagnose-debug-log", diagnoseDebugLog ? "1" : "0");
+    window.dispatchEvent(new CustomEvent("tuffbox:diagnose-debug-setting"));
+  }
+
   function selectBrandIcon(id: BrandIconId) {
     const prev = $brandIcon;
     brandIcon.set(id);
@@ -1213,6 +1220,12 @@
           Potato PC mode (reduce motion / animations)
         </label>
         <p class="hint">Disables CSS animations and transitions for weaker machines.</p>
+
+        <label class="check-row" style="margin-top: 14px;">
+          <input type="checkbox" checked={diagnoseDebugLog} onchange={toggleDiagnoseDebugLog} />
+          Diagnose debug log (testing)
+        </label>
+        <p class="hint">Shows a detailed Diagnose timing log with backend stages and durations. Enable this only while testing and send the downloaded log when reporting a problem.</p>
 
         <label class="check-row" style="margin-top: 14px;">
           <input

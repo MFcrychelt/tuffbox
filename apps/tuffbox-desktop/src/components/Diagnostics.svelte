@@ -42,6 +42,7 @@
   import DiagnoseProblemsList from "./diagnostics/DiagnoseProblemsList.svelte";
   import DiagnoseStatusBar from "./diagnostics/DiagnoseStatusBar.svelte";
   import DiagnoseAdvanced from "./diagnostics/DiagnoseAdvanced.svelte";
+  import DiagnoseDebugLog from "./diagnostics/DiagnoseDebugLog.svelte";
   import { formatCascadeLabel } from "./diagnostics/cascadeLabel";
   import {
     buildUnifiedProblems,
@@ -172,6 +173,27 @@
   let analysisGeneration = 0;
   let analysisKickoff: ReturnType<typeof setTimeout> | undefined;
   let diagnoseTimings = $state<Record<string, { elapsedMs: number; cacheHit: boolean }>>({});
+  let diagnoseDebugEnabled = $state(false);
+  let diagnoseDebugOpen = $state(false);
+  let diagnoseDebugEntries = $state<string[]>([]);
+  let diagnoseDebugStartedAt = 0;
+
+  function readDiagnoseDebugSetting(): boolean {
+    try {
+      return localStorage.getItem("tuffbox-diagnose-debug-log") === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function debugLog(message: string) {
+    if (!diagnoseDebugEnabled) return;
+    if (!diagnoseDebugStartedAt) diagnoseDebugStartedAt = performance.now();
+    const elapsed = Math.round(performance.now() - diagnoseDebugStartedAt);
+    const stamp = new Date().toISOString();
+    diagnoseDebugEntries = [...diagnoseDebugEntries, `${stamp}  +${elapsed}ms  ${message}`].slice(-1000);
+  }
+
   const isCurrentAnalysis = (generation: number) => generation === analysisGeneration;
   // A broken/very large pack must not leave the Diagnose tab in a permanent
   // "running crash checks" state. The backend work cannot be cancelled from
@@ -337,6 +359,7 @@
     if (activeLoadPath === requestedPath) return;
     if (!force && lastLoadedPath === requestedPath && diagnosis) return;
     activeLoadPath = requestedPath;
+    debugLog(`load:start path=${requestedPath} force=${force}`);
     loading = true;
     error = null;
     const requestedLatest = preferLatestLog;
@@ -390,6 +413,7 @@
       if (activeLoadPath === requestedPath) {
         activeLoadPath = null;
         loading = false;
+        debugLog(`load:${error ? "failed" : "done"} source=${activeReportId()}`);
       }
     }
   }
@@ -929,8 +953,10 @@
   async function runOptionalCrashChecks() {
     if (!$projectPath || loading || crashLoading || analysisBusy) return;
     error = null;
+    debugLog("crash-checks:start manual");
     await runCrashAssistant();
     if (aiAnalysis) enrichCrashFindingsWithAi();
+    debugLog(`crash-checks:end findings=${crashFindings.length}`);
   }
 
   /** AI explanation only. Crash Assistant is an explicit, separate action.
@@ -1189,6 +1215,7 @@
   async function runAiExplain(opts: { quiet?: boolean; runId?: number } = {}) {
     if (!$projectPath || aiLoading) return;
     const run = opts.runId ?? ++analysisGeneration;
+    debugLog(`ai:start run=${run} quiet=${!!opts.quiet}`);
     aiLoading = true;
     cascadeLiveStage = "l1_searching";
     if (!opts.quiet) error = null;
@@ -1280,6 +1307,7 @@
       if (isCurrentAnalysis(run)) {
         aiLoading = false;
         cascadeLiveStage = null;
+        debugLog(`ai:end status=${aiAnalysis ? "ok" : "failed"}`);
       }
     }
   }
@@ -2715,6 +2743,17 @@
   });
 
   onMount(() => {
+    diagnoseDebugEnabled = readDiagnoseDebugSetting();
+    if (diagnoseDebugEnabled) {
+      diagnoseDebugStartedAt = performance.now();
+      debugLog("diagnose:component-mounted");
+    }
+    const onDebugSetting = () => {
+      diagnoseDebugEnabled = readDiagnoseDebugSetting();
+      debugLog(`debug-log:${diagnoseDebugEnabled ? "enabled" : "disabled"}`);
+      if (!diagnoseDebugEnabled) diagnoseDebugOpen = false;
+    };
+    window.addEventListener("tuffbox:diagnose-debug-setting", onDebugSetting);
     // Refresh whenever the Diagnose tab is (re)opened so the user always sees
     // fresh crash-report / log data rather than a stale snapshot from a
     // previous visit. Without this the panel could appear "stuck" / empty.
@@ -2735,7 +2774,10 @@
     let unlistenTiming: UnlistenFn | undefined;
     void listen<{ stage?: string }>("diagnose-cascade", (ev) => {
       const stage = ev.payload?.stage;
-      if (stage) cascadeLiveStage = stage;
+      if (stage) {
+        cascadeLiveStage = stage;
+        debugLog(`cascade:stage=${stage}`);
+      }
     }).then((u) => {
       unlistenCascade = u;
     });
@@ -2743,7 +2785,10 @@
     // scanning, AI stages) — replaces the static "Loading crash diagnosis…".
     void listen<{ stage?: string }>("diagnose-progress", (ev) => {
       const stage = ev.payload?.stage;
-      if (stage) liveDiagnoseStage = stage;
+      if (stage) {
+        liveDiagnoseStage = stage;
+        debugLog(`backend:stage=${stage}`);
+      }
     }).then((u) => {
       unlistenProgress = u;
     });
@@ -2755,6 +2800,7 @@
         ...diagnoseTimings,
         [phase]: { elapsedMs, cacheHit: !!ev.payload?.cacheHit },
       };
+      debugLog(`timing:${phase} elapsed=${Math.round(elapsedMs)}ms cacheHit=${!!ev.payload?.cacheHit}`);
     }).then((u) => {
       unlistenTiming = u;
     });
@@ -2784,6 +2830,7 @@
     });
     return () => {
       window.removeEventListener("tuffbox:open-diagnostics", reload);
+      window.removeEventListener("tuffbox:diagnose-debug-setting", onDebugSetting);
       unlistenCascade?.();
       unlistenSoftVerify?.();
       unlistenCrash?.();
@@ -2850,6 +2897,11 @@
           <RefreshCw size={15} class={analysisBusy ? "spin" : ""} />
           {analysisBusy ? "Analyzing…" : "Re-analyze"}
         </button>
+        {#if diagnoseDebugEnabled}
+          <button class="ghost" type="button" onclick={() => (diagnoseDebugOpen = true)} title="Open Diagnose debug log">
+            Log{#if diagnoseDebugEntries.length} · {diagnoseDebugEntries.length}{/if}
+          </button>
+        {/if}
         <button class="primary" onclick={runTest} disabled={!$projectPath || launching || loading}>
           <Play size={15} class={launching ? "spin" : ""} />
           {launching ? "Launching…" : "Test launch"}
@@ -3277,6 +3329,13 @@
 />
 
 <AiConnectionModal bind:open={aiModalOpen} />
+{#if diagnoseDebugEnabled && diagnoseDebugOpen}
+  <DiagnoseDebugLog
+    entries={diagnoseDebugEntries}
+    onclose={() => (diagnoseDebugOpen = false)}
+    onclear={() => (diagnoseDebugEntries = [])}
+  />
+{/if}
 
 <style>
   .diagnostics {
