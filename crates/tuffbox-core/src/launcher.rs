@@ -1,6 +1,6 @@
 use crate::jre::JavaRuntime;
 use crate::manifest::{ContentType, ProfileSpec, ProjectManifest, Side};
-use crate::mc_install::{install_game, InstallProgress};
+use crate::mc_install::{install_game, verify_install_integrity, InstallProgress};
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,6 +15,17 @@ use thiserror::Error;
 pub enum LauncherError {
     #[error("java not found")]
     JavaNotFound,
+    #[error(
+        "Minecraft {mc_version} requires Java {required_major}+ but the selected runtime is Java {actual_major} ({java_path})"
+    )]
+    JavaVersionMismatch {
+        mc_version: String,
+        required_major: u32,
+        actual_major: u32,
+        java_path: String,
+    },
+    #[error("launch preflight failed: {0}")]
+    Preflight(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("instance directory not prepared")]
@@ -41,18 +52,20 @@ pub struct LaunchOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchResult {
+    /// `None` means the process was successfully spawned and is still owned by
+    /// the launcher. Final exit status arrives through the lifecycle event.
     pub exit_code: Option<i32>,
     pub log_path: PathBuf,
     /// OS pid of the spawned Java process (set when launch returns "started").
     #[serde(default)]
-    pub pid: Option<u32>,
-    /// Manifest path / instance id used for running-instance tracking.
+    pub pid: u32,
+    /// Stable manifest-path key used by `list_running_instances`.
     #[serde(default)]
-    pub instance_id: Option<String>,
+    pub instance_id: String,
     #[serde(default)]
-    pub profile_id: Option<String>,
+    pub profile: String,
     #[serde(default)]
-    pub started_at: Option<u64>,
+    pub started_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +143,27 @@ impl TestLauncher {
                 other.to_string(),
             )),
         })
+    }
+
+    /// Check the Java runtime before any install or classpath work begins.
+    ///
+    /// Keeping this in core means every launch entry point (desktop, CLI and
+    /// future integrations) rejects an undersized JVM with the same typed
+    /// error instead of reaching a loader-specific module error later.
+    pub fn preflight_java_runtime(
+        mc_version: &str,
+        java: &JavaRuntime,
+    ) -> Result<(), LauncherError> {
+        let required_major = crate::jre::required_java_major(mc_version);
+        if java.major < required_major {
+            return Err(LauncherError::JavaVersionMismatch {
+                mc_version: mc_version.to_string(),
+                required_major,
+                actual_major: java.major,
+                java_path: java.path.clone(),
+            });
+        }
+        Ok(())
     }
 
     /// Stage a dedicated server working directory: only `both` + `server`
@@ -293,6 +327,7 @@ impl TestLauncher {
         if !options.instance_dir.exists() {
             return Err(LauncherError::InstanceNotPrepared);
         }
+        Self::preflight_java_runtime(&manifest.minecraft.version, java)?;
 
         let loader_kind = format!("{:?}", manifest.loader.kind).to_lowercase();
         let loader_version = manifest.loader.version.clone();
@@ -312,6 +347,11 @@ impl TestLauncher {
                 e.to_string(),
             ))
         })?;
+        // `install_game` repairs missing assets/natives; this second, explicit
+        // preflight keeps command construction fail-closed if the filesystem
+        // changes between install resolution and classpath assembly.
+        verify_install_integrity(&game)
+            .map_err(|error| LauncherError::Preflight(error.to_string()))?;
 
         let auth_player_name = auth_name_override
             .map(|s| s.to_string())
@@ -365,7 +405,7 @@ impl TestLauncher {
         let version_jar_s = version_jar.to_string_lossy();
         let library_dir_s = library_dir.to_string_lossy();
 
-        let classpath = classpath_string(&game.libraries);
+        let classpath = classpath_string(&game.libraries)?;
         // Same separator `classpath_string`/`std::env::join_paths` uses
         // for `${classpath}`, needed for Forge's `-p <module-path>` JVM
         // arg which uses a separate `${classpath_separator}` placeholder.
@@ -569,13 +609,21 @@ fn split_server_address(addr: &str) -> (&str, u16) {
     (addr, 25565)
 }
 
-fn classpath_string(paths: &[PathBuf]) -> String {
+fn classpath_string(paths: &[PathBuf]) -> Result<String, LauncherError> {
+    if paths.is_empty() {
+        return Err(LauncherError::Preflight(
+            "classpath has no entries after install".to_string(),
+        ));
+    }
+    // Do not silently drop a missing jar. A shortened classpath often turns
+    // into a misleading ClassNotFoundException, while this error identifies
+    // the actual failed preflight and lets the installer repair it.
     let canonical_paths = paths
         .iter()
-        .filter_map(|p| canonicalize(p).ok())
-        .collect::<Vec<_>>();
+        .map(|path| canonicalize(path))
+        .collect::<Result<Vec<_>, _>>()?;
 
-    std::env::join_paths(canonical_paths.iter().map(|p| p.as_os_str()))
+    Ok(std::env::join_paths(canonical_paths.iter().map(|path| path.as_os_str()))
         .map(|joined| joined.to_string_lossy().to_string())
         .unwrap_or_else(|_| {
             let separator = if cfg!(target_os = "windows") {
@@ -585,10 +633,10 @@ fn classpath_string(paths: &[PathBuf]) -> String {
             };
             canonical_paths
                 .iter()
-                .map(|p| p.to_string_lossy().to_string())
+                .map(|path| path.to_string_lossy().to_string())
                 .collect::<Vec<_>>()
                 .join(separator)
-        })
+        }))
 }
 
 fn canonicalize(path: &Path) -> Result<PathBuf, LauncherError> {
@@ -660,6 +708,18 @@ mod tests {
             assert!(PathBuf::from(&java.path).exists());
             assert!(java.major >= 8);
         }
+    }
+
+    #[test]
+    fn preflight_rejects_java_below_minecraft_requirement() {
+        let java = JavaRuntime {
+            path: "java".to_string(),
+            version: "openjdk version \"8\"".to_string(),
+            major: 8,
+        };
+        let error = TestLauncher::preflight_java_runtime("1.20.1", &java).unwrap_err();
+        assert!(matches!(error, LauncherError::JavaVersionMismatch { .. }));
+        assert!(TestLauncher::preflight_java_runtime("1.16.5", &java).is_ok());
     }
 
     #[test]

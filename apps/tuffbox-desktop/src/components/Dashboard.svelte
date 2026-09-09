@@ -19,6 +19,8 @@
     loginModalOpen,
     isLaunching,
     launchProgress,
+    launchSessions,
+    isProjectLaunching,
     runningInstances,
     isProjectRunning,
     normalizeInstancePath,
@@ -91,6 +93,12 @@
 
   const selectedProject = $derived($recentProjects.find((p) => p.path === selectedPath));
   const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
+  const selectedLaunching = $derived(isProjectLaunching(selectedPath, $launchSessions));
+  const selectedLaunchMessage = $derived(
+    selectedPath ? $launchSessions[selectedPath]?.message ?? "Launching…" : "Launching…",
+  );
+  const hasInstanceHome = $derived(!!(selectedPath && selectedProject));
+  const hideInstanceHome = $derived(!!$launcherSettingsLive?.hideInstanceHome);
   // Spinner covers spawn + play session, not just the invoke round-trip.
   const launchingHeld = $derived($isLaunching || launchHoldPath !== null);
   const selectedInstanceMeta = $derived.by(() => {
@@ -114,7 +122,7 @@
   const youtubeFullOnHome = $derived(youtubeOnHome && !youtubeBesideSkin);
   const homeBackdropOn = $derived($launcherSettingsLive?.homeBackdrop !== false);
   const skinPreviewHeight = $derived(youtubeBesideSkin ? 340 : 400);
-    const skinAvatarSize = $derived(youtubeBesideSkin ? 96 : 120);
+  const skinAvatarSize = $derived(youtubeBesideSkin ? 96 : 120);
 
   type CoverState = { url: string | null; kind: PosterCoverKind };
   let coverByPath = $state<Record<string, CoverState>>({});

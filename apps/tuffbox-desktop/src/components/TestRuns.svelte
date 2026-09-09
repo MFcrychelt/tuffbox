@@ -6,14 +6,23 @@
     PlayCircle, RefreshCw, TimerReset,
     Square, Stethoscope, Activity,
   } from "@lucide/svelte";
-  import { onDestroy, onMount } from "svelte";
-  import { ideStageRequest, openLaunchLog, projectPath, projectInfo } from "../lib/store";
+  import { onDestroy, onMount, tick } from "svelte";
+  import {
+    ideStageRequest,
+    isProjectLaunching,
+    isProjectRunning,
+    launchSessions,
+    openLaunchLog,
+    projectPath,
+    projectInfo,
+    runningInstances,
+  } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import TestHardwareCard from "./test/TestHardwareCard.svelte";
   import TestLoadChart from "./test/TestLoadChart.svelte";
   import TestLabConsole from "./test/TestLabConsole.svelte";
   import TestLabOptions from "./test/TestLabOptions.svelte";
-  import { launchWithFeedback } from "../lib/launch";
+  import { killWithFeedback, launchWithFeedback } from "../lib/launch";
   import type { TestRunRecord } from "../lib/api";
   import { gb1, peaksFromSamples, pushLoadSample, type LoadSample } from "../lib/testLoad";
 
@@ -143,6 +152,10 @@
   const selected = $derived(profiles.find((p) => p.id === selectedProfile));
   /** Resolved memory for the main run button (null = profile default). */
   const mainRunMb = $derived(MEM_PRESETS.find((m) => m.id === memPreset)?.mb ?? null);
+  const sharedLaunch = $derived($launchSessions[$projectPath ?? ""] ?? null);
+  const sharedLaunching = $derived(isProjectLaunching($projectPath, $launchSessions));
+  const sharedRunning = $derived(isProjectRunning($projectPath, $runningInstances));
+  const launchBusy = $derived(running || matrixRunning || sharedLaunching || sharedRunning);
   const elapsed = $derived(startedAt ? Math.floor((now - startedAt) / 1000) : 0);
   const validationCritical = $derived(!!validationReport && (
     !validationReport.passed
@@ -181,7 +194,7 @@
   });
   const statusLabel = $derived((() => {
     switch (livePhase) {
-      case "launching": return "Launching…";
+      case "launching": return sharedLaunch?.message || "Launching…";
       case "bootstrapping": return `Bootstrapping… ${elapsed}s`;
       case "pass": return `Pass (${startupSeconds ?? elapsed}s)`;
       case "fail": return "Fail";
@@ -190,6 +203,38 @@
       default: return live?.instance || running ? `${elapsed}s` : "idle";
     }
   })());
+
+  // Process lifecycle is authoritative. The debug sampler below remains for
+  // CPU/RAM and log metrics, but it no longer decides whether a Play action
+  // became a running game or silently reset after invoke.
+  $effect(() => {
+    const lifecycle = sharedLaunch;
+    if (!lifecycle) return;
+    if (lifecycle.phase === "running") {
+      sawProcess = true;
+      if (!startedAt) startedAt = (lifecycle.startedAt || 0) * 1000 || Date.now();
+      if (livePhase === "idle" || livePhase === "launching") livePhase = "bootstrapping";
+      if (!watching) startPolling();
+      return;
+    }
+    if (lifecycle.phase === "failed" && (livePhase === "launching" || livePhase === "bootstrapping")) {
+      error = lifecycle.error?.message || lifecycle.message || "Launch failed.";
+      verdictReason = error;
+      livePhase = "fail";
+      running = false;
+      return;
+    }
+    if (lifecycle.phase === "exited" && live?.instance) {
+      live = { ...live, instance: null };
+    }
+    if (lifecycle.phase === "exited" && running && !finalizeInFlight && livePhase === "bootstrapping") {
+      void finalizeActive(
+        lifecycle.error ? "crashed" : "fail",
+        lifecycle.error?.message || lifecycle.message || "Process exited before pass signal",
+      );
+    }
+  });
+
   $effect(() => {
     if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
   });
@@ -402,7 +447,7 @@
   }
 
   function canLaunch(): boolean {
-    if (!$projectPath || running || matrixRunning) return false;
+    if (!$projectPath || launchBusy) return false;
     if (validationCritical && !forceRun) {
       error = "Validation has critical issues. Enable Force run to launch anyway.";
       return false;
@@ -448,7 +493,6 @@
           targetDir: opts.serverDir,
         });
       }
-      await invoke("record_launch", { path: $projectPath });
       const res = await launchWithFeedback(
         {
           path: $projectPath!,
@@ -467,8 +511,10 @@
         },
       );
       if (!res) {
+        const lifecycle = $launchSessions[$projectPath ?? ""];
         running = false;
-        livePhase = "idle";
+        livePhase = lifecycle?.phase === "failed" ? "fail" : "idle";
+        if (lifecycle?.error?.message) error = lifecycle.error.message;
         activeLogRoot = null;
         return false;
       }
@@ -576,8 +622,7 @@
     const shouldKill = kill || matrixRunning;
     if (shouldKill && $projectPath) {
       try {
-        await invoke("kill_running_instance", { instanceId: $projectPath });
-        live = live ? { ...live, instance: null } : null;
+        await killWithFeedback($projectPath);
       } catch {
         // ignore
       }
@@ -734,25 +779,24 @@
     killing = true;
     error = null;
     try {
-      message = await invoke("kill_running_instance", { instanceId: $projectPath });
-      live = live ? { ...live, instance: null } : null;
+      const stopped = await killWithFeedback($projectPath);
+      if (!stopped) return;
+      message = "Stopping game…";
       if (running && !finalizeInFlight && livePhase === "bootstrapping") {
-        await finalizeActive("fail", "Killed by user");
+        await finalizeActive("fail", "Stopped by user");
       } else {
         running = false;
         if (livePhase === "launching" || livePhase === "bootstrapping") livePhase = "idle";
       }
       await refreshLog();
       await loadRuns();
-    } catch (e) {
-      error = String(e);
     } finally {
       killing = false;
     }
   }
 
   async function runMatrix() {
-    if (!$projectPath || running || matrixRunning) return;
+    if (!$projectPath || launchBusy) return;
     if (validationCritical && !forceRun) {
       error = "Validation has critical issues. Enable Force run to launch matrix.";
       return;
@@ -917,6 +961,22 @@
       <button class="ghost" onclick={() => loadProfiles(true)} disabled={!$projectPath || loading} title="Reload profiles">
         <RefreshCw size={14} class={loading ? "spin" : ""} />
         Profiles
+      </button>
+      <button class="secondary" onclick={refreshLog} disabled={!$projectPath}>
+        <Terminal size={14} /> Tail log
+      </button>
+      <button class="secondary" onclick={runValidation} disabled={!$projectPath || validationLoading}>
+        <Shield size={14} />
+        {validationLoading ? "Checking…" : "Validate"}
+      </button>
+      {#if validationBadge}
+        <span class="val-badge" class:ok={validationBadge.ok} class:bad={!validationBadge.ok}>
+          {validationBadge.label}
+        </span>
+      {/if}
+      <button class="danger" onclick={killInstance} disabled={!$projectPath || (!live?.instance && !sharedRunning) || killing} title="Kill game/server process">
+        <Square size={14} />
+        {killing ? "Stopping…" : "Kill"}
       </button>
     </div>
   </div>

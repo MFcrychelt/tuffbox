@@ -1,31 +1,43 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
+import { get } from "svelte/store";
 import { toasts } from "./toast";
-import type { LaunchResult, LaunchErrorInfo, RunningInstance } from "./api";
+import type {
+  LaunchCrashEvent,
+  LaunchErrorInfo,
+  LaunchLifecycleEvent,
+  LaunchPhase,
+  LaunchResult,
+  ProcessExitedEvent,
+  RunningInstance,
+} from "./api";
 import { api } from "./api";
 import {
-  isLaunching,
-  launchProgress,
+  applyLaunchLifecycle,
+  beginLaunchSession,
+  failLaunchSession,
+  isProjectLaunching,
+  isProjectRunning,
+  launchSessions,
+  markLaunchRunning,
   openLaunchLog,
   projectPath,
+  removeRunning,
   runningInstances,
   upsertRunning,
-  removeRunning,
   authState,
   loginModalOpen,
   openLauncherSettings,
-  isProjectRunning,
 } from "./store";
 import { shareCrashLogWithFeedback } from "./mclogs";
-import { get } from "svelte/store";
 import { reportSoftVerifyCrash } from "./softVerify";
 
-export type { LaunchErrorInfo };
+export type { LaunchErrorInfo, LaunchLifecycleEvent, LaunchPhase };
 
 export interface LaunchParams {
   path: string;
-  /// "client" (default) | "server" | a custom profile id
+  /** "client" (default) | "server" | a custom profile id */
   profile?: string;
   quickPlayType?: string | null;
   quickPlayValue?: string | null;
@@ -35,6 +47,15 @@ export interface LaunchParams {
   serverDir?: string | null;
   levelSeed?: string | null;
   onlineMode?: boolean | null;
+}
+
+export interface LaunchFeedbackOptions {
+  onStarted?: (result: LaunchResult) => void;
+  showSuccess?: boolean;
+  openLog?: boolean;
+  /** Manifest path for the log modal (for example, a staged server dir). */
+  logPath?: string | null;
+  logTitle?: string | null;
 }
 
 // Retryable error categories — mirrors `LaunchErrorKind::retryable` on the Rust
@@ -49,32 +70,49 @@ const RETRYABLE = new Set<string>([
   "launch_crash",
 ]);
 
-export function isLaunchError(e: unknown): e is LaunchErrorInfo {
+const STARTUP_PHASES = new Set<LaunchPhase>([
+  "preflight",
+  "resolving_java",
+  "downloading",
+  "starting",
+]);
+
+/** Human-friendly text for buttons / status chips. The backend message is more
+ * specific when available; this is a stable fallback for every Play surface. */
+export function launchPhaseLabel(phase: LaunchPhase | null | undefined): string {
+  switch (phase) {
+    case "preflight": return "Checking…";
+    case "resolving_java": return "Resolving Java…";
+    case "downloading": return "Preparing files…";
+    case "starting": return "Starting…";
+    case "running": return "Running";
+    case "stopping": return "Stopping…";
+    case "exited": return "Exited";
+    case "failed": return "Launch failed";
+    default: return "Launch";
+  }
+}
+
+export function isLaunchError(error: unknown): error is LaunchErrorInfo {
   return (
-    typeof e === "object" &&
-    e !== null &&
-    "kind" in e &&
-    "message" in e
+    typeof error === "object"
+    && error !== null
+    && "kind" in error
+    && "message" in error
+    && typeof (error as { kind?: unknown }).kind === "string"
+    && typeof (error as { message?: unknown }).message === "string"
   );
+}
+
+function asLaunchError(error: unknown): LaunchErrorInfo {
+  return isLaunchError(error)
+    ? error
+    : { kind: "unknown", message: String(error) };
 }
 
 function isRetryable(info: LaunchErrorInfo): boolean {
   return RETRYABLE.has(info.kind);
 }
-
-// Remember the last launch so the crash listener can offer a Retry for a JVM
-// that started but then exited non-zero after the launch command returned.
-let lastLaunch: LaunchParams | null = null;
-let lastOnStarted: ((r: LaunchResult) => void) | null = null;
-type LaunchFeedbackOpts = {
-  onStarted?: (r: LaunchResult) => void;
-  showSuccess?: boolean;
-  openLog?: boolean;
-  logPath?: string | null;
-  logTitle?: string | null;
-  skipAuthGate?: boolean;
-};
-let lastOpts: LaunchFeedbackOpts | null = null;
 
 type LaunchProgressPayload = {
   phase?: string;
@@ -110,16 +148,6 @@ async function pollDownloadOverlay() {
   }
 }
 
-function openInAppLaunchLog(info?: LaunchErrorInfo | null) {
-  const path = lastLaunch?.path || get(projectPath);
-  if (path) {
-    openLaunchLog(path);
-    return;
-  }
-  if (info?.logPath) {
-    open(info.logPath).catch(() => {});
-  }
-}
 
 async function doLaunch(params: LaunchParams): Promise<LaunchResult> {
   const profile = params.profile ?? "client";
@@ -136,7 +164,7 @@ async function doLaunch(params: LaunchParams): Promise<LaunchResult> {
   if (profile === "server") {
     const serverDir = params.serverDir?.trim();
     if (!serverDir) {
-      throw { kind: "install", message: "Pick a server folder before Run server." };
+      throw { kind: "install", message: "Pick a server folder before Run server." } satisfies LaunchErrorInfo;
     }
     return invoke<LaunchResult>("launch_server", {
       path: params.path,
@@ -152,26 +180,49 @@ async function doLaunch(params: LaunchParams): Promise<LaunchResult> {
   });
 }
 
-/// Launch a profile and surface a categorized, optionally-retryable toast on
-/// failure. Returns the `LaunchResult` on success, or `null` after the error
-/// toast has been shown.
+type RememberedLaunch = {
+  params: LaunchParams;
+  options?: LaunchFeedbackOptions;
+};
+
+// A JVM can crash long after invoke returned. Keep the launch request per
+// instance (not as one global "last launch") so its Retry action is always
+// attached to the correct Play surface when several instances are used.
+const rememberedLaunches = new Map<string, RememberedLaunch>();
+
+function normaliseRunningResult(result: LaunchResult, fallback: LaunchParams): RunningInstance | null {
+  const id = result.instanceId || fallback.path;
+  const pid = Number(result.pid);
+  const startedAt = Number(result.startedAt);
+  if (!id || !Number.isFinite(pid) || pid <= 0 || !Number.isFinite(startedAt)) return null;
+  return {
+    id,
+    pid,
+    profile: result.profile || fallback.profile || "client",
+    startedAt,
+  };
+}
+
+/**
+ * The one public path for starting Minecraft from the UI.
+ *
+ * It begins a shared lifecycle session before invoke, promotes it to Running
+ * from the returned process identity / Tauri events, and leaves completion to
+ * process-exited / launch-crashed. It intentionally has no `finally` that
+ * clears UI state: invoke timing is not game lifecycle timing.
+ */
 export async function launchWithFeedback(
   params: LaunchParams,
-  opts?: LaunchFeedbackOpts,
+  options?: LaunchFeedbackOptions,
 ): Promise<LaunchResult | null> {
-  lastLaunch = params;
-  lastOnStarted = opts?.onStarted ?? null;
-  lastOpts = opts ?? null;
-
-  if (get(isLaunching)) {
-    toasts.info("Launch already in progress…");
+  const profile = params.profile ?? "client";
+  const sessions = get(launchSessions);
+  if (isProjectLaunching(params.path, sessions)) {
+    toasts.info("This instance is already launching.");
     return null;
   }
-
-  // Soft-block double client launch when UI already knows the game is up.
-  const profile = params.profile ?? "client";
-  if (profile !== "server" && isProjectRunning(params.path, get(runningInstances))) {
-    toasts.info("This instance is already running", 6000, [
+  if (isProjectRunning(params.path, get(runningInstances))) {
+    toasts.info("This instance is already running.", 6000, [
       {
         label: "Stop",
         run: () => {
@@ -182,7 +233,7 @@ export async function launchWithFeedback(
     return null;
   }
 
-  if (profile !== "server" && !opts?.skipAuthGate) {
+  if (profile !== "server") {
     const auth = get(authState);
     if (!auth.loggedIn || !auth.profile) {
       toasts.warning(
@@ -196,7 +247,7 @@ export async function launchWithFeedback(
           {
             label: "Play offline",
             run: () => {
-              void launchWithFeedback(params, { ...opts, skipAuthGate: true });
+              void launchWithFeedback(params, options);
             },
           },
         ],
@@ -205,12 +256,14 @@ export async function launchWithFeedback(
     }
   }
 
-  const showLog = opts?.openLog !== false;
-  isLaunching.set(true);
+  rememberedLaunches.set(params.path, { params, options });
+  beginLaunchSession(params.path, profile);
   launchProgress.set({ phase: "preparing", message: "Preparing…", percent: 0 });
   void invoke("set_last_opened_project", { path: params.path }).catch(() => {});
 
+  const showLog = options?.openLog !== false;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+
   try {
     void ensureLaunchProgressListener();
     pollTimer = setInterval(() => {
@@ -218,48 +271,57 @@ export async function launchWithFeedback(
     }, 450);
 
     const result = await doLaunch(params);
-    if (showLog) openLaunchLog(opts?.logPath ?? params.path, opts?.logTitle ?? null);
-    // Mark running immediately (don't wait for the process-started event race).
-    if (result.pid != null && result.instanceId) {
-      upsertRunning({
-        id: result.instanceId,
-        pid: result.pid,
-        profile: result.profileId ?? params.profile ?? "client",
-        startedAt: result.startedAt ?? Math.floor(Date.now() / 1000),
-      });
-    } else {
-      void refreshRunningInstances();
+    const running = normaliseRunningResult(result, params);
+    if (running) {
+      // A very short-lived JVM can emit `exited` before invoke returns. Never
+      // resurrect that terminal state from the result; the process event stays
+      // authoritative in that race.
+      const phase = get(launchSessions)[running.id]?.phase;
+      if (phase !== "exited" && phase !== "failed") {
+        upsertRunning(running);
+      }
+      rememberedLaunches.set(running.id, { params, options });
     }
-    if (opts?.showSuccess) toasts.success("Launch started");
-    opts?.onStarted?.(result);
+    if (options?.showSuccess) toasts.success("Launch started");
+    options?.onStarted?.(result);
     // After a successful start, confirm any pending crash-fix as resolved when
     // latest.log looks healthy. On verified resolution the backend emits
     // `tuffbox:distill-resolution` for the Confirm → publish UI (no auto-upload).
-    void (async () => {
-      try {
-        await invoke("confirm_crash_resolution_after_launch", { path: params.path });
-      } catch {
-        // optional bookkeeping
-      }
-    })();
+    void invoke("confirm_crash_resolution_after_launch", { path: params.path }).catch(() => {
+      // Optional bookkeeping must never change the launch lifecycle.
+    });
     return result;
-  } catch (e) {
-    showLaunchError(e, () => launchWithFeedback(params, opts));
-    if (showLog) openLaunchLog(opts?.logPath ?? params.path, opts?.logTitle ?? null);
+  } catch (error) {
+    const info = asLaunchError(error);
+    failLaunchSession(params.path, info);
+    showLaunchError(info, () => void launchWithFeedback(params, options), { path: params.path });
+    if (showLog) openLaunchLog(options?.logPath ?? params.path, options?.logTitle ?? null);
     return null;
   } finally {
     if (pollTimer) clearInterval(pollTimer);
-    isLaunching.set(false);
     launchProgress.set(null);
   }
 }
 
-/// Kill the Minecraft process for a project. Backend emits `process-exited`.
+/** Stop a tracked game. The backend keeps it in `list_running_instances` until
+ * Child::wait observes exit and then emits `process-exited`; do not optimistically
+ * remove it here or the UI can claim the game stopped while it is still alive. */
 export async function killWithFeedback(path: string): Promise<boolean> {
+  const running = get(runningInstances).find((instance) => instance.id === path);
+  if (running) {
+    applyLaunchLifecycle({
+      id: path,
+      profile: running.profile,
+      phase: "stopping",
+      message: "Stopping game…",
+      pid: running.pid,
+      startedAt: running.startedAt,
+      stopped: true,
+    });
+  }
   try {
     await invoke("kill_running_instance", { instanceId: path });
-    removeRunning(path);
-    toasts.info("Game stopped");
+    toasts.info("Stopping game…");
     return true;
   } catch (e) {
     const msg = String(e).toLowerCase();
@@ -269,17 +331,23 @@ export async function killWithFeedback(path: string): Promise<boolean> {
       toasts.info("Game already stopped");
       return true;
     }
+    // If delivery of the kill signal failed, restore the known running state.
+    if (running) markLaunchRunning(running);
     toasts.error(`Stop failed: ${e}`);
     return false;
   }
 }
 
+/** Reconcile initial app state with the backend process registry. Events keep
+ * it current afterwards; this is only the startup/reconnect safety net. */
 export async function refreshRunningInstances(): Promise<void> {
   try {
     const list = await invoke<RunningInstance[]>("list_running_instances");
-    runningInstances.set(Array.isArray(list) ? list : []);
+    const instances = Array.isArray(list) ? list : [];
+    runningInstances.set(instances);
+    for (const instance of instances) markLaunchRunning(instance);
   } catch {
-    // backend not ready / optional
+    // Backend not ready / optional in web preview.
   }
 }
 
@@ -317,35 +385,40 @@ export function startRunningInstancesWatch(): () => void {
 
 /// Display a launch error as a toast with Retry / View log actions when
 /// appropriate.
-export function showLaunchError(e: unknown, retry?: () => void): void {
-  const info: LaunchErrorInfo = isLaunchError(e)
-    ? e
-    : ({ kind: "unknown", message: String(e) } as LaunchErrorInfo);
+export function showLaunchError(
+  error: unknown,
+  retry?: () => void,
+  context?: { path?: string | null },
+): void {
+  const info = asLaunchError(error);
   const actions: { label: string; run: () => void }[] = [];
   if (retry && isRetryable(info)) {
     actions.push({ label: "Retry", run: retry });
   }
-  const canOpenLog = !!(lastLaunch?.path || get(projectPath) || info.logPath);
-  if (canOpenLog) {
+  if (context?.path) {
     actions.push({
-      label: "Open log",
-      run: () => openInAppLaunchLog(info),
+      label: "Live log",
+      run: () => openLaunchLog(context.path!),
+    });
+  }
+  if (info.logPath) {
+    actions.push({
+      label: "Open file",
+      run: () => { void open(info.logPath!).catch(() => {}); },
     });
   }
   // A JVM crash produced a fresh latest.log / crash-report — jump straight into
-  // the existing Crash Assistant report for the project so the user can read
-  // the structured findings and apply a fix without re-navigating.
+  // the existing Crash Assistant report so the user can investigate without
+  // hunting for a hidden log. The Live log action remains available alongside it.
   if (info.kind === "launch_crash") {
     actions.push({
       label: "Fix it",
-      run: () => {
-        window.dispatchEvent(new Event("tuffbox:open-diagnostics"));
-      },
+      run: () => window.dispatchEvent(new Event("tuffbox:open-diagnostics")),
     });
     actions.push({
       label: "Share log",
       run: () => {
-        const path = lastLaunch?.path || get(projectPath);
+        const path = context?.path ?? get(projectPath);
         if (!path) {
           toasts.warning("Open a project to share the crash log");
           return;
@@ -384,46 +457,100 @@ function ensureLaunchProgressListener(): Promise<UnlistenFn> {
   return progressListener;
 }
 
-/// Register the global `launch-crashed` handler exactly once. The JVM can exit
-/// non-zero after the launch command has already returned "started", so the
-/// backend emits this event from the process-exit callback.
+function parseCrashPayload(payload: LaunchCrashEvent | LaunchErrorInfo): LaunchCrashEvent {
+  if (typeof payload === "object" && payload !== null && "error" in payload) {
+    const event = payload as LaunchCrashEvent;
+    return {
+      id: event.id || event.path || get(projectPath) || "",
+      profile: event.profile || "client",
+      error: asLaunchError(event.error),
+      exitCode: event.exitCode,
+    };
+  }
+  // Compatibility with older desktop binaries that emitted LaunchErrorInfo
+  // directly. New backend events always include the instance id.
+  return {
+    id: get(projectPath) ?? "",
+    profile: "client",
+    error: asLaunchError(payload),
+  };
+}
+
+/** Register the global `launch-crashed` handler exactly once. */
 export function registerLaunchCrashListener(): Promise<UnlistenFn> {
   void ensureLaunchProgressListener();
   if (!crashListener) {
-    crashListener = listen<LaunchErrorInfo>("launch-crashed", (event) => {
-      const info = event.payload;
-      const path = lastLaunch?.path ?? get(projectPath);
+    crashListener = listen<LaunchCrashEvent | LaunchErrorInfo>("launch-crashed", (event) => {
+      const crash = parseCrashPayload(event.payload);
+      const path = crash.id || get(projectPath);
       if (path) {
+        failLaunchSession(path, crash.error);
         void reportSoftVerifyCrash(path);
         // Keep the live log modal open on the crashed session.
         openLaunchLog(path);
       }
-      // Already played once — don't re-prompt the soft auth gate on Retry.
-      const retry = lastLaunch
-        ? () =>
-            launchWithFeedback(lastLaunch!, {
-              ...(lastOpts ?? {}),
-              onStarted: lastOnStarted ?? lastOpts?.onStarted,
-              skipAuthGate: true,
-            })
+      const remembered = path ? rememberedLaunches.get(path) : undefined;
+      const retry = remembered
+        ? () => void launchWithFeedback(remembered.params, remembered.options)
         : undefined;
-      showLaunchError(info, retry);
+      showLaunchError(crash.error, retry, { path });
     });
   }
   return crashListener;
 }
 
-/// Keep `runningInstances` in sync with backend process-started / process-exited.
+/**
+ * Keep running process truth and shared lifecycle sessions in sync with Tauri.
+ * `process-exited` is deliberately event-driven; stats polling is optional
+ * observability and never decides whether a Play button becomes Stop.
+ */
 export function registerProcessListeners(): Promise<UnlistenFn[]> {
   if (!processListeners) {
     processListeners = Promise.all([
-      listen<RunningInstance>("process-started", (event) => {
-        upsertRunning(event.payload);
+      listen<LaunchLifecycleEvent>("launch-phase", (event) => {
+        const lifecycle = event.payload;
+        if (!lifecycle?.id) return;
+        applyLaunchLifecycle(lifecycle);
+        if (lifecycle.phase === "running" && lifecycle.pid != null && lifecycle.startedAt != null) {
+          upsertRunning({
+            id: lifecycle.id,
+            pid: lifecycle.pid,
+            profile: lifecycle.profile || "client",
+            startedAt: lifecycle.startedAt,
+          });
+        } else if (lifecycle.phase === "exited") {
+          removeRunning(lifecycle.id, {
+            profile: lifecycle.profile,
+            startedAt: lifecycle.startedAt,
+            code: lifecycle.exitCode,
+            stopped: lifecycle.stopped,
+            error: lifecycle.error,
+          });
+        } else if (lifecycle.phase === "failed" && lifecycle.error) {
+          failLaunchSession(lifecycle.id, lifecycle.error);
+        }
       }),
-      listen<{ id: string; code?: number | null }>("process-exited", (event) => {
-        if (event.payload?.id) removeRunning(event.payload.id);
+      listen<RunningInstance>("process-started", (event) => {
+        if (event.payload?.id) upsertRunning(event.payload);
+      }),
+      listen<ProcessExitedEvent>("process-exited", (event) => {
+        const exited = event.payload;
+        if (exited?.id) {
+          removeRunning(exited.id, {
+            profile: exited.profile,
+            startedAt: exited.startedAt,
+            code: exited.code,
+            stopped: exited.stopped,
+          });
+        }
       }),
     ]);
   }
   return processListeners;
+}
+
+/** Used by controls that need a short phase label without maintaining local
+ * booleans. Kept exported to make the shared pattern easy to reuse. */
+export function isStartupPhase(phase: LaunchPhase | null | undefined): boolean {
+  return phase != null && STARTUP_PHASES.has(phase);
 }

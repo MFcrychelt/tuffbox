@@ -38,6 +38,8 @@
     openAddInstance,
     runningInstances,
     isProjectRunning,
+    launchSessions,
+    isProjectLaunching,
     formatPlaytime,
     authState,
     skinPath,
@@ -89,7 +91,6 @@
   const MOVE_CANCEL_PX = 10;
 
   let selectedPath = $state<string | null>($projectPath);
-  let launching = $state<string | null>(null);
   let actionBusy = $state(false);
   let exportMenuOpen = $state(false);
   let addMenuOpen = $state(false);
@@ -171,6 +172,12 @@
   const selected = $derived($recentProjects.find((p) => p.path === selectedPath) ?? null);
   const selectedRunning = $derived(
     isProjectRunning(selectedPath, $runningInstances),
+  );
+  const selectedLaunching = $derived(
+    isProjectLaunching(selectedPath, $launchSessions),
+  );
+  const selectedLaunchMessage = $derived(
+    selectedPath ? $launchSessions[selectedPath]?.message ?? "Launching…" : "Launching…",
   );
   /** Multiplier from the Settings UI-scale (Auto mode derives it from screen size). */
   const sideScale = $derived(($uiScalePercentLive ?? 100) / 100);
@@ -358,58 +365,19 @@
 
   async function launchInstance(project: RecentProject) {
     closeMenus();
+    const path = await selectInstance(project);
     if (
+      isProjectRunning(path, $runningInstances) ||
       isProjectRunning(project.path, $runningInstances)
     ) {
+      await killWithFeedback(path);
+      if (path !== project.path) await killWithFeedback(project.path);
       return;
     }
-    launching = project.path;
-    try {
-      const path = await selectInstance(project);
-      if (
-        isProjectRunning(path, $runningInstances) ||
-        isProjectRunning(project.path, $runningInstances)
-      ) {
-        return;
-      }
-      await invoke("set_last_opened_project", { path });
-      // launchWithFeedback returns as soon as the JVM is spawned; keep the
-      // spinner honest by clearing on process-exited for this instance
-      // (same lifecycle as Dashboard.launch), not synchronously in finally.
-      let exited = false;
-      let unlisten: () => void = () => {};
-      const onExited = (event: { payload?: { id?: string } }) => {
-        if (event.payload?.id === path) {
-          exited = true;
-          unlisten();
-        }
-      };
-      listen<{ id: string; code?: number | null }>("process-exited", onExited).then((fn) => {
-        if (exited) {
-          fn();
-        } else {
-          unlisten = fn;
-        }
-      });
-      try {
-        await launchWithFeedback({ path, profile: "client" });
-        // Fallback: if no exit event arrives (e.g. instance already counted
-        // as running elsewhere), clear after a generous grace period.
-        setTimeout(() => {
-          if (!exited) {
-            unlisten();
-            launching = null;
-          }
-        }, 15000);
-        return;
-      } catch (e) {
-        toasts.error(`Launch failed: ${e}`);
-      } finally {
-        unlisten();
-      }
-    } finally {
-      void loadStats(selectedPath ?? project.path);
-    }
+    if (isProjectLaunching(path, $launchSessions)) return;
+    await invoke("set_last_opened_project", { path });
+    await launchWithFeedback({ path, profile: "client" });
+    void loadStats(selectedPath ?? project.path);
   }
 
   async function stopInstance(project: RecentProject) {
@@ -1377,11 +1345,11 @@
               <button
                 type="button"
                 class={["side-btn", "launch", { stop: selectedRunning }]}
-                disabled={actionBusy || launching === selected.path}
+                disabled={actionBusy || selectedLaunching}
                 onclick={() => void runAction(selectedRunning ? "stop" : "launch", selected)}
               >
-                {#if launching === selected.path}
-                  <span class="mini-spinner"></span> Launching…
+                {#if selectedLaunching}
+                  <span class="mini-spinner"></span> {selectedLaunchMessage}
                 {:else if selectedRunning}
                   <Square size={16} fill="currentColor" /> Stop
                 {:else}
@@ -1535,7 +1503,7 @@
           isProjectRunning(menuProject.path, $runningInstances) ? "stop" : "launch",
           menuProject,
         )}
-      disabled={actionBusy}
+      disabled={actionBusy || isProjectLaunching(menuProject.path, $launchSessions)}
     >
       {#if isProjectRunning(menuProject.path, $runningInstances)}
         <Square size={14} /> Stop

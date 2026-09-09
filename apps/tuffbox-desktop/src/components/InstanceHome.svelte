@@ -20,6 +20,7 @@
   import { libraryTabRequest } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { launchWithFeedback } from "../lib/launch";
+  import { isProjectLaunching, isProjectRunning, launchSessions, runningInstances } from "../lib/store";
 
   let {
     projectPath,
@@ -77,6 +78,8 @@
   let newServerAddress = $state("");
 
   const packs = $derived(tab === "shaderpacks" ? shaderPacks : resourcePacks);
+  const projectLaunching = $derived(isProjectLaunching(projectPath, $launchSessions));
+  const projectRunning = $derived(isProjectRunning(projectPath, $runningInstances));
   const tabPrimed = $derived(!!primed[tab]);
   const showSkeleton = $derived(
     loading &&
@@ -255,6 +258,7 @@
   }
 
   async function joinServer(address: string) {
+    if (projectLaunching || projectRunning) return;
     busyKey = `join:${address}`;
     try {
       await launchWithFeedback({
@@ -269,6 +273,7 @@
   }
 
   async function playWorld(name: string) {
+    if (projectLaunching || projectRunning) return;
     busyKey = `play:${name}`;
     try {
       await launchWithFeedback({
@@ -441,10 +446,10 @@
                 </div>
                 <button
                   class="accent"
-                  disabled={busyKey === `play:${world.name}`}
+                  disabled={busyKey === `play:${world.name}` || projectLaunching || projectRunning}
                   onclick={() => playWorld(world.name)}
                 >
-                  <Play size={14} /> Play
+                  <Play size={14} /> {projectLaunching ? "Launching…" : projectRunning ? "Running" : "Play"}
                 </button>
                 <button class="ghost" onclick={onOpenWorld}>Open World tools</button>
               </div>
@@ -485,10 +490,10 @@
                 </div>
                 <button
                   class="accent"
-                  disabled={busyKey === `join:${srv.address}`}
+                  disabled={busyKey === `join:${srv.address}` || projectLaunching || projectRunning}
                   onclick={() => joinServer(srv.address)}
                 >
-                  <Play size={14} /> Join
+                  <Play size={14} /> {projectLaunching ? "Launching…" : projectRunning ? "Running" : "Join"}
                 </button>
                 <button class="ghost" disabled={busyKey === `ping:${srv.address}`} onclick={() => pingServer(srv.address)}>Ping</button>
                 <button class="danger" disabled={busyKey === srv.address} onclick={() => removeServer(srv.address)}>

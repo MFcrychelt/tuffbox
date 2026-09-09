@@ -13,6 +13,8 @@
     openLaunchLog,
     isLaunching,
     launchProgress,
+    launchSessions,
+    isProjectLaunching,
     brandIcon,
     BRAND_ICON_CREEPER_SRC_SM,
     authState,
@@ -22,7 +24,7 @@
   } from "../lib/store";
   import { api } from "../lib/api";
   import { homeIcons } from "../lib/homeBootstrap";
-  import { launchWithFeedback, killWithFeedback } from "../lib/launch";
+  import { killWithFeedback, launchWithFeedback } from "../lib/launch";
   import HeadAvatar from "./HeadAvatar.svelte";
 
   import type { View } from "../lib/types";
@@ -30,6 +32,8 @@
 
   /** Real pack icon (data URL from the instance listing) keyed by project path. */
   const instanceIcons = $derived($homeIcons);
+  const currentRunning = $derived(isProjectRunning($projectPath, $runningInstances));
+  const currentLaunching = $derived(isProjectLaunching($projectPath, $launchSessions));
   const selectedRunning = $derived(isProjectRunning($projectPath, $runningInstances));
   const playTitle = $derived.by(() => {
     if ($isLaunching) {
@@ -147,7 +151,11 @@
   }
 
   async function playClient() {
-    if (!$projectPath || $isLaunching) return;
+    if (!$projectPath || currentLaunching) return;
+    if (currentRunning) {
+      await killWithFeedback($projectPath);
+      return;
+    }
     await launchWithFeedback({ path: $projectPath, profile: "client" });
   }
 
@@ -386,6 +394,14 @@
 </aside>
 
 <style>
+  .rail-stop-glyph {
+    width: 15px;
+    height: 15px;
+    display: block;
+    background: currentColor;
+    border-radius: 2px;
+  }
+
   .rail {
     width: 72px;
     flex-shrink: 0;

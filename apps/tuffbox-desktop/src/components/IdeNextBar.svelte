@@ -20,6 +20,8 @@
     ideNextTrigger,
     ideIssuesRefresh,
     idePlayTrigger,
+    launchSessions,
+    isProjectLaunching,
   } from "../lib/store";
 
   let {
@@ -29,7 +31,8 @@
   } = $props();
 
   let refreshing = $state(false);
-  let launching = $state(false);
+  const launchSession = $derived($launchSessions[$projectPath ?? ""] ?? null);
+  const launching = $derived(isProjectLaunching($projectPath, $launchSessions));
 
   const next = $derived(
     computeIdeNextAction({
@@ -187,6 +190,11 @@
     {/if}
     {#if next.detail}
       <span class="detail">{next.detail}</span>
+    {/if}
+    {#if launching}
+      <span class="detail launch-detail" title={launchSession?.message}>
+        {launchSession?.message || "Launching…"}
+      </span>
     {/if}
   </div>
 

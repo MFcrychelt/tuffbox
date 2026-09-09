@@ -1,11 +1,13 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { launchWithFeedback } from "../lib/launch";
+  import { killWithFeedback, launchWithFeedback } from "../lib/launch";
   import { onMount, tick } from "svelte";
   import {
     Stethoscope,
     Play,
+    Square,
+    FolderOpen,
     RefreshCw,
     AlertCircle,
     AlertTriangle,
@@ -25,6 +27,11 @@
     ideNeedsHealth,
     requestIdeIssuesRefresh,
     historyFocusFingerprintKey,
+    launchSessions,
+    isProjectLaunching,
+    isProjectRunning,
+    openLaunchLog,
+    runningInstances,
     changeOptionKey,
     getFixPreference,
     setFixPreference,
@@ -209,7 +216,9 @@
   let planning = $state(false);
   let applying = $state(false);
   let applyingHintId = $state<string | null>(null);
-  let launching = $state(false);
+  const launchSession = $derived($launchSessions[$projectPath ?? ""] ?? null);
+  const launching = $derived(isProjectLaunching($projectPath, $launchSessions));
+  const projectRunning = $derived(isProjectRunning($projectPath, $runningInstances));
   let fixingIdx = $state<number | null>(null);
   let disablingModId = $state<string | null>(null);
   let error = $state<string | null>(null);
@@ -2156,10 +2165,9 @@
   /// Soft-verify is started by `launchWithFeedback` → `confirm_crash_resolution_after_launch`
   /// (do not invoke confirm again here).
   async function runTest() {
-    if (!$projectPath || launching) return;
-    launching = true;
+    if (!$projectPath || launching || projectRunning) return;
     error = null;
-    message = "Launching Test profile — reproduce the crash, then come back.";
+    message = "Preparing Test launch — reproduce the crash, then come back.";
     const result = await launchWithFeedback(
       { path: $projectPath, profile: "client" },
       {
@@ -2195,7 +2203,11 @@
       }, 15000);
       return;
     }
-    launching = false;
+  }
+
+  async function stopTest() {
+    if (!$projectPath || !projectRunning) return;
+    await killWithFeedback($projectPath);
   }
 
   /// Opens the project folder in the OS file manager (quick access to
@@ -2791,14 +2803,40 @@
           <RefreshCw size={15} class={analysisBusy ? "spin" : ""} />
           {analysisBusy ? "Analyzing…" : "Re-analyze"}
         </button>
-        <button class="primary" onclick={runTest} disabled={!$projectPath || launching || loading}>
-          <Play size={15} class={launching ? "spin" : ""} />
-          {launching ? "Launching…" : "Test launch"}
-        </button>
+        {#if projectRunning}
+          <button class="primary" onclick={stopTest} disabled={!$projectPath}>
+            <Square size={14} fill="currentColor" /> Stop test
+          </button>
+        {:else}
+          <button class="primary" onclick={runTest} disabled={!$projectPath || launching || loading}>
+            <Play size={15} class={launching ? "spin" : ""} />
+            {launching ? (launchSession?.message || "Launching…") : "Test launch"}
+          </button>
+        {/if}
+        {#if launchSession && (launching || projectRunning || launchSession.phase === "failed")}
+          <button class="ghost" type="button" onclick={() => $projectPath && openLaunchLog($projectPath)}>
+            <FileText size={15} /> Live log
+          </button>
+        {/if}
       </div>
     </div>
 
     {#if error}<div class="notice error">{error}</div>{/if}
+    {#if launchSession && (launching || launchSession.phase === "failed" || launchSession.phase === "exited")}
+      <div class="notice" class:error={launchSession.phase === "failed"} class:warning={launching}>
+        <span>{launchSession.message || (launching ? "Preparing Test launch…" : "Test launch ended.")}</span>
+        <div class="trail-links">
+          <button class="ghost mini" type="button" onclick={() => $projectPath && openLaunchLog($projectPath)}>
+            <FileText size={12} /> Live log
+          </button>
+          {#if launchSession.phase === "failed"}
+            <button class="ghost mini" type="button" onclick={() => ideStageRequest.set("diagnose")}>
+              <Bug size={12} /> Crash findings
+            </button>
+          {/if}
+        </div>
+      </div>
+    {/if}
     {#if message}
       <div class="notice success trail-notice">
         <span>{message}</span>
@@ -2814,7 +2852,7 @@
       <div class="notice warning verify-banner">
         <span>Fix applied. Run a Test launch to confirm it worked?</span>
         <div class="trail-links">
-          <button class="primary small" type="button" onclick={() => { verifyPrompt = false; void runTest(); }} disabled={launching}>
+          <button class="primary small" type="button" onclick={() => { verifyPrompt = false; void runTest(); }} disabled={launching || projectRunning}>
             Test launch
           </button>
           <button class="ghost mini" type="button" onclick={() => (verifyPrompt = false)}>Later</button>
@@ -2973,7 +3011,7 @@
       <div class="dx-empty-sources panel">
         <span>No crash reports yet.</span>
         <button type="button" class="ghost mini" onclick={chooseLatestLog}>Game log</button>
-        <button type="button" class="ghost mini" onclick={runTest} disabled={launching}>Test launch</button>
+        <button type="button" class="ghost mini" onclick={runTest} disabled={launching || projectRunning}>Test launch</button>
       </div>
     {/if}
 
