@@ -363,8 +363,8 @@
       }
       plan = data.fixPlan ?? null;
       preselectFixOption();
-      detectWrongLoaderMods();
-      detectDuplicateModJars();
+      // The JAR scanners are Advanced-only actions. Running them here made
+      // the first Diagnose render wait for a second full pass over mods.
       if (data.sessionHealthy && preferLatestLog) {
         crashFindings = [];
         crashMcreator = [];
