@@ -178,6 +178,9 @@
   // the webview, but the UI can time out and remain usable; a later Refresh
   // starts a fresh generation and ignores the late result.
   const CRASH_ASSISTANT_TIMEOUT_MS = 45_000;
+  const AI_PREP_TIMEOUT_MS = 30_000;
+  const AI_CONTEXT_TIMEOUT_MS = 45_000;
+  const AI_ANALYSIS_TIMEOUT_MS = 180_000;
 
   function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1184,7 +1187,7 @@
   }
 
   async function runAiExplain(opts: { quiet?: boolean; runId?: number } = {}) {
-    if (!$projectPath) return;
+    if (!$projectPath || aiLoading) return;
     const run = opts.runId ?? ++analysisGeneration;
     aiLoading = true;
     cascadeLiveStage = "l1_searching";
@@ -1200,8 +1203,10 @@
         // non-fatal
       }
       try {
-        const prep = await invoke<{ ok?: boolean; model?: string; skipped?: boolean }>(
-          "ensure_ollama_model",
+        const prep = await withTimeout(
+          invoke<{ ok?: boolean; model?: string; skipped?: boolean }>("ensure_ollama_model"),
+          AI_PREP_TIMEOUT_MS,
+          "AI model preparation",
         );
         if (!opts.quiet) {
           if (prep?.model) message = `AI ready (${prep.model}). Analyzing crash…`;
@@ -1209,20 +1214,31 @@
         }
       } catch (prepErr) {
         console.warn("[AI] ensure_ollama_model:", prepErr);
+        // A timed-out model preparation is not recoverable by continuing to
+        // build context; fail fast and let the user retry after fixing AI.
+        if (String(prepErr).includes("timed out")) throw prepErr;
       }
       const reportId = activeReportId();
-      const context: any = await invoke("build_ai_crash_context", {
-        path: $projectPath,
-        reportId,
-      });
+      const context: any = await withTimeout(
+        invoke("build_ai_crash_context", {
+          path: $projectPath,
+          reportId,
+        }),
+        AI_CONTEXT_TIMEOUT_MS,
+        "AI context preparation",
+      );
       if (!isCurrentAnalysis(run)) return;
       aiContext = context;
       aiPrompt = context.prompt ?? "";
       aiShowPrompt = false;
-      const result = await invoke("analyze_crash_with_ai", {
-        path: $projectPath,
-        reportId,
-      });
+      const result = await withTimeout(
+        invoke("analyze_crash_with_ai", {
+          path: $projectPath,
+          reportId,
+        }),
+        AI_ANALYSIS_TIMEOUT_MS,
+        "AI analysis",
+      );
       if (!isCurrentAnalysis(run)) return;
       aiAnalysis = result;
       swarmEnabled = !!aiAnalysis?.swarmEnabled;
