@@ -365,7 +365,7 @@
   });
 </script>
 
-<div class="export-builder w-full bg-black/30 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] p-6">
+<div class="export-builder">
   <div class="eb-cap">
   <div class="toolbar">
     <div class="title"><UploadCloud size={18} /> Export</div>
@@ -412,7 +412,7 @@
   {#if !$projectPath}
     <EmptyState icon={PackageOpen} title="No project selected" description="Open a project to export a modpack." />
   {:else}
-    <section class="bg-white/[0.03] border border-white/[0.08] rounded-[length:var(--border-radius-lg)] p-3.5 grid gap-3 shadow-xl backdrop-blur-md">
+    <section class="export-section">
       <ExportFormatSelector
         formats={FORMATS}
         selected={exportMode}
@@ -421,7 +421,7 @@
         onSelect={(id) => (exportMode = id as ExportMode)}
       />
 
-      <div class="grid gap-2.5 p-3 border border-white/[0.08] rounded-[length:var(--border-radius-md)] bg-black/40">
+      <div class="export-detail">
         <div>
           <h2 class="m-0 mb-1 text-sm font-bold text-[color:var(--text-primary)]">{activeFormat.title}</h2>
           <p class="m-0 text-xs text-[color:var(--text-muted)] leading-snug">{activeFormat.detail}</p>
@@ -523,9 +523,65 @@
 
 <style>
   /* Theming/states only — layout lives in Tailwind utilities. */
+  .export-builder {
+    width: 100%;
+    box-sizing: border-box;
+    padding: clamp(16px, 2.2vw, 28px);
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--bg-secondary) 78%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+    border-radius: var(--border-radius-xl);
+    box-shadow: var(--shadow-md), inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent);
+  }
+  .export-section {
+    display: grid;
+    gap: 16px;
+    padding: clamp(12px, 1.6vw, 20px);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    background: color-mix(in srgb, var(--bg-tertiary) 70%, transparent);
+    box-shadow: var(--shadow-sm);
+  }
+  .export-detail {
+    display: grid;
+    gap: 16px;
+    padding: clamp(12px, 1.6vw, 18px);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: color-mix(in srgb, var(--bg-primary) 65%, transparent);
+  }
+  .export-detail :global(input) {
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    border-color: var(--border-color);
+    border-radius: var(--border-radius-sm);
+    outline: none;
+  }
+  .export-detail :global(input:focus) {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  }
+  .export-detail :global(h2) { color: var(--text-primary); }
+  .export-detail :global(p), .export-detail :global(label) { color: var(--text-secondary); }
+  .export-builder :global(.ghost) {
+    color: var(--text-secondary);
+    border-color: var(--border-color);
+  }
+  .export-builder :global(.ghost:hover:not(:disabled)) {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
   .eb-cap {
-    max-width: min(1240px, 100%);
+    max-width: 1240px;
     margin: 0 auto;
+  }
+  @media (max-width: 640px) {
+    .export-builder { padding: 12px; border-radius: var(--border-radius-lg); }
+    .toolbar { align-items: stretch; }
+    .toolbar-actions { width: 100%; }
+    .toolbar-actions :global(button) { flex: 1; justify-content: center; }
+    .pack-summary { white-space: normal; }
+    .eb-export-btn { width: 100%; }
   }
 
   /* Stage toolbar — same pattern as Ores / Release / History stages. */
@@ -589,15 +645,6 @@
     cursor: default;
   }
 
-  .format-card.active {
-    color: var(--text-primary);
-    border-color: rgba(16, 185, 129, 0.5);
-    background: rgba(16, 185, 129, 0.1);
-    box-shadow: 0 0 15px rgba(16, 185, 129, 0.15);
-  }
-  .format-card.has-error:not(.active) {
-    border-color: rgba(239, 68, 68, 0.35);
-  }
   li.ok {
     border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
   }

@@ -10,6 +10,7 @@
   import PackHealthBadge from "./components/PackHealthBadge.svelte";
   import SwarmOnboarding from "./components/SwarmOnboarding.svelte";
   import ShareCapsuleDialog from "./components/ShareCapsuleDialog.svelte";
+  import CrashRecoveryWindow from "./components/CrashRecoveryWindow.svelte";
   import TaskProgressPanel from "./components/TaskProgressPanel.svelte";
   import type { Component } from "svelte";
   import { onMount, tick } from "svelte";
@@ -168,6 +169,7 @@
   let shareResolutionId = $state<string | null>(null);
   let shareBusy = $state(false);
   let shareError = $state<string | null>(null);
+  let crashRecovery = $state<{ path: string; message: string } | null>(null);
   /** 1 = deeper in nav (slide from right), -1 = back (from left). */
   let viewDir = $state(1);
   let prevViewForDir = $state<View>("dashboard");
@@ -341,6 +343,16 @@
     };
     window.addEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
 
+    const onOpenCrashRecovery = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ path?: string; message?: string }>).detail;
+      if (!detail?.path) return;
+      crashRecovery = {
+        path: detail.path,
+        message: detail.message || "The game exited after launch.",
+      };
+    };
+    window.addEventListener("tuffbox:open-crash-recovery", onOpenCrashRecovery);
+
     const onOpenProjectSettings = () => {
       currentView = "project-settings";
     };
@@ -494,6 +506,7 @@
       stopHomeEnrich?.();
       window.removeEventListener("tuffbox:open-graph", onOpenGraph);
       window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
+      window.removeEventListener("tuffbox:open-crash-recovery", onOpenCrashRecovery);
       window.removeEventListener("tuffbox:open-project-settings", onOpenProjectSettings);
       window.removeEventListener("tuffbox:open-settings", onOpenSettings);
       window.removeEventListener("tuffbox:open-me", onOpenMe);
@@ -789,6 +802,13 @@
 
 <ToastContainer />
 <TaskProgressPanel />
+{#if crashRecovery}
+  <CrashRecoveryWindow
+    path={crashRecovery.path}
+    message={crashRecovery.message}
+    onclose={() => (crashRecovery = null)}
+  />
+{/if}
 {#if $loginModalOpen}
   <MinecraftLogin onclose={() => loginModalOpen.set(false)} />
 {/if}

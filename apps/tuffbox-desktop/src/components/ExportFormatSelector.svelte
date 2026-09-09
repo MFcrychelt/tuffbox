@@ -41,7 +41,7 @@
     {@const errors = errorCounts[format.id] ?? 0}
     <button
       type="button"
-      class="group min-h-[112px] rounded-xl border border-white/[0.08] bg-white/[0.025] p-4 text-left transition-all duration-200 hover:border-white/20 hover:bg-white/[0.04] {selected === format.id ? 'border-emerald-500/60 bg-emerald-500/10 shadow-[0_0_15px_rgba(16,185,129,0.15)]' : ''}"
+      class="format-card group min-h-[112px] rounded-xl border p-4 text-left transition-all duration-200 {selected === format.id ? 'selected' : ''}"
       class:has-error={errors > 0}
       role="option"
       aria-selected={selected === format.id}
@@ -67,3 +67,24 @@
     </button>
   {/each}
 </div>
+
+<style>
+  .format-card {
+    border-color: color-mix(in srgb, var(--border-color) 82%, transparent);
+    background: color-mix(in srgb, var(--bg-elevated) 48%, transparent);
+    color: var(--text-primary);
+  }
+  .format-card:hover,
+  .format-card:focus-visible {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 7%, var(--bg-elevated));
+    outline: none;
+  }
+  .format-card.selected {
+    border-color: color-mix(in srgb, var(--accent-primary) 65%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 12%, var(--bg-elevated));
+    box-shadow: 0 0 18px color-mix(in srgb, var(--accent-primary) 16%, transparent);
+  }
+  .format-card :global(strong) { color: var(--text-primary); }
+  .format-card :global(p), .format-card :global(span.font-mono) { color: var(--text-muted); }
+</style>
