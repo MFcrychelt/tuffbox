@@ -94,7 +94,7 @@
 </script>
 
 <div class="overlay" role="presentation" onclick={(event) => event.target === event.currentTarget && onclose()}>
-  <section class="recovery" role="dialog" aria-modal="true" aria-label="Crash recovery">
+  <div class="recovery" role="dialog" aria-modal="true" aria-label="Crash recovery">
     <header>
       <div class="heading-icon"><AlertTriangle size={18} /></div>
       <div class="heading-copy">
@@ -137,7 +137,7 @@
         <Play size={15} /> {running ? "Starting…" : "Run"}
       </button>
     </footer>
-  </section>
+  </div>
 </div>
 
 <style>
