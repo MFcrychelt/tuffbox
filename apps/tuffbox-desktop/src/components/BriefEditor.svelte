@@ -1208,7 +1208,7 @@
     box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
   }
   input.invalid {
-    border-color: rgba(239, 68, 68, 0.55);
+    border-color: color-mix(in srgb, var(--accent-danger) 55%, transparent);
   }
 
   .hint {
@@ -1217,10 +1217,10 @@
     font-size: 12px;
   }
   .hint.warn {
-    color: #fbbf24;
+    color: var(--accent-warning);
   }
   .hint.bad {
-    color: #f87171;
+    color: var(--accent-danger);
   }
 
   /* Icon dropzone — square 112x112 with drag & drop */
@@ -1475,6 +1475,34 @@
     padding-top: 2px;
   }
 
+  .gal-item img,
+  .gal-ph {
+    width: 120px;
+    height: 72px;
+    object-fit: cover;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+  }
+
+  .gal-ph {
+    display: grid;
+    place-items: center;
+    color: var(--text-muted);
+  }
+
+  .gal-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+
+  .gal-actions .danger {
+    color: var(--accent-danger);
+  }
+
+  .author-notes .panel-head h3,
+  .extras-panel summary,
   .panel-summary {
     cursor: pointer;
     font-weight: 700;
@@ -1526,9 +1554,9 @@
     background: rgba(255, 255, 255, 0.03);
   }
   .inline-error {
-    color: #fecaca;
-    background: rgba(239, 68, 68, 0.08);
-    border-color: rgba(239, 68, 68, 0.28);
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent);
   }
   .inline-success {
     color: #6ee7b7;

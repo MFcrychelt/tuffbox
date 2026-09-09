@@ -807,6 +807,61 @@
     color: var(--text-muted);
   }
 
+
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+  }
+
+  .inline-error,
+  .inline-success {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+  }
+
+  .inline-error {
+    color: var(--accent-danger);
+    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent);
+  }
+
+  .inline-success {
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
+  }
+
+  .brief-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 18px;
+  }
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-weight: 700;
+  }
+
+  textarea {
+    min-height: 120px;
+    resize: vertical;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    padding: 12px;
+    font-family: inherit;
+  }
+
+
   @media (max-width: 1100px) {
     .stage-content {
       padding: 16px;

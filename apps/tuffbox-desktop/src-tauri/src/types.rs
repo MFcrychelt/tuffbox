@@ -241,6 +241,32 @@ pub struct SnapshotDetail {
     pub manifest_only: bool,
 }
 
+/// Result of diffing a snapshot against the current live project state.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotVsCurrent {
+    /// Snapshot-side files that differ from (or are now missing on) disk.
+    pub snapshot_changed_files: Vec<String>,
+    /// Snapshot-side files that are no longer present in the live project.
+    pub snapshot_gone_files: Vec<String>,
+    /// Live-side files the snapshot did not record. Intentionally empty:
+    /// discovering files that appeared since a checkpoint requires knowing the
+    /// snapshot's tracked roots, which are not persisted.
+    pub current_added_files: Vec<String>,
+    /// True when a manifest file exists both in the snapshot and on disk.
+    pub manifest_compared: bool,
+    /// Unified textual diff of the manifest ("" when not comparable).
+    pub manifest_diff: String,
+}
+
+/// Result of pruning expired automatic snapshots.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PruneResult {
+    pub removed_ids: Vec<String>,
+    pub total_bytes: u64,
+}
+
 // ── Release & Export types ───────────────────────────────────────
 
 #[derive(serde::Serialize)]

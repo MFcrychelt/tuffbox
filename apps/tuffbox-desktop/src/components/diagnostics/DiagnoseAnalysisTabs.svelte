@@ -222,7 +222,7 @@
   .panel { padding: 16px; min-width: 0; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .muted-box { padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color); color: var(--text-muted); font-size: 12px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
-  .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); }
+  .notice.warning { color: var(--accent-warning); background: color-mix(in srgb, var(--accent-warning) 8%, transparent); border-color: color-mix(in srgb, var(--accent-warning) 28%, transparent); }
   .notice.tight { padding: 8px 10px; margin-bottom: 10px; font-size: 12px; }
   .risk-pill {
     font-size: 10px;
@@ -255,10 +255,10 @@
     color: var(--text-muted);
     background: rgba(148, 163, 184, 0.15);
   }
-  .sev-chip.critical { color: #fecaca; background: rgba(239, 68, 68, 0.18); }
-  .sev-chip.error { color: #fed7aa; background: rgba(249, 115, 22, 0.16); }
-  .sev-chip.warning { color: #fde68a; background: rgba(245, 158, 11, 0.14); }
-  .sev-chip.info { color: #bae6fd; background: rgba(56, 189, 248, 0.12); }
+  .sev-chip.critical { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 18%, transparent); }
+  .sev-chip.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 16%, transparent); }
+  .sev-chip.warning { color: var(--accent-warning); background: color-mix(in srgb, var(--accent-warning) 14%, transparent); }
+  .sev-chip.info { color: var(--accent-secondary); background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); }
   .dx-tabs { padding: 0; overflow: hidden; margin-bottom: 14px; }
   .dx-tabbar {
     display: flex;

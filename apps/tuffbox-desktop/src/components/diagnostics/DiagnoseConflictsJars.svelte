@@ -160,8 +160,8 @@
 <style>
   .panel { padding: 16px; min-width: 0; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .muted-box { padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color); color: var(--text-muted); font-size: 12px; }
-  .ghost.danger { color: #fca5a5; }
-  .ghost.danger:hover { color: #fecaca; }
+  .ghost.danger { color: var(--accent-danger); }
+  .ghost.danger:hover { color: var(--accent-danger); }
   .collapsible-block {
     margin-bottom: 12px;
     padding: 0;

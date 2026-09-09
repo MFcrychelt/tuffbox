@@ -2573,7 +2573,7 @@
     justify-content: center;
     font-weight: 900;
     font-size: 32px;
-    color: #000;
+    color: var(--on-accent, #000);
     box-shadow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
 
@@ -2581,7 +2581,7 @@
     display: block;
     object-fit: cover;
     background: transparent;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 25%, transparent);
     color: transparent;
     font-size: 0;
   }
@@ -2670,7 +2670,7 @@
   .shortcut-row small { color: var(--text-muted); font-size: 10px; }
 
   .update-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); border: 1px solid var(--border-color); margin: 10px 0; font-size: 12px; }
-  .update-info.error { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 30%, transparent); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); }
+  .update-info.error { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); }
   .update-avail { color: var(--accent-primary); font-weight: 700; }
   .update-ok { color: var(--text-muted); }
 

@@ -620,8 +620,8 @@
   }
 
   .mr-badge.loader {
-    border-color: rgba(96, 165, 250, 0.4);
-    color: #93c5fd;
+    border-color: color-mix(in srgb, var(--accent-secondary) 40%, transparent);
+    color: var(--accent-secondary);
   }
 
   .cf-kicker {

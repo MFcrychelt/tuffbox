@@ -1043,6 +1043,9 @@ pub fn record_user_fix_attempt(
             .collect(),
         actor: Some(actor),
         managed_files: Vec::new(),
+        // This marker snapshot's on-disk counterpart is stored separately via
+        // SnapshotStore::create_with_meta; keep size 0 here (unknown/absent).
+        size_bytes: 0,
     };
     write_last_crash_fix_marker(project_dir, &snapshot, &plan, &fp)?;
     if let Ok(Some(mut marker)) = load_crash_fix_marker(project_dir) {

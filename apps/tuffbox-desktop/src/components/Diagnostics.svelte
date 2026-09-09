@@ -3049,7 +3049,7 @@
           else scrollLogToLine(Math.max(0, n - 1));
         }}
         onDisableMod={fixDisableMod}
-        onUpdateMod={async (id) => {
+        onUpdateMod={async (id: string) => {
           if (!id) return;
           fixingIdx = -1;
           try {
@@ -3146,7 +3146,7 @@
         bisectMods={bisectMods}
         onJumpLine={() => void openEvidence()}
         onDisableMod={fixDisableMod}
-        onUpdateMod={async (id) => {
+        onUpdateMod={async (id: string) => {
           if (!id) return;
           try { await applyFixBatchOrThrow([{ kind: "updateMod", label: `Update ${id}`, modId: id }]); message = `Update requested for ${id}`; }
           catch (err) { error = String(err); }
@@ -3164,7 +3164,7 @@
         launching={launching}
         onStartGroupTest={() => void startGroupTest()}
         onGroupTestLaunch={() => void runTest()}
-        onReportGroupTest={(outcome) => void reportGroupTest(outcome)}
+        onReportGroupTest={(outcome: "healthy" | "crash") => void reportGroupTest(outcome)}
         onCancelGroupTest={() => void cancelGroupTest()}
         graphDiagnostics={graphDiagnostics}
         duplicateJarGroups={duplicateJarGroups}
@@ -3172,9 +3172,9 @@
         fixingIdx={fixingIdx}
         duplicateJarFixing={duplicateJarFixing}
         wrongLoaderFixing={wrongLoaderFixing}
-        onFixMissingDependency={({ modId, idx }) => fixMissingDependency(modId, idx)}
+        onFixMissingDependency={({ modId, idx }: { modId: string; idx: number }) => fixMissingDependency(modId, idx)}
         onFixDeduplicate={fixDeduplicate}
-        onKeepOneDuplicateJar={({ modId, fileName }) => keepOneDuplicateJar(modId, fileName)}
+        onKeepOneDuplicateJar={({ modId, fileName }: { modId: string; fileName: string }) => keepOneDuplicateJar(modId, fileName)}
         onDisableWrongJar={disableWrongJar}
         onRemoveWrongJar={removeWrongJar}
         plan={plan}
@@ -3478,7 +3478,7 @@
   }
   h2 { display: flex; font-size: 14px; margin: 0 0 12px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
+  .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .panel, .empty, .loading { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .panel { padding: 16px; min-width: 0; }
@@ -3493,7 +3493,7 @@
     font-size: 11px;
     font-weight: 700;
   }
-  .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); }
+  .notice.warning { color: var(--accent-warning); background: color-mix(in srgb, var(--accent-warning) 8%, transparent); border-color: color-mix(in srgb, var(--accent-warning) 28%, transparent); }
   .group-test-panel {
     display: flex;
     flex-direction: column;
@@ -3534,6 +3534,10 @@
     background: var(--bg-tertiary);
     color: var(--text-secondary);
   }
+  .diff-chip.add { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
+  .diff-chip.remove { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); background: color-mix(in srgb, var(--accent-danger) 10%, transparent); }
+  .diff-chip.change { color: var(--accent-warning); border-color: color-mix(in srgb, var(--accent-warning) 35%, transparent); background: color-mix(in srgb, var(--accent-warning) 10%, transparent); }
+  .muted-box { padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color); }
   .loading, .empty { padding: 24px; text-align: center; color: var(--text-muted); }
   .loading-title { font-weight: 700; color: var(--text-primary); }
   .loading-stage {

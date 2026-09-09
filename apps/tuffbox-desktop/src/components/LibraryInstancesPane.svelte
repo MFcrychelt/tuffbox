@@ -2407,6 +2407,10 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .side-btn.danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    color: var(--accent-danger);
+  }
   .side-empty {
     padding: 24px 8px;
     text-align: center;
@@ -2434,7 +2438,7 @@
     border: none;
     border-radius: var(--border-radius-md);
     background: var(--accent-primary);
-    color: var(--on-accent);
+    color: var(--on-accent, #000);
     font-weight: 700;
     font-size: 13px;
     cursor: pointer;
@@ -2474,8 +2478,8 @@
   }
   .pack-ctx-menu button:disabled { opacity: 0.45; cursor: default; }
   .pack-ctx-menu button.danger:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.12);
-    color: #f87171;
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    color: var(--accent-danger);
   }
   .pack-ctx-menu .menu-sep {
     height: 1px;
@@ -2564,7 +2568,7 @@
     border-radius: var(--border-radius-sm);
     border: none;
     background: var(--accent-primary);
-    color: var(--on-accent);
+    color: var(--on-accent, #000);
     cursor: pointer;
     font-weight: 700;
     font-size: 12px;

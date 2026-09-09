@@ -354,7 +354,7 @@
     cursor: pointer;
   }
   .sig-line:hover {
-    color: var(--accent-primary, #93c5fd);
+    color: var(--accent-primary, #0284c7);
   }
   .sec-list {
     display: grid;

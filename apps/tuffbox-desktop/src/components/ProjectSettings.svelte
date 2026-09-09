@@ -663,6 +663,53 @@
         inset 0 1px 0 rgba(255, 255, 255, 0.2);
     }
 
+  .memory-slider::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    background: var(--accent-primary);
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+  }
+
+  .memory-marks {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .mark {
+    padding: 6px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: var(--border-radius-sm);
+  }
+
+  .mark.active {
+    background: var(--accent-primary);
+    color: var(--on-accent, #000);
+    border-color: var(--accent-primary);
+  }
+
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+  }
+
+  .error {
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    color: var(--accent-danger);
+    padding: 10px 12px;
+    border-radius: var(--border-radius-md);
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+
   .schema-info { display: grid; gap: 12px; }
   .schema-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--bg-tertiary); border-radius: var(--border-radius-md); border: 1px solid var(--border-color); }
   .schema-row span { color: var(--text-muted); font-size: 13px; }

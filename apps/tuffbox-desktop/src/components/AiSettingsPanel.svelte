@@ -1099,9 +1099,9 @@
     font-size: 12px;
     color: var(--text-secondary);
   }
-  .status.ok { border-color: rgba(34, 197, 94, 0.35); color: #86efac; }
-  .status.warn { border-color: rgba(251, 191, 36, 0.4); color: #fde68a; }
-  .status.bad { border-color: rgba(239, 68, 68, 0.35); color: #fca5a5; }
+  .status.ok { border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); color: var(--accent-primary); }
+  .status.warn { border-color: color-mix(in srgb, var(--accent-warning) 40%, transparent); color: var(--accent-warning); }
+  .status.bad { border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); color: var(--accent-danger); }
   .status-text { flex: 1; min-width: 0; word-break: break-word; }
   .status-actions { display: flex; gap: 4px; flex-shrink: 0; }
   .block {
@@ -1165,9 +1165,9 @@
     font-weight: 700;
     letter-spacing: 0.02em;
   }
-  .fit[data-fit="ok"] { color: #86efac; }
-  .fit[data-fit="tight"] { color: #fde68a; }
-  .fit[data-fit="heavy"] { color: #fca5a5; }
+  .fit[data-fit="ok"] { color: var(--accent-primary); }
+  .fit[data-fit="tight"] { color: var(--accent-warning); }
+  .fit[data-fit="heavy"] { color: var(--accent-danger); }
   .install { display: flex; flex-direction: column; gap: 8px; }
   .field-row { display: flex; gap: 6px; align-items: center; }
   .field-row input { flex: 1; min-width: 0; }
@@ -1308,7 +1308,7 @@
     font-weight: 500;
   }
   button.mini { padding: 6px 8px; }
-  button.danger { color: #fca5a5; }
+  button.danger { color: var(--accent-danger); }
   .check-row {
     display: flex;
     align-items: center;
@@ -1333,9 +1333,9 @@
     padding: 8px 10px;
     border-radius: var(--border-radius-sm);
   }
-  .notice.error { background: rgba(239, 68, 68, 0.12); color: #fca5a5; }
-  .notice.ok { background: rgba(34, 197, 94, 0.12); color: #86efac; }
-  .test-ok { color: #86efac; font-size: 11px; }
+  .notice.error { background: color-mix(in srgb, var(--accent-danger) 12%, transparent); color: var(--accent-danger); }
+  .notice.ok { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-primary); }
+  .test-ok { color: var(--accent-primary); font-size: 11px; }
   :global(.spin) { animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>

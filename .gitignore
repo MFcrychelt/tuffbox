@@ -17,6 +17,9 @@ tmp_mpi_chunks/
 .cursor/hooks.json.empty
 .cursor/hooks/state/
 .homunculus/
+# Local Reasonix agent config/scaffold (not part of the project)
+.reasonix/
+reasonix.toml
 
 .cargo/
 dist/

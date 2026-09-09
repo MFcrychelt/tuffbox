@@ -88,7 +88,7 @@
     color: var(--text-primary);
     margin-bottom: 10px;
   }
-  .cd-icon { display: inline-flex; flex-shrink: 0; }
+  .cd-icon { display: inline-flex; flex-shrink: 0; margin-bottom: 12px; }
   :global(.cd-message) {
     color: var(--text-muted);
     font-size: 13px;
@@ -96,5 +96,9 @@
     margin-bottom: 20px;
     white-space: pre-wrap;
   }
+  .cd-dialog h3 { font-size: 18px; margin-bottom: 8px; color: var(--text-primary); }
+  .cd-dialog p { color: var(--text-muted); font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
   .cd-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  button.danger { background: var(--accent-danger); color: var(--on-accent, #fff); }
+  button.danger:hover { background: color-mix(in srgb, var(--accent-danger) 85%, #000 15%); }
 </style>

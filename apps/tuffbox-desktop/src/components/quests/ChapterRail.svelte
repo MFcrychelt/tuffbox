@@ -149,7 +149,7 @@
 <aside class="rail ftbq-rail flex flex-col h-full min-h-0">
   <div class="rail-h flex items-center justify-between px-2 py-[7px]">
     <h3>Chapters</h3>
-    <button type="button" class="ico" title="Add chapter" onclick={onCreate}>
+    <button type="button" class="ico" title="Add chapter" aria-label="Add chapter" onclick={onCreate}>
       <Plus size={14} class="flex-shrink-0" />
     </button>
   </div>
@@ -157,7 +157,7 @@
   <div class="rail-list flex-1 overflow-y-auto min-h-0 flex flex-col py-1">
     {#each groups as g (g.key)}
       {#if groups.length > 1 || g.key}
-        <button type="button" class="group-h flex items-center gap-1 w-full pt-2 px-2.5 pb-1" onclick={() => toggleGroup(g.key)}>
+        <button type="button" class="group-h flex items-center gap-1 w-full pt-2 px-2.5 pb-1" onclick={() => toggleGroup(g.key)} aria-expanded={!collapsed.has(g.key)}>
           {#if collapsed.has(g.key)}<ChevronRight size={12} class="flex-shrink-0" />{:else}<ChevronDown size={12} class="flex-shrink-0" />{/if}
           <span>{g.label}</span>
           <span class="group-count">{g.chapters.length}</span>

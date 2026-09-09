@@ -296,7 +296,7 @@
     color: var(--ftbq-text-muted);
   }
   .err {
-    color: #fca5a5;
+    color: var(--accent-danger);
   }
   .ico {
     width: 28px;
