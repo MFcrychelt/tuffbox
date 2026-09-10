@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
-import { get } from "svelte/store";
+import { writable, get } from "svelte/store";
 import { toasts } from "./toast";
 import type {
   LaunchCrashEvent,
@@ -56,6 +56,122 @@ export interface LaunchFeedbackOptions {
   /** Manifest path for the log modal (for example, a staged server dir). */
   logPath?: string | null;
   logTitle?: string | null;
+}
+
+// ─── Shared launch state machine ─────────────────────────────────────
+//
+// The backend exposes an explicit lifecycle through Tauri events so every Play
+// button in the app can render the same accurate state instead of each keeping
+// its own local `launching` flag that is reset the instant `invoke` returns
+// (BUG_REPORT Bug 2). Phases flow:
+//
+//   (user clicks Play)
+//     → "preparing"   (launchWithFeedback starts the invoke)
+//     → "resolving_java" / "downloading"  (optional, from `launch-phase` events)
+//     → "starting"    (JVM spawn begins)
+//     → "running"     (`process-started` / `launch-phase` running)
+//     → "exited"      (`process-exited` / `launch-crashed`)
+//
+// A path is considered "launching" for phases preparing…starting and stays that
+// way until the backend confirms `running` or the run ends — never reset by the
+// return of the invoke alone.
+
+export type LaunchPhase =
+  | "idle"
+  | "preparing"
+  | "resolving_java"
+  | "downloading"
+  | "starting"
+  | "running"
+  | "exited";
+
+export interface LaunchPhaseState {
+  path: string;
+  phase: LaunchPhase;
+  message: string | null;
+  /** Set on launch failure / crash (kept for deep-link UI). */
+  error?: LaunchErrorInfo | null;
+  /** The LaunchResult when the invoke succeeded (running/exited). */
+  result?: LaunchResult | null;
+}
+
+/** Per-path launch phase map, keyed by manifest path (`running.id`). */
+export const launchStates = writable<Record<string, LaunchPhaseState>>({});
+
+/**
+ * The single path whose launch is currently in a pre-run phase
+ * (preparing…starting). Cleared once the game is `running` or `exited`.
+ * This is the shared replacement for the per-component `launching` flags.
+ */
+export const launchingPath = writable<string | null>(null);
+
+const LAUNCHING_PHASES: ReadonlySet<LaunchPhase> = new Set<LaunchPhase>([
+  "preparing",
+  "resolving_java",
+  "downloading",
+  "starting",
+]);
+
+export function isLaunchPhase(phase: LaunchPhase | null | undefined): boolean {
+  return phase != null && LAUNCHING_PHASES.has(phase);
+}
+
+/** True while `path` is in a pre-run phase (preparing…starting). */
+export function isPathLaunching(
+  path: string | null | undefined,
+  states?: Record<string, LaunchPhaseState>,
+): boolean {
+  if (!path) return false;
+  const s = (states ?? get(launchStates))[path];
+  return s ? isLaunchPhase(s.phase) : false;
+}
+
+export function setLaunchPhase(
+  path: string,
+  phase: LaunchPhase,
+  message?: string | null,
+  result?: LaunchResult | null,
+): void {
+  launchStates.update((map) => {
+    const prev = map[path];
+    return {
+      ...map,
+      [path]: {
+        path,
+        phase,
+        message: message ?? prev?.message ?? null,
+        error: prev?.error ?? null,
+        result: result ?? prev?.result ?? null,
+      },
+    };
+  });
+}
+
+export function setLaunchError(path: string, error: LaunchErrorInfo): void {
+  launchStates.update((map) => ({
+    ...map,
+    [path]: {
+      path,
+      phase: "exited",
+      message: error.message,
+      error,
+      result: map[path]?.result ?? null,
+    },
+  }));
+}
+
+/** Mark a run as running (game is up) — clears the launching flag. */
+function markRunning(path: string): void {
+  setLaunchPhase(path, "running", "Running");
+  launchingPath.update((p) => (p === path ? null : p));
+  if (get(launchingPath) === null) isLaunching.set(false);
+}
+
+/** Mark a run as exited — clears the launching flag for this path. */
+function markExited(path: string): void {
+  setLaunchPhase(path, "exited", "Exited");
+  launchingPath.update((p) => (p === path ? null : p));
+  if (get(launchingPath) === null) isLaunching.set(false);
 }
 
 // Retryable error categories — mirrors `LaunchErrorKind::retryable` on the Rust
@@ -211,6 +327,15 @@ function normaliseRunningResult(result: LaunchResult, fallback: LaunchParams): R
  * process-exited / launch-crashed. It intentionally has no `finally` that
  * clears UI state: invoke timing is not game lifecycle timing.
  */
+/// Launch a profile and surface a categorized, optionally-retryable toast on
+/// failure. Returns the `LaunchResult` on success, or `null` after the error
+/// toast has been shown.
+///
+/// The `launching`/`isLaunching` state is **not** reset here — it is driven by
+/// the backend lifecycle events (`process-started` / `process-exited` /
+/// `launch-phase` / `launch-crashed`) so the spinner stays up until the game is
+/// actually running or the run has ended/failed. Callers must not clear it in a
+/// `finally` block.
 export async function launchWithFeedback(
   params: LaunchParams,
   options?: LaunchFeedbackOptions,
@@ -261,9 +386,16 @@ export async function launchWithFeedback(
   launchProgress.set({ phase: "preparing", message: "Preparing…", percent: 0 });
   void invoke("set_last_opened_project", { path: params.path }).catch(() => {});
 
+  lastLaunch = params;
+  lastOnStarted = options?.onStarted ?? null;
   const showLog = options?.openLog !== false;
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  if (showLog) openLaunchLog(options?.logPath ?? params.path, options?.logTitle ?? null);
+  // Enter the pre-run launch phase. Kept until process-started / exit events.
+  launchingPath.set(params.path);
+  isLaunching.set(true);
+  setLaunchPhase(params.path, "preparing", "Preparing…");
 
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
   try {
     void ensureLaunchProgressListener();
     pollTimer = setInterval(() => {
@@ -282,6 +414,16 @@ export async function launchWithFeedback(
       }
       rememberedLaunches.set(running.id, { params, options });
     }
+    // Successfully spawned — the game is starting. Keep `launching` true until
+    // the backend confirms `running` via process-started, or the run ends.
+    // Only advance a pre-run phase to "starting"; never downgrade a phase the
+    // backend already advanced (the process-started event may beat the invoke).
+    const cur = get(launchStates)[params.path];
+    if (cur && isLaunchPhase(cur.phase)) {
+      setLaunchPhase(params.path, "starting", "Starting game…", result);
+    } else if (cur) {
+      setLaunchPhase(params.path, cur.phase, cur.message, result);
+    }
     if (options?.showSuccess) toasts.success("Launch started");
     options?.onStarted?.(result);
     // After a successful start, confirm any pending crash-fix as resolved when
@@ -294,6 +436,9 @@ export async function launchWithFeedback(
   } catch (error) {
     const info = asLaunchError(error);
     failLaunchSession(params.path, info);
+    setLaunchError(params.path, info);
+    launchingPath.update((p) => (p === params.path ? null : p));
+    if (get(launchingPath) === null) isLaunching.set(false);
     showLaunchError(info, () => void launchWithFeedback(params, options), { path: params.path });
     if (showLog) openLaunchLog(options?.logPath ?? params.path, options?.logTitle ?? null);
     return null;
@@ -306,6 +451,8 @@ export async function launchWithFeedback(
 /** Stop a tracked game. The backend keeps it in `list_running_instances` until
  * Child::wait observes exit and then emits `process-exited`; do not optimistically
  * remove it here or the UI can claim the game stopped while it is still alive. */
+/// Kill the Minecraft process for a project. Backend emits `process-exited`
+/// (which clears `launching` via the shared state machine).
 export async function killWithFeedback(path: string): Promise<boolean> {
   const running = get(runningInstances).find((instance) => instance.id === path);
   if (running) {
@@ -322,6 +469,8 @@ export async function killWithFeedback(path: string): Promise<boolean> {
   try {
     await invoke("kill_running_instance", { instanceId: path });
     toasts.info("Stopping game…");
+    removeRunning(path);
+    markExited(path);
     return true;
   } catch (e) {
     const msg = String(e).toLowerCase();
@@ -346,6 +495,21 @@ export async function refreshRunningInstances(): Promise<void> {
     const instances = Array.isArray(list) ? list : [];
     runningInstances.set(instances);
     for (const instance of instances) markLaunchRunning(instance);
+    // Reconcile phase map with the source of truth: any running id should read
+    // "running"; anything no longer in the list that was running → exited.
+    const ids = new Set(instances.map((r) => r.id));
+    const states = get(launchStates);
+    for (const id of ids) {
+      const s = states[id];
+      if (!s || s.phase === "running") continue;
+      setLaunchPhase(id, "running", "Running");
+    }
+    for (const id of Object.keys(states)) {
+      if (ids.has(id)) continue;
+      if (states[id] && isLaunchPhase(states[id].phase)) {
+        setLaunchPhase(id, "exited", "Exited");
+      }
+    }
   } catch {
     // Backend not ready / optional in web preview.
   }
@@ -485,6 +649,9 @@ export function registerLaunchCrashListener(): Promise<UnlistenFn> {
       const path = crash.id || get(projectPath);
       if (path) {
         failLaunchSession(path, crash.error);
+        setLaunchError(path, crash.error);
+        launchingPath.update((p) => (p === path ? null : p));
+        if (get(launchingPath) === null) isLaunching.set(false);
         void reportSoftVerifyCrash(path);
         // Keep the live log modal open on the crashed session.
         openLaunchLog(path);
@@ -504,6 +671,8 @@ export function registerLaunchCrashListener(): Promise<UnlistenFn> {
  * `process-exited` is deliberately event-driven; stats polling is optional
  * observability and never decides whether a Play button becomes Stop.
  */
+/// Keep `runningInstances` + the shared launch state machine in sync with
+/// backend process-started / process-exited / launch-phase events.
 export function registerProcessListeners(): Promise<UnlistenFn[]> {
   if (!processListeners) {
     processListeners = Promise.all([
@@ -528,6 +697,25 @@ export function registerProcessListeners(): Promise<UnlistenFn[]> {
           });
         } else if (lifecycle.phase === "failed" && lifecycle.error) {
           failLaunchSession(lifecycle.id, lifecycle.error);
+        }
+        // Also drive the shared launch phase state machine.
+        const known: Record<string, LaunchPhase> = {
+          preparing: "preparing",
+          resolving_java: "resolving_java",
+          downloading: "downloading",
+          starting: "starting",
+          running: "running",
+          exited: "exited",
+        };
+        const mapped = known[(lifecycle.phase ?? "").toLowerCase()];
+        if (mapped) {
+          if (mapped === "running") markRunning(lifecycle.id);
+          else if (mapped === "exited") markExited(lifecycle.id);
+          else {
+            setLaunchPhase(lifecycle.id, mapped, lifecycle.message ?? null);
+            launchingPath.set(lifecycle.id);
+            isLaunching.set(true);
+          }
         }
       }),
       listen<RunningInstance>("process-started", (event) => {

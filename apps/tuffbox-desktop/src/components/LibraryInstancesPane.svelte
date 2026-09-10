@@ -54,7 +54,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { api, githubInspectMeta } from "../lib/api";
   import { copyText } from "../lib/clipboard";
-  import { launchWithFeedback, killWithFeedback } from "../lib/launch";
+  import { launchWithFeedback, killWithFeedback, launchingPath } from "../lib/launch";
   import {
     DEFAULT_GROUP,
     loadGroupMap,
@@ -375,9 +375,12 @@
       return;
     }
     if (isProjectLaunching(path, $launchSessions)) return;
-    await invoke("set_last_opened_project", { path });
-    await launchWithFeedback({ path, profile: "client" });
-    void loadStats(selectedPath ?? project.path);
+    try {
+      await invoke("set_last_opened_project", { path });
+      await launchWithFeedback({ path, profile: "client" });
+    } finally {
+      void loadStats(selectedPath ?? project.path);
+    }
   }
 
   async function stopInstance(project: RecentProject) {
@@ -876,10 +879,12 @@
       case "repair":
         actionBusy = true;
         try {
-          const report: { downloaded?: unknown[]; failed?: unknown[] } = await invoke(
-            "repair_project",
-            { path: project.path },
-          );
+          const report: {
+            downloaded?: unknown[];
+            failed?: unknown[];
+            duplicates?: unknown[];
+            wrongLoader?: unknown[];
+          } = await invoke("repair_project", { path: project.path });
           const downloaded = report.downloaded?.length ?? 0;
           const failed = report.failed?.length ?? 0;
 
@@ -896,21 +901,15 @@
             [];
 
           const parts: string[] = [];
-          parts.push(
-            downloaded === 0 && failed === 0
-              ? "All mod files present and valid."
-              : `Re-downloaded ${downloaded} file(s)${failed ? `, ${failed} failed` : ""}.`,
-          );
-          if (dupes.length > 0) {
-            parts.push(`${dupes.length} duplicate group${dupes.length > 1 ? "s" : ""} — resolve in Mods → Duplicates.`);
-          }
-          if (wrongLoader.length > 0) {
-            parts.push(`${wrongLoader.length} wrong-loader jar(s) — disable in Mods → Wrong loader.`);
-          }
-          if (dupes.length === 0 && wrongLoader.length === 0) {
-            toasts.success(parts.join(" "));
+          if (downloaded > 0) parts.push(`${downloaded} re-downloaded`);
+          if (failed > 0) parts.push(`${failed} failed`);
+          if (dupes.length > 0) parts.push(`${dupes.length} duplicate group${dupes.length > 1 ? "s" : ""}`);
+          if (wrongLoader.length > 0) parts.push(`${wrongLoader.length} wrong-loader jar${wrongLoader.length > 1 ? "s" : ""}`);
+          if (parts.length === 0) {
+            toasts.success("All mod files present and valid.");
+          } else if (dupes.length === 0 && wrongLoader.length === 0) {
+            toasts.success(`Repair report: ${parts.join(", ")}.`);
           } else {
-            // Problems found: warn instead of success so it draws the eye.
             toasts.warning(`Repair finished with findings. ${parts.join(" ")}`, 10000);
           }
         } catch (e) {

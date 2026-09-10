@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { killWithFeedback, launchWithFeedback } from "../lib/launch";
+  import { killWithFeedback, launchWithFeedback, launchingPath } from "../lib/launch";
   import { onMount, tick } from "svelte";
   import {
     Stethoscope,
@@ -165,6 +165,17 @@
   };
 
   let diagnosis = $state<CrashDiagnosis | null>(null);
+  /** Aggregated HealthReport (diagnostics + crash + export blockers + missing). */
+  let health = $state<{
+    errorCount?: number;
+    warningCount?: number;
+    hasCrash?: boolean;
+    crashReports?: string[];
+    exportBlockers?: { code: string; message: string; target?: string | null }[];
+    missingCount?: number;
+    hashMismatchCount?: number;
+  } | null>(null);
+  let healthLoading = $state(false);
   let selectedReportId = $state("");
   let preferLatestLog = $state(true);
   let preferLauncherLog = $state(false);
@@ -219,6 +230,9 @@
   const launchSession = $derived($launchSessions[$projectPath ?? ""] ?? null);
   const launching = $derived(isProjectLaunching($projectPath, $launchSessions));
   const projectRunning = $derived(isProjectRunning($projectPath, $runningInstances));
+  // launching is derived from the shared launch store so the button stays in the
+  // launching state until the game is running or the run ends.
+  const launchingFromPath = $derived($launchingPath === $projectPath);
   let fixingIdx = $state<number | null>(null);
   let disablingModId = $state<string | null>(null);
   let error = $state<string | null>(null);
@@ -321,6 +335,18 @@
     }
   }
 
+  async function loadHealth() {
+    if (!$projectPath) return;
+    healthLoading = true;
+    try {
+      health = await invoke("get_health_report", { path: $projectPath });
+    } catch {
+      health = null;
+    } finally {
+      healthLoading = false;
+    }
+  }
+
   async function load(force = false) {
     if (!$projectPath) return;
     const requestedPath = $projectPath;
@@ -356,6 +382,7 @@
       }
       plan = data.fixPlan ?? null;
       preselectFixOption();
+      void loadHealth();
       detectWrongLoaderMods();
       detectDuplicateModJars();
       if (data.sessionHealthy && preferLatestLog) {
@@ -2168,6 +2195,7 @@
     if (!$projectPath || launching || projectRunning) return;
     error = null;
     message = "Preparing Test launch — reproduce the crash, then come back.";
+    // launchWithFeedback drives the shared launch store; no local reset.
     const result = await launchWithFeedback(
       { path: $projectPath, profile: "client" },
       {
@@ -2974,6 +3002,40 @@
       onFixAll={openFixAllReview}
     />
 
+    {#if health}
+      <section class="health-strip panel" aria-label="Pack health summary">
+        {#if health.hasCrash}
+          <span class="health-chip bad" title={(health.crashReports ?? []).join("\n")}>
+            ⚠ {health.crashReports?.length ?? 1} crash report{((health.crashReports?.length ?? 1) !== 1) ? "s" : ""}
+          </span>
+        {/if}
+        <span class="health-chip" class:bad={(health.errorCount ?? 0) > 0}>
+          {health.errorCount ?? 0} errors
+        </span>
+        <span class="health-chip" class:bad={(health.warningCount ?? 0) > 0}>
+          {health.warningCount ?? 0} warnings
+        </span>
+        <span class="health-chip" class:bad={(health.missingCount ?? 0) > 0}>
+          {health.missingCount ?? 0} missing
+        </span>
+        {#if (health.hashMismatchCount ?? 0) > 0}
+          <span class="health-chip bad">{health.hashMismatchCount} hash mismatch</span>
+        {/if}
+        <span class="health-chip" class:bad={(health.exportBlockers?.length ?? 0) > 0}>
+          {health.exportBlockers?.length ?? 0} export blocker{((health.exportBlockers?.length ?? 0) !== 1) ? "s" : ""}
+        </span>
+        {#if (health.exportBlockers?.length ?? 0) > 0}
+          <div class="health-blockers">
+            {#each health.exportBlockers ?? [] as b (b.code)}
+              <code>{b.code}</code><span>{b.message}</span>
+            {/each}
+          </div>
+        {/if}
+      </section>
+    {:else if healthLoading}
+      <div class="loading compact health-strip-loading">Loading health…</div>
+    {/if}
+
     {#if !sessionOk}
       <DiagnoseVerdictHero
         sessionOk={sessionOk}
@@ -3410,6 +3472,94 @@
   }
   .title, h2 { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .actions { gap: 8px; flex-wrap: wrap; }
+  .primary-actions { gap: 8px; flex-wrap: wrap; }
+  .primary-actions .primary, .primary-actions .secondary, .primary-actions .ghost { cursor: pointer; }
+  .ghost.icon-only { padding: 8px; min-width: 36px; justify-content: center; }
+
+  .tools-strip {
+    padding: 0;
+    margin-bottom: 14px;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+  }
+  .tools-strip > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    cursor: pointer;
+    list-style: none;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+  .tools-strip > summary::-webkit-details-marker { display: none; }
+  .tools-strip > summary span:first-child {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .tools-strip[open] .tools-hint :global(svg) { transform: rotate(180deg); }
+  .tools-strip-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 14px 12px;
+    border-top: 1px solid var(--border-color);
+  }
+  .tools-primary-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding-top: 10px;
+  }
+  .health-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+  }
+  .health-chip {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 999px;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
+    border: 1px solid var(--border-color);
+  }
+  .health-chip.bad {
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.5);
+    background: rgba(239, 68, 68, 0.08);
+  }
+  .health-blockers {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    background: rgba(251, 191, 36, 0.08);
+    border: 1px solid rgba(251, 191, 36, 0.25);
+  }
+  .health-blockers code {
+    font-size: 11px;
+    color: #fbbf24;
+  }
+  .health-blockers span {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .health-strip-loading {
+    margin-bottom: 14px;
+  }
   .recent-pack-panel {
     margin-bottom: 14px;
   }

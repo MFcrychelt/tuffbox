@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { Stethoscope, ArrowRight, X, AlertTriangle } from "@lucide/svelte";
-  import { launchWithFeedback } from "../lib/launch";
+  import { launchWithFeedback, launchingPath } from "../lib/launch";
   import {
     projectPath,
     ideStageRequest,
@@ -33,6 +33,9 @@
   let refreshing = $state(false);
   const launchSession = $derived($launchSessions[$projectPath ?? ""] ?? null);
   const launching = $derived(isProjectLaunching($projectPath, $launchSessions));
+  // launching is derived from the shared launch store so the Play button stays
+  // disabled until the game is actually running (process-started) or exits.
+  const launchingFromPath = $derived($launchingPath === $projectPath);
 
   const next = $derived(
     computeIdeNextAction({
