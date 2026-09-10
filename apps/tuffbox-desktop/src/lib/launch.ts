@@ -7,7 +7,6 @@ import type {
   LaunchCrashEvent,
   LaunchErrorInfo,
   LaunchLifecycleEvent,
-  LaunchPhase,
   LaunchResult,
   ProcessExitedEvent,
   RunningInstance,
@@ -33,7 +32,47 @@ import {
 import { shareCrashLogWithFeedback } from "./mclogs";
 import { reportSoftVerifyCrash } from "./softVerify";
 
-export type { LaunchErrorInfo, LaunchLifecycleEvent, LaunchPhase };
+export type { LaunchErrorInfo, LaunchLifecycleEvent };
+
+/** Unified launch-phase type used across the desktop UI. */
+export type LaunchPhase =
+  | "idle"
+  | "preparing"
+  | "preflight"
+  | "resolving_java"
+  | "downloading"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "exited"
+  | "failed";
+
+export interface LaunchFeedbackOptions {
+  onStarted?: (result: LaunchResult) => void;
+  showSuccess?: boolean;
+  openLog?: boolean;
+  /** Manifest path for the log modal (for example, a staged server dir). */
+  logPath?: string | null;
+  logTitle?: string | null;
+}
+
+// ─── Shared launch state machine ─────────────────────────────────────
+//
+// The backend exposes an explicit lifecycle through Tauri events so every Play
+// button in the app can render the same accurate state instead of each keeping
+// its own local `launching` flag that is reset the instant `invoke` returns
+// (BUG_REPORT Bug 2). Phases flow:
+//
+//   (user clicks Play)
+//     → "preparing"   (launchWithFeedback starts the invoke)
+//     → "resolving_java" / "downloading"  (optional, from `launch-phase` events)
+//     → "starting"    (JVM spawn begins)
+//     → "running"     (`process-started` / `launch-phase` running)
+//     → "exited"      (`process-exited` / `launch-crashed`)
+//
+// A path is considered "launching" for phases preparing…starting and stays that
+// way until the backend confirms `running` or the run ends — never reset by the
+// return of the invoke alone.
 
 export interface LaunchParams {
   path: string;
@@ -76,15 +115,6 @@ export interface LaunchFeedbackOptions {
 // way until the backend confirms `running` or the run ends — never reset by the
 // return of the invoke alone.
 
-export type LaunchPhase =
-  | "idle"
-  | "preparing"
-  | "resolving_java"
-  | "downloading"
-  | "starting"
-  | "running"
-  | "exited";
-
 export interface LaunchPhaseState {
   path: string;
   phase: LaunchPhase;
@@ -104,6 +134,27 @@ export const launchStates = writable<Record<string, LaunchPhaseState>>({});
  * This is the shared replacement for the per-component `launching` flags.
  */
 export const launchingPath = writable<string | null>(null);
+
+/**
+ * Shared "is any instance launching?" store. Driven by the same lifecycle
+ * events that update `launchingPath`. Components can subscribe to this instead
+ * of maintaining their own `launching` flag.
+ */
+export const isLaunching = writable(false);
+
+/**
+ * Shared launch progress state — used by the progress bar / detailed status
+ * messages in the header bar. Driven by `launch-phase` events from the backend.
+ */
+export const launchProgress = writable<{ phase: string; message: string; percent: number | null } | null>(null);
+
+/**
+ * The last LaunchParams passed to `launchWithFeedback`. Retained so the
+ * crash-retry flow can reconstruct the same launch call without asking the
+ * user to pick the instance again.
+ */
+let lastLaunch: LaunchParams | null = null;
+let lastOnStarted: ((result: LaunchResult) => void) | null = null;
 
 const LAUNCHING_PHASES: ReadonlySet<LaunchPhase> = new Set<LaunchPhase>([
   "preparing",

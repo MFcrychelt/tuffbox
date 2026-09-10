@@ -5,6 +5,7 @@
   import {
     PlayCircle, RefreshCw, TimerReset,
     Square, Stethoscope, Activity,
+    Terminal, Shield,
   } from "@lucide/svelte";
   import { onDestroy, onMount, tick } from "svelte";
   import {

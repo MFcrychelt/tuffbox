@@ -123,7 +123,6 @@
 
   async function runPlay() {
     if (!$projectPath || launching) return;
-    launching = true;
     try {
       await launchWithFeedback({ path: $projectPath, profile: "client" });
       // launchWithFeedback returns once the JVM is spawned; keep the spinner
@@ -145,11 +144,10 @@
       setTimeout(() => {
         if (!exited) {
           unlisten();
-          launching = false;
         }
       }, 15000);
     } catch {
-      launching = false;
+      // Error handled by launchWithFeedback's toast
     }
   }
 

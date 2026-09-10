@@ -16,6 +16,10 @@
     Trash2,
     Database,
     ArrowDownToLine,
+    FileText,
+    Bug,
+    Terminal,
+    Shield,
   } from "@lucide/svelte";
   import {
     diagnoseFocus,
@@ -2226,7 +2230,6 @@
       setTimeout(() => {
         if (!exited) {
           unlisten();
-          launching = false;
         }
       }, 15000);
       return;
