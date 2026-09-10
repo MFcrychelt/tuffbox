@@ -686,8 +686,11 @@ mod tests {
         let exit = ProcessExit {
             code: Some(1),
             duration_secs: 3,
+            started_at: 1000,
+            stop_requested: false,
         };
         assert_eq!(exit.code, Some(1));
         assert_eq!(exit.duration_secs, 3);
+        assert!(!exit.stop_requested);
     }
 }
