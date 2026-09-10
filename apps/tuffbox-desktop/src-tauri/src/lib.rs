@@ -4345,7 +4345,7 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
                 .iter()
                 .any(|l| l == project_loader || (project_loader == "quilt" && l == "fabric"));
             let mc_ok = latest.game_versions.iter().any(|v| v == project_mc);
-            let changelog = latest.changelog.trim();
+            let changelog = latest.changelog.as_deref().unwrap_or("").trim();
             let changelog_snippet: String = changelog
                 .chars()
                 .take(400)
@@ -4434,6 +4434,8 @@ async fn update_all_mods(
                     let mc_ok = latest.game_versions.iter().any(|v| v == project_mc);
                     let changelog_snippet: String = latest
                         .changelog
+                        .as_deref()
+                        .unwrap_or("")
                         .trim()
                         .chars()
                         .take(400)
@@ -14069,6 +14071,37 @@ fn emit_launch_phase(
     );
 }
 
+/// Convenience wrapper used by arena-style 4-arg calls in the launch path.
+/// Converts string phase to `LaunchPhase` enum and fills defaults for the
+/// remaining parameters.
+fn emit_launch_phase_simple(app: &tauri::AppHandle, path: &str, phase: &str, message: &str) {
+    let launch_phase = match phase {
+        "preparing" => LaunchPhase::Preflight,
+        "preflight" => LaunchPhase::Preflight,
+        "resolving_java" => LaunchPhase::ResolvingJava,
+        "downloading" => LaunchPhase::Downloading,
+        "starting" => LaunchPhase::Starting,
+        "running" => LaunchPhase::Running,
+        "stopping" => LaunchPhase::Stopping,
+        "exited" => LaunchPhase::Exited,
+        "failed" => LaunchPhase::Failed,
+        _ => LaunchPhase::Preflight,
+    };
+    emit_launch_phase(
+        app,
+        path,
+        "",
+        launch_phase,
+        message,
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
+}
+
 /// Outer error boundary for every client/profile launch. It deliberately
 /// converts *all* failures (including setup before the blocking task starts)
 /// into the same structured `LaunchErrorInfo` event used by asynchronous JVM
@@ -14281,20 +14314,6 @@ fn emit_launch_progress(
     );
 }
 
-/// `preparing` → `resolving_java` → `downloading` → `starting` → `running` →
-/// `exited`, keyed by the manifest path (the same id used by
-/// `process-started` / `process-exited` and `runningInstances`).
-fn emit_launch_phase(app: &tauri::AppHandle, path: &str, phase: &str, message: &str) {
-    let _ = app.emit(
-        "launch-phase",
-        serde_json::json!({
-            "path": path,
-            "phase": phase,
-            "message": message,
-        }),
-    );
-}
-
 /// A jar found in the instance's mods folder that was built for a different
 /// mod loader than the project uses.
 #[derive(Debug, Serialize)]
@@ -14405,7 +14424,7 @@ fn build_and_spawn(
             "This instance is already running. Stop it before launching again.",
         ));
     }
-    emit_launch_phase(&app, &path, "preparing", "Preparing profile…");
+    emit_launch_phase_simple(&app, &path, "preparing", "Preparing profile…");
 
     let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| {
         LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&console_log)
@@ -14542,7 +14561,7 @@ fn build_and_spawn(
     // For server runs, verify against the author project (source of jars);
     // the staged server dir already has a filtered copy.
     emit_launch_progress(&app, "mods", "Checking mods…", Some(35));
-    emit_launch_phase(&app, &path, "downloading", "Verifying content files…");
+    emit_launch_phase_simple(&app, &path, "downloading", "Verifying content files…");
     progress.log("# Verifying mod files...");
     // 'Play does not lie' preflight: catch wrong-loader jars here instead of
     // after a failed boot, and announce pending downloads up front.
@@ -14650,7 +14669,7 @@ fn build_and_spawn(
     }
 
     emit_launch_progress(&app, "install", "Installing Minecraft…", Some(55));
-    emit_launch_phase(&app, &path, "starting", "Installing Minecraft & starting JVM…");
+    emit_launch_phase_simple(&app, &path, "starting", "Installing Minecraft & starting JVM…");
     progress.log("# Installing Minecraft (this may take a while)...");
 
     let mut launch_jvm_args = project_profile.jvm_args.clone();
@@ -14912,7 +14931,7 @@ fn build_and_spawn(
                 stopped: exit.stop_requested,
             },
         );
-        emit_launch_phase(
+        emit_launch_phase_simple(
             &app_for_exit,
             &stats_path_for_exit,
             "exited",
@@ -14962,7 +14981,7 @@ fn build_and_spawn(
                 &project_dir,
                 exit.code,
                 exit.duration_secs,
-                Some(fp.key.clone()),
+                Some(fingerprint.key.clone()),
                 crash_report_abs.as_deref(),
             );
             let _ = pack_events::append_crash_detected(
@@ -14974,7 +14993,7 @@ fn build_and_spawn(
             );
             let _ = swarm_api::ensure_open_crash_episode_marker(
                 &project_dir,
-                &fp.key,
+                &fingerprint.key,
                 None,
             );
         }
@@ -16194,60 +16213,58 @@ fn clone_project(path: String, new_name: String) -> Result<String, String> {
 /// action — it doesn't pretend to fix arbitrary problems, but it does fix
 /// the most common real one (missing or corrupted content files).
 #[tauri::command(rename_all = "camelCase")]
-async fn repair_project(path: String) -> Result<tuffbox_core::ModSyncReport, String> {
-    tokio::task::spawn_blocking(move || {
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        let instance_dir = tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path))
-            .ok_or_else(|| "manifest has no parent directory".to_string())?;
-        // Surface the (possibly slow) re-download sweep in TaskProgress so the
-        // user sees why the UI is busy instead of a silent hang. Task id is
-        // stable (repair-<project id>) so the panel's cancel button works.
-        let task_id = format!("repair-{}", manifest.project.id);
-        if !tuffbox_core::task_progress::try_start_task(
-            task_id.clone(),
-            format!("Repair {}", manifest.project.name),
-        ) {
-            return Err(format!(
-                "Repair of {} is already running",
-                manifest.project.name
-            ));
+async fn repair_project(path: String) -> Result<serde_json::Value, String> {
+    let report = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || {
+            let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+            let instance_dir = tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path))
+                .ok_or_else(|| "manifest has no parent directory".to_string())?;
+            let task_id = format!("repair-{}", manifest.project.id);
+            if !tuffbox_core::task_progress::try_start_task(
+                task_id.clone(),
+                format!("Repair {}", manifest.project.name),
+            ) {
+                return Err(format!(
+                    "Repair of {} is already running",
+                    manifest.project.name
+                ));
+            }
+            tuffbox_core::task_progress::set_progress(&task_id, 0.1, Some("Checking mod files…".into()));
+            let report = tuffbox_core::ensure_project_mods_downloaded_cancellable(
+                &manifest,
+                &instance_dir,
+                &tuffbox_core::ProgressCallback::new(),
+                Some(&task_id),
+            );
+            if report
+                .skipped
+                .iter()
+                .any(|s| s.starts_with("__cancelled__"))
+            {
+                tuffbox_core::task_progress::mark_cancelled(&task_id, Some("cancelled by user".into()));
+                return Err("Repair cancelled".to_string());
+            }
+            let detail = if !report.downloaded.is_empty() {
+                format!("{} file(s) re-downloaded", report.downloaded.len())
+            } else {
+                "all files present".into()
+            };
+            tuffbox_core::task_progress::succeed(&task_id, Some(detail));
+            Ok(report)
         }
-        tuffbox_core::task_progress::set_progress(&task_id, 0.1, Some("Checking mod files…".into()));
-        let report = tuffbox_core::ensure_project_mods_downloaded_cancellable(
-            &manifest,
-            &instance_dir,
-            &tuffbox_core::ProgressCallback::new(),
-            Some(&task_id),
-        );
-        if report
-            .skipped
-            .iter()
-            .any(|s| s.starts_with("__cancelled__"))
-        {
-            tuffbox_core::task_progress::mark_cancelled(&task_id, Some("cancelled by user".into()));
-            return Err("Repair cancelled".to_string());
-        }
-        let detail = if !report.downloaded.is_empty() {
-            format!("{} file(s) re-downloaded", report.downloaded.len())
-        } else {
-            "all files present".into()
-        };
-        tuffbox_core::task_progress::succeed(&task_id, Some(detail));
-        Ok(report)
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    // Also surface duplicate jars and wrong-loader jars in the same report so
-    // a single "Repair" pass reports everything the user must act on.
     let duplicates = detect_duplicate_mod_jars(path.clone()).await.unwrap_or_default();
     let wrong_loader = detect_wrong_loader_mods(path).await.unwrap_or_default();
 
     Ok(serde_json::json!({
-        "downloaded": sync.downloaded,
-        "failed": sync.failed,
-        "alreadyPresent": sync.already_present,
-        "skipped": sync.skipped,
+        "downloaded": report.downloaded,
+        "failed": report.failed,
+        "alreadyPresent": report.already_present,
+        "skipped": report.skipped,
         "duplicates": duplicates,
         "wrongLoader": wrong_loader,
     }))
@@ -17353,52 +17370,6 @@ fn remove_superseded_mod_files(
         sha1: old_mod.hashes.as_ref().and_then(|h| h.sha1.as_deref()),
     };
     superseded_cleanup::remove_superseded_in_dir(&content_dir, &old, new_mod.file_name.as_deref());
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        let base = name.strip_suffix(".disabled").unwrap_or(name.as_str());
-        if !(base.ends_with(".jar") || base.ends_with(".zip")) {
-            continue;
-        }
-        if keep_name == Some(base) {
-            continue;
-        }
-        // Never remove a file still tracked by ANOTHER live mod (e.g. a
-        // sibling like sodium-extra when updating sodium) — the slug-prefix
-        // heuristic below must not cross mod boundaries.
-        if tracked_bases.contains(base) {
-            continue;
-        }
-
-        let mut remove = old_name == Some(base);
-        if !remove {
-            if let Some(ref expected) = old_sha1 {
-                if let Ok(actual) = tuffbox_core::sha1_file(&path) {
-                    if actual.eq_ignore_ascii_case(expected) {
-                        remove = true;
-                    }
-                }
-            }
-        }
-        // Also drop leftover jars that share the mod slug as a filename prefix
-        // (e.g. sodium-fabric-0.5.0.jar after updating to sodium-fabric-0.5.8.jar).
-        if !remove {
-            let id = old_mod.id.to_lowercase().replace('_', "-");
-            let base_l = base.to_lowercase();
-            if !id.is_empty()
-                && (base_l.starts_with(&id) || base_l.starts_with(&format!("{id}-")))
-                && keep_name != Some(base)
-            {
-                remove = true;
-            }
-        }
-        if remove {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
 }
 
 fn refresh_modrinth_file_metadata(
