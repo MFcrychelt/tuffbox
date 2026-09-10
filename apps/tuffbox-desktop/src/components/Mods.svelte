@@ -3056,15 +3056,67 @@ import { trapFocus } from "../lib/focusTrap";
 
   <div class="toolbar">
     <div class="tabs content-tabs">
-      <button class={contentFilter === "mod" ? "primary" : "secondary"} onclick={() => switchContentFilter("mod")}>Mods <span class="tab-count">{tabCounts.mod}</span></button>
-      <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} onclick={() => switchContentFilter("resourcepack")}>Resourcepacks <span class="tab-count">{tabCounts.resourcepack}</span></button>
-      <button class={contentFilter === "datapack" ? "primary" : "secondary"} onclick={() => switchContentFilter("datapack")}>Datapacks <span class="tab-count">{tabCounts.datapack}</span></button>
-      <button class={contentFilter === "shader" ? "primary" : "secondary"} onclick={() => switchContentFilter("shader")}>Shaders <span class="tab-count">{tabCounts.shader}</span></button>
-      <button class={contentFilter === "favorites" ? "primary" : "secondary"} onclick={() => switchContentFilter("favorites")} title="Favorite Modrinth projects">
+      <button
+        type="button"
+        class="content-tab-btn"
+        class:active={contentFilter === "mod"}
+        class:primary={contentFilter === "mod"}
+        class:secondary={contentFilter !== "mod"}
+        onclick={() => switchContentFilter("mod")}
+      >
+        Mods <span class="tab-count">{tabCounts.mod}</span>
+      </button>
+      <button
+        type="button"
+        class="content-tab-btn"
+        class:active={contentFilter === "resourcepack"}
+        class:primary={contentFilter === "resourcepack"}
+        class:secondary={contentFilter !== "resourcepack"}
+        onclick={() => switchContentFilter("resourcepack")}
+      >
+        Resourcepacks <span class="tab-count">{tabCounts.resourcepack}</span>
+      </button>
+      <button
+        type="button"
+        class="content-tab-btn"
+        class:active={contentFilter === "datapack"}
+        class:primary={contentFilter === "datapack"}
+        class:secondary={contentFilter !== "datapack"}
+        onclick={() => switchContentFilter("datapack")}
+      >
+        Datapacks <span class="tab-count">{tabCounts.datapack}</span>
+      </button>
+      <button
+        type="button"
+        class="content-tab-btn"
+        class:active={contentFilter === "shader"}
+        class:primary={contentFilter === "shader"}
+        class:secondary={contentFilter !== "shader"}
+        onclick={() => switchContentFilter("shader")}
+      >
+        Shaders <span class="tab-count">{tabCounts.shader}</span>
+      </button>
+      <button
+        type="button"
+        class="content-tab-btn"
+        class:active={contentFilter === "favorites"}
+        class:primary={contentFilter === "favorites"}
+        class:secondary={contentFilter !== "favorites"}
+        onclick={() => switchContentFilter("favorites")}
+        title="Favorite Modrinth projects"
+      >
         <Heart size={14} /> Favorites
       </button>
       {#each listTabNames as listName (listName)}
-        <button class={contentFilter === `list:${listName}` ? "primary" : "secondary"} onclick={() => switchContentFilter(`list:${listName}`)} title="Saved build list">
+        <button
+          type="button"
+          class="content-tab-btn"
+          class:active={contentFilter === `list:${listName}`}
+          class:primary={contentFilter === `list:${listName}`}
+          class:secondary={contentFilter !== `list:${listName}`}
+          onclick={() => switchContentFilter(`list:${listName}`)}
+          title="Saved build list"
+        >
           <Bookmark size={14} /> {listName}
           <span class="tab-count">{userState.lists[listName]?.length ?? 0}</span>
         </button>
@@ -3121,7 +3173,7 @@ import { trapFocus } from "../lib/focusTrap";
     <div class="control-actions">
     <button
       type="button"
-      class="ghost mini glow-btn ideas-accent"
+      class="action-btn glow-btn ideas-accent"
       onclick={loadRecommendations}
       disabled={!$projectPath || recsLoading || contentFilter !== "mod"}
       title="Suggest optimization mods for this loader, Minecraft version, and pack"
@@ -3131,7 +3183,7 @@ import { trapFocus } from "../lib/focusTrap";
     </button>
     <button
       type="button"
-      class="ghost mini"
+      class="action-btn optimize-btn"
       onclick={() => { actionsMenuOpen = false; optimizePackOpen = true; }}
       disabled={!$projectPath || contentFilter !== "mod"}
       title="Install performance mods and safe config patches"
@@ -3142,7 +3194,7 @@ import { trapFocus } from "../lib/focusTrap";
     <div class="more-wrap">
       <button
         type="button"
-        class="ghost mini more-toggle"
+        class="action-btn more-toggle"
         aria-expanded={actionsMenuOpen}
         aria-haspopup="menu"
         onclick={() => (actionsMenuOpen = !actionsMenuOpen)}
@@ -5299,9 +5351,77 @@ import { trapFocus } from "../lib/focusTrap";
 
   .content-tabs {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     overflow-x: auto;
     padding-bottom: 2px;
+  }
+
+  .content-tabs .content-tab-btn,
+  .content-tabs button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-bottom-width: 1px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      background var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease),
+      color var(--motion-fast) var(--motion-ease),
+      box-shadow var(--motion-fast) var(--motion-ease);
+  }
+
+  .content-tabs .content-tab-btn:hover:not(.active),
+  .content-tabs button:hover:not(.active):not(.primary) {
+    background: var(--bg-hover);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+    color: var(--text-primary);
+  }
+
+  .content-tabs .content-tab-btn.active,
+  .content-tabs .content-tab-btn.primary,
+  .content-tabs button.active,
+  .content-tabs button.primary {
+    background: var(--accent-primary) !important;
+    border-color: var(--accent-primary) !important;
+    border-bottom-color: var(--accent-primary) !important;
+    color: var(--on-accent, #ffffff) !important;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 28%, transparent);
+  }
+
+  .content-tabs .content-tab-btn.active:hover:not(:disabled),
+  .content-tabs .content-tab-btn.primary:hover:not(:disabled),
+  .content-tabs button.active:hover:not(:disabled),
+  .content-tabs button.primary:hover:not(:disabled) {
+    background: var(--accent-hover, var(--accent-primary)) !important;
+    filter: brightness(1.08);
+  }
+
+  .content-tabs .tab-count,
+  .tabs .tab-count {
+    margin-left: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
+  }
+
+  .content-tabs .content-tab-btn.active .tab-count,
+  .content-tabs .content-tab-btn.primary .tab-count,
+  .content-tabs button.active .tab-count,
+  .content-tabs button.primary .tab-count {
+    background: color-mix(in srgb, var(--on-accent, #ffffff) 24%, transparent) !important;
+    color: var(--on-accent, #ffffff) !important;
   }
 
   .control-row {
@@ -5315,101 +5435,148 @@ import { trapFocus } from "../lib/focusTrap";
   .control-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     flex-wrap: wrap;
     margin-left: auto;
     min-width: 0;
   }
 
+  .control-actions button,
+  .control-actions .action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 38px;
+    padding: 0 13px;
+    border: 1px solid var(--border-color);
+    border-bottom-width: 1px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      color var(--motion-fast) ease,
+      box-shadow var(--motion-fast) ease;
+  }
+
+  .control-actions button:hover:not(:disabled),
+  .control-actions .action-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+  }
+
+  .control-actions button:disabled,
+  .control-actions .action-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
   .side-segment {
     display: inline-flex;
-    align-items: stretch;
+    align-items: center;
     flex-shrink: 0;
     padding: 2px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     background: var(--bg-secondary);
-    gap: 0;
+    gap: 2px;
   }
 
   .side-segment button {
     appearance: none;
-    border: none;
+    border: 1px solid transparent;
+    border-bottom-width: 1px;
     background: transparent;
-    color: var(--text-muted);
-    padding: 6px 10px;
+    color: var(--text-secondary);
+    padding: 5px 11px;
     font: inherit;
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    border-radius: 0;
-    transition: background 0.15s, color 0.15s;
+    border-radius: var(--border-radius-sm);
+    transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
     white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
   }
 
-  .side-segment button:first-child {
-    border-radius: calc(var(--border-radius-md) - 2px) 0 0 calc(var(--border-radius-md) - 2px);
-  }
-
-  .side-segment button:last-child {
-    border-radius: 0 calc(var(--border-radius-md) - 2px) calc(var(--border-radius-md) - 2px) 0;
-  }
-
+  .side-segment button:first-child,
+  .side-segment button:last-child,
   .side-segment button:only-child {
-    border-radius: calc(var(--border-radius-md) - 2px);
+    border-radius: var(--border-radius-sm);
   }
 
-  .side-segment button:hover {
-    color: var(--text-secondary);
+  .side-segment button:hover:not(.active) {
+    color: var(--text-primary);
     background: var(--bg-hover);
   }
 
   .side-segment button.active {
-    background: var(--accent-primary);
-    color: var(--on-accent);
+    background: var(--accent-primary) !important;
+    border-color: var(--accent-primary) !important;
+    border-bottom-color: var(--accent-primary) !important;
+    color: var(--on-accent, #ffffff) !important;
+    box-shadow: 0 1px 4px color-mix(in srgb, var(--accent-primary) 30%, transparent);
   }
 
   .side-segment button.active span {
-    color: rgba(4, 20, 10, 0.7);
+    color: var(--on-accent, #ffffff) !important;
+    opacity: 0.9;
   }
 
   .side-segment span {
-    margin-left: 4px;
-    font-weight: 500;
+    margin-left: 5px;
+    font-weight: 700;
     opacity: 0.75;
   }
 
   .layout-segment {
     display: inline-flex;
-    align-items: stretch;
+    align-items: center;
     border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-sm);
-    overflow: hidden;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+    padding: 2px;
+    gap: 2px;
     flex-shrink: 0;
   }
   .layout-segment button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
+    width: 32px;
     height: 32px;
     padding: 0;
-    border: 0;
-    border-radius: 0;
-    background: var(--bg-tertiary);
-    color: var(--text-muted);
+    border: 1px solid transparent;
+    border-bottom-width: 1px;
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
     cursor: pointer;
+    transition:
+      background var(--motion-fast) ease,
+      color var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      box-shadow var(--motion-fast) ease;
   }
   .layout-segment button + button {
-    border-left: 1px solid var(--border-color);
+    border-left: 1px solid transparent;
   }
-  .layout-segment button:hover {
+  .layout-segment button:hover:not(.active) {
     color: var(--text-primary);
-    background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-tertiary));
+    background: var(--bg-hover);
   }
   .layout-segment button.active {
-    color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    color: var(--on-accent, #ffffff) !important;
+    background: var(--accent-primary) !important;
+    border-color: var(--accent-primary) !important;
+    border-bottom-color: var(--accent-primary) !important;
+    box-shadow: 0 1px 4px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
 
   .installed-dual {
@@ -5430,10 +5597,10 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     flex-direction: column;
     gap: 10px;
-    padding: 10px;
+    padding: 12px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
-    background: color-mix(in srgb, var(--bg-tertiary) 55%, transparent);
+    background: var(--bg-secondary);
     /* Fill the scrollable mods-list column: grow to at least the available
        height, keep a generous cap for very wide/short windows. min() makes
        tall screens use more vertical space than the old fixed 70vh. */
@@ -5459,17 +5626,34 @@ import { trapFocus } from "../lib/focusTrap";
     justify-content: space-between;
     gap: 8px;
     position: sticky;
-    top: 0;
-    z-index: 1;
-    padding: 2px 2px 8px;
-    background: color-mix(in srgb, var(--bg-tertiary) 92%, transparent);
+    top: -12px;
+    z-index: 2;
+    margin: -12px -12px 10px -12px;
+    padding: 10px 14px;
+    background: color-mix(in srgb, var(--bg-secondary) 94%, transparent);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border-color);
+    border-top-left-radius: calc(var(--border-radius-lg) - 1px);
+    border-top-right-radius: calc(var(--border-radius-lg) - 1px);
   }
   .installed-pane-header strong {
     font-size: 13px;
-    letter-spacing: 0.02em;
+    font-weight: 700;
+    letter-spacing: 0.03em;
     text-transform: uppercase;
+    color: var(--text-primary);
+  }
+  .installed-pane-header .tab-count,
+  .installed-pane-header .pane-count {
+    margin-left: 6px;
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--bg-elevated);
     color: var(--text-secondary);
+    border: 1px solid var(--border-color);
   }
   .installed-pane-empty {
     margin: 0;
@@ -5514,7 +5698,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .toolbar-search input {
     width: 100%;
-    min-height: 40px;
+    min-height: 38px;
     box-sizing: border-box;
     padding: 8px 12px 8px 40px;
     border: 1px solid var(--border-color);
@@ -5522,7 +5706,7 @@ import { trapFocus } from "../lib/focusTrap";
     background: var(--bg-elevated);
     color: var(--text-primary);
     font: inherit;
-    font-size: 14px;
+    font-size: 13.5px;
   }
 
   .toolbar-search input::placeholder {
@@ -5538,8 +5722,14 @@ import { trapFocus } from "../lib/focusTrap";
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    min-height: 40px;
-    padding: 8px 12px;
+    min-height: 38px;
+    padding: 0 13px;
+  }
+
+  .more-toggle[aria-expanded="true"] {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
   }
 
   .more-backdrop {
@@ -5554,10 +5744,10 @@ import { trapFocus } from "../lib/focusTrap";
     top: calc(100% + 4px);
     z-index: 50;
     min-width: 200px;
-    background: var(--bg-secondary, #151922);
-    border: 1px solid var(--border-color, #2a2f3a);
-    border-radius: var(--border-radius-sm);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
     padding: 4px;
     display: flex;
     flex-direction: column;
@@ -5572,16 +5762,18 @@ import { trapFocus } from "../lib/focusTrap";
     text-align: left;
     padding: 8px 10px;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--border-radius-sm);
     background: transparent;
-    color: var(--text-primary, #e8ecf4);
-    font-size: 12px;
+    color: var(--text-primary);
+    font-size: 12.5px;
     font-weight: 500;
     cursor: pointer;
+    transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
   }
 
   .more-item:hover:not(:disabled) {
     background: var(--bg-hover);
+    color: var(--text-primary);
   }
 
   .more-item:disabled {
@@ -5591,36 +5783,32 @@ import { trapFocus } from "../lib/focusTrap";
 
   .more-item.has-updates {
     color: var(--accent-primary);
+    font-weight: 600;
   }
 
   .glow-btn,
   .ideas-accent {
     position: relative;
-    flex-shrink: 0;
-    min-height: 40px;
-    padding: 8px 12px !important;
-    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent) !important;
-    background:
-      linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 18%, transparent), rgba(56, 189, 248, 0.1)) !important;
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color)) !important;
+    background: color-mix(in srgb, var(--accent-primary) 12%, var(--bg-secondary)) !important;
     color: var(--accent-primary) !important;
     box-shadow:
       0 0 0 1px color-mix(in srgb, var(--accent-primary) 15%, transparent),
-      0 0 14px color-mix(in srgb, var(--accent-primary) 18%, transparent);
-    font-weight: 600 !important;
+      0 0 12px color-mix(in srgb, var(--accent-primary) 18%, transparent) !important;
+    font-weight: 700 !important;
   }
 
   .ideas-accent:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--accent-primary) 65%, transparent) !important;
-    background:
-      linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 28%, transparent), rgba(56, 189, 248, 0.16)) !important;
+    border-color: var(--accent-primary) !important;
+    background: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-secondary)) !important;
     box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--accent-primary) 28%, transparent),
-      0 0 18px color-mix(in srgb, var(--accent-primary) 28%, transparent);
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 25%, transparent),
+      0 0 16px color-mix(in srgb, var(--accent-primary) 25%, transparent) !important;
   }
 
   .ideas-accent:disabled {
     opacity: 0.45;
-    box-shadow: none;
+    box-shadow: none !important;
   }
 
   .ideas-toggle {
@@ -5628,17 +5816,23 @@ import { trapFocus } from "../lib/focusTrap";
     align-items: center;
     justify-content: center;
     gap: 6px;
-    min-width: 36px;
-    height: 36px;
-    padding: 0 10px;
-    border-radius: var(--border-radius-sm);
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--text-muted);
+    min-height: 38px;
+    padding: 0 12px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
     cursor: pointer;
     user-select: none;
     flex-shrink: 0;
     position: relative;
+    font-size: 12.5px;
+    font-weight: 600;
+    transition:
+      background var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      color var(--motion-fast) ease,
+      box-shadow var(--motion-fast) ease;
   }
   .ideas-toggle-label {
     font-size: 12px;
@@ -5650,7 +5844,7 @@ import { trapFocus } from "../lib/focusTrap";
       display: none;
     }
     .ideas-toggle {
-      width: 36px;
+      width: 38px;
       padding: 0;
     }
   }
@@ -5661,18 +5855,21 @@ import { trapFocus } from "../lib/focusTrap";
     cursor: pointer;
     margin: 0;
   }
+  .ideas-toggle:hover:not(.on) {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+  }
   .ideas-toggle.on {
     color: var(--accent-primary);
-    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
-    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-  }
-  .ideas-toggle:hover {
-    color: var(--text-secondary);
-    background: var(--bg-hover);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 12%, var(--bg-secondary));
+    box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 20%, transparent);
   }
   .ideas-toggle.on:hover {
     color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 20%, var(--bg-secondary));
+    border-color: var(--accent-primary);
   }
   .ideas-dialog {
     max-width: 420px;

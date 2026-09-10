@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Trash2 } from "@lucide/svelte";
+  import { Trash2, Plus, Sparkles, Trophy, CheckSquare, Coins } from "@lucide/svelte";
   import type { QuestData, QuestReward, QuestTask } from "../../lib/api";
   import {
     REWARD_TYPE_OPTIONS,
@@ -20,11 +20,13 @@
     onDirty,
     rewardTableIds = [],
     onOpenKubeJs,
+    section = "all",
   }: {
     quest: QuestData;
     onDirty: () => void;
     rewardTableIds?: string[];
     onOpenKubeJs?: (id: string) => void;
+    section?: "all" | "tasks" | "rewards";
   } = $props();
 
   function newId(len = 12) {
@@ -363,18 +365,42 @@
   }
 </script>
 
+{#if section === "all" || section === "tasks"}
 <section class="tr ftbq-tr" id="quest-how-to-prove">
-  <div class="tr-h">
-    <h4>How to prove</h4>
-    <div class="add-row">
-      <select onchange={onPickTaskType}>
-        <option value="">+ Task…</option>
+  <div class="tr-h flex items-center justify-between gap-2">
+    <div class="flex items-center gap-2">
+      <CheckSquare size={14} class="text-[var(--accent-primary)]" />
+      <h4>How to prove ({quest.tasks?.length ?? 0})</h4>
+    </div>
+    <div class="add-row flex items-center gap-2">
+      <select onchange={onPickTaskType} class="add-type-select">
+        <option value="">+ Add Task…</option>
         {#each TASK_TYPE_OPTIONS as t (t.id)}
           <option value={t.id}>{t.label}</option>
         {/each}
       </select>
     </div>
   </div>
+
+  {#if (!quest.tasks || quest.tasks.length === 0)}
+    <div class="tr-empty-box">
+      <p class="tr-empty-msg">No tasks yet. Choose how players complete this quest:</p>
+      <div class="tr-quick-actions">
+        <button type="button" class="quick-add-btn" onclick={() => addTask("item")}>
+          + Item task
+        </button>
+        <button type="button" class="quick-add-btn" onclick={() => addTask("checkmark")}>
+          + Checkmark
+        </button>
+        <button type="button" class="quick-add-btn" onclick={() => addTask("kill")}>
+          + Kill mob
+        </button>
+        <button type="button" class="quick-add-btn" onclick={() => addTask("xp")}>
+          + XP
+        </button>
+      </div>
+    </div>
+  {/if}
 
   {#each quest.tasks as task, i (task.id)}
     <div class="card">
@@ -757,18 +783,42 @@
       </details>
     </div>
   {/each}
+</section>
+{/if}
 
-  <div class="tr-h">
-    <h4>What you get</h4>
-    <div class="add-row">
-      <select onchange={onPickRewardType}>
-        <option value="">+ Reward type…</option>
+{#if section === "all" || section === "rewards"}
+<section class="tr ftbq-tr" id="quest-what-you-get">
+  <div class="tr-h flex items-center justify-between gap-2">
+    <div class="flex items-center gap-2">
+      <Trophy size={14} class="text-[var(--accent-warning)]" />
+      <h4>What you get ({quest.rewards?.length ?? 0})</h4>
+    </div>
+    <div class="add-row flex items-center gap-2">
+      <select onchange={onPickRewardType} class="add-type-select">
+        <option value="">+ Add Reward…</option>
         {#each REWARD_TYPE_OPTIONS as t (t.id)}
           <option value={t.id}>{t.label}</option>
         {/each}
       </select>
     </div>
   </div>
+
+  {#if (!quest.rewards || quest.rewards.length === 0)}
+    <div class="tr-empty-box">
+      <p class="tr-empty-msg">No rewards yet. Add XP, items, or loot tables:</p>
+      <div class="tr-quick-actions">
+        <button type="button" class="quick-add-btn" onclick={() => addReward("xp")}>
+          + XP reward
+        </button>
+        <button type="button" class="quick-add-btn" onclick={() => addReward("item")}>
+          + Item reward
+        </button>
+        <button type="button" class="quick-add-btn" onclick={() => addReward("random")}>
+          + Random loot
+        </button>
+      </div>
+    </div>
+  {/if}
 
   {#each quest.rewards as reward, i (reward.id)}
     <div class="card">
@@ -981,6 +1031,7 @@
     </div>
   {/each}
 </section>
+{/if}
 
 <style>
   .tr {
@@ -993,10 +1044,68 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 10px 12px 8px;
-    background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
-    border-top: 1px solid var(--ftbq-frame);
-    border-bottom: 1px solid var(--ftbq-frame);
+    padding: 10px 14px;
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    border-bottom: 1px solid var(--border-color, var(--ftbq-frame));
+  }
+  .tr-h h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary, var(--ftbq-text));
+    letter-spacing: -0.01em;
+  }
+  .add-type-select {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 10px;
+    background: var(--bg-card, var(--ftbq-btn-top));
+    border: 1px solid var(--border-color, var(--ftbq-frame));
+    color: var(--text-primary, var(--ftbq-text));
+    border-radius: var(--border-radius-sm, 6px);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .add-type-select:hover {
+    border-color: var(--accent-primary);
+    background: var(--bg-hover);
+  }
+  .tr-empty-box {
+    padding: 18px 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    text-align: center;
+    background: color-mix(in srgb, var(--bg-primary) 40%, transparent);
+    border-bottom: 1px dashed var(--border-color, var(--ftbq-border));
+  }
+  .tr-empty-msg {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-muted, var(--ftbq-text-muted));
+  }
+  .tr-quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+  }
+  .quick-add-btn {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 10px;
+    background: var(--bg-card, var(--bg-elevated));
+    border: 1px solid var(--border-color, var(--ftbq-frame));
+    color: var(--text-secondary, var(--ftbq-text));
+    border-radius: var(--border-radius-sm, 6px);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .quick-add-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
   }
   .tr-h h4 {
     margin: 0;

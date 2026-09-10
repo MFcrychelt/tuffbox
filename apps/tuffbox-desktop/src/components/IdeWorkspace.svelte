@@ -447,6 +447,7 @@
         activeStage === "configs" ||
         activeStage === "world-map" ||
         activeStage === "brief" ||
+        activeStage === "setup" ||
         activeStage === "quests" ||
         activeStage === "content" ||
         activeStage === "resolve" ||
@@ -631,7 +632,8 @@
     height: 100%;
   }
 
-  .stage-content.fill-stage > :global(.brief-editor) {
+  .stage-content.fill-stage > :global(.brief-editor),
+  .stage-content.fill-stage > :global(.settings-page) {
     flex: 1;
     min-height: 0;
     height: 100%;

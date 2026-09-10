@@ -10,6 +10,9 @@
     PanelRightClose,
     GitBranch,
     MessageSquareText,
+    AlertCircle,
+    Info,
+    Code,
   } from "@lucide/svelte";
   import {
     api,
@@ -126,20 +129,20 @@
   const EXAMPLE_CHIPS_BY_LANG: Record<"en" | "ru", ExampleChip[]> = {
     en: [
       {
-        label: "24-quest line",
-        text: "24-quest line: early game → nether, with descriptions and rewards",
+        label: "24-quest progression",
+        text: "24-quest progression line: early game → nether, with descriptions and item rewards",
       },
       {
         label: "3 chapters",
         text: "3 chapters: early / mid / late progression with about 18 quests total",
       },
       {
-        label: "Create early game",
-        text: "Create a 16-quest chapter for Create mod early progression with lore and XP rewards",
+        label: "Create mod starter",
+        text: "16-quest chapter for Create mod early kinetic progression with lore and rewards",
       },
       {
-        label: "Numbered list",
-        text: "chapter 1: start — 1. gather 10 wood, 2. mine 20 cobblestone — reward 10 sticks",
+        label: "Magic & Alchemy",
+        text: "12-quest branch focusing on brewing, potions, and enchanted gear",
       },
     ],
     ru: [
@@ -152,12 +155,12 @@
         text: "3 главы: early / mid / late прогрессия, около 18 квестов всего",
       },
       {
-        label: "Create early game",
-        text: "глава Create early game на 16 квестов с лором и XP наградами",
+        label: "Create starter",
+        text: "глава Create early game на 16 квестов с кинетикой, лором и наградами",
       },
       {
-        label: "Нумерованный список",
-        text: "глава 1: начало — 1. добудь 10 дерева, 2. накопай 20 булыги — награда 10 палок",
+        label: "Магия и зелья",
+        text: "линейка на 12 квестов: зельеварение, зачарования и алхимия",
       },
     ],
   };
@@ -181,7 +184,6 @@
     if (pin != null) parts.push(`${formatTokens(pin)} in`);
     if (cout != null) parts.push(`${formatTokens(cout)} out`);
     if (tot != null && (pin == null || cout == null)) parts.push(`${formatTokens(tot)} tot`);
-    // Rough OpenAI-class mid-tier estimate ($/1M); local Ollama shows tokens only when cost ~0.
     let costHint = "";
     if (pin != null || cout != null) {
       const usd = ((pin ?? 0) * 0.15 + (cout ?? 0) * 0.6) / 1_000_000;
@@ -248,6 +250,27 @@
     progressLog = [...progressLog, line];
   }
 
+  /** Format raw Rust / Serde / schema errors into friendly user-facing messages */
+  function friendlyErrorMessage(rawMsg: string): string {
+    const msg = rawMsg.toLowerCase();
+    if (msg.includes("missing field `title`") || msg.includes("missing field `quests`") || msg.includes("invalid type")) {
+      return "AI generated output with missing or unexpected fields. Try simplifying your prompt or asking for fewer quests.";
+    }
+    if (msg.includes("connection refused") || msg.includes("failed to connect") || msg.includes("11434")) {
+      return "Unable to connect to local Ollama. Please check if Ollama is running or configure Settings → AI.";
+    }
+    if (msg.includes("rate limit") || msg.includes("429") || msg.includes("quota")) {
+      return "AI provider rate limit reached. Please wait a moment before sending another prompt.";
+    }
+    if (msg.includes("context length") || msg.includes("maximum context") || msg.includes("tokens")) {
+      return "The prompt and quest plan exceeded the AI context window. Try splitting into smaller chapters.";
+    }
+    if (msg.includes("json error") || msg.includes("syntax error") || msg.includes("trailing comma")) {
+      return "AI output contained invalid JSON syntax. Please retry or adjust prompt specificity.";
+    }
+    return rawMsg.replace(/^Error:\s*/i, "");
+  }
+
   /** When an anchor quest is selected, default the next send to "branch". */
   $effect(() => {
     if (anchorQuest && pendingIntent === "generate") {
@@ -277,7 +300,7 @@
       sessions = (await api.quests.listChats($projectPath)).sessions;
     } catch (e) {
       sessions = [];
-      error = String(e);
+      error = friendlyErrorMessage(String(e));
     }
   }
 
@@ -300,7 +323,7 @@
         );
       }
     } catch (e) {
-      error = String(e);
+      error = friendlyErrorMessage(String(e));
     }
   }
 
@@ -314,7 +337,7 @@
       streamDraft = "";
       await refreshList();
     } catch (e) {
-      error = String(e);
+      error = friendlyErrorMessage(String(e));
     }
   }
 
@@ -337,7 +360,7 @@
       }
       await refreshList();
     } catch (e) {
-      error = String(e);
+      error = friendlyErrorMessage(String(e));
     }
   }
 
@@ -353,7 +376,7 @@
         $projectPath,
       );
     } catch (e) {
-      error = String(e);
+      error = friendlyErrorMessage(String(e));
     } finally {
       busy = false;
     }
@@ -366,7 +389,7 @@
       aiReadyHint = result;
       return true;
     } catch (e) {
-      error = `AI not ready: ${String(e)}. Open Settings → AI and configure Ollama / a cloud API.`;
+      error = `AI provider not connected: ${friendlyErrorMessage(String(e))}. Check Settings → AI to verify your configuration.`;
       return false;
     }
   }
@@ -391,17 +414,17 @@
     busy = true;
     error = "";
     loreWarning = "";
-    progressLog = ["Starting…"];
+    progressLog = ["Starting generation…"];
     streamDraft = "";
     try {
       if (showJson && rawJson.trim()) {
         merge = await api.quests.parseAndMergePlan(rawJson, $projectPath);
-        progressLog = ["Parsed pasted QuestPlan JSON"];
+        progressLog = ["Parsed QuestPlan JSON"];
         input = "";
       } else {
         const useForceAi = forceAi;
         if (useForceAi && useIntent !== "lore") {
-          progressLog = ["Checking AI…"];
+          progressLog = ["Checking AI provider…"];
           const ok = await preflightAi();
           if (!ok) return;
         }
@@ -415,19 +438,19 @@
           const saveOutcome = await onsavechapter(targetChapterId);
           if (saveOutcome === "cancelled") {
             progressLog = [...progressLog, "Branch aborted — anchor chapter not saved"];
-            composerHint = "Branch aborted: the anchor quest chapter was not saved. Save it first, then retry.";
+            composerHint = "Branch aborted: anchor chapter was not saved.";
             return;
           }
           if (saveOutcome === "error") {
             progressLog = [...progressLog, "Error: anchor chapter save failed"];
-            error = "Failed to save the anchor quest chapter. Check the editor for details, then retry.";
+            error = "Failed to save the anchor chapter. Please check editor errors and retry.";
             return;
           }
           progressLog = [
             ...progressLog,
             saveOutcome === "saved"
               ? "Anchor chapter saved"
-              : "Anchor chapter already up to date",
+              : "Anchor chapter up to date",
           ];
         }
         const msg =
@@ -460,23 +483,23 @@
         lastUsage = result.usage ?? result.session.messages.at(-1)?.usage ?? null;
         const logJoined = progressLog.join("\n");
         if (/offline heuristic/i.test(logJoined)) {
-          loreWarning = "Used offline heuristic (no LLM). Enable Force AI for full generation.";
+          loreWarning = "Used offline generation template. Enable 'Force AI' in Advanced settings for full LLM.";
         }
         if (/Lore AI unavailable|Lore fail|template fill/i.test(logJoined)) {
           loreWarning =
             (loreWarning ? loreWarning + " " : "") +
-            "Lore used templates — AI lore pass failed or was skipped.";
+            "Quest lore used default fallback templates.";
         }
         input = "";
         await refreshList();
       }
     } catch (e) {
-      const msg = String(e);
-      if (/cancelled/i.test(msg)) {
+      const rawMsg = String(e);
+      if (/cancelled/i.test(rawMsg)) {
         error = "";
         progressLog = [...progressLog, "Cancelled"];
       } else {
-        const rawMatch = msg.match(
+        const rawMatch = rawMsg.match(
           /<<<QUEST_RAW_JSON>>>\r?\n?([\s\S]*?)\r?\n?<<<END_QUEST_RAW_JSON>>>/,
         );
         const recovered = (rawMatch?.[1] ?? streamDraft).trim();
@@ -484,15 +507,12 @@
           rawJson = recovered;
           showJson = true;
           composerHint =
-            "AI JSON saved in the editor — fix arrays (desc/tasks must be lists) and Apply";
-          error = msg
-            .replace(/<<<QUEST_RAW_JSON>>>[\s\S]*<<<END_QUEST_RAW_JSON>>>/, "")
-            .trim();
+            "AI output had syntax formatting issues. Recovered raw JSON has been loaded into the editor.";
+          error = "The AI generated response had formatting issues. Raw JSON has been restored for manual review.";
         } else {
-          error = msg;
+          error = friendlyErrorMessage(rawMsg);
         }
-        progressLog = [...progressLog, `Error: ${error || msg}`];
-        // Reload chat — backend may have persisted the raw output.
+        progressLog = [...progressLog, `Error: ${error}`];
         if (activeId) {
           try {
             session = await api.quests.loadChat(activeId, $projectPath!);
@@ -514,7 +534,7 @@
       await api.quests.cancelChatTurn();
       appendProgressLine("Stopping…");
     } catch (e) {
-      error = String(e);
+      error = friendlyErrorMessage(String(e));
     }
   }
 
@@ -539,7 +559,7 @@
           await refreshList();
         }
       } catch (err) {
-        error = String(err);
+        error = friendlyErrorMessage(String(err));
       } finally {
         busy = false;
       }
@@ -559,7 +579,7 @@
       await api.quests.saveChat(next, $projectPath);
       await refreshList();
     } catch (e) {
-      error = String(e);
+      error = friendlyErrorMessage(String(e));
     }
   }
 
@@ -570,10 +590,8 @@
     void listen<QuestAiProgressPayload>("quest-ai-progress", (event) => {
       const payload = event.payload;
       if (!busy) return;
-      // Accept when no session yet, or chat matches active (incl. after assign).
       if (activeId != null && payload.chatId !== activeId) return;
       appendProgressLine(payload.line);
-      // Clear live draft when a phase completes / advances past outline streaming.
       if (payload.phase && payload.phase !== "outline") {
         streamDraft = "";
       }
@@ -630,43 +648,53 @@
   });
 </script>
 
-<aside class="qai" class:open aria-busy={busy}>
-  <div class="qai-h">
-    <Sparkles size={16} />
-    <strong>Quest AI</strong>
-    {#if sessionUsageLabel}
-      <span class="usage-pill" title="Session token usage (estimate)">{sessionUsageLabel}</span>
-    {/if}
-    <button type="button" class="ghost ico" title="Close" onclick={() => onclose?.()}>
-      <PanelRightClose size={16} />
+<aside class="qai flex flex-col h-full min-h-0 bg-[var(--bg-secondary)] border-l border-[var(--border-color)] text-[var(--text-primary)]" class:open aria-busy={busy}>
+  <!-- Header -->
+  <div class="qai-h flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-[var(--border-color)] bg-[var(--bg-card)] flex-shrink-0">
+    <div class="flex items-center gap-2">
+      <Sparkles size={16} class="text-[var(--accent-primary)]" />
+      <strong class="text-xs font-bold text-[var(--text-primary)]">Quest AI</strong>
+      {#if sessionUsageLabel}
+        <span class="usage-pill text-[10px] text-[var(--text-muted)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded border border-[var(--border-color)]" title="Session token usage">
+          {sessionUsageLabel}
+        </span>
+      {/if}
+    </div>
+    <button type="button" class="close-btn text-[var(--text-muted)] hover:text-[var(--text-primary)] p-1 rounded hover:bg-[var(--bg-hover)]" title="Close AI Sidebar" onclick={() => onclose?.()}>
+      <PanelRightClose size={15} />
     </button>
   </div>
 
   {#if anchorQuest}
-    <div class="anchor-banner" title="Branch will root at this quest">
-      <GitBranch size={14} />
-      <div class="anchor-text">
-        <span class="anchor-label">Branch from</span>
-        <strong class="anchor-title">{anchorQuest.title}</strong>
-        {#if anchorChapterTitle}<span class="anchor-ch">{anchorChapterTitle}</span>{/if}
+    <div class="anchor-banner flex items-center gap-2 px-3 py-2 bg-[var(--accent-primary)]/10 border-b border-[var(--accent-primary)]/20 text-xs flex-shrink-0" title="Branch will root at this quest">
+      <GitBranch size={13} class="text-[var(--accent-primary)] flex-shrink-0" />
+      <div class="flex-1 min-w-0">
+        <span class="text-[10px] uppercase font-semibold text-[var(--accent-primary)] block">Branch root</span>
+        <span class="font-bold truncate block text-[var(--text-primary)]">{anchorQuest.title || "Untitled quest"}</span>
       </div>
-      <code class="anchor-id">{anchorQuest.id.slice(0, 8)}</code>
+      <code class="text-[10px] font-mono bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-[var(--text-muted)] border border-[var(--border-color)]">
+        {anchorQuest.id.slice(0, 8)}
+      </code>
     </div>
   {/if}
 
-  <div class="sessions">
-    <button type="button" class="ghost" onclick={newSession} disabled={!$projectPath}>
-      <Plus size={14} /> New
-    </button>
-    <div class="sess-list">
+  <!-- Sessions List -->
+  <div class="sessions px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] flex-shrink-0">
+    <div class="flex items-center justify-between mb-1.5">
+      <span class="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Sessions</span>
+      <button type="button" class="text-xs font-semibold text-[var(--accent-primary)] hover:brightness-110 flex items-center gap-1" onclick={newSession} disabled={!$projectPath}>
+        <Plus size={13} /> New
+      </button>
+    </div>
+    <div class="sess-list flex flex-col gap-1 max-h-24 overflow-y-auto">
       {#each sessions as s (s.id)}
-        <div class="sess" class:active={activeId === s.id}>
-          <button type="button" class="sess-open" onclick={() => selectSession(s.id)}>
+        <div class="sess flex items-center justify-between gap-1 px-2 py-1 rounded text-xs transition {activeId === s.id ? 'bg-[var(--accent-primary)]/15 font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}">
+          <button type="button" class="sess-open flex-1 text-left truncate" onclick={() => selectSession(s.id)}>
             {s.title}
           </button>
           <button
             type="button"
-            class="ghost ico"
+            class="text-[var(--text-muted)] hover:text-red-400 p-0.5"
             aria-label={`Delete chat ${s.title}`}
             title={`Delete chat ${s.title}`}
             onclick={() => requestDeleteSession(s.id, s.title)}
@@ -678,168 +706,186 @@
     </div>
   </div>
 
-  <div class="transcript" bind:this={transcriptEl}>
+  <!-- Chat Transcript -->
+  <div class="transcript flex-1 overflow-y-auto p-3 flex flex-col gap-2.5 min-h-0 bg-[var(--bg-primary)]" bind:this={transcriptEl}>
     {#if !session?.messages?.length}
-      <div class="empty-chat">
-        <MessageSquareText size={28} />
-        <p class="hint">
-          Describe a quest line. <strong>Apply</strong> updates the editor; <strong>Save</strong> writes
-          SNBT.
+      <div class="empty-chat flex flex-col items-center justify-center py-6 text-center text-[var(--text-muted)]">
+        <MessageSquareText size={28} class="mb-2 opacity-50 text-[var(--accent-primary)]" />
+        <p class="text-xs max-w-xs leading-relaxed text-[var(--text-secondary)]">
+          Describe the quest line or chapter you want to create. Click <strong>Review</strong> to preview nodes before merging.
         </p>
-        {#if anchorQuest}
-          <p class="hint hint-anchor">
-            Tip: with a quest selected, <kbd>Branch</kbd> creates a chain rooted at it.
-          </p>
-        {/if}
-        <div class="chips">
+        <div class="chips flex flex-wrap gap-1.5 mt-3.5 justify-center">
           {#each exampleChips as chip (chip.label)}
-            <button type="button" class="chip" onclick={() => useChip(chip.text)}>{chip.label}</button>
+            <button
+              type="button"
+              class="chip text-xs px-2.5 py-1 bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] hover:text-[var(--text-primary)] rounded-full transition text-[var(--text-secondary)]"
+              onclick={() => useChip(chip.text)}
+            >
+              {chip.label}
+            </button>
           {/each}
         </div>
       </div>
     {:else}
       {#each session.messages as m, i (`${m.role}-${i}`)}
         <div
-          class="msg"
-          class:user={m.role === "user"}
-          class:assistant={m.role === "assistant"}
+          class="msg p-2.5 rounded-lg border text-xs leading-relaxed {m.role === 'user' ? 'bg-[var(--accent-primary)]/10 border-[var(--accent-primary)]/30 text-[var(--text-primary)] ml-3' : 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)] mr-3'}"
           aria-live={m.role === "assistant" ? "polite" : undefined}
         >
-          <strong>{m.role === "user" ? "You" : "AI"}</strong>
-          <p>{m.content}</p>
+          <strong class="block mb-1 text-[11px] font-bold text-[var(--accent-primary)]">
+            {m.role === "user" ? "You" : "Quest AI"}
+          </strong>
+          <p class="whitespace-pre-wrap">{m.content}</p>
           {#if m.progressLog?.length}
-            <details class="prog">
-              <summary>{m.progressLog.length} log lines</summary>
-              <ul>{#each m.progressLog as p, pi (`p-${pi}`)}<li>{p}</li>{/each}</ul>
+            <details class="prog mt-2 text-[11px] text-[var(--text-muted)] border-t border-[var(--border-color)] pt-1.5">
+              <summary class="cursor-pointer font-medium">{m.progressLog.length} generation log entries</summary>
+              <ul class="list-disc pl-4 mt-1 space-y-0.5">
+                {#each m.progressLog as p, pi (`p-${pi}`)}
+                  <li>{p}</li>
+                {/each}
+              </ul>
             </details>
           {/if}
           {#if formatUsage(m.usage)}
-            <div class="msg-usage">{formatUsage(m.usage)}</div>
+            <div class="text-[10px] text-[var(--text-muted)] mt-1.5 text-right font-mono">{formatUsage(m.usage)}</div>
           {/if}
         </div>
       {/each}
     {/if}
   </div>
 
+  <!-- Live Generation Progress Banner -->
   {#if busy && (progressLog.length || streamDraft)}
-    <div class="live-prog">
-      <Loader2 size={14} class="spin" />
-      {progressLog.length ? progressLog[progressLog.length - 1] : "Streaming…"}
+    <div class="live-prog flex items-center gap-2 px-3 py-2 bg-[var(--accent-primary)]/10 border-t border-[var(--accent-primary)]/20 text-xs text-[var(--text-primary)]">
+      <Loader2 size={13} class="spin text-[var(--accent-primary)] flex-shrink-0" />
+      <span class="truncate">{progressLog.length ? progressLog[progressLog.length - 1] : "Generating quest plan…"}</span>
     </div>
     {#if streamDraft}
-      <details class="stream-wrap" open={busy && !merge}>
-        <summary>Stream draft ({streamDraft.length} chars)</summary>
-        <pre class="stream-draft">{streamDraft}</pre>
+      <details class="stream-wrap px-3 py-1 bg-[var(--bg-secondary)] border-t border-[var(--border-color)]" open={busy && !merge}>
+        <summary class="text-[11px] text-[var(--text-muted)] cursor-pointer font-medium">Live draft ({streamDraft.length} chars)</summary>
+        <pre class="text-[10px] max-h-24 overflow-y-auto bg-[var(--bg-primary)] p-2 rounded mt-1 font-mono text-[var(--text-secondary)] whitespace-pre-wrap border border-[var(--border-color)]">{streamDraft}</pre>
       </details>
     {/if}
   {/if}
-  {#if !busy && lastUsage && formatUsage(lastUsage)}
-    <div class="live-prog usage-last">Last turn: {formatUsage(lastUsage)}</div>
-  {/if}
 
+  <!-- Error and Warning Notifications -->
   {#if error}
-    <div class="err" role="alert">
-      <span class="err-text">{error}</span>
-      <button type="button" class="ghost ico err-dismiss" title="Dismiss" aria-label="Dismiss error" onclick={() => (error = "")}>
+    <div class="err flex items-start gap-2 px-3 py-2 bg-red-500/10 border-t border-red-500/20 text-red-400 text-xs" role="alert">
+      <AlertCircle size={14} class="flex-shrink-0 mt-0.5" />
+      <span class="flex-1 leading-normal">{error}</span>
+      <button type="button" class="text-red-400 hover:text-red-300 font-bold px-1" title="Dismiss" aria-label="Dismiss error" onclick={() => (error = "")}>
         ×
       </button>
     </div>
   {/if}
   {#if loreWarning}
-    <div class="warn" role="status">
-      <span class="warn-text">{loreWarning}</span>
-      <button type="button" class="ghost ico err-dismiss" title="Dismiss" aria-label="Dismiss warning" onclick={() => (loreWarning = "")}>
+    <div class="warn flex items-start gap-2 px-3 py-2 bg-amber-500/10 border-t border-amber-500/20 text-amber-300 text-xs" role="status">
+      <Info size={14} class="flex-shrink-0 mt-0.5" />
+      <span class="flex-1 leading-normal">{loreWarning}</span>
+      <button type="button" class="text-amber-300 hover:text-amber-200 font-bold px-1" title="Dismiss" aria-label="Dismiss warning" onclick={() => (loreWarning = "")}>
         ×
       </button>
     </div>
   {/if}
-  {#if aiReadyHint && busy}<div class="live-prog">{aiReadyHint}</div>{/if}
 
+  <!-- Merge Review Area -->
   {#if merge}
-    <QuestPlanReview
-      {merge}
-      needsReviewAck={!!merge.plan?.needsUserReview}
-      onapply={onApplyReview}
-      ondiscard={() => (discardConfirmOpen = true)}
-    />
-  {/if}
-
-  {#if session?.pendingPlan && !merge}
-    <div class="pending-plan-bar">
-      <span class="pending-plan-label">Pending plan ready</span>
-      <button
-        type="button"
-        class="ghost review-plan"
-        disabled={busy}
-        onclick={() => void reopenPendingReview()}
-      >
-        Review
-      </button>
-      <button
-        type="button"
-        class="ghost discard-plan"
-        disabled={busy}
-        onclick={() => (discardConfirmOpen = true)}
-      >
-        Discard
-      </button>
+    <div class="p-2 border-t border-[var(--border-color)] bg-[var(--bg-card)]">
+      <QuestPlanReview
+        {merge}
+        needsReviewAck={!!merge.plan?.needsUserReview}
+        onapply={onApplyReview}
+        ondiscard={() => (discardConfirmOpen = true)}
+      />
     </div>
   {/if}
 
-  <div class="composer">
+  {#if session?.pendingPlan && !merge}
+    <div class="pending-plan-bar flex items-center justify-between gap-2 px-3 py-2 bg-amber-500/10 border-t border-amber-500/20 text-xs">
+      <span class="font-semibold text-amber-300">Pending plan ready for review</span>
+      <div class="flex items-center gap-1.5">
+        <button
+          type="button"
+          class="px-2.5 py-1 bg-[var(--accent-primary)] text-white font-semibold rounded hover:brightness-110 disabled:opacity-50"
+          disabled={busy}
+          onclick={() => void reopenPendingReview()}
+        >
+          Review
+        </button>
+        <button
+          type="button"
+          class="px-2 py-1 bg-red-500/20 text-red-300 border border-red-500/30 font-medium rounded hover:bg-red-500/30 disabled:opacity-50"
+          disabled={busy}
+          onclick={() => (discardConfirmOpen = true)}
+        >
+          Discard
+        </button>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Composer & Action Section -->
+  <div class="composer p-3 border-t border-[var(--border-color)] bg-[var(--bg-secondary)] flex flex-col gap-2.5 flex-shrink-0">
+    <!-- Intent Tabs / Pills -->
     <div
-      class="intent-row"
+      class="intent-row flex bg-[var(--bg-card)] p-0.5 rounded-lg border border-[var(--border-color)] gap-0.5"
       role="radiogroup"
       aria-label="Quest AI intent"
       tabindex="-1"
       onkeydown={onIntentKeydown}
-    >      <button
+    >
+      <button
         type="button"
-        class="intent"
-        class:active={pendingIntent === "generate"}
+        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition {pendingIntent === 'generate' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
         role="radio"
         aria-checked={pendingIntent === "generate"}
         tabindex={pendingIntent === "generate" ? 0 : -1}
         onclick={() => setIntent("generate")}
-      >Generate</button>
+      >
+        Generate
+      </button>
       <button
         type="button"
-        class="intent"
-        class:active={pendingIntent === "branch"}
+        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition flex items-center justify-center gap-1 {pendingIntent === 'branch' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
         role="radio"
         aria-checked={pendingIntent === "branch"}
         tabindex={pendingIntent === "branch" ? 0 : -1}
         disabled={!anchorQuest}
         title={anchorQuest ? "Branch from selected quest" : "Select a quest on canvas first"}
         onclick={() => setIntent("branch")}
-      ><GitBranch size={12} /> Branch</button>
+      >
+        <GitBranch size={11} /> Branch
+      </button>
       <button
         type="button"
-        class="intent"
-        class:active={pendingIntent === "extend"}
+        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition {pendingIntent === 'extend' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
         role="radio"
         aria-checked={pendingIntent === "extend"}
         tabindex={pendingIntent === "extend" ? 0 : -1}
         disabled={!session?.pendingPlan}
         title={session?.pendingPlan ? "Append to pending plan" : "Generate a plan first"}
         onclick={() => setIntent("extend")}
-      >Extend</button>
+      >
+        Extend
+      </button>
       <button
         type="button"
-        class="intent"
-        class:active={pendingIntent === "lore"}
+        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition {pendingIntent === 'lore' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
         role="radio"
         aria-checked={pendingIntent === "lore"}
         tabindex={pendingIntent === "lore" ? 0 : -1}
         disabled={!session?.pendingPlan}
         title={session?.pendingPlan ? "Regenerate lore only" : "Generate a plan first"}
         onclick={() => setIntent("lore")}
-      >Lore</button>
+      >
+        Lore
+      </button>
     </div>
 
     {#if showJson}
       <textarea
         rows="4"
+        class="w-full text-xs font-mono p-2 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] resize-y focus:outline-none focus:border-[var(--accent-primary)]"
         placeholder={'{ "why": "…", "chapters": [{ "title": "…", "quests": […] }] }'}
         bind:this={composerEl}
         bind:value={rawJson}
@@ -848,9 +894,12 @@
     {:else}
       <textarea
         rows="3"
+        class="w-full text-xs p-2.5 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] resize-y focus:outline-none focus:border-[var(--accent-primary)] placeholder-[var(--text-muted)]"
         placeholder={pendingIntent === "branch"
-          ? `Describe the branch from "${anchorQuest?.title ?? "…"}"…`
-          : "Describe the quest line…"}
+          ? `Describe how the branch progresses from "${anchorQuest?.title ?? "…"}"…`
+          : pendingIntent === "lore"
+            ? "Provide custom lore guidelines or tone instructions…"
+            : "Describe the quest line or chapter topic…"}
         bind:this={composerEl}
         bind:value={input}
         oninput={() => (composerHint = "")}
@@ -859,36 +908,56 @@
         }}
       ></textarea>
     {/if}
+
     {#if composerHint}
-      <div class="composer-hint" role="status">{composerHint}</div>
+      <div class="composer-hint text-xs text-amber-400 bg-amber-400/10 px-2 py-1 rounded" role="status">
+        {composerHint}
+      </div>
     {/if}
-    <p class="send-chord">Ctrl+Enter to send</p>
-    <div class="composer-actions">
-      {#if busy}
-        <button type="button" class="stop" onclick={() => void stopGeneration()}>
-          Stop
-        </button>
-      {:else}
+
+    <div class="flex items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
         <button
           type="button"
-          class="primary"
-          disabled={!canSend}
-          title={!canSend && $projectPath ? "Describe the quest line first" : undefined}
-          onclick={() => send(pendingIntent)}
+          class="text-[11px] font-semibold text-[var(--text-muted)] hover:text-[var(--text-primary)] flex items-center gap-1"
+          onclick={() => (showJson = !showJson)}
+          disabled={busy}
         >
-          <Send size={14} />
-          {pendingIntent === "branch" ? "Branch" : pendingIntent === "extend" ? "Extend" : pendingIntent === "lore" ? "Lore" : "Generate"}
+          <Code size={12} />
+          {showJson ? "Switch to Text" : "Paste JSON"}
         </button>
-      {/if}
-      <button type="button" class="ghost" onclick={() => (showJson = !showJson)} disabled={busy}>
-        {showJson ? "Text" : "JSON"}
-      </button>
+        <span class="text-[10px] text-[var(--text-muted)]">Ctrl+Enter to send</span>
+      </div>
+
+      <div class="flex items-center gap-1.5">
+        {#if busy}
+          <button
+            type="button"
+            class="px-3.5 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-500 shadow-sm"
+            onclick={() => void stopGeneration()}
+          >
+            Stop
+          </button>
+        {:else}
+          <button
+            type="button"
+            class="px-4 py-1.5 bg-[var(--accent-primary)] text-white text-xs font-bold rounded-lg hover:brightness-110 shadow-sm flex items-center gap-1.5 disabled:opacity-40"
+            disabled={!canSend}
+            onclick={() => send(pendingIntent)}
+          >
+            <Send size={13} />
+            {pendingIntent === "branch" ? "Branch" : pendingIntent === "extend" ? "Extend" : pendingIntent === "lore" ? "Lore" : "Generate"}
+          </button>
+        {/if}
+      </div>
     </div>
-    <details class="adv">
-      <summary>Advanced</summary>
-      <label class="opt"
-        ><input type="checkbox" bind:checked={forceAi} /> Force AI (skip offline heuristic)</label
-      >
+
+    <details class="text-[11px] text-[var(--text-muted)] pt-0.5">
+      <summary class="cursor-pointer font-medium hover:text-[var(--text-primary)]">Advanced settings</summary>
+      <label class="flex items-center gap-2 mt-1.5 cursor-pointer">
+        <input type="checkbox" bind:checked={forceAi} />
+        <span>Force AI call (bypass offline template fallback)</span>
+      </label>
     </details>
   </div>
 </aside>
@@ -896,7 +965,7 @@
 {#if discardConfirmOpen}
   <ConfirmDialog
     title="Discard pending plan?"
-    message="This clears the pending QuestPlan from the chat session. You can generate a new one afterward."
+    message="This clears the unmerged QuestPlan from the current chat session. You can generate a new one anytime."
     danger={true}
     confirmLabel="Discard"
     onconfirm={() => void confirmDiscardPendingPlan()}
@@ -906,7 +975,7 @@
 
 {#if deleteConfirmOpen && deleteTarget}
   <ConfirmDialog
-    title="Delete chat?"
+    title="Delete chat session?"
     message={`Delete chat “${deleteTarget.title}”? History cannot be recovered.`}
     danger={true}
     confirmLabel="Delete"
@@ -920,469 +989,9 @@
 
 <style>
   .qai {
-    display: flex;
-    flex-direction: column;
-    width: 360px;
-    min-width: 300px;
-    max-width: 440px;
-    border-left: 1px solid rgba(255, 255, 255, 0.06);
-    box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.05);
-    background: rgba(255, 255, 255, 0.02);
-    color: var(--ftbq-text);
-    min-height: 0;
-    height: 100%;
-  }
-  .qai-h {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25));
-    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
-  }
-  .qai-h strong {
-    color: var(--ftbq-title-gold);
-    font-size: 13px;
-    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.65);
-    letter-spacing: 0.02em;
-  }
-  .qai-h .ico {
-    margin-left: auto;
-  }
-  .usage-pill,
-  .msg-usage,
-  .usage-last {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--ftbq-text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 160px;
-  }
-  .msg-usage {
-    margin-top: 4px;
-    max-width: none;
-  }
-  .usage-last {
-    max-width: none;
-    padding: 4px 10px 8px;
-  }
-
-  .anchor-banner {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: linear-gradient(90deg, rgba(61, 184, 168, 0.18), rgba(61, 184, 168, 0.05));
-    border-bottom: 1px solid var(--ftbq-frame);
-    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
-    color: var(--ftbq-text);
-  }
-  .anchor-banner :global(svg) {
-    color: var(--ftbq-accent-teal);
-    flex-shrink: 0;
-  }
-  .anchor-text {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-  .anchor-label {
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--ftbq-text-muted);
-  }
-  .anchor-title {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--ftbq-text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
-  }
-  .anchor-ch {
-    font-size: 10px;
-    color: var(--ftbq-text-muted);
-  }
-  .anchor-id {
-    font-size: 9px;
-    color: var(--ftbq-text-muted);
-    background: rgba(0, 0, 0, 0.35);
-    padding: 2px 5px;
-    border-radius: 3px;
-    border: 1px solid var(--ftbq-frame);
-  }
-  .sessions {
-    padding: 8px;
-    border-bottom: 1px solid var(--ftbq-frame);
-  }
-  .sess-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    max-height: 88px;
-    overflow: auto;
-    margin-top: 6px;
-  }
-  .sess {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .sess.active .sess-open {
-    color: var(--ftbq-accent-green);
-  }
-  .sess-open {
-    flex: 1;
-    text-align: left;
-    background: transparent;
-    border: none;
-    color: inherit;
-    font-size: 12px;
-    cursor: pointer;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .transcript {
-    flex: 1;
-    overflow: auto;
-    padding: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    min-height: 120px;
-  }
-  .empty-chat {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    color: var(--ftbq-text-muted);
-    text-align: center;
-    padding: 16px 8px;
-  }
-  .empty-chat :global(svg) {
-    color: var(--ftbq-text-muted);
-    opacity: 0.6;
-  }
-  .msg {
-    font-size: 12px;
-    padding: 8px 10px;
-    border-radius: 3px;
-    background: var(--ftbq-input-bg);
-    border: 1px solid var(--ftbq-frame);
-    box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.4), inset -1px -1px 0 rgba(255, 255, 255, 0.04);
-  }
-  .msg.user {
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 12%, transparent), color-mix(in srgb, var(--accent-primary) 5%, transparent));
-    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
-  }
-  .msg p {
-    margin: 4px 0 0;
-    white-space: pre-wrap;
-  }
-  .prog {
-    margin: 6px 0 0;
-    color: var(--ftbq-text-muted);
-    font-size: 11px;
-  }
-  .prog summary {
-    cursor: pointer;
-    padding: 2px 0;
-  }
-  .prog ul {
-    margin: 4px 0 0;
-    padding-left: 16px;
-  }
-  .hint {
-    color: var(--ftbq-text-muted);
-    font-size: 12px;
-    margin: 0;
-  }
-  .hint-anchor {
-    font-size: 11px;
-  }
-  .hint-anchor kbd {
-    display: inline-block;
-    padding: 1px 5px;
-    font-size: 10px;
-    font-family: monospace;
-    background: var(--ftbq-input-bg);
-    border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
-    margin: 0 2px;
-  }
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 10px;
-    justify-content: center;
-  }
-  .chip {
-    border: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
-    color: var(--ftbq-text);
-    border-radius: 3px;
-    padding: 4px 8px;
-    font-size: 11px;
-    cursor: pointer;
-  }
-  .chip:hover {
-    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
-    color: var(--ftbq-accent-green);
-  }
-  .adv {
-    margin-top: 4px;
-    font-size: 11px;
-    color: var(--ftbq-text-muted);
-  }
-  .adv summary {
-    cursor: pointer;
-    padding: 4px 0;
-  }
-  .live-prog,
-  .err,
-  .warn {
-    padding: 6px 10px;
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .stream-wrap {
-    margin: 0 10px 8px;
-    border: 1px solid var(--ftbq-frame);
-    border-radius: var(--border-radius-sm);
-    background: rgba(0, 0, 0, 0.2);
-  }
-  .stream-wrap summary {
-    cursor: pointer;
-    padding: 6px 8px;
-    font-size: 11px;
-    color: var(--ftbq-text-muted);
-    font-weight: 600;
-  }
-  .stream-draft {
-    margin: 0;
-    max-height: 140px;
-    overflow: auto;
-    padding: 8px;
-    font-size: 11px;
-    line-height: 1.4;
-    white-space: pre-wrap;
-    word-break: break-word;
-    color: var(--ftbq-text-muted);
-    background: rgba(0, 0, 0, 0.25);
-    border: none;
-    border-top: 1px solid var(--ftbq-frame);
-    border-radius: 0;
-  }
-  .err {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    color: var(--accent-danger);
-    padding: 6px 10px;
-    font-size: 12px;
-    background: color-mix(in srgb, var(--accent-danger) 10%, transparent);
-    border-top: 1px solid color-mix(in srgb, var(--accent-danger) 25%, transparent);
-  }
-  .err-text {
-    flex: 1;
-    min-width: 0;
-  }
-  .err-dismiss {
-    flex-shrink: 0;
-    line-height: 1;
-    font-size: 16px;
-    padding: 0 4px;
-    color: #f87171;
-  }
-  .warn {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    color: var(--ftbq-quest-started);
-    background: rgba(242, 201, 76, 0.08);
-    padding: 6px 10px;
-    font-size: 12px;
-  }
-  .warn-text {
-    flex: 1;
-    min-width: 0;
-  }
-  .send-chord {
-    margin: 0;
-    font-size: 10px;
-    color: var(--ftbq-text-muted);
-  }
-  .pending-plan-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    border-top: 1px solid var(--ftbq-frame);
-    background: rgba(242, 201, 76, 0.06);
-  }
-  .pending-plan-label {
-    flex: 1;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--ftbq-quest-started);
-  }
-  .review-plan {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--ftbq-accent-green);
-    background: transparent;
-    border: 1px solid color-mix(in srgb, var(--ftbq-accent-green) 40%, #1f5a2c);
-    border-radius: 3px;
-    padding: 3px 8px;
-    cursor: pointer;
-  }
-  .review-plan:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-  }
-  .review-plan:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .discard-plan {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--accent-danger);
-    background: transparent;
-    border: 1px solid color-mix(in srgb, var(--accent-danger) 40%, #5a1a1a);
-    border-radius: 3px;
-    padding: 3px 8px;
-    cursor: pointer;
-  }
-  .discard-plan:hover:not(:disabled) {
-    background: rgba(248, 113, 113, 0.12);
-  }
-  .discard-plan:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .composer {
-    padding: 10px;
-    border-top: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.2));
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .composer-hint {
-    font-size: 11px;
-    color: var(--accent-warning);
-    padding: 2px 0;
-  }
-  .intent-row {
-    display: flex;
-    gap: 4px;
-    flex-wrap: wrap;
-  }
-  .intent {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    border-radius: var(--ftbq-radius-control);
-    border: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 rgba(0, 0, 0, 0.45);
-    color: var(--ftbq-text-muted);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
-  }
-  .intent:hover:not(:disabled) {
-    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
-    color: var(--ftbq-text);
-  }
-  .intent.active {
-    border-color: #12380f;
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 88%, #fff 12%), color-mix(in srgb, var(--accent-primary) 72%, #000 28%));
-    color: var(--ftbq-text);
-  }
-  .intent:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-  .opt {
-    font-size: 11px;
-    color: var(--ftbq-text-muted);
-    display: inline-flex;
-    gap: 6px;
-    align-items: center;
-  }
-  textarea {
-    width: 100%;
-    resize: vertical;
-    border-radius: var(--ftbq-radius-control);
-    border: 1px solid var(--ftbq-frame);
-    background: var(--ftbq-input-bg);
-    box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.55);
-    color: inherit;
-    padding: 8px;
-    font-family: inherit;
-    font-size: 12px;
-  }
-  .composer-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .composer-actions button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .composer-actions .primary {
-    flex: 1;
-    justify-content: center;
-    padding: 6px 12px;
-    border: 1px solid color-mix(in srgb, var(--accent-primary) 50%, #000);
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 88%, #fff 12%), color-mix(in srgb, var(--accent-primary) 72%, #000 28%));
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
-    color: var(--ftbq-text);
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
-    border-radius: var(--ftbq-radius-control);
-    font-weight: 700;
-    cursor: pointer;
-  }
-  .composer-actions .primary:hover:not(:disabled) {
-    filter: brightness(1.12);
-  }
-  .composer-actions .primary:disabled {
-    opacity: 0.5;
-  }
-  .composer-actions .stop {
-    flex: 1;
-    justify-content: center;
-    padding: 6px 12px;
-    border: 1px solid color-mix(in srgb, var(--accent-danger) 60%, #000);
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent-danger) 78%, #000), color-mix(in srgb, var(--accent-danger) 45%, #000));
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
-    color: var(--ftbq-bg);
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
-    border-radius: var(--ftbq-radius-control);
-    font-weight: 700;
-    cursor: pointer;
-  }
-  .composer-actions .stop:hover {
-    filter: brightness(1.1);
+    width: 340px;
+    min-width: 280px;
+    max-width: 420px;
   }
   :global(.spin) {
     animation: spin 0.8s linear infinite;
