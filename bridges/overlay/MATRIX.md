@@ -5,7 +5,7 @@ any loader (Forge / Fabric / Quilt / NeoForge). Injected by the launcher after p
 
 | Path | MC / loader | UI | YouTube | Friends/Chat | Status |
 |------|-------------|----|---------|--------------|--------|
-| GL hook | any | F8 framebuffer UI | feed + LRU thumbs + libmpv (optional DLL) | via Tauri IPC | **primary** |
+| GL hook | any | F8 MC-style shell (Sora font) + wheel + PiP | filter/search, FBO video frames, libmpv, F9/F10 | full list/add/accept/chat via Tauri IPC | **primary** |
 | Legacy JVM jar | exact 1.21.1 Fabric/NeoForge | Screen + WATERMeDIA | full PiP | in-mod | opt-in `TUFFBOX_OVERLAY_JVM=1` |
 
 ## Layout

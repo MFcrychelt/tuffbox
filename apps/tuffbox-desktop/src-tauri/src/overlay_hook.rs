@@ -130,18 +130,58 @@ fn handle_friends() -> Result<serde_json::Value, String> {
     Ok(body)
 }
 
-fn handle_chat_poll(peer: Option<&str>) -> Result<serde_json::Value, String> {
+/// Proxy friends mutations (add / accept / remove) to the edge function.
+fn handle_friends_action(body: &serde_json::Value) -> Result<serde_json::Value, String> {
     let s = load_session()?;
     let client = http_client()?;
-    let url = edge_url(&s.api_base, "overlay-chat-poll");
+    let url = edge_url(&s.api_base, "overlay-friends");
+    let action = body
+        .get("action")
+        .and_then(|a| a.as_str())
+        .unwrap_or("")
+        .to_string();
+    if action.is_empty() {
+        return Err("action required".into());
+    }
     let mut payload = json!({
+        "action": action,
         "playerKey": s.uuid,
         "username": s.username,
         "writeSecret": s.write_secret,
     });
-    if let Some(p) = peer.filter(|p| !p.is_empty()) {
-        payload["peerKey"] = json!(p);
+    if let Some(name) = body.get("friendUsername").and_then(|v| v.as_str()) {
+        payload["friendUsername"] = json!(name);
     }
+    if let Some(id) = body.get("friendshipId").and_then(|v| v.as_i64()) {
+        payload["friendshipId"] = json!(id);
+    }
+    let resp = client
+        .post(&url)
+        .header("apikey", &s.anon_key)
+        .header("Authorization", format!("Bearer {}", s.anon_key))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let out: serde_json::Value = resp.json().unwrap_or_else(|_| json!({ "error": "bad json" }));
+    if !status.is_success() {
+        // Surface edge error body to the hook (404 player not found, etc.).
+        return Ok(out);
+    }
+    Ok(out)
+}
+
+fn handle_chat_poll(since_id: i64) -> Result<serde_json::Value, String> {
+    let s = load_session()?;
+    let client = http_client()?;
+    let url = edge_url(&s.api_base, "overlay-chat-poll");
+    let payload = json!({
+        "playerKey": s.uuid,
+        "username": s.username,
+        "writeSecret": s.write_secret,
+        "sinceId": since_id,
+    });
     let resp = client
         .post(&url)
         .header("apikey", &s.anon_key)
@@ -158,6 +198,141 @@ fn handle_chat_poll(peer: Option<&str>) -> Result<serde_json::Value, String> {
     Ok(body)
 }
 
+fn handle_chat_send(body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let s = load_session()?;
+    let client = http_client()?;
+    let url = edge_url(&s.api_base, "overlay-chat-send");
+    let to_key = body
+        .get("toKey")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let text = body
+        .get("body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    // Proxy-side validation (hook already sanitises; this is the trust boundary
+    // before we attach writeSecret and hit Supabase).
+    if to_key.len() < 8
+        || to_key.len() > 64
+        || !to_key
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() || b == b'-')
+    {
+        return Err("invalid toKey".into());
+    }
+    let text = sanitize_chat_body(&text)?;
+    let payload = json!({
+        "playerKey": s.uuid,
+        "username": s.username,
+        "writeSecret": s.write_secret,
+        "toKey": to_key,
+        "body": text,
+    });
+    let resp = client
+        .post(&url)
+        .header("apikey", &s.anon_key)
+        .header("Authorization", format!("Bearer {}", s.anon_key))
+        // Explicit UTF-8 charset so intermediate proxies don't mangle emoji.
+        .header("Content-Type", "application/json; charset=utf-8")
+        .json(&payload)
+        .send()
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let out: serde_json::Value = resp.json().unwrap_or_else(|_| json!({ "error": "bad json" }));
+    if !status.is_success() {
+        return Ok(out);
+    }
+    Ok(out)
+}
+
+/// Mirror of the hook's chat sanitiser — keep the two in sync.
+fn sanitize_chat_body(input: &str) -> Result<String, String> {
+    const MAX_CHARS: usize = 500;
+    const MAX_BYTES: usize = 2000;
+    let mut out = String::with_capacity(input.len().min(MAX_BYTES));
+    let mut bytes = 0usize;
+    let mut chars = 0usize;
+    for ch in input.chars() {
+        if chars >= MAX_CHARS || bytes >= MAX_BYTES {
+            break;
+        }
+        let ch = if matches!(ch, '\n' | '\r' | '\t') {
+            ' '
+        } else {
+            ch
+        };
+        let u = ch as u32;
+        // C0/C1 controls, bidi overrides, deprecated format, tags, soft hyphen, BOM.
+        let bad = matches!(
+            ch,
+            '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{200E}'
+                | '\u{200F}'
+                | '\u{061C}'
+                | '\u{200B}'
+                | '\u{200C}'
+                | '\u{2060}'
+                | '\u{FEFF}'
+                | '\u{00AD}'
+                | '\u{180E}'
+                | '\u{206A}'..='\u{206F}'
+        ) || u < 0x20
+            || (0x7F..=0x9F).contains(&u)
+            || (0xE0000..=0xE007F).contains(&u)
+            || (0xE000..=0xF8FF).contains(&u);
+        if bad {
+            continue;
+        }
+        let mut buf = [0u8; 4];
+        let enc = ch.encode_utf8(&mut buf);
+        if bytes + enc.len() > MAX_BYTES {
+            break;
+        }
+        out.push_str(enc);
+        bytes += enc.len();
+        chars += 1;
+    }
+    // Collapse whitespace.
+    let cleaned = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.is_empty() {
+        return Err("body empty after sanitise".into());
+    }
+    Ok(cleaned)
+}
+
+/// Presence heartbeat — marks us online and returns friends' live presence.
+fn handle_presence() -> Result<serde_json::Value, String> {
+    let s = load_session()?;
+    let client = http_client()?;
+    let url = edge_url(&s.api_base, "overlay-presence");
+    let payload = json!({
+        "playerKey": s.uuid,
+        "username": s.username,
+        "writeSecret": s.write_secret,
+        "packName": s.pack_name,
+        "server": "",
+        "offline": false,
+    });
+    let resp = client
+        .post(&url)
+        .header("apikey", &s.anon_key)
+        .header("Authorization", format!("Bearer {}", s.anon_key))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().unwrap_or_else(|_| json!({ "error": "bad json" }));
+    if !status.is_success() {
+        return Err(format!("presence {status}: {body}"));
+    }
+    Ok(body)
+}
+
 fn handle_youtube_resolve(id: &str) -> Result<serde_json::Value, String> {
     let id = id.trim();
     if id.is_empty() {
@@ -170,28 +345,40 @@ fn handle_youtube_resolve(id: &str) -> Result<serde_json::Value, String> {
     }))
 }
 
-fn route(method: &str, path: &str, query: &str) -> (u16, serde_json::Value) {
+fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    let prefix = format!("{key}=");
+    query.split('&').find_map(|p| p.strip_prefix(&prefix))
+}
+
+fn route(
+    method: &str,
+    path: &str,
+    query: &str,
+    body: Option<&serde_json::Value>,
+) -> (u16, serde_json::Value) {
     if method != "GET" && method != "POST" {
         return (405, json!({ "error": "method not allowed" }));
     }
     let path = path.split('?').next().unwrap_or(path);
-    let result = match path {
-        "/health" => Ok(json!({ "ok": true })),
-        "/session" => handle_session(),
-        "/youtube-feed" => handle_youtube_feed(),
-        "/friends" => handle_friends(),
-        "/chat" | "/chat/poll" => {
-            let peer = query
-                .split('&')
-                .find_map(|p| p.strip_prefix("peer="))
-                .map(|s| s.to_string());
-            handle_chat_poll(peer.as_deref())
+    let empty = json!({});
+    let body = body.unwrap_or(&empty);
+    let result = match (method, path) {
+        (_, "/health") => Ok(json!({ "ok": true })),
+        (_, "/session") => handle_session(),
+        (_, "/youtube-feed") => handle_youtube_feed(),
+        ("GET", "/friends") | ("POST", "/friends") => handle_friends(),
+        ("POST", "/friends/action") => handle_friends_action(body),
+        (_, "/presence") => handle_presence(),
+        ("GET", "/chat") | ("GET", "/chat/poll") | ("POST", "/chat") | ("POST", "/chat/poll") => {
+            let since = query_param(query, "sinceId")
+                .and_then(|s| s.parse::<i64>().ok())
+                .or_else(|| body.get("sinceId").and_then(|v| v.as_i64()))
+                .unwrap_or(0);
+            handle_chat_poll(since)
         }
-        "/youtube-resolve" => {
-            let id = query
-                .split('&')
-                .find_map(|p| p.strip_prefix("id="))
-                .unwrap_or("");
+        ("POST", "/chat/send") => handle_chat_send(body),
+        (_, "/youtube-resolve") => {
+            let id = query_param(query, "id").unwrap_or("");
             handle_youtube_resolve(id)
         }
         _ => Err(format!("not found: {path}")),
@@ -202,28 +389,71 @@ fn route(method: &str, path: &str, query: &str) -> (u16, serde_json::Value) {
     }
 }
 
+fn parse_http_request(raw: &str) -> (String, String, String, Option<serde_json::Value>) {
+    let mut lines = raw.split("\r\n");
+    let first = lines.next().unwrap_or("");
+    let mut parts = first.split_whitespace();
+    let method = parts.next().unwrap_or("GET").to_string();
+    let target = parts.next().unwrap_or("/").to_string();
+    let (path, query) = match target.split_once('?') {
+        Some((p, q)) => (p.to_string(), q.to_string()),
+        None => (target, String::new()),
+    };
+
+    // Split headers / body on blank line.
+    let mut content_length = 0usize;
+    let mut in_headers = true;
+    let mut body_start = String::new();
+    for line in lines {
+        if in_headers {
+            if line.is_empty() {
+                in_headers = false;
+                continue;
+            }
+            if let Some(v) = line
+                .split_once(':')
+                .filter(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                .map(|(_, v)| v.trim())
+            {
+                content_length = v.parse().unwrap_or(0);
+            }
+        } else {
+            if !body_start.is_empty() {
+                body_start.push_str("\r\n");
+            }
+            body_start.push_str(line);
+        }
+    }
+    let body = if method == "POST" && content_length > 0 {
+        // Body may be truncated if it spanned the initial read; best-effort parse.
+        let sliced = if body_start.len() >= content_length {
+            &body_start[..content_length]
+        } else {
+            body_start.as_str()
+        };
+        serde_json::from_str(sliced).ok()
+    } else if method == "POST" && !body_start.trim().is_empty() {
+        serde_json::from_str(body_start.trim()).ok()
+    } else {
+        None
+    };
+    (method, path, query, body)
+}
+
 fn serve_connection(mut stream: std::net::TcpStream) {
-    let mut buf = [0u8; 8192];
+    let mut buf = [0u8; 16384];
     let n = match stream.read(&mut buf) {
         Ok(n) if n > 0 => n,
         _ => return,
     };
     let req = String::from_utf8_lossy(&buf[..n]);
-    let mut lines = req.lines();
-    let first = lines.next().unwrap_or("");
-    let mut parts = first.split_whitespace();
-    let method = parts.next().unwrap_or("GET");
-    let target = parts.next().unwrap_or("/");
-    let (path, query) = match target.split_once('?') {
-        Some((p, q)) => (p, q),
-        None => (target, ""),
-    };
-    let (status, body) = route(method, path, query);
-    let body_bytes = serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec());
+    let (method, path, query, body) = parse_http_request(&req);
+    let (status, resp_body) = route(&method, &path, &query, body.as_ref());
+    let body_bytes = serde_json::to_vec(&resp_body).unwrap_or_else(|_| b"{}".to_vec());
     let reason = if status == 200 { "OK" } else { "Error" };
     let _ = write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
         body_bytes.len()
     );
     let _ = stream.write_all(&body_bytes);

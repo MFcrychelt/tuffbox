@@ -2641,15 +2641,60 @@ export const api = {
 
   // ── Export ────────────────────────────────────────────────────────
   export: {
-    modrinthPack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_modrinth_pack", { ...pathArg(p), targetPath }); },
-    serverPack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_server_pack", { ...pathArg(p), targetPath }); },
-    prismInstance(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_prism_instance", { ...pathArg(p), targetPath }); },
-    curseforgePack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_curseforge_pack", { ...pathArg(p), targetPath }); },
-    packwizPack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_packwiz_pack", { ...pathArg(p), targetPath }); },
-    batchAll(p?: string) { return cmd<Record<string, unknown>[]>("batch_export_all", pathArg(p)); },
-    projectReport(p?: string) { return cmd<Record<string, unknown>>("export_project_report", pathArg(p)); },
-    validateModrinth(p?: string) { return cmd<ExportIssue[]>("validate_modrinth_export", pathArg(p)); },
-    validateCurseforge(p?: string) { return cmd<ExportIssue[]>("validate_curseforge_export", pathArg(p)); },
+    modrinthPack(targetPath?: string | null, p?: string) {
+      return cmd<ExportResult>("export_modrinth_pack", {
+        ...pathArg(p),
+        targetPath: targetPath ?? null,
+      });
+    },
+    serverPack(targetPath?: string | null, p?: string) {
+      return cmd<ExportResult>("export_server_pack", {
+        ...pathArg(p),
+        targetPath: targetPath ?? null,
+      });
+    },
+    prismInstance(targetPath?: string | null, p?: string) {
+      return cmd<ExportResult>("export_prism_instance", {
+        ...pathArg(p),
+        targetPath: targetPath ?? null,
+      });
+    },
+    curseforgePack(targetPath?: string | null, p?: string) {
+      return cmd<ExportResult>("export_curseforge_pack", {
+        ...pathArg(p),
+        targetPath: targetPath ?? null,
+      });
+    },
+    packwizPack(targetPath?: string | null, p?: string) {
+      return cmd<ExportResult>("export_packwiz_pack", {
+        ...pathArg(p),
+        targetPath: targetPath ?? null,
+      });
+    },
+    batchAll(p?: string) {
+      return cmd<
+        Array<{
+          kind: string;
+          status: string;
+          path?: string;
+          files?: number;
+          overrideCount?: number;
+          error?: string;
+        }>
+      >("batch_export_all", pathArg(p));
+    },
+    projectReport(p?: string) {
+      return cmd<Record<string, unknown>>("export_project_report", pathArg(p));
+    },
+    validateModrinth(p?: string) {
+      return cmd<ExportIssue[]>("validate_modrinth_export", pathArg(p));
+    },
+    validateCurseforge(p?: string) {
+      return cmd<ExportIssue[]>("validate_curseforge_export", pathArg(p));
+    },
+    reveal(path: string) {
+      return cmd<void>("reveal_export_path", { path });
+    },
   },
 
   // ── GitHub Pack Transport (public repos, anonymous consume) ─────
