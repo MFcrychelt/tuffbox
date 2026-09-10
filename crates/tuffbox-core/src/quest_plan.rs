@@ -1160,37 +1160,43 @@ fn expand_compact_quest_value(v: &mut Value) {
 
         // 4. Recover when LLM places quests directly inside "chapters": [...]
         // e.g. { "title": "Create early game", "chapters": [ { "title": "Quest 1", "tasks": [...] }, ... ] }
-        if let Some(chapters) = obj.get_mut("chapters").and_then(|c| c.as_array_mut()) {
-            if !chapters.is_empty() {
-                let all_look_like_quests = chapters.iter().all(|item| {
-                    item.get("quests").is_none() && item.get("quest").is_none()
-                }) && chapters.iter().any(|item| {
-                    item.get("tasks").is_some()
-                        || item.get("task").is_some()
-                        || item.get("rewards").is_some()
-                        || item.get("reward").is_some()
-                        || item.get("deps").is_some()
-                        || item.get("dependencies").is_some()
-                });
+        let chapters_looks_like_quests = obj
+            .get("chapters")
+            .and_then(|c| c.as_array())
+            .map(|chapters| {
+                !chapters.is_empty()
+                    && chapters
+                        .iter()
+                        .all(|item| item.get("quests").is_none() && item.get("quest").is_none())
+                    && chapters.iter().any(|item| {
+                        item.get("tasks").is_some()
+                            || item.get("task").is_some()
+                            || item.get("rewards").is_some()
+                            || item.get("reward").is_some()
+                            || item.get("deps").is_some()
+                            || item.get("dependencies").is_some()
+                    })
+            })
+            .unwrap_or(false);
 
-                if all_look_like_quests {
-                    let ch_title =
-                        str_field_map(obj, &["title", "name"]).unwrap_or_else(|| "Quests".into());
-                    let ch_icon = obj.remove("icon");
-                    let ch_group = obj.remove("group");
-                    let quests_val = Value::Array(chapters.drain(..).collect());
-                    let mut new_ch = serde_json::json!({
-                        "title": ch_title,
-                        "quests": quests_val
-                    });
-                    if let Some(ic) = ch_icon {
-                        new_ch["icon"] = ic;
-                    }
-                    if let Some(gr) = ch_group {
-                        new_ch["group"] = gr;
-                    }
-                    chapters.push(new_ch);
+        if chapters_looks_like_quests {
+            let ch_title =
+                str_field_map(obj, &["title", "name"]).unwrap_or_else(|| "Quests".into());
+            let ch_icon = obj.remove("icon");
+            let ch_group = obj.remove("group");
+            if let Some(chapters) = obj.get_mut("chapters").and_then(|c| c.as_array_mut()) {
+                let quests_val = Value::Array(chapters.drain(..).collect());
+                let mut new_ch = serde_json::json!({
+                    "title": ch_title,
+                    "quests": quests_val
+                });
+                if let Some(ic) = ch_icon {
+                    new_ch["icon"] = ic;
                 }
+                if let Some(gr) = ch_group {
+                    new_ch["group"] = gr;
+                }
+                chapters.push(new_ch);
             }
         }
 
