@@ -261,7 +261,12 @@
     transform: translateY(-3px);
   }
   .pack-tile:hover .pack-icon {
-    filter: brightness(1.06);
+    /* No `filter` on hover. The shelf is a .glass-panel (backdrop-filter);
+       a hover-toggled filter on a descendant forces Chromium/WebView2 to
+       re-snapshot the panel's backdrop, so the glass background visibly
+       flickers/jumps on every hover — only when transparency is on (that is
+       when the panel actually blurs). The ring + shadow below are
+       compositing-only and give the same affordance without a filter. */
     box-shadow:
       0 10px 22px color-mix(in srgb, var(--bg-primary) 45%, transparent),
       0 0 0 1px color-mix(in srgb, var(--accent-primary) 38%, transparent);
@@ -280,6 +285,19 @@
     background: color-mix(in srgb, var(--bg-hover) 90%, transparent);
     color: var(--text-primary);
   }
+  /* Transparency modes: the 90%-opaque pill above wipes the glass out under
+     the hovered icon ("background turns solid on hover"). Keep the highlight
+     but let the glass/acrylic show through. Sharp themes keep solid fills —
+     glass contradicts their identity (same rule as themes.css). */
+  :global(html[data-glass="on"]) .pack-tile:hover:not(.selected) .pack-name,
+  :global(html.glass-os) .pack-tile:hover:not(.selected) .pack-name {
+    background: color-mix(in srgb, var(--bg-hover) 46%, transparent);
+  }
+  :global(html[data-glass="on"]:is([data-theme="win95"], [data-theme="pixelato"]))
+    .pack-tile:hover:not(.selected)
+    .pack-name {
+    background: var(--bg-hover);
+  }
   .pack-tile:focus-visible {
     outline: 2px solid var(--accent-primary);
     outline-offset: 2px;
@@ -290,6 +308,9 @@
     height: 60px;
     flex-shrink: 0;
     transition: transform var(--motion-fast, 160ms) var(--ease-spring, ease);
+    /* Own compositor layer: the hover lift animates without repainting the
+       glass panel's backdrop (extra flicker guard for WebView2). */
+    will-change: transform;
   }
   .pack-icon {
     position: relative;
@@ -301,8 +322,7 @@
     place-items: center;
     box-shadow: 0 6px 14px color-mix(in srgb, var(--bg-primary) 35%, transparent);
     transition:
-      box-shadow var(--motion-fast, 160ms) var(--ease-out, ease),
-      filter var(--motion-fast, 160ms) var(--ease-out, ease);
+      box-shadow var(--motion-fast, 160ms) var(--ease-out, ease);
   }
   .pack-icon::after {
     content: "";
@@ -379,7 +399,6 @@
     transform: none;
   }
   .potato .pack-tile:hover:not(.selected) .pack-icon {
-    filter: none;
     box-shadow: 0 6px 14px color-mix(in srgb, var(--bg-primary) 35%, transparent);
   }
   .potato .pack-tile.selected .pack-icon {
