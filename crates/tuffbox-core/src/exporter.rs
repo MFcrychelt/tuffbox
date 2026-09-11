@@ -796,13 +796,26 @@ fn modrinth_files_and_overrides(
             .unwrap_or_default();
         let hashes = module.hashes.as_ref();
 
-        // Modrinth index files MUST have at least one download URL.
-        // Local-only content goes into overrides/ only (never a hollow index row).
+        // Modrinth index: local-only content also gets an index row
+        // (with empty downloads) so the pack installer knows the path
+        // and hashes.  The actual bytes go into overrides/.
         if downloads.is_empty() {
+            let mut has_override = false;
             if let Some(local) = resolve_content_path(project_dir, module) {
                 override_content.push((local, format!("overrides/{index_path}")));
-                // Still skip walking this path again from content folders.
-                skip_paths.insert(index_path);
+                skip_paths.insert(index_path.clone());
+                has_override = true;
+            }
+            if has_override {
+                files.push(ModrinthFile {
+                    path: index_path,
+                    hashes: ModrinthHashes {
+                        sha1: hashes.and_then(|h| h.sha1.clone()),
+                        sha512: hashes.and_then(|h| h.sha512.clone()),
+                    },
+                    downloads: Vec::new(),
+                    env: side_env(module.side),
+                });
             }
             continue;
         }
@@ -1536,7 +1549,7 @@ mod tests {
         let result = export_modrinth_pack(&manifest, &manifest_path, &out);
         assert!(result.is_ok(), "{:?}", result.err());
         let res = result.unwrap();
-        assert_eq!(res.file_count, 1);
+        assert_eq!(res.file_count, 2, "local mod + remote rp in index");
         assert_eq!(res.override_count, 1, "only local jar embedded, not remote rp on disk");
 
         let file = fs::File::open(&out).unwrap();
@@ -1549,7 +1562,7 @@ mod tests {
             .unwrap();
         let index_json: serde_json::Value = serde_json::from_str(&index).unwrap();
         let files = index_json.get("files").and_then(|v| v.as_array()).unwrap();
-        assert_eq!(files.len(), 1, "local-only mods must not appear in index files[]");
+        assert_eq!(files.len(), 2, "local mod + remote rp in index files[]");
 
         let local_entry = files
             .iter()

@@ -1258,19 +1258,9 @@ fn expand_compact_quest_value(v: &mut Value) {
                         "title": "Quests",
                         "quests": quests
                     }));
-                } else {
-                    if let Value::Array(mut arr) = quests {
-                        if !arr.is_empty() {
-                            if let Some(last_ch) = chapters.last_mut() {
-                                if let Some(existing) =
-                                    last_ch.get_mut("quests").and_then(|q| q.as_array_mut())
-                                {
-                                    existing.append(&mut arr);
-                                }
-                            }
-                        }
-                    }
                 }
+                // When all chapters already have quests, discard stray top-level
+                // quests/quest — they belong to the chapters that own them.
             }
         }
     }

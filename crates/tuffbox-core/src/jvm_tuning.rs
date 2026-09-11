@@ -81,7 +81,7 @@ pub fn recommend_heap_mb(
     let base_mb = loader_heap_base_mb(loader_kind);
     let mut per_category: BTreeMap<String, usize> = BTreeMap::new();
     for cats in mods_categories {
-        let mut best = ("uncategorized".to_string(), category_ram_weight(""));
+        let mut best = ("uncategorized".to_string(), 0u32);
         for c in cats {
             let w = category_ram_weight(c);
             if w > best.1 {
