@@ -6666,13 +6666,24 @@ fn prepare_ai_crash_context_uncached(
         win_events: Vec::new(),
         combined_lines: std::cell::OnceCell::new(),
     };
-    let diagnosis = tuffbox_core::crash::build_crash_diagnosis(
-        &project_dir,
-        &manifest,
-        report_id,
-        Vec::new(),
-    )
-    .map_err(|e| e.to_string())?;
+    // Reuse the base diagnosis already computed by get_crash_diagnosis for
+    // the same inputs (same mtime-keyed cache entry). Rebuilding it here
+    // doubled the full log/archive/graph pass on every cold AI explain —
+    // the second-largest cold-path cost after the full-file log reads.
+    let diagnosis_cache_key = crash_diagnosis_cache_key(path, report_id);
+    let diagnosis =
+        match tuffbox_core::api_cache::get::<tuffbox_core::crash::CrashDiagnosis>(
+            &diagnosis_cache_key,
+        ) {
+            Some(cached) => cached,
+            None => tuffbox_core::crash::build_crash_diagnosis(
+                &project_dir,
+                &manifest,
+                report_id,
+                Vec::new(),
+            )
+            .map_err(|e| e.to_string())?,
+        };
 
     let report = tuffbox_core::crash_assistant::run_full_analysis(&ctx);
 
@@ -6882,8 +6893,60 @@ async fn build_ai_crash_context(
     }))
 }
 
+/// Single-flight for the AI cascade: one run per (path, report_id) at a time.
+/// A second "AI explain" click (or a watchdog reset followed by retry) used
+/// to spawn a full parallel cascade — double the network wait, double the
+/// CPU — whose late result the frontend generation guard discarded anyway.
+/// Concurrent callers now share the in-flight run's result.
+static AI_CASCADE_INFLIGHT: std::sync::Mutex<
+    std::collections::HashMap<
+        String,
+        std::sync::Arc<tokio::sync::OnceCell<Result<serde_json::Value, String>>>,
+    >,
+> = std::sync::Mutex::new(std::collections::HashMap::new());
+
 #[tauri::command(rename_all = "camelCase")]
 async fn analyze_crash_with_ai(
+    app: tauri::AppHandle,
+    path: String,
+    report_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let key = format!("{}:{:?}", path, report_id);
+    let cell = {
+        let mut map = AI_CASCADE_INFLIGHT
+            .lock()
+            .map_err(|_| "ai cascade lock poisoned".to_string())?;
+        map.entry(key.clone())
+            .or_insert_with(|| std::sync::Arc::new(tokio::sync::OnceCell::new()))
+            .clone()
+    };
+    let app_for_run = app.clone();
+    let path_for_run = path.clone();
+    let report_for_run = report_id.clone();
+    let result = cell
+        .get_or_init(|| async move {
+            analyze_crash_with_ai_inner(app_for_run, path_for_run, report_for_run).await
+        })
+        .await;
+    // Unlink the entry once the run has settled so a later call starts a
+    // fresh cascade instead of replaying a stale result. Callers still
+    // awaiting hold their own Arc clone and keep receiving this run.
+    {
+        let mut map = AI_CASCADE_INFLIGHT
+            .lock()
+            .map_err(|_| "ai cascade lock poisoned".to_string())?;
+        if map
+            .get(&key)
+            .map(|c| std::sync::Arc::ptr_eq(c, &cell))
+            .unwrap_or(false)
+        {
+            map.remove(&key);
+        }
+    }
+    result.clone()
+}
+
+async fn analyze_crash_with_ai_inner(
     app: tauri::AppHandle,
     path: String,
     report_id: Option<String>,
@@ -6925,11 +6988,20 @@ async fn analyze_crash_with_ai(
     let mut cascade_tried: Vec<String> = vec!["l1".into()];
 
     emit_diagnose_cascade(&app, "l1_searching");
+    let cascade_started = std::time::Instant::now();
 
     // Enrich similar_cases from local capsule library + remote lookup (read-only).
     if swarm_on {
-        let global_hits =
-            integrations::global_capsule_library().lookup(&fingerprint, &haystack, 5);
+        // Library lookup reads + parses the whole capsule JSONL and verifies
+        // signatures per hit — disk/CPU work that used to run directly on the
+        // async runtime, stalling every other IPC (and the UI) while it ran.
+        let fp_for_lookup = fingerprint.clone();
+        let hay_for_lookup = haystack.clone();
+        let global_hits = tokio::task::spawn_blocking(move || {
+            integrations::global_capsule_library().lookup(&fp_for_lookup, &hay_for_lookup, 5)
+        })
+        .await
+        .unwrap_or_default();
         if !global_hits.is_empty() {
             let mut merged = tuffbox_core::crash_remote::hits_to_similar_cases(&global_hits);
             merged.extend(ai_ctx.similar_cases.drain(..));
@@ -6947,12 +7019,19 @@ async fn analyze_crash_with_ai(
             loader: Some(ai_ctx.loader.clone()),
             limit: 5,
         };
+        let l1_lookup_started = std::time::Instant::now();
         if let Ok(Some(resp)) = tokio::time::timeout(
             NET_STEP_TIMEOUT,
-            swarm_node::lookup_across_transports(&req),
+            swarm_node::lookup_across_transports(&req, &transport_bases),
         )
         .await
         {
+            diagnose_timing(
+                Some(&app),
+                "ai_l1_remote_lookup_hit",
+                l1_lookup_started,
+                false,
+            );
             let mut remote = tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
             remote.extend(ai_ctx.similar_cases.drain(..));
             let mut seen = std::collections::HashSet::new();
@@ -6971,7 +7050,16 @@ async fn analyze_crash_with_ai(
         tuffbox_core::ai_explanation::missing_dep_hints_from_graph(&ai_ctx.graph_diagnostics);
 
     // ── L1: strong KB / capsule hit (free) ──────────────────────────
-    let l1_plan = try_l1_strong_plan(&fingerprint, &haystack, &ai_ctx, swarm_on);
+    // Candidates come from the capsule-library disk scan + signature verify
+    // (same cost as the lookup above) — keep it off the async runtime too.
+    let fp_for_l1 = fingerprint.clone();
+    let hay_for_l1 = haystack.clone();
+    let ctx_for_l1 = ai_ctx.clone();
+    let l1_plan = tokio::task::spawn_blocking(move || {
+        try_l1_strong_plan(&fp_for_l1, &hay_for_l1, &ctx_for_l1, swarm_on)
+    })
+    .await
+    .unwrap_or(None);
 
     let mut plan = if let Some(plan) = l1_plan {
         cascade_stage = "l1_hit".into();
@@ -6995,7 +7083,7 @@ async fn analyze_crash_with_ai(
             };
             match tokio::time::timeout(
                 NET_STEP_TIMEOUT,
-                swarm_node::lookup_across_transports(&req),
+                swarm_node::lookup_across_transports(&req, &transport_bases),
             )
             .await
             {
@@ -7056,6 +7144,7 @@ async fn analyze_crash_with_ai(
         // ── L2: Fog volunteer (opt-in P2P) — best-effort; miss → L3 ──
         cascade_tried.push("l2".into());
         emit_diagnose_cascade(&app, "l2_asking");
+        let l2_started = std::time::Instant::now();
         let l2 = if swarm_on && settings.swarm.p2p_enabled {
             match tokio::time::timeout(
                 NET_STEP_TIMEOUT,
@@ -7073,6 +7162,7 @@ async fn analyze_crash_with_ai(
         } else {
             Err("fog volunteer unavailable".into())
         };
+        diagnose_timing(Some(&app), "ai_l2_volunteer", l2_started, false);
 
         match l2 {
             Ok(mut volunteer_plan) => {
@@ -7095,9 +7185,10 @@ async fn analyze_crash_with_ai(
                         excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 4000)),
                         prefer_kb_only: false,
                     };
-                    match tokio::time::timeout(
+                    let l3_started = std::time::Instant::now();
+                    let l3_out = match tokio::time::timeout(
                         NET_STEP_TIMEOUT,
-                        swarm_node::diagnose_across_transports(&req),
+                        swarm_node::diagnose_across_transports(&req, &transport_bases),
                     )
                     .await
                     {
@@ -7145,7 +7236,9 @@ async fn analyze_crash_with_ai(
                             };
                             p
                         }
-                    }
+                    };
+                    diagnose_timing(Some(&app), "ai_l3_server", l3_started, false);
+                    l3_out
                 }
                 tuffbox_core::action_plan::DiagnoseMode::Local
                 | tuffbox_core::action_plan::DiagnoseMode::Server => {
@@ -7181,8 +7274,14 @@ async fn analyze_crash_with_ai(
     // claims instead of blindly downgrading them. Global Supabase pairs are
     // merged with the project's local co-occurrence store.
     let compat_pairs: Vec<tuffbox_core::action_plan::CoexistingPair> = {
+        // Local co-occurrence store is a disk read (JSONL scan) — blocking pool.
+        let dir_for_pairs = project_dir.clone();
         let mut pairs: Vec<tuffbox_core::swarm::ModPairStat> =
-            tuffbox_core::swarm::top_cooccurrence_pairs(&project_dir, 200);
+            tokio::task::spawn_blocking(move || {
+                tuffbox_core::swarm::top_cooccurrence_pairs(&dir_for_pairs, 200)
+            })
+            .await
+            .unwrap_or_default();
         if let (Some(url), Some(key)) = (
             integrations::swarm_supabase_url(),
             integrations::swarm_supabase_anon_key(),
@@ -7236,8 +7335,18 @@ async fn analyze_crash_with_ai(
         });
     }
 
-    let pending_path =
-        swarm_api::maybe_persist_pending_from_plan(&project_dir, &plan, network_used);
+    // Pending-plan persist writes to disk (snapshot dir) — keep the write off
+    // the async runtime so late-stage I/O cannot stall the IPC response.
+    let dir_for_pending = project_dir.clone();
+    let plan_for_pending = plan.clone();
+    let pending_path = tokio::task::spawn_blocking(move || {
+        swarm_api::maybe_persist_pending_from_plan(&dir_for_pending, &plan_for_pending, network_used)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        // JoinError: the write is best-effort telemetry — lose it, not the plan.
+        None
+    });
     let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory_and_compat(
         &plan,
         &inventory_ids,
@@ -7245,6 +7354,12 @@ async fn analyze_crash_with_ai(
         &compat_pairs,
     );
     let legacy = tuffbox_core::action_plan::plan_to_legacy_ai_actions(&plan);
+    diagnose_timing(
+        Some(&app),
+        "ai_cascade_total",
+        cascade_started,
+        kb_short_circuit,
+    );
 
     Ok(serde_json::json!({
         "schemaVersion": plan.schema_version,
@@ -8427,11 +8542,23 @@ fn restore_backup(path: String, backup_id: String) -> Result<(), String> {
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = entry.name().to_string();
+        let name = entry.name().replace('\\', "/");
         if name.ends_with('/') {
             continue;
         }
-        let target = project_dir.join(&name);
+        // Zip-slip guard done lexically: backup zips live inside the project,
+        // but a hand-crafted or corrupted archive must not escape it. The old
+        // canonicalize-based check also false-rejected entries in NEW
+        // subdirectories (nothing to canonicalize yet), breaking restores.
+        let rel = name.trim_start_matches('/');
+        if rel.is_empty() || tuffbox_core::importer::is_unsafe_zip_rel_path(rel) {
+            return Err(format!("zip entry escapes project directory: {name}"));
+        }
+        let target = project_dir.join(rel);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        // Defense in depth: with parents in place, verify the real path.
         let canonical = std::fs::canonicalize(&target)
             .or_else(|_| std::fs::canonicalize(target.parent().unwrap_or(&project_dir)))
             .map_err(|e| e.to_string())?;
@@ -8439,9 +8566,6 @@ fn restore_backup(path: String, backup_id: String) -> Result<(), String> {
             std::fs::canonicalize(&project_dir).map_err(|e| e.to_string())?
         ) {
             return Err(format!("zip entry escapes project directory: {name}"));
-        }
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mut dest = std::fs::File::create(&target).map_err(|e| e.to_string())?;
         std::io::copy(&mut entry, &mut dest).map_err(|e| e.to_string())?;
@@ -11265,6 +11389,19 @@ fn get_crash_diagnosis_impl(
     }
     let result = get_crash_diagnosis_uncached(app, &path, report_id.clone());
     diagnose_timing(app, "diagnosis_total", total_started, false);
+    // Cache the computed diagnosis under the same mtime key the lookup above
+    // reads. The `get` existed but the result was never stored, so the
+    // "Loaded from cache" fast path was dead code and every tab open /
+    // refresh / source switch re-ran the full log + jar + graph analysis.
+    // The key already covers all file inputs (mtimes); the short TTL only
+    // bounds memory (each entry carries multi-hundred-KB log tails).
+    if let Ok(diagnosis) = &result {
+        tuffbox_core::api_cache::put_with_ttl(
+            cache_key,
+            diagnosis.clone(),
+            std::time::Duration::from_secs(60),
+        );
+    }
     let finish_detail = match &result {
         Ok(d) => format!("{} hint(s), {} suspect(s)", d.hints.len(), d.suspected_mods.len()),
         Err(e) => e.clone(),
@@ -19653,5 +19790,72 @@ mod mods_cleanup_tests {
         let files = files_in(&mods);
         assert!(files.contains(&"sodium-fabric-0.5.8.jar".to_string()));
         assert!(files.contains(&"sodium-extra-0.4.0.jar".to_string()), "sibling kept: {files:?}");
+    }
+}
+
+#[cfg(test)]
+mod crash_diagnosis_cache_tests {
+    use super::*;
+
+    const MINIMAL_MANIFEST: &str = r#"{
+      "schemaVersion": "0.1.0",
+      "project": { "id": "diag-cache-test", "name": "Diag Cache Test", "version": "0.1.0" },
+      "minecraft": { "version": "1.20.1" },
+      "loader": { "type": "fabric", "version": "0.15.0" },
+      "mods": []
+    }"#;
+
+    fn fixture_project() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("project.tuffbox.json");
+        std::fs::write(&manifest, MINIMAL_MANIFEST).unwrap();
+        std::fs::create_dir_all(dir.path().join("logs")).unwrap();
+        std::fs::create_dir_all(dir.path().join("mods")).unwrap();
+        std::fs::write(
+            dir.path().join("logs").join("latest.log"),
+            "INFO: game started\n",
+        )
+        .unwrap();
+        let path = dir.path().to_string_lossy().to_string();
+        (dir, path)
+    }
+
+    /// The diagnosis cache lookup existed but the computed result was never
+    /// stored, so the "Loaded from cache" fast path was dead code and every
+    /// Diagnose open re-ran the full log/jar/graph analysis. Guard the put:
+    /// after one impl run the mtime key must hold a fresh entry, and a second
+    /// run must serve byte-identical data from it.
+    #[test]
+    fn get_crash_diagnosis_stores_result_in_cache() {
+        let (_dir, path) = fixture_project();
+        let first = get_crash_diagnosis_impl(None, path.clone(), None).unwrap();
+        let key = crash_diagnosis_cache_key(&path, None);
+        let cached: tuffbox_core::crash::CrashDiagnosis = tuffbox_core::api_cache::get(&key)
+            .expect("diagnosis must be cached after the first run");
+        let second = get_crash_diagnosis_impl(None, path.clone(), None).unwrap();
+        let first_json = serde_json::to_string(&first).unwrap();
+        assert_eq!(
+            first_json,
+            serde_json::to_string(&cached).unwrap(),
+            "cache entry must hold the same diagnosis the first run returned"
+        );
+        assert_eq!(
+            first_json,
+            serde_json::to_string(&second).unwrap(),
+            "second run must return the same diagnosis for unchanged inputs"
+        );
+    }
+
+    /// Changing the analyzed source (report_id) must not collide with the
+    /// default key — different source ⇒ different cache entry.
+    #[test]
+    fn cache_key_separates_sources() {
+        let (_dir, path) = fixture_project();
+        let none_key = crash_diagnosis_cache_key(&path, None);
+        let latest_key = crash_diagnosis_cache_key(&path, Some("__latest_log__"));
+        let session_key = crash_diagnosis_cache_key(&path, Some("session/abc"));
+        assert_ne!(none_key, latest_key);
+        assert_ne!(none_key, session_key);
+        assert_ne!(latest_key, session_key);
     }
 }

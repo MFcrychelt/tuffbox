@@ -546,7 +546,12 @@
 
 <style>
   .export-builder {
-    max-width: none;
+    /* Document page (form + cards), not a canvas — same centered cap as the
+       sibling document stages ReleaseRoom/OreGenVisualizer (1240). The old
+       max-width: none stretched the path input and card grids edge-to-edge
+       on wide windows. */
+    max-width: min(1240px, 100%);
+    margin: 0 auto;
     width: 100%;
   }
   .toolbar,
@@ -793,6 +798,14 @@
   }
   .err-text {
     color: #fecaca;
+  }
+  /* Laptop band: 4 cards x ~250px get cramped — drop to 2x2 before the
+     single-column fallback. */
+  @media (min-width: 901px) and (max-width: 1280px) {
+    .checks,
+    .format-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
   @media (max-width: 900px) {
     .checks,

@@ -256,10 +256,32 @@ pub async fn ensure_node_running(control_base: &str) -> Result<(), String> {
         }
     }
 
-    for _ in 0..40 {
+    // Wall-clock deadline instead of a fixed iteration count: every
+    // p2p_authorized check can itself block up to its 2s HTTP timeout, so the
+    // old 40-iteration loop could stall ~90s against a dead control URL and
+    // freeze the diagnose cascade step that called us. 8s keeps attach useful.
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
         tokio::time::sleep(Duration::from_millis(250)).await;
         if p2p_authorized(control_base).await {
             return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        // Bail out early when the child we spawned already died — polling a
+        // corpse for the remaining deadline is pure freeze time.
+        let mut guard = NODE_CHILD
+            .lock()
+            .map_err(|_| "p2p node lock poisoned".to_string())?;
+        if let Some(child) = guard.as_mut() {
+            if child
+                .try_wait()
+                .map_err(|e| format!("p2p node wait failed: {e}"))?
+                .is_some()
+            {
+                break;
+            }
         }
     }
     Err("tuffswarm-node did not become healthy/authorized in time".into())
@@ -398,8 +420,13 @@ pub async fn get_p2p_node_status() -> Result<Value, String> {
 }
 
 /// Lookup capsules across Supabase, then P2P, then hub; merge hits.
+///
+/// `bases` must come from a single [`capsule_transport_bases`] probe done by
+/// the caller: resolving them here re-ran `ensure_node_running` (spawn +
+/// auth polling, seconds on a dead control plane) inside every cascade step.
 pub async fn lookup_across_transports(
     req: &tuffbox_core::crash_remote::CrashLookupRequest,
+    bases: &[String],
 ) -> Option<tuffbox_core::crash_remote::CrashLookupResponse> {
     let mut merged: Vec<tuffbox_core::crash_remote::CrashLookupHit> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -425,8 +452,7 @@ pub async fn lookup_across_transports(
         }
     }
 
-    let bases = capsule_transport_bases().await;
-    for base in &bases {
+    for base in bases {
         let token = auth_token_for_base(base);
         if let Ok(resp) =
             tuffbox_core::crash_remote::lookup_remote_async(base, token.as_deref(), req).await
@@ -449,15 +475,16 @@ pub async fn lookup_across_transports(
 }
 
 /// Try diagnose on each transport (P2P has no diagnose — hub/KB will succeed if present).
+/// `bases` must come from a single [`capsule_transport_bases`] probe by the caller.
 pub async fn diagnose_across_transports(
     req: &tuffbox_core::crash_remote::CrashDiagnoseRequest,
+    bases: &[String],
 ) -> Result<tuffbox_core::crash_remote::CrashDiagnoseResponse, String> {
-    let bases = capsule_transport_bases().await;
     if bases.is_empty() {
         return Err("no swarm transport (enable P2P node or set hub URL)".into());
     }
     let mut last_err = "diagnose failed on all transports".to_string();
-    for base in &bases {
+    for base in bases {
         let token = auth_token_for_base(base);
         match tuffbox_core::crash_remote::diagnose_remote_async(base, token.as_deref(), req).await
         {

@@ -639,25 +639,35 @@
     height: 100%;
   }
 
-  /* Priority stages: one primary canvas fills the stage (DaVinci-style work area). */
+  /* Priority stages: one primary canvas fills the stage (DaVinci-style work
+     area). The stage only provides sizing — each canvas keeps its own
+     centered max-width cap on 1440p+ (.mods 1680 / .graph 1840 /
+     .diagnostics 1320 / .snapshots 1440). Do NOT set max-width/margin here:
+     the previous `max-width: none; margin: 0` clobbered those caps and
+     stretched every stage edge-to-edge across the window. */
   .stage-content.fill-stage > :global(.mods),
   .stage-content.fill-stage > :global(.graph),
   .stage-content.fill-stage > :global(.test-runs),
   .stage-content.fill-stage > :global(.diagnostics),
-  .stage-content.fill-stage > :global(.jei),
+  .stage-content.fill-stage > :global(.recipe-workspace),
   .stage-content.fill-stage > :global(.snapshots) {
     flex: 1;
     min-height: 0;
     height: 100%;
-    max-width: none;
-    margin: 0;
     box-sizing: border-box;
+  }
+
+  /* Banner is a direct child of the zero-padding canvas stage — inset it so
+     the bordered card does not hug the window edges. Document stages render
+     inside .stage-content padding and need no override. */
+  .stage-content.fill-stage > :global(.update-card) {
+    margin: 12px 16px 0;
   }
 
   .stage-content.fill-stage > :global(.mods),
   .stage-content.fill-stage > :global(.test-runs),
   .stage-content.fill-stage > :global(.diagnostics),
-  .stage-content.fill-stage > :global(.jei) {
+  .stage-content.fill-stage > :global(.recipe-workspace) {
     display: flex;
     flex-direction: column;
     padding: 12px 16px;

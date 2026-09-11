@@ -45,7 +45,7 @@ static CIRCUIT: LazyLock<Mutex<CircuitBreakerState>> = LazyLock::new(|| {
 /// Returns `Ok(())` if the request may proceed, or `Err` if the
 /// circuit breaker has tripped for this host.
 pub(crate) fn circuit_check(host: &str) -> Result<(), CircuitBreakerOpen> {
-    let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
+    let mut cb = CIRCUIT.lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
     let entry = cb
         .hosts
@@ -77,7 +77,7 @@ pub(crate) fn circuit_check(host: &str) -> Result<(), CircuitBreakerOpen> {
 
 /// Must be called after a *successful* request to the host.
 pub(crate) fn circuit_record_success(host: &str) {
-    let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
+    let mut cb = CIRCUIT.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = cb.hosts.get_mut(host) {
         entry.failures.clear();
         entry.state = CircuitState::Closed;
@@ -86,7 +86,7 @@ pub(crate) fn circuit_record_success(host: &str) {
 
 /// Must be called after a *failed* request to the host.
 pub(crate) fn circuit_record_failure(host: &str) {
-    let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
+    let mut cb = CIRCUIT.lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
     let entry = cb
         .hosts
@@ -137,6 +137,9 @@ pub(crate) fn host_from_url(url: &str) -> &str {
 // ---------------------------------------------------------------------------
 
 static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    // Release hardening: a builder failure (exotic TLS/proxy misconfig) must
+    // degrade to a plain client instead of panicking the whole process on
+    // first network use.
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60))
         .connect_timeout(Duration::from_secs(15))
@@ -144,7 +147,7 @@ static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .tcp_nodelay(true)
         .user_agent("TuffBox-IDE/0.1.0")
         .build()
-        .expect("Failed to build HTTP client")
+        .unwrap_or_else(|_| reqwest::blocking::Client::new())
 });
 
 static HTTP_ASYNC: LazyLock<reqwest::Client> = LazyLock::new(|| {
@@ -154,7 +157,7 @@ static HTTP_ASYNC: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .tcp_keepalive(Duration::from_secs(10))
         .user_agent("TuffBox-IDE/0.1.0")
         .build()
-        .expect("Failed to build async HTTP client")
+        .unwrap_or_else(|_| reqwest::Client::new())
 });
 
 /// Shared blocking HTTP client with connection pooling.
