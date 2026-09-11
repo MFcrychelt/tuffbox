@@ -88,7 +88,7 @@ pub fn vendor_label(vendor_id: u16) -> &'static str {
 /// Resolve the launch target: `auto` prefers discrete, then the primary
 /// adapter, then whatever was detected first. `integrated` falls back the
 /// same way when no iGPU is reported (single-dGPU desktop).
-pub fn resolve_target_gpu(mode: &str, gpus: &[GpuInfo]) -> Option<&GpuInfo> {
+pub fn resolve_target_gpu<'a>(mode: &str, gpus: &'a [GpuInfo]) -> Option<&'a GpuInfo> {
     if gpus.is_empty() {
         return None;
     }

@@ -5329,7 +5329,7 @@ async fn install_fo_optimize_pack(
         let manifest_path = PathBuf::from(&path_for_block);
         let mut snapshot =
             auto_snapshot_before_mod_op(&manifest_path, "optimize-fo").map_err(|e| e.to_string())?;
-        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path_for_block).map_err(|e| e.to_string())?;
         let mut installed: Vec<String> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
         let mut requested: Vec<String> = Vec::new();
@@ -7282,12 +7282,14 @@ async fn build_ai_crash_context(
 /// to spawn a full parallel cascade — double the network wait, double the
 /// CPU — whose late result the frontend generation guard discarded anyway.
 /// Concurrent callers now share the in-flight run's result.
-static AI_CASCADE_INFLIGHT: std::sync::Mutex<
-    std::collections::HashMap<
-        String,
-        std::sync::Arc<tokio::sync::OnceCell<Result<serde_json::Value, String>>>,
+static AI_CASCADE_INFLIGHT: std::sync::LazyLock<
+    std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            std::sync::Arc<tokio::sync::OnceCell<Result<serde_json::Value, String>>>,
+        >,
     >,
-> = std::sync::Mutex::new(std::collections::HashMap::new());
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 #[tauri::command(rename_all = "camelCase")]
 async fn analyze_crash_with_ai(
@@ -16859,7 +16861,6 @@ async fn get_loader_versions(
     .map_err(|e| e.to_string())?)
 }
 
-#[tauri::command(rename_all = "camelCase")]
 /// Category-aware heap recommendation for one instance (Project Settings
 /// preview; launch logs the same estimate but keeps the memory setting).
 #[tauri::command(rename_all = "camelCase")]
