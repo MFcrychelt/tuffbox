@@ -64,7 +64,7 @@ static CACHE: LazyLock<Mutex<CacheInner>> = LazyLock::new(|| {
 ///
 /// `T` must match the type originally stored under `key`.
 pub fn get<T: Clone + 'static>(key: &str) -> Option<T> {
-    let cache = CACHE.lock().expect("api_cache lock poisoned");
+    let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let entry = cache.entries.get(key)?;
     let entry = entry.downcast_ref::<CacheEntry<T>>()?;
     if entry.is_fresh() {
@@ -78,7 +78,7 @@ pub fn get<T: Clone + 'static>(key: &str) -> Option<T> {
 ///
 /// Returns `None` if the key is not in the cache at all.
 pub fn get_stale<T: Clone + 'static>(key: &str) -> Option<T> {
-    let mut cache = CACHE.lock().expect("api_cache lock poisoned");
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let entry = cache.entries.get_mut(key)?;
     let entry = entry.downcast_mut::<CacheEntry<T>>()?;
     entry.inserted_at = Instant::now();
@@ -87,7 +87,7 @@ pub fn get_stale<T: Clone + 'static>(key: &str) -> Option<T> {
 
 /// Returns `true` if a fresh (non-stale) value exists for `key`.
 pub fn is_fresh(key: &str) -> bool {
-    let cache = CACHE.lock().expect("api_cache lock poisoned");
+    let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache
         .entries
         .get(key)
@@ -103,7 +103,7 @@ pub fn put<T: Clone + Send + 'static>(key: impl Into<String>, value: T) {
 
 /// Inserts a value into the cache with a custom TTL.
 pub fn put_with_ttl<T: Clone + Send + 'static>(key: impl Into<String>, value: T, ttl: Duration) {
-    let mut cache = CACHE.lock().expect("api_cache lock poisoned");
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
 
     // Evict stale entries first, then if still over capacity evict oldest.
     if cache.entries.len() >= MAX_ENTRIES {
@@ -170,25 +170,25 @@ where
 
 /// Removes a single entry from the cache.
 pub fn invalidate(key: &str) {
-    let mut cache = CACHE.lock().expect("api_cache lock poisoned");
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.entries.remove(key);
 }
 
 /// Removes all entries whose keys start with `prefix`.
 pub fn invalidate_prefix(prefix: &str) {
-    let mut cache = CACHE.lock().expect("api_cache lock poisoned");
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.entries.retain(|k, _| !k.starts_with(prefix));
 }
 
 /// Clears the entire cache.
 pub fn clear() {
-    let mut cache = CACHE.lock().expect("api_cache lock poisoned");
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.entries.clear();
 }
 
 /// Returns the number of entries currently in the cache.
 pub fn len() -> usize {
-    let cache = CACHE.lock().expect("api_cache lock poisoned");
+    let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.entries.len()
 }
 

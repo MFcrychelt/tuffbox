@@ -1379,7 +1379,10 @@
     height: 100%;
     min-height: 0;
     overflow: hidden;
-    max-width: none;
+    /* Centered cap on 1440p+ — matches the other IDE tool canvases (Mods,
+       ConfigEditor 1680); strips/terminal keep readable line lengths. */
+    max-width: min(1680px, 100%);
+    margin: 0 auto;
     width: 100%;
   }
   .toolbar, .title, .status, .status-strip, .log-tools, .preflight, .opts-row, .matrix-head, .run-top, .run-actions, .history-head, .filters, .log-tools-right, .launch-bar, .launch-actions { display: flex; align-items: center; }
