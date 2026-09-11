@@ -16926,6 +16926,7 @@ fn recommend_jvm_cmd(path: String) -> Result<tuffbox_core::jvm_tuning::JvmRecomm
     ))
 }
 
+#[tauri::command(rename_all = "camelCase")]
 async fn find_java_runtimes() -> Result<Vec<tuffbox_core::jre::JavaRuntime>, String> {
     tokio::task::spawn_blocking(|| tuffbox_core::jre::find_all_runtimes_full())
         .await
