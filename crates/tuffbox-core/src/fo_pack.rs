@@ -136,7 +136,7 @@ pub fn fo_mods_from_index_json(index_json: &str) -> Result<(Vec<FoIndexMod>, FoI
         let (project_id, version_id) = file
             .downloads
             .iter()
-            .find_map(modrinth_ids_from_file_url)
+            .find_map(|url| modrinth_ids_from_file_url(url))
             .unwrap_or_default();
         mods.push(FoIndexMod {
             file_name,
