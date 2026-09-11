@@ -2476,6 +2476,10 @@
 <style>
   .recipe-workspace {
     font-family: var(--font-sans, inherit);
+    /* Centered cap on 1440p+ — the recipe grid keeps card-sized columns
+       instead of stretching edge-to-edge (matches .graph 1840). */
+    max-width: min(1840px, 100%);
+    margin: 0 auto;
   }
   .pixelated {
     image-rendering: pixelated;
