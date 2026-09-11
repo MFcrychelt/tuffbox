@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Mutex,
@@ -483,13 +483,42 @@ fn kill_pid(pid: u32) -> std::io::Result<()> {
     }
 }
 
+/// Assumed average bytes per log line used to size the tail window.
+const LOG_TAIL_AVG_LINE_BYTES: u64 = 2048;
+/// Lower bound for the tail window so tiny `limit` values still see context.
+const LOG_TAIL_MIN_WINDOW_BYTES: u64 = 64 * 1024;
+/// Hard cap on the tail window so pathological inputs cannot balloon memory.
+const LOG_TAIL_MAX_WINDOW_BYTES: u64 = 32 * 1024 * 1024;
+
 pub fn read_log_tail(path: &Path, limit: usize) -> std::io::Result<String> {
     if !path.exists() {
         return Ok(String::new());
     }
+    if limit == 0 {
+        return Ok(String::new());
+    }
     let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let lines: Vec<String> = read_lines_lossy(reader).collect();
+    let file_len = file.metadata()?.len();
+    // Seek a byte window from the end instead of reading the whole file.
+    // Diagnose reads latest.log / launcher.log / debug.log / archived session
+    // logs several times per run; a full-file read turned every one of those
+    // into an O(file) stall on long Minecraft sessions (hundreds of MB).
+    // 2 KiB/line covers stack-trace-heavy tails; the cap bounds worst cases.
+    let window = (limit as u64)
+        .saturating_mul(LOG_TAIL_AVG_LINE_BYTES)
+        .clamp(LOG_TAIL_MIN_WINDOW_BYTES, LOG_TAIL_MAX_WINDOW_BYTES)
+        .min(file_len);
+    let window_start = file_len - window;
+    let mut reader = BufReader::new(file);
+    if window_start > 0 {
+        reader.seek(SeekFrom::Start(window_start))?;
+    }
+    let mut lines: Vec<String> = read_lines_lossy(reader).collect();
+    // The window may start mid-line; drop the partial first line unless the
+    // window covers the whole file, so line counts stay honest.
+    if window_start > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
     let start = lines.len().saturating_sub(limit);
     Ok(format_minecraft_log_for_display(&lines[start..].join("\n")))
 }
@@ -692,5 +721,144 @@ mod tests {
         assert_eq!(exit.code, Some(1));
         assert_eq!(exit.duration_secs, 3);
         assert!(!exit.stop_requested);
+    }
+
+    // ── read_log_tail ───────────────────────────────────────────────
+
+    fn write_temp_log(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tuffbox-read-tail-{}-{}",
+            std::process::id(),
+            name
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("write temp log");
+        path
+    }
+
+    #[test]
+    fn read_log_tail_returns_last_lines() {
+        let mut body = String::new();
+        for i in 0..100 {
+            body.push_str(&format!("line-{i}\n"));
+        }
+        let path = write_temp_log("tail-basic.log", &body);
+        let tail = read_log_tail(&path, 5).expect("read tail");
+        let lines: Vec<&str> = tail.lines().collect();
+        assert_eq!(lines.len(), 5, "{tail}");
+        assert_eq!(lines[0], "line-95");
+        assert_eq!(lines[4], "line-99");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_log_tail_small_file_returns_all_lines() {
+        let path = write_temp_log("tail-small.log", "a\nb\nc\n");
+        let tail = read_log_tail(&path, 10).expect("read tail");
+        assert_eq!(tail.lines().collect::<Vec<_>>(), vec!["a", "b", "c"]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_log_tail_empty_file_is_empty_string() {
+        let path = write_temp_log("tail-empty.log", "");
+        let tail = read_log_tail(&path, 10).expect("read tail");
+        assert_eq!(tail, "");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_log_tail_missing_file_is_empty_string() {
+        let tail = read_log_tail(Path::new("/nonexistent/tuffbox-tail.log"), 10)
+            .expect("missing file must not error");
+        assert_eq!(tail, "");
+    }
+
+    #[test]
+    fn read_log_tail_zero_limit_is_empty() {
+        let path = write_temp_log("tail-zero.log", "a\nb\n");
+        let tail = read_log_tail(&path, 0).expect("read tail");
+        assert_eq!(tail, "");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_log_tail_no_trailing_newline_keeps_last_line() {
+        let path = write_temp_log("tail-nonl.log", "a\nb\nc");
+        let tail = read_log_tail(&path, 2).expect("read tail");
+        assert_eq!(tail.lines().collect::<Vec<_>>(), vec!["b", "c"]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_log_tail_drops_partial_window_line() {
+        // Each line is padded past the 64 KiB minimum window so the seek
+        // lands mid-line; the partial first line must not leak into output.
+        let long_line = format!("L{:<7000}", "x");
+        let mut body = String::new();
+        for i in 0..40 {
+            body.push_str(&format!("row-{i}-"));
+            body.push_str(&"y".repeat(6000));
+            body.push('\n');
+        }
+        body.push_str(&long_line);
+        body.push('\n');
+        let path = write_temp_log("tail-partial.log", &body);
+        let tail = read_log_tail(&path, 3).expect("read tail");
+        for line in tail.lines() {
+            assert!(
+                line.starts_with("row-") || line.starts_with("L"),
+                "partial line leaked: {line}"
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_log_tail_multibyte_utf8_not_split() {
+        let mut body = String::new();
+        for i in 0..500 {
+            body.push_str(&format!("строка-{i} краш\n"));
+        }
+        let path = write_temp_log("tail-utf8.log", &body);
+        let tail = read_log_tail(&path, 2).expect("read tail");
+        let lines: Vec<&str> = tail.lines().collect();
+        assert_eq!(lines.len(), 2, "{tail}");
+        assert!(lines[0].starts_with("строка-498"), "{tail}");
+        assert!(!tail.contains('\u{FFFD}'), "replacement char in {tail}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_log_tail_lossy_on_invalid_bytes() {
+        let mut body = b"ok-line\n".to_vec();
+        body.extend_from_slice(&[0xFF, 0xFE, 0x00, b'\n']);
+        body.extend_from_slice(b"after-binary\n");
+        let dir = std::env::temp_dir().join(format!(
+            "tuffbox-read-tail-{}-{}",
+            std::process::id(),
+            "bin"
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("tail-binary.log");
+        std::fs::write(&path, &body).expect("write binary log");
+        let tail = read_log_tail(&path, 3).expect("read tail");
+        assert!(tail.contains("after-binary"), "{tail}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_log_tail_huge_single_line_is_bounded() {
+        // A 4 MB line followed by a short final line: the window can only
+        // cover the end, so the huge line is (partially) dropped and the
+        // memory stays bounded — the final line must still come through.
+        let mut big = "z".repeat(4 * 1024 * 1024);
+        big.push_str("\nfinal-marker-line\n");
+        let path = write_temp_log("tail-big.log", &big);
+        let tail = read_log_tail(&path, 5).expect("read tail");
+        assert!(tail.contains("final-marker-line"), "{tail}");
+        assert!(tail.len() < 256 * 1024, "tail ballooned: {}", tail.len());
+        let _ = std::fs::remove_file(&path);
     }
 }

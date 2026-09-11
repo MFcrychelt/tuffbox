@@ -1205,17 +1205,17 @@
       } catch {
         // non-fatal
       }
-      try {
-        const prep = await invoke<{ ok?: boolean; model?: string; skipped?: boolean }>(
-          "ensure_ollama_model",
-        );
-        if (!opts.quiet) {
-          if (prep?.model) message = `AI ready (${prep.model}). Analyzing crash…`;
-          else message = "Preparing local AI…";
-        }
-      } catch (prepErr) {
+      // Daemon warm-up and the heavy context build are independent — run
+      // them concurrently. Serializing them stacked the Ollama probe time
+      // (up to tens of seconds on a sick daemon) on top of the context
+      // build before the AI cascade even started.
+      const prepPromise = invoke<{ ok?: boolean; model?: string; skipped?: boolean }>(
+        "ensure_ollama_model",
+      ).catch((prepErr) => {
         console.warn("[AI] ensure_ollama_model:", prepErr);
-      }
+        return null;
+      });
+      if (!opts.quiet) message = "Preparing local AI…";
       const reportId = activeReportId();
       const context: any = await invoke("build_ai_crash_context", {
         path: $projectPath,
@@ -1225,6 +1225,10 @@
       aiContext = context;
       aiPrompt = context.prompt ?? "";
       aiShowPrompt = false;
+      const prep = await prepPromise;
+      if (!opts.quiet && prep?.model) {
+        message = `AI ready (${prep.model}). Analyzing crash…`;
+      }
       const result = await invoke("analyze_crash_with_ai", {
         path: $projectPath,
         reportId,

@@ -1537,9 +1537,20 @@ fn model_name_matches(installed: &str, wanted: &str) -> bool {
 }
 
 async fn ollama_list_models(root: &str) -> Result<Vec<OllamaModelInfo>, String> {
+    ollama_list_models_with_timeout(root, 8).await
+}
+
+/// Same probe with a caller-chosen timeout. Diagnose/AI warm-up uses short
+/// probes: a live daemon answers /api/tags in milliseconds, so a long hang
+/// means the endpoint is dead and retrying with 8s timeouts only froze the
+/// AI path for tens of seconds before surfacing the real error.
+async fn ollama_list_models_with_timeout(
+    root: &str,
+    timeout_secs: u64,
+) -> Result<Vec<OllamaModelInfo>, String> {
     let url = format!("{root}/api/tags");
     let response = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .build()
         .map_err(|e| e.to_string())?
         .get(&url)
@@ -1780,7 +1791,9 @@ async fn wait_ollama_api(root: &str, attempts: u32) -> Result<(), String> {
     for attempt in 0..attempts {
         let delay_ms = 400u64 + u64::from(attempt) * 200;
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-        match ollama_list_models(root).await {
+        // Short probe: a starting daemon answers quickly; a black-holing
+        // endpoint must not consume the full 8s timeout per attempt.
+        match ollama_list_models_with_timeout(root, 2).await {
             Ok(_) => return Ok(()),
             Err(e) => last_err = e,
         }
@@ -1837,7 +1850,7 @@ async fn relaunch_user_endpoint_daemon(settings: &AiSettings) -> Result<String, 
     stop_ollama_processes();
     tokio::time::sleep(std::time::Duration::from_millis(900)).await;
     try_start_ollama(&settings.ollama_binary_path, models);
-    match wait_ollama_api(&root, 12).await {
+    match wait_ollama_api(&root, 6).await {
         Ok(()) => Ok(root),
         Err(e) => {
             // Soft failure: models are on disk; user can open Ollama tray (now with User env).
@@ -1856,7 +1869,7 @@ async fn ensure_ollama_daemon(settings: &AiSettings) -> Result<String, String> {
     let root = ollama_root(&settings.endpoint);
     let models = settings.ollama_models_path.trim();
     if models.is_empty() {
-        if ollama_list_models(&root).await.is_err() {
+        if ollama_list_models_with_timeout(&root, 2).await.is_err() {
             try_start_ollama(&settings.ollama_binary_path, "");
             tokio::time::sleep(std::time::Duration::from_millis(900)).await;
         }
@@ -1865,11 +1878,11 @@ async fn ensure_ollama_daemon(settings: &AiSettings) -> Result<String, String> {
 
     let _ = fs::create_dir_all(models);
     persist_ollama_models_user_env(models);
-    if ollama_list_models(&root).await.is_ok() {
+    if ollama_list_models_with_timeout(&root, 2).await.is_ok() {
         return Ok(root);
     }
     try_start_ollama(&settings.ollama_binary_path, models);
-    let _ = wait_ollama_api(&root, 10).await;
+    let _ = wait_ollama_api(&root, 5).await;
     Ok(root)
 }
 
@@ -2119,18 +2132,28 @@ pub async fn ensure_ollama_ready(settings: &AiSettings) -> Result<String, String
     if !settings.ollama_models_path.trim().is_empty() {
         let _ = ensure_ollama_daemon(settings).await;
     }
-    for attempt in 0..4 {
-        match ollama_list_models(&root).await {
+    // Fail-fast budget: at most two short probes. A live daemon answers in
+    // milliseconds; the old 4×8s retry storm stalled every Diagnose → AI
+    // run for ~35s whenever the endpoint was hanging (sick daemon, firewall
+    // drop), and the process spawn below cannot help a remote endpoint.
+    let mut started = false;
+    for attempt in 0..2 {
+        match ollama_list_models_with_timeout(&root, 3).await {
             Ok(list) => {
                 models = Some(list);
                 break;
             }
             Err(e) => {
                 last_err = e;
-                if attempt == 0 {
-                    try_start_ollama(&settings.ollama_binary_path, &settings.ollama_models_path);
+                if !started {
+                    started = true;
+                    if ollama_binary_exists(&settings.ollama_binary_path) {
+                        try_start_ollama(&settings.ollama_binary_path, &settings.ollama_models_path);
+                    }
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(700 + attempt * 400)).await;
+                if attempt == 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                }
             }
         }
     }
@@ -2196,8 +2219,9 @@ fn ollama_binary_exists(hint: &str) -> bool {
     if resolved.is_file() {
         return true;
     }
-    // PATH lookup: try `ollama --version` quickly
-    std::process::Command::new(if hint.trim().is_empty() {
+    // PATH lookup: try `ollama --version`, but never wait on it indefinitely —
+    // a hanging stub on PATH used to block the whole async executor here.
+    let mut child = match std::process::Command::new(if hint.trim().is_empty() {
         "ollama"
     } else {
         resolved.to_str().unwrap_or("ollama")
@@ -2205,9 +2229,24 @@ fn ollama_binary_exists(hint: &str) -> bool {
     .arg("--version")
     .stdout(std::process::Stdio::null())
     .stderr(std::process::Stdio::null())
-    .status()
-    .map(|s| s.success())
-    .unwrap_or(false)
+    .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(_) => return false,
+        }
+    }
 }
 
 /// Probe whether Ollama is installed / running and list local models.
