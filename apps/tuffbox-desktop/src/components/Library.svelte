@@ -30,6 +30,7 @@
   import LibraryInstancesPane from "./LibraryInstancesPane.svelte";
   import PromptDialog from "./PromptDialog.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import DropImportDialog from "./DropImportDialog.svelte";
   import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
@@ -47,6 +48,16 @@
   let importing = $state(false);
   let importMenuOpen = $state(false);
   let githubImportOpen = $state(false);
+
+  // ── Drag & drop import (Library tab) ────────────────────────────────
+  let dragDepth = $state(0);
+  let dropStaging = $state<{ total: number; done: number } | null>(null);
+  let offerOpen = $state(false);
+  let offerInspect = $state<any>(null);
+  let offerPath = $state("");
+  let offerToken = $state("");
+  let offerName = $state("");
+  let offerBusy = $state(false);
   let githubConfirmOpen = $state(false);
   let githubInstallActive = $state(false);
   let githubPendingSource = $state("");
@@ -164,6 +175,176 @@
       importing = false;
       githubInstallActive = false;
     }
+  }
+
+  // ── Drag & drop staging (DOM drops — dragDropEnabled:false webview) ──
+  const DROP_CHUNK = 4 * 1024 * 1024;
+
+  function u8ToB64(bytes: Uint8Array): string {
+    let bin = "";
+    const step = 0x8000;
+    for (let i = 0; i < bytes.length; i += step) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + step));
+    }
+    return btoa(bin);
+  }
+
+  type DroppedFile = { rel: string; file: File };
+
+  /** webkitGetAsEntry must run synchronously inside the drop event —
+      DataTransfer items are invalidated by the first await. */
+  function collectDropEntriesSync(dt: DataTransfer): Array<FileSystemEntry | File> {
+    const out: Array<FileSystemEntry | File> = [];
+    for (const item of Array.from(dt.items ?? [])) {
+      const entry = (item as unknown as { webkitGetAsEntry?: () => FileSystemEntry | null })
+        .webkitGetAsEntry?.();
+      if (entry) out.push(entry);
+    }
+    if (out.length === 0) {
+      for (const file of Array.from(dt.files ?? [])) out.push(file);
+    }
+    return out;
+  }
+
+  async function walkDropEntry(
+    entry: FileSystemEntry | File,
+    prefix: string,
+    out: DroppedFile[],
+  ): Promise<void> {
+    if (entry instanceof File) {
+      out.push({ rel: prefix + entry.name, file: entry });
+      return;
+    }
+    const fileEntry = entry as FileSystemFileEntry;
+    if (fileEntry.isFile) {
+      const file = await new Promise<File | null>((resolve) =>
+        fileEntry.file((f) => resolve(f), () => resolve(null)),
+      );
+      if (file) out.push({ rel: prefix + file.name, file });
+      return;
+    }
+    const dirEntry = entry as FileSystemDirectoryEntry;
+    const reader = dirEntry.createReader();
+    for (;;) {
+      // readEntries returns at most 100 per call — loop until empty.
+      const batch = await new Promise<FileSystemEntry[]>((resolve) =>
+        reader.readEntries(
+          (entries) => resolve(entries as FileSystemEntry[]),
+          () => resolve([]),
+        ),
+      );
+      if (batch.length === 0) break;
+      for (const child of batch) await walkDropEntry(child, `${prefix}${dirEntry.name}/`, out);
+    }
+  }
+
+  function onLibraryDragEnter(e: DragEvent) {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+    e.preventDefault();
+    dragDepth += 1;
+  }
+  function onLibraryDragOver(e: DragEvent) {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  }
+  function onLibraryDragLeave() {
+    dragDepth = Math.max(0, dragDepth - 1);
+  }
+
+  async function onLibraryDrop(e: DragEvent) {
+    e.preventDefault();
+    dragDepth = 0;
+    if (importing || dropStaging || offerOpen) return;
+    if (!e.dataTransfer) return;
+    const items = collectDropEntriesSync(e.dataTransfer);
+    if (items.length === 0) return;
+    await handleDroppedItems(items);
+  }
+
+  async function handleDroppedItems(items: Array<FileSystemEntry | File>) {
+    const files: DroppedFile[] = [];
+    for (const item of items) await walkDropEntry(item, "", files);
+    if (files.length === 0) {
+      toasts.error("Nothing importable in the dropped selection.");
+      return;
+    }
+    const first = files[0].rel;
+    const rootName = first.includes("/")
+      ? first.split("/")[0]
+      : first.replace(/\.(zip|mrpack|rar|7z)$/i, "");
+    let stage: { token: string; dir: string } | null = null;
+    try {
+      stage = (await invoke("begin_drop_import", { name: rootName })) as {
+        token: string;
+        dir: string;
+      };
+      const total = files.reduce((acc, f) => acc + f.file.size, 0);
+      dropStaging = { total, done: 0 };
+      for (const { rel, file } of files) {
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        for (let offset = 0; offset < bytes.length; offset += DROP_CHUNK) {
+          const chunk = bytes.subarray(offset, Math.min(offset + DROP_CHUNK, bytes.length));
+          await invoke("write_drop_chunk", {
+            token: stage.token,
+            rel,
+            offset,
+            data: u8ToB64(chunk),
+          });
+          dropStaging = { total, done: dropStaging.done + chunk.length };
+        }
+      }
+      const { dir } = (await invoke("finish_drop_import", { token: stage.token })) as {
+        dir: string;
+      };
+      // A single dropped file imports as itself; anything else (folder /
+      // multi-folder drop) imports as the staged root directory.
+      const singleFile = files.length === 1 && !first.includes("/") ? first : null;
+      offerPath = singleFile ? `${dir}/${singleFile}` : dir;
+      offerToken = stage.token;
+      offerInspect = await invoke("inspect_import_source", { path: offerPath });
+      offerName = String(offerInspect?.name || rootName || "Imported pack");
+      offerOpen = true;
+    } catch (err) {
+      toasts.error(String(err));
+      if (stage) await invoke("cancel_drop_import", { token: stage.token }).catch(() => {});
+    } finally {
+      dropStaging = null;
+    }
+  }
+
+  async function confirmDropImport() {
+    if (!offerPath || !offerName.trim()) return;
+    offerBusy = true;
+    try {
+      const targetDir = await resolveImportTargetDir();
+      if (!targetDir) {
+        toasts.error("Set an instances folder in Settings first.");
+        return;
+      }
+      const result: any = await invoke("install_modpack", {
+        source: offerPath,
+        targetDir,
+        instanceName: offerName.trim(),
+      });
+      await invoke("cancel_drop_import", { token: offerToken }).catch(() => {});
+      offerOpen = false;
+      offerToken = "";
+      await finishImportedPack(result);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      offerBusy = false;
+    }
+  }
+
+  function cancelDropImport() {
+    offerOpen = false;
+    if (offerToken) void invoke("cancel_drop_import", { token: offerToken }).catch(() => {});
+    offerToken = "";
+    offerPath = "";
+    offerInspect = null;
   }
 
   async function importPackFile() {
@@ -640,7 +821,48 @@
   });
 </script>
 
-<div class="library fade-slide-in">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- Drop target for modpack archives/folders. The drag events only open the
+     overlay; the keyboard path is the existing Import menu above. -->
+<div
+  class="library fade-slide-in"
+  class:drop-target={dragDepth > 0}
+  ondragenter={onLibraryDragEnter}
+  ondragover={onLibraryDragOver}
+  ondragleave={onLibraryDragLeave}
+  ondrop={(e) => void onLibraryDrop(e)}
+>
+  {#if dragDepth > 0 && !dropStaging && !offerOpen}
+    <div class="drop-overlay" data-testid="library-drop-overlay" aria-hidden="true">
+      <div class="drop-overlay-card">
+        <Download size={26} />
+        <strong>Drop to import</strong>
+        <span>.mrpack · Prism / CurseForge .zip · .rar · .7z · mods / resourcepacks / shaders</span>
+      </div>
+    </div>
+  {/if}
+  {#if dropStaging}
+    <div class="drop-overlay" data-testid="library-drop-staging" aria-hidden="true">
+      <div class="drop-overlay-card">
+        <strong>Copying dropped files…</strong>
+        <div
+          class="drop-progress"
+          role="progressbar"
+          aria-label="Copying dropped files"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={dropStaging.total
+            ? Math.round((dropStaging.done / dropStaging.total) * 100)
+            : 0}
+        >
+          <div
+            class="drop-progress-fill"
+            style={`width: ${dropStaging.total ? Math.round((dropStaging.done / dropStaging.total) * 100) : 0}%`}
+          ></div>
+        </div>
+      </div>
+    </div>
+  {/if}
   {#snippet tabButtons()}
     <!-- svelte-ignore a11y_interactive_supports_focus -->
     <!-- Keydown lands here by bubbling from the focused tab button; the
@@ -1044,6 +1266,18 @@
     confirmLabel="Install"
     onconfirm={() => void confirmGithubInstall()}
     oncancel={() => (githubConfirmOpen = false)}
+  />
+{/if}
+
+{#if offerOpen && offerInspect}
+  <DropImportDialog
+    inspect={offerInspect}
+    busy={offerBusy}
+    onconfirm={(name) => {
+      offerName = name;
+      void confirmDropImport();
+    }}
+    oncancel={cancelDropImport}
   />
 {/if}
 
@@ -1748,5 +1982,60 @@
     .lib-header-enter {
       animation: none !important;
     }
+  }
+  /* ── Drag & drop import ─────────────────────────────────────────── */
+  .library {
+    position: relative;
+  }
+  .library.drop-target {
+    outline: 2px dashed color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    outline-offset: -6px;
+  }
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    border-radius: var(--border-radius-xl);
+    pointer-events: none;
+  }
+  .drop-overlay-card {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    padding: 26px 34px;
+    text-align: center;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: 2px dashed color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow-lg);
+  }
+  .drop-overlay-card strong {
+    font-size: 15px;
+    color: var(--text-primary);
+  }
+  .drop-overlay-card span {
+    font-size: 12px;
+    color: var(--text-muted);
+    max-width: 380px;
+  }
+  .drop-progress {
+    width: 240px;
+    height: 6px;
+    margin-top: 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    overflow: hidden;
+  }
+  .drop-progress-fill {
+    height: 100%;
+    background: var(--accent-primary);
+    transition: width 120ms var(--ease-out, ease);
   }
 </style>
