@@ -1,6 +1,7 @@
 mod auth;
 mod cosmetics_local;
 mod cpu_affinity;
+mod gpu;
 mod resource_mode;
 mod create_mode_api;
 mod deep_link;
@@ -4732,18 +4733,8 @@ fn audit_performance(path: String) -> Result<Vec<serde_json::Value>, String> {
         .find(|p| p.id == "client")
         .or_else(|| manifest.profiles.first());
     if let Some(profile) = profile {
-        let jvm = profile.jvm_args.join(" ");
-        if !jvm.contains("-XX:+UseG1GC")
-            && !jvm.contains("-XX:+UseZGC")
-            && !jvm.contains("-XX:+UseShenandoahGC")
-        {
-            findings.push(serde_json::json!({
-                "severity": "info",
-                "code": "NO_GC_SETTING",
-                "message": "No GC specified in JVM args. Consider -XX:+UseG1GC for Minecraft.",
-                "file": null,
-            }));
-        }
+        // No NO_GC_SETTING finding: empty JVM args are fine — the launcher
+        // auto-tunes a GC profile per pack at launch (ZGC on vanilla).
         if profile.memory_mb.unwrap_or(4096) < 3072 {
             findings.push(serde_json::json!({
                 "severity": "warning",
@@ -4901,6 +4892,16 @@ async fn preview_curated_optimize_pack(path: String) -> Result<serde_json::Value
                 "Curated pack '{id}' not found on Modrinth yet ({e}). Publish the project or fix optimize-packs.json."
             )
         })?;
+        // A mapping that points at a *modpack* (e.g. Fabulously Optimized)
+        // cannot be installed as a single mod — its versions carry the set in
+        // modrinth.index.json, not in dependencies. Redirect to the FO tab
+        // instead of downloading a stray .mrpack into mods/.
+        if project.project_type.eq_ignore_ascii_case("modpack") {
+            return Err(format!(
+                "Curated entry '{}' is a Modrinth modpack, not a single mod — open the Fabulously Optimized tab to install its mod set.",
+                project.slug
+            ));
+        }
         let query = ProviderSearchQuery {
             query: None,
             minecraft_version: Some(mc.clone()),
@@ -5036,6 +5037,389 @@ async fn install_curated_optimize_pack(
         "install": install,
         "config": config_result,
         "pack": pack,
+    }))
+}
+
+/// ── Optimize pack (Fabulously Optimized set) ───────────────────────
+///
+/// Unlike curated/custom, the FO variant downloads the official FO `.mrpack`
+/// for the instance's exact MC version + loader, parses its
+/// `modrinth.index.json` and installs the **exact pinned builds** — the set
+/// the FO team tested together, not latest-per-mod.
+
+/// Numeric `1.20.1`-style ordering, newest first. Local copy: the one in
+/// `optimize_pack` is private and sorts ascending.
+fn sort_mc_versions_desc(versions: &mut [String]) {
+    fn parts(v: &str) -> Vec<u32> {
+        v.split('.').map(|p| p.parse().unwrap_or(0)).collect()
+    }
+    versions.sort_by(|a, b| parts(b).cmp(&parts(a)));
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn preview_fo_optimize_pack(path: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let project_dir = manifest_parent(&path)?;
+        let loader = loader_slug_for_manifest(&manifest);
+        let mc = manifest.minecraft.version.clone();
+        if loader != "fabric" && loader != "quilt" {
+            return Err(format!(
+                "The Fabulously Optimized set needs Fabric or Quilt (this instance uses {loader}). Use Custom mode for other loaders."
+            ));
+        }
+        // Exact MC match against the curated mapping (the FO project id lives
+        // there, shared with the curated flow).
+        let entries = tuffbox_core::optimize_pack::list_curated_pack_entries(&loader);
+        let fo_ref = entries
+            .iter()
+            .find(|(ver, _)| ver == &mc)
+            .map(|(_, r)| r.clone());
+        let Some(fo_ref) = fo_ref else {
+            let mut supported: Vec<String> = entries
+                .iter()
+                .map(|(ver, _)| ver.clone())
+                .filter(|v| v != "default")
+                .collect();
+            sort_mc_versions_desc(&mut supported);
+            let supported = if supported.is_empty() {
+                "none mapped yet".to_string()
+            } else {
+                supported.join(", ")
+            };
+            return Err(format!(
+                "No Fabulously Optimized set for MC {mc}. FO supports: {supported}."
+            ));
+        };
+        let fo_id = fo_ref
+            .slug
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| fo_ref.project_id.clone());
+        let provider = tuffbox_core::ModrinthProvider::new();
+        let fo_project = provider.get_project(&fo_id).map_err(|e| e.to_string())?;
+        if !fo_project.project_type.eq_ignore_ascii_case("modpack") {
+            return Err(format!(
+                "Mapped FO project '{fo_id}' is not a Modrinth modpack (type: {}).",
+                fo_project.project_type
+            ));
+        }
+        let mut warnings: Vec<String> = Vec::new();
+        let query = ProviderSearchQuery {
+            query: None,
+            minecraft_version: Some(mc.clone()),
+            loader: Some(loader.clone()),
+            ..Default::default()
+        };
+        let mut versions = provider
+            .get_versions(&fo_project.id, &query)
+            .map_err(|e| e.to_string())?;
+        // FO publishes Fabric-tagged builds; Quilt runs Fabric mods, so fall
+        // back to the Fabric build when no Quilt-tagged one exists.
+        if versions.is_empty() && loader == "quilt" {
+            let fabric_query = ProviderSearchQuery {
+                query: None,
+                minecraft_version: Some(mc.clone()),
+                loader: Some("fabric".to_string()),
+                ..Default::default()
+            };
+            versions = provider
+                .get_versions(&fo_project.id, &fabric_query)
+                .map_err(|e| e.to_string())?;
+            if !versions.is_empty() {
+                warnings.push(
+                    "No Quilt-tagged FO build — using the Fabric FO build (Quilt runs Fabric mods)."
+                        .to_string(),
+                );
+            }
+        }
+        let fo_version = versions.into_iter().next().ok_or_else(|| {
+            let mut supported: Vec<String> = provider
+                .get_versions(&fo_project.id, &ProviderSearchQuery::default())
+                .map(|vs| {
+                    vs.into_iter()
+                        .flat_map(|v| v.game_versions)
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect()
+                })
+                .unwrap_or_default();
+            sort_mc_versions_desc(&mut supported);
+            supported.truncate(12);
+            let supported = if supported.is_empty() {
+                "none published".to_string()
+            } else {
+                supported.join(", ")
+            };
+            format!("No Fabulously Optimized build for MC {mc} ({loader}). FO supports: {supported}.")
+        })?;
+
+        let mrpack = fo_version
+            .files
+            .iter()
+            .find(|f| f.filename.to_lowercase().ends_with(".mrpack"))
+            .or_else(|| fo_version.files.iter().find(|f| f.primary))
+            .ok_or_else(|| {
+                format!(
+                    "FO version {} has no downloadable pack file.",
+                    fo_version.version_number
+                )
+            })?;
+        let pack_bytes = tuffbox_core::http::get_bytes(&mrpack.url)
+            .map_err(|e| format!("Failed to download the FO pack file: {e}"))?;
+        let index_json = tuffbox_core::importer::read_mrpack_index_json(&pack_bytes)
+            .map_err(|e| e.to_string())?;
+        let (mut fo_mods, stats) =
+            tuffbox_core::fo_pack::fo_mods_from_index_json(&index_json).map_err(|e| e.to_string())?;
+        if fo_mods.is_empty() {
+            return Err("The FO pack index contains no client mods.".to_string());
+        }
+        // SHA-1 fallback for entries whose download URL didn't parse.
+        for fo_mod in fo_mods
+            .iter_mut()
+            .filter(|m| m.project_id.is_empty() && !m.sha1.is_empty())
+        {
+            if let Ok(Some(version)) = provider.get_version_by_hash(&fo_mod.sha1) {
+                fo_mod.project_id = version.project_id;
+                fo_mod.version_id = version.id;
+            }
+        }
+        let unresolved = fo_mods
+            .iter()
+            .filter(|m| m.project_id.is_empty() || m.version_id.is_empty())
+            .count();
+        if unresolved > 0 {
+            warnings.push(format!(
+                "{unresolved} FO entries could not be resolved to a Modrinth version and were skipped."
+            ));
+        }
+        let mut ids: Vec<String> = fo_mods
+            .iter()
+            .filter(|m| !m.project_id.is_empty() && !m.version_id.is_empty())
+            .map(|m| m.project_id.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        let infos = provider.get_projects_batch(&ids).map_err(|e| e.to_string())?;
+        // Warm the project cache so the install step's per-mod lookups are instant.
+        for info in &infos {
+            tuffbox_core::api_cache::put(
+                tuffbox_core::api_cache::project_key("modrinth", &info.id),
+                info.clone(),
+            );
+            tuffbox_core::api_cache::put(
+                tuffbox_core::api_cache::project_key("modrinth", &info.slug),
+                info.clone(),
+            );
+        }
+        let by_id: std::collections::HashMap<&str, &tuffbox_core::ProjectInfo> = infos
+            .iter()
+            .map(|p| (p.id.as_str(), p))
+            .collect();
+        let keys = installed_mod_keys(&manifest);
+        let reason = format!(
+            "Fabulously Optimized {} · exact pinned build",
+            fo_version.version_number
+        );
+        let mut mods: Vec<serde_json::Value> = fo_mods
+            .iter()
+            .filter(|m| !m.project_id.is_empty() && !m.version_id.is_empty())
+            .map(|m| {
+                let (slug, name) = match by_id.get(m.project_id.as_str()) {
+                    Some(p) => (p.slug.clone(), p.name.clone()),
+                    None => (
+                        m.file_name
+                            .trim_end_matches(".jar")
+                            .trim_end_matches(".JAR")
+                            .to_lowercase()
+                            .replace(['_', ' ', '+'], "-"),
+                        tuffbox_core::fo_pack::pretty_name_from_file_name(&m.file_name),
+                    ),
+                };
+                let already = keys.contains(&m.project_id.to_lowercase())
+                    || is_mod_installed_by_slug(&keys, &slug);
+                serde_json::json!({
+                    "slug": slug,
+                    "name": name,
+                    "fileName": m.file_name,
+                    "provider": "modrinth",
+                    "projectId": m.project_id,
+                    "versionId": m.version_id,
+                    "reason": reason,
+                    "risk": "low",
+                    "alreadyInstalled": already,
+                })
+            })
+            .collect();
+        // Not-installed first so the set reads as a to-do list, then A–Z.
+        mods.sort_by(|a, b| {
+            let a_done = a
+                .get("alreadyInstalled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let b_done = b
+                .get("alreadyInstalled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            a_done.cmp(&b_done).then_with(|| {
+                a.get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+            })
+        });
+        if stats.skipped_non_mod > 0 {
+            warnings.push(format!(
+                "Skipped {} non-mod FO files (resource packs, configs).",
+                stats.skipped_non_mod
+            ));
+        }
+        if stats.skipped_client_unsupported > 0 {
+            warnings.push(format!(
+                "Skipped {} server-only FO entries.",
+                stats.skipped_client_unsupported
+            ));
+        }
+        let (cfg_actions, mut cfg_warnings) =
+            tuffbox_core::optimize_pack::build_optimize_config_actions(
+                &project_dir,
+                &manifest,
+                true,
+            );
+        warnings.append(&mut cfg_warnings);
+        let pack_name = fo_ref.name.clone().unwrap_or_else(|| fo_project.name.clone());
+        Ok(serde_json::json!({
+            "pack": {
+                "projectId": fo_project.id,
+                "slug": fo_project.slug,
+                "name": pack_name,
+                "versionId": fo_version.id,
+                "versionNumber": fo_version.version_number,
+                "minecraftVersion": mc,
+                "loader": loader,
+                "modCount": mods.len(),
+            },
+            "mods": mods,
+            "configActions": cfg_actions,
+            "warnings": warnings,
+            "minecraftVersion": mc,
+            "loader": loader,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Installs the selected FO pinned builds (one snapshot + one download batch
+/// for the whole set), then fills any missing required dependencies.
+#[tauri::command(rename_all = "camelCase")]
+async fn install_fo_optimize_pack(
+    app: tauri::AppHandle,
+    path: String,
+    mods: Vec<OptimizeModOffer>,
+    apply_configs: bool,
+    config_plan: Option<tuffbox_core::action_plan::ActionPlan>,
+) -> Result<serde_json::Value, String> {
+    let path_for_stats = path.clone();
+    // The blocking section moves its own clones: `app` + `path` are still
+    // needed afterwards for the config-plan apply.
+    let path_for_block = path.clone();
+    let app_for_block = app.clone();
+    let (installed, mut errors) = tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path_for_block);
+        let mut snapshot =
+            auto_snapshot_before_mod_op(&manifest_path, "optimize-fo").map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let mut installed: Vec<String> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        let mut requested: Vec<String> = Vec::new();
+        for offer in &mods {
+            if offer.already_installed {
+                continue;
+            }
+            if offer.provider != "modrinth" {
+                errors.push(format!("{}: only Modrinth entries are supported", offer.slug));
+                continue;
+            }
+            let Some(version_id) = offer
+                .version_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+            else {
+                errors.push(format!("{}: missing pinned version", offer.slug));
+                continue;
+            };
+            if manifest_has_dependency_target(&manifest, &offer.project_id)
+                || manifest.mods.iter().any(|m| m.id == offer.slug)
+            {
+                continue;
+            }
+            requested.push(offer.project_id.clone());
+            match add_mod_from_modrinth_pinned(
+                &mut manifest,
+                &offer.project_id,
+                version_id,
+                Some("both".to_string()),
+            ) {
+                Ok(()) => installed.push(offer.project_id.clone()),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("already in the project") {
+                        continue;
+                    }
+                    errors.push(format!("{}: {msg}", offer.slug));
+                }
+            }
+        }
+        // Empty seed: only fills Requires-deps the set itself recorded
+        // (FO mods deselected by the user resolve to latest here).
+        match install_modrinth_with_dependencies_rounds(&mut manifest, &[], "both", 50, None) {
+            Ok(deps) => installed.extend(deps),
+            Err(e) => errors.push(format!("dependencies: {e}")),
+        }
+        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods_tracked(&app_for_block, &manifest_path, &manifest, None, true);
+        let related: Vec<&ModSpec> = installed
+            .iter()
+            .filter_map(|id| {
+                manifest.mods.iter().find(|m| {
+                    m.id == *id || m.source.project_id.as_deref() == Some(id.as_str())
+                })
+            })
+            .collect();
+        let lines = mod_install_history_lines(&related, &requested);
+        finalize_mod_history(
+            &manifest_path,
+            &mut snapshot,
+            "optimize-fo",
+            &lines,
+            &related,
+            &[],
+        );
+        Ok::<(Vec<String>, Vec<String>), String>((installed, errors))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let mut config_result = serde_json::json!(null);
+    if apply_configs {
+        if let Some(plan) = config_plan {
+            if !plan.actions.is_empty() {
+                match apply_action_plan(app, path, plan, Some("optimize-fo".into())).await {
+                    Ok(v) => config_result = v,
+                    Err(e) => errors.push(format!("configs: {e}")),
+                }
+            }
+        }
+    }
+    swarm_api::spawn_pack_cooccurrence(path_for_stats, "mod_install");
+
+    Ok(serde_json::json!({
+        "installed": installed,
+        "errors": errors,
+        "config": config_result,
+        "ok": errors.is_empty(),
     }))
 }
 
@@ -14676,14 +15060,11 @@ fn build_and_spawn(
     launch_jvm_args.extend(launcher_settings::split_custom_jvm_args(
         launch_settings.java_custom_args.as_deref(),
     ));
-    launcher_settings::append_stability_jvm_args(
-        &mut launch_jvm_args,
-        launch_settings.potato_pc,
-    );
-    // Auto-tune (Millida tuning.rs-inspired): when neither the profile nor
-    // settings pin an explicit heap, size memory + GC flags from total RAM
-    // and the installed mod count. User/profile JVM args always win.
-    let auto_mod_count = manifest
+    // Auto-tune (jvm_tuning): loader/version-aware GC profile plus a
+    // category-aware heap estimate. Profile/user JVM args always win via
+    // GC-aware dedupe; the heap itself stays on the memory setting.
+    let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind);
+    let mod_categories: Vec<Vec<String>> = manifest
         .mods
         .iter()
         .filter(|m| {
@@ -14692,17 +15073,40 @@ fn build_and_spawn(
                 tuffbox_core::manifest::ContentType::Mod
             )
         })
-        .count();
+        .map(|m| m.source.categories.clone())
+        .collect();
     let auto_total_ram_mb = {
         let mut sys = sysinfo::System::new();
         sys.refresh_memory();
         sys.total_memory() / 1024 / 1024
     };
-    let (auto_memory_mb, auto_gc_args) =
-        launcher_settings::auto_tune_launch(auto_total_ram_mb, auto_mod_count);
-    for arg in &auto_gc_args {
-        launcher_settings::append_unique_jvm_arg(&mut launch_jvm_args, arg.clone());
+    let heap_rec = tuffbox_core::jvm_tuning::recommend_heap_mb(
+        auto_total_ram_mb,
+        loader_slug,
+        &mod_categories,
+    );
+    let heavy_pack = heap_rec.category_mb >= 2048 || heap_rec.mod_count >= 100;
+    let jvm_rec = tuffbox_core::jvm_tuning::recommend_jvm_args(
+        loader_slug,
+        &manifest.minecraft.version,
+        java.major,
+        heavy_pack,
+    );
+    for arg in &jvm_rec.args {
+        launcher_settings::append_tuned_jvm_arg(&mut launch_jvm_args, arg.clone());
     }
+    progress.log(&format!(
+        "# JVM auto-tune ({}): {}",
+        jvm_rec.profile, jvm_rec.note
+    ));
+    progress.log(&format!(
+        "# Heap estimate: {} MB for {} mods (base {} + categories {})",
+        heap_rec.memory_mb, heap_rec.mod_count, heap_rec.base_mb, heap_rec.category_mb
+    ));
+    launcher_settings::append_stability_jvm_args(
+        &mut launch_jvm_args,
+        launch_settings.potato_pc,
+    );
     if launch_settings.potato_pc {
         progress.log("# Potato PC: using lighter JVM GC / thread defaults.");
     }
@@ -14832,6 +15236,31 @@ fn build_and_spawn(
     if let Some((ep, session)) = &overlay_env {
         cmd.env("TUFFBOX_OVERLAY_IPC", ep);
         cmd.env("TUFFBOX_OVERLAY_SESSION", session);
+    }
+
+    // GPU preference (discrete by default on hybrid systems) — best effort, never blocks the game.
+    match gpu::detect_gpus() {
+        Ok(gpus) => {
+            if let Some(target) = gpu::resolve_target_gpu(&launch_settings.gpu_preference, &gpus) {
+                progress.log(&format!(
+                    "# GPU: {} ({}, {})",
+                    target.name, target.kind, target.vendor
+                ));
+                #[cfg(target_os = "linux")]
+                for (key, value) in gpu::linux_prime_env(target, gpus.len()) {
+                    cmd.env(&key, &value);
+                }
+                #[cfg(target_os = "windows")]
+                if let Some(value) = gpu::windows_gpu_preference_value(&target.kind) {
+                    if let Err(e) = gpu::apply_windows_gpu_preference(&java.path, value) {
+                        progress.log(&format!("# WARNING: GPU preference: {e}"));
+                    }
+                }
+            } else {
+                progress.log("# GPU: no adapters detected \u{2014} OS default renderer");
+            }
+        }
+        Err(e) => progress.log(&format!("# WARNING: GPU detection: {e}")),
     }
 
     emit_launch_progress(&app, "starting", "Starting…", Some(95));
@@ -16294,6 +16723,71 @@ async fn get_loader_versions(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+/// Category-aware heap recommendation for one instance (Project Settings
+/// preview; launch logs the same estimate but keeps the memory setting).
+#[tauri::command(rename_all = "camelCase")]
+fn recommend_heap_cmd(path: String) -> Result<tuffbox_core::jvm_tuning::HeapRecommendation, String> {
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind);
+    let mod_categories: Vec<Vec<String>> = manifest
+        .mods
+        .iter()
+        .filter(|m| {
+            matches!(
+                m.content_type,
+                tuffbox_core::manifest::ContentType::Mod
+            )
+        })
+        .map(|m| m.source.categories.clone())
+        .collect();
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let total_ram_mb = sys.total_memory() / 1024 / 1024;
+    Ok(tuffbox_core::jvm_tuning::recommend_heap_mb(
+        total_ram_mb,
+        loader_slug,
+        &mod_categories,
+    ))
+}
+
+/// Loader/version-aware JVM flag recommendation for one instance. Uses the
+/// required Java for the game version (launch re-resolves with the real
+/// runtime); never emits heap-size options.
+#[tauri::command(rename_all = "camelCase")]
+fn recommend_jvm_cmd(path: String) -> Result<tuffbox_core::jvm_tuning::JvmRecommendation, String> {
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind);
+    let mod_categories: Vec<Vec<String>> = manifest
+        .mods
+        .iter()
+        .filter(|m| {
+            matches!(
+                m.content_type,
+                tuffbox_core::manifest::ContentType::Mod
+            )
+        })
+        .map(|m| m.source.categories.clone())
+        .collect();
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let total_ram_mb = sys.total_memory() / 1024 / 1024;
+    let heap_rec = tuffbox_core::jvm_tuning::recommend_heap_mb(
+        total_ram_mb,
+        loader_slug,
+        &mod_categories,
+    );
+    let heavy_pack = heap_rec.category_mb >= 2048 || heap_rec.mod_count >= 100;
+    let java_major = tuffbox_core::jre::required_java_major(&manifest.minecraft.version);
+    Ok(tuffbox_core::jvm_tuning::recommend_jvm_args(
+        loader_slug,
+        &manifest.minecraft.version,
+        java_major,
+        heavy_pack,
+    ))
+}
+
 async fn find_java_runtimes() -> Result<Vec<tuffbox_core::jre::JavaRuntime>, String> {
     tokio::task::spawn_blocking(|| tuffbox_core::jre::find_all_runtimes_full())
         .await
@@ -16858,7 +17352,7 @@ fn create_instance(
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     let mem = memory_mb.unwrap_or(4096).clamp(1024, 65536);
-    let args = jvm_args.unwrap_or_else(|| vec!["-XX:+UseG1GC".to_string()]);
+    let args = jvm_args.unwrap_or_default();
 
     let manifest = ProjectManifest {
         schema_version: "0.1.0".to_string(),
@@ -17847,6 +18341,47 @@ fn add_mod_from_modrinth(
     let version = versions.into_iter().next().ok_or_else(|| {
         anyhow::anyhow!("{mod_id}: no Modrinth build for Minecraft {mc} / {loader}")
     })?;
+
+    let file = ProviderFileInfo::select_file_for_loader(
+        &version,
+        &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind),
+    )
+    .cloned()
+    .ok_or_else(|| anyhow::anyhow!("no primary file for version {}", version.id))?;
+
+    let dependencies = provider.resolve_dependencies(&version.id)?;
+    let mod_side = parse_side(side.as_deref(), Some(&project));
+    let mod_spec = build_mod_spec(&project, &version, file, dependencies, mod_side);
+    manifest.mods.push(mod_spec);
+    Ok(())
+}
+
+/// Adds the **exact pinned version** of a Modrinth mod (unlike
+/// [`add_mod_from_modrinth`], which always resolves the latest compatible
+/// build). Used by the Optimize FO flow where every mod version comes from
+/// the FO `modrinth.index.json`.
+fn add_mod_from_modrinth_pinned(
+    manifest: &mut ProjectManifest,
+    project_id: &str,
+    version_id: &str,
+    side: Option<String>,
+) -> anyhow::Result<()> {
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let project = provider.get_project(project_id)?;
+
+    if manifest.mods.iter().any(|m| {
+        m.id == project.slug || m.source.project_id.as_deref() == Some(project.id.as_str())
+    }) {
+        anyhow::bail!("mod {} is already in the project", project.slug);
+    }
+
+    let version = provider.get_version(version_id)?;
+    if version.project_id != project.id {
+        anyhow::bail!(
+            "version {version_id} does not belong to project {}",
+            project.slug
+        );
+    }
 
     let file = ProviderFileInfo::select_file_for_loader(
         &version,
@@ -19300,6 +19835,8 @@ pub fn run() {
             install_curated_optimize_pack,
             build_optimize_plan,
             apply_optimize_custom_plan,
+            preview_fo_optimize_pack,
+            install_fo_optimize_pack,
             get_mod_presets,
             save_mod_presets_cmd,
             resolve_preset_mod,
@@ -19467,6 +20004,9 @@ pub fn run() {
             launcher_settings::get_launcher_settings,
             launcher_settings::get_auto_tune,
             launcher_settings::count_instance_mods_cmd,
+            recommend_heap_cmd,
+            recommend_jvm_cmd,
+            gpu::detect_gpus,
             window_glass::set_window_glass,
             launcher_settings::save_launcher_settings_cmd,
             launcher_settings::get_runtime_path_info,

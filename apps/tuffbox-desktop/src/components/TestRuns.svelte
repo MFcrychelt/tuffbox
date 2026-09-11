@@ -413,7 +413,7 @@
       .toString()
       .replace(/[<>:"/\\|?*]+/g, "-")
       .trim() || "modpack";
-    return dir ? `${dir}\\${name}-server` : `${name}-server`;
+    return dir ? `${dir}/${name}-server` : `${name}-server`;
   }
 
   async function ensureServerDir(): Promise<string | null> {
@@ -482,7 +482,7 @@
     startupSeconds = null;
     activeRunId = null;
     activeLogRoot = opts.serverDir
-      ? `${opts.serverDir.replace(/[/\\]+$/, "")}\\tuffbox.project.json`
+      ? `${opts.serverDir.replace(/[/\\]+$/, "")}/tuffbox.project.json`
       : $projectPath;
     try {
       await maybeSnapshot(opts.label);
@@ -752,7 +752,7 @@
 
   async function openRunLogs(run: TestRunRecord) {
     if (!$projectPath) return;
-    const captureDir = `${projectDir()}/.tuffbox/test-runs/${run.id}`.replace(/\//g, "\\");
+    const captureDir = `${projectDir()}/.tuffbox/test-runs/${run.id}`;
     try {
       if (!capturedRunIds[run.id]) await captureRunLogs(run, true);
       await openShell(captureDir);
@@ -1632,6 +1632,13 @@
   }
 
   .chip-pid {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 10px;
     font-weight: 600;
     padding: 2px 7px;

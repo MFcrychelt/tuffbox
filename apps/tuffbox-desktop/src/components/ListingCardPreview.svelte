@@ -634,6 +634,13 @@
   .chip,
   .mr-badge,
   .cf-cats span {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 11px;
     font-weight: 600;
     padding: 2px 7px;

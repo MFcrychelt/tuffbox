@@ -2872,6 +2872,13 @@
     text-align: center;
   }
   .pillar-checklist li .prio {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 10px;
     padding: 1px 5px;
     border-radius: 4px;

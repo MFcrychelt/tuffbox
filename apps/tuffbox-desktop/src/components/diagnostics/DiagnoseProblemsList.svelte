@@ -224,6 +224,13 @@
     border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .applied-chip {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     padding: 2px 8px;
     border-radius: 999px;
     font-size: 10px;

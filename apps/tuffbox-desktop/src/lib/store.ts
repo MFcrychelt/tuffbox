@@ -209,6 +209,8 @@ export interface LauncherSettings {
   cpuAffinityMode: "off" | "performance" | "manual";
   /** Hex bitmask used when mode is "manual" (e.g. "0xFF0"). */
   cpuAffinityMask: string | null;
+  /** GPU used for the game: auto (discrete when present) | discrete | integrated. */
+  gpuPreference: "auto" | "discrete" | "integrated";
   /** Hide IDE bottom workflow rail until cursor hits the window bottom edge. */
   autoHideWorkflowRail: boolean;
   /** Left nav: full labels | icons (button toggle) | autoHide (left-edge hover). */
@@ -219,8 +221,6 @@ export interface LauncherSettings {
   uiScaleMode: UiScaleMode;
   /** Round corners on panels/cards/buttons everywhere. */
   roundedCorners: boolean;
-  /** Hide InstanceHome (mods/packs/worlds) preview block on the home dashboard. */
-  hideInstanceHome: boolean;
   /** Quartz backdrop panel behind the home dashboard. Home-only; toggle in Settings. */
   homeBackdrop: boolean;
 }
@@ -751,6 +751,14 @@ export function closeLaunchLog() {
 
 /** One-shot: open IDE on this stage id (e.g. "content" = Mods). Cleared by IdeWorkspace. */
 export const ideStageRequest = writable<string | null>(null);
+
+/**
+ * One-shot: after creating a fresh instance, open the Optimize pack wizard
+ * for this project path. Set by AddInstanceModal ("Install performance mods"),
+ * consumed by Mods (opens the wizard once Content mounts) — Dashboard only
+ * navigates to IDE → Content. Cleared by Mods after applying.
+ */
+export const optimizeAfterCreate = writable<string | null>(null);
 
 /** Live IDE stage while IdeWorkspace is mounted (for left-nav active highlight). */
 export const ideActiveStage = writable<string | null>(null);

@@ -531,6 +531,13 @@
   }
 
   .qw-count {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     padding: 1px 8px;
     border-radius: var(--border-radius-sm);
     background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
@@ -825,6 +832,13 @@
   }
 
   .qw-now-badge {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     align-self: flex-start;
     padding: 1px 6px;
     border-radius: var(--border-radius-sm);

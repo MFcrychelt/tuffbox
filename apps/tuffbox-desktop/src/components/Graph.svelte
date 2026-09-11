@@ -4631,6 +4631,13 @@
     gap: 8px;
   }
   .conflict-badge {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     flex-shrink: 0;
     padding: 2px 7px;
     border-radius: 999px;
@@ -5145,6 +5152,13 @@
   .dep-target { font-weight: 600; }
   .dep-entry small { flex-basis: 100%; display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
   .dep-installed-pill {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     margin-left: 8px;
     font-size: 10px;
     font-weight: 600;

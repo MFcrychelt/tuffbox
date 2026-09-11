@@ -191,6 +191,20 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
     })
 }
 
+/// Reads `modrinth.index.json` from in-memory `.mrpack` bytes (e.g. a pack file
+/// downloaded from Modrinth). Additive helper for the Optimize FO flow;
+/// the file-based [`import_modrinth_pack`] above is untouched.
+pub fn read_mrpack_index_json(pack_bytes: &[u8]) -> Result<String, ImportError> {
+    let cursor = std::io::Cursor::new(pack_bytes);
+    let mut archive = zip::ZipArchive::new(cursor)?;
+    let mut index_raw = String::new();
+    archive
+        .by_name("modrinth.index.json")
+        .map_err(|_| ImportError::MissingModrinthIndex)?
+        .read_to_string(&mut index_raw)?;
+    Ok(index_raw)
+}
+
 /// ── CurseForge modpack import ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -1282,4 +1296,40 @@ fn parse_ini(raw: &str) -> HashMap<String, String> {
         }
     }
     map
+}
+
+#[cfg(test)]
+mod zip_slip_tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+
+    fn write_pack_zip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        let file = std::fs::File::create(path).expect("create zip");
+        let mut zip = zip::ZipWriter::new(file);
+        for (name, data) in entries {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .expect("start file");
+            zip.write_all(data).expect("write data");
+        }
+        zip.finish().expect("finish zip");
+    }
+
+    #[test]
+    fn mrpack_index_reads_from_memory_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pack = dir.path().join("fo.mrpack");
+        write_pack_zip(
+            &pack,
+            &[
+                ("modrinth.index.json", br#"{"name":"FO","files":[]}"#.as_slice()),
+                ("overrides/config/a.toml", b"a".as_slice()),
+            ],
+        );
+        let bytes = fs::read(&pack).expect("read pack");
+        let raw = read_mrpack_index_json(&bytes).expect("read index");
+        assert!(raw.contains("\"FO\""), "unexpected index: {raw}");
+        let missing = read_mrpack_index_json(b"not a zip");
+        assert!(missing.is_err(), "garbage bytes must fail");
+    }
 }

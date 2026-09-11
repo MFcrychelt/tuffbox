@@ -26,6 +26,7 @@
     Search,
     X,
     Compass,
+    Server,
   } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
@@ -77,6 +78,7 @@
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
+  import LibraryInstanceContent from "./LibraryInstanceContent.svelte";
 
   let {
     currentView = $bindable(),
@@ -91,6 +93,22 @@
   const MOVE_CANCEL_PX = 10;
 
   let selectedPath = $state<string | null>($projectPath);
+  /** Per-instance content (mods/packs/shaders/servers) — collapsed by default
+      so the Library side rail stays quiet until needed. */
+  const CONTENT_COLLAPSE_KEY = "tuffbox-library-content-collapsed";
+  let contentCollapsed = $state(
+    typeof localStorage === "undefined"
+      ? true
+      : localStorage.getItem(CONTENT_COLLAPSE_KEY) !== "false",
+  );
+  function toggleContentCollapsed() {
+    contentCollapsed = !contentCollapsed;
+    try {
+      localStorage.setItem(CONTENT_COLLAPSE_KEY, String(contentCollapsed));
+    } catch {
+      /* ignore */
+    }
+  }
   let actionBusy = $state(false);
   let exportMenuOpen = $state(false);
   let addMenuOpen = $state(false);
@@ -848,6 +866,22 @@
           actionBusy = false;
         }
         break;
+      case "export-server":
+        actionBusy = true;
+        try {
+          const exported = await api.export.serverPack(null, project.path);
+          try {
+            await copyText(exported.path);
+            toasts.success(`Exported server pack — path copied: ${exported.path}`);
+          } catch {
+            toasts.success(`Exported server pack: ${exported.path}`);
+          }
+        } catch (e) {
+          toasts.error(String(e));
+        } finally {
+          actionBusy = false;
+        }
+        break;
       case "copy":
         clonePromptName = `${project.info.name} copy`;
         cloneTarget = project;
@@ -1393,6 +1427,9 @@
                       <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", selected)}>
                         Export .mrpack
                       </button>
+                      <button type="button" role="menuitem" onclick={() => void runAction("export-server", selected)}>
+                        Export server pack
+                      </button>
                       <button type="button" role="menuitem" onclick={() => void runAction("export-prism", selected)}>
                         Export Prism zip
                       </button>
@@ -1465,6 +1502,26 @@
                 <span class="side-meta-value">{memoryLabel(selected.info.memoryMb)}</span>
               </div>
             </div>
+            <div class="side-content">
+              <button
+                type="button"
+                class="side-content-toggle"
+                aria-expanded={!contentCollapsed}
+                onclick={toggleContentCollapsed}
+              >
+                <span class="side-content-title">Content</span>
+                <span class="side-content-hint">mods · packs · shaders · servers</span>
+                <ChevronDown size={14} class={!contentCollapsed ? "flipped" : ""} />
+              </button>
+              {#if !contentCollapsed}
+                <div class="side-content-body">
+                  <LibraryInstanceContent
+                    projectPath={selected.path}
+                    onOpenMods={() => openInIde(selected)}
+                  />
+                </div>
+              {/if}
+            </div>
           </div>
         {/key}
       {:else}
@@ -1532,6 +1589,12 @@
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("shortcut", menuProject)}>
       <Link2 size={14} /> Create Shortcut
+    </button>
+    <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", menuProject)} disabled={actionBusy}>
+      <Package size={14} /> Export .mrpack
+    </button>
+    <button type="button" role="menuitem" onclick={() => void runAction("export-server", menuProject)} disabled={actionBusy}>
+      <Server size={14} /> Export server pack
     </button>
     <div class="menu-sep"></div>
     <button type="button" role="menuitem" onclick={() => void runAction("copy-path", menuProject)}>
@@ -2577,6 +2640,53 @@
   @keyframes lib-side-in {
     from { opacity: 0; }
     to { opacity: 1; }
+  }
+
+  /* Per-instance content drawer (mods/packs/shaders/servers status board). */
+  .side-content {
+    margin-top: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
+
+  .side-content-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 4px;
+    background: transparent;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    cursor: pointer;
+    color: var(--text);
+  }
+
+  .side-content-toggle:hover {
+    background: var(--surface-hover);
+  }
+
+  .side-content-title {
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .side-content-hint {
+    flex: 1 1 auto;
+    text-align: left;
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .side-content-toggle :global(.flipped) {
+    transform: rotate(180deg);
+  }
+
+  .side-content-body {
+    margin-top: 6px;
   }
 
   .drag-mode .prism-grid-pane {

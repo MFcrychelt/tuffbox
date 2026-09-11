@@ -162,6 +162,13 @@
     color: var(--text-secondary);
   }
   .shelf-count {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     min-width: 1.4em;
     padding: 1px 7px;
     border-radius: 999px;

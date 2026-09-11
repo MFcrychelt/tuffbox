@@ -401,6 +401,13 @@
     color: var(--ftbq-text-muted);
   }
   .mode-badge {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 9px;
     font-weight: 700;
     text-transform: uppercase;

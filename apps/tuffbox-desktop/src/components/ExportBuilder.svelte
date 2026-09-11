@@ -55,6 +55,7 @@
   let exportMode = $state<ExportMode>("mrpack");
 
   let lastPathForDefaults = $state("");
+  let lastInfoKey = $state("");
 
   const modeMeta: Record<
     ExportMode,
@@ -138,12 +139,25 @@
     void loadDefaultPaths($projectPath);
   }
 
-  function onProjectPathChange(path: string | null) {
-    if (!path || path === lastPathForDefaults) return;
-    lastPathForDefaults = path;
-    result = null;
-    batchResults = [];
-    void loadDefaultPaths(path);
+  function onProjectPathChange(path: string | null, infoKey: string) {
+    if (!path) return;
+    if (path !== lastPathForDefaults) {
+      lastPathForDefaults = path;
+      lastInfoKey = infoKey;
+      result = null;
+      batchResults = [];
+      void loadDefaultPaths(path);
+      return;
+    }
+    // projectInfo loads async *after* the path is set — without this the
+    // default filenames stick to the "modpack-1.0.0" fallbacks. Refresh once
+    // when the real id/version arrive; never clobber afterwards (the user
+    // may have typed custom paths — Refresh button covers renames).
+    const hadInfo = lastInfoKey !== "" && lastInfoKey !== "@";
+    lastInfoKey = infoKey;
+    if (!hadInfo && infoKey !== "" && infoKey !== "@") {
+      void loadDefaultPaths(path);
+    }
   }
 
   async function browseSave(mode: ExportMode) {
@@ -280,7 +294,7 @@
   const busy = $derived(exporting || batching || issuesLoading);
 
   $effect(() => {
-    onProjectPathChange($projectPath);
+    onProjectPathChange($projectPath, `${$projectInfo?.id ?? ""}@${$projectInfo?.version ?? ""}`);
   });
 </script>
 

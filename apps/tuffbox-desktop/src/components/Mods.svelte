@@ -48,7 +48,7 @@
     Layers,
     Scale,
   } from "@lucide/svelte";
-  import { projectPath, projectInfo, ideStageRequest, pushWorkTrail, requestIdeIssuesRefresh, modsFocusId, modsFocusFileName } from "../lib/store";
+  import { projectPath, projectInfo, ideStageRequest, pushWorkTrail, requestIdeIssuesRefresh, modsFocusId, modsFocusFileName, optimizeAfterCreate } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import ModInspector from "./ModInspector.svelte";
@@ -321,6 +321,19 @@ import { trapFocus } from "../lib/focusTrap";
       window.removeEventListener("tuffbox:open-optimize-pack", onOpenOptimize);
       unsub();
     };
+  });
+
+  // Post-create flow (sole consumer of the one-shot): open the Optimize
+  // wizard once Content mounts for the freshly created pack. Runs on mount
+  // too, so lazy IDE loading can't miss it (unlike the window event above).
+  $effect(() => {
+    const pending = $optimizeAfterCreate;
+    const path = $projectPath;
+    if (!pending || !path || pending !== path) return;
+    optimizeAfterCreate.set(null);
+    contentFilter = "mod";
+    actionsMenuOpen = false;
+    optimizePackOpen = true;
   });
 
   onMount(async () => {
@@ -5257,8 +5270,19 @@ import { trapFocus } from "../lib/focusTrap";
     font-size: 12px;
     color: var(--text-secondary);
   }
+  /* Long jar names wrap instead of pushing the row past the panel. */
+  .dup-list li > code {
+    min-width: 0;
+  }
   .dup-list .pill,
   .conflicts-jars .pill {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.04em;
@@ -5406,6 +5430,13 @@ import { trapFocus } from "../lib/focusTrap";
 
   .content-tabs .tab-count,
   .tabs .tab-count {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     margin-left: 6px;
     font-size: 11px;
     font-weight: 700;
@@ -6028,6 +6059,13 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .installed-pill {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.03em;
@@ -7618,6 +7656,10 @@ import { trapFocus } from "../lib/focusTrap";
   code {
     color: var(--text-muted);
     background: var(--bg-elevated);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
     border-radius: 999px;
     padding: 3px 8px;
   }

@@ -16,6 +16,9 @@
     Copy,
     Trash2,
     ShieldAlert,
+    Server,
+    Wrench,
+    FileArchive,
   } from "@lucide/svelte";
   import { fade } from "svelte/transition";
   import type { CrashFixBannerPayload } from "../lib/homeBootstrap";
@@ -55,6 +58,10 @@
     onToggleOverflow,
     onRename,
     onClone,
+    onExportMrpack = null,
+    onExportServer = null,
+    onRepair = null,
+    onLogsZip = null,
     onDelete,
     onCreate,
     onImport,
@@ -97,6 +104,10 @@
     onToggleOverflow: () => void;
     onRename: () => void;
     onClone: () => void;
+    onExportMrpack?: (() => void) | null;
+    onExportServer?: (() => void) | null;
+    onRepair?: (() => void) | null;
+    onLogsZip?: (() => void) | null;
     onDelete: () => void;
     onCreate: () => void;
     onImport: () => void;
@@ -222,6 +233,30 @@
       </div>
       {#if overflowOpen}
         <div class="poster-overflow-menu" role="menu">
+          {#if onExportMrpack}
+            <button type="button" role="menuitem" disabled={actionBusy} onclick={onExportMrpack}>
+              <Package size={14} />
+              Export .mrpack
+            </button>
+          {/if}
+          {#if onExportServer}
+            <button type="button" role="menuitem" disabled={actionBusy} onclick={onExportServer}>
+              <Server size={14} />
+              Server pack
+            </button>
+          {/if}
+          {#if onRepair}
+            <button type="button" role="menuitem" disabled={actionBusy} onclick={onRepair}>
+              <Wrench size={14} />
+              Repair
+            </button>
+          {/if}
+          {#if onLogsZip}
+            <button type="button" role="menuitem" disabled={actionBusy} onclick={onLogsZip}>
+              <FileArchive size={14} />
+              Logs .zip
+            </button>
+          {/if}
           <button type="button" role="menuitem" class="danger" disabled={actionBusy} onclick={onDelete}>
             <Trash2 size={14} />
             Delete

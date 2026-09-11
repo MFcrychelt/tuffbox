@@ -4,7 +4,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { projectPath, libraryTabRequest } from "../lib/store";
+  import { projectPath, libraryTabRequest, optimizeAfterCreate } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { trapFocus } from "../lib/focusTrap";
   import LoadingButton from "./LoadingButton.svelte";
@@ -42,7 +42,10 @@
 
   // --- Blank instance (explicit, typed inputs) ---
   let name = $state("New Instance");
-  let minecraftVersion = $state("1.20.1");
+  // Empty until versions load — then defaults to the latest Mojang release
+  // (first non-popular entry; popular pins are sorted first by the backend).
+  let minecraftVersion = $state("");
+  let latestMcId = $state("");
   let loader = $state<"vanilla" | "fabric" | "forge" | "neoforge" | "quilt">("fabric");
   let loaderVersion = $state("");
   let mcVersions = $state<{ id: string; popular: boolean }[]>([]);
@@ -51,14 +54,16 @@
   let loadingLoader = $state(false);
   let loaderRequestId = 0;
   let memoryMode = $state<"auto" | "manual">("auto");
-  let recommendedMemoryMb = $state(8192);
-  let memoryMb = $state(8192);
+  let recommendedMemoryMb = $state(4096);
+  let memoryMb = $state(4096);
+  /** Open the Optimize wizard right after creating (solo fast-start flow). */
+  let optimizeAfterCreateChecked = $state(true);
   /** Hard cap for Create modpack memory slider / presets. */
   const MEMORY_MAX_MB = 64 * 1024;
   const MEMORY_MIN_MB = 4 * 1024;
   const MEMORY_PRESETS_GB = [4, 8, 10, 12, 16, 24, 32, 36, 48, 64] as const;
   let memoryMaxMb = $state(MEMORY_MAX_MB);
-  let jvmArgs = $state("-XX:+UseG1GC");
+  let jvmArgs = $state("");
   let iconSourcePath = $state<string | null>(null);
   let iconPreviewUrl = $state<string | null>(null);
 
@@ -118,8 +123,11 @@
       memoryMaxMb = MEMORY_MAX_MB;
       const versions = await invoke("get_minecraft_versions");
       mcVersions = versions as { id: string; popular: boolean }[];
-      if (!mcVersions.some((v) => v.id === minecraftVersion)) {
-        minecraftVersion = mcVersions[0]?.id ?? "";
+      // Backend sorts popular pins first, then releases newest-first —
+      // so the first non-popular entry is the latest Mojang release.
+      latestMcId = mcVersions.find((v) => !v.popular)?.id ?? mcVersions[0]?.id ?? "";
+      if (!minecraftVersion || !mcVersions.some((v) => v.id === minecraftVersion)) {
+        minecraftVersion = latestMcId;
       }
       await loadDefaultHome();
       location = guessLocation();
@@ -304,7 +312,7 @@
         loaderVersion,
         location,
         memoryMb: mem,
-        jvmArgs: args.length ? args : ["-XX:+UseG1GC"],
+        jvmArgs: args,
       });
       if (iconSourcePath) {
         try {
@@ -315,6 +323,10 @@
         } catch (iconErr) {
           toasts.warning(`Pack created, but the icon could not be applied: ${iconErr}`);
         }
+      }
+      // Solo fast-start: open IDE → Content → Optimize wizard for the new pack.
+      if (optimizeAfterCreateChecked && loader !== "vanilla") {
+        optimizeAfterCreate.set(path as string);
       }
       oncreated?.(path as string);
       onclose?.();
@@ -472,7 +484,7 @@
             {:else}
               <select id="inst-mc" bind:value={minecraftVersion}>
                 {#each mcVersions as v (v.id)}
-                  <option value={v.id}>{v.id}{#if v.popular} ★{/if}</option>
+                  <option value={v.id}>{v.id}{#if v.id === latestMcId} ● latest{/if}{#if v.popular} ★{/if}</option>
                 {/each}
               </select>
             {/if}
@@ -485,6 +497,15 @@
               <input id="inst-loader-version" value="No loader (Vanilla)" disabled />
             {:else if loaderVersions.length === 0}
               <input id="inst-loader-version" value="No versions available" disabled />
+              <div class="loader-empty-actions">
+                <span class="path-hint">Fresh MC builds often lack {loader} on day one — Fabric usually ships first.</span>
+                <div class="loader-empty-btns">
+                  {#if loader !== "fabric"}
+                    <button type="button" class="ghost mini" onclick={() => pickLoader("fabric")}>Try Fabric</button>
+                  {/if}
+                  <button type="button" class="ghost mini" onclick={() => pickLoader("vanilla")}>Use Vanilla</button>
+                </div>
+              </div>
             {:else}
               <select id="inst-loader-version" bind:value={loaderVersion}>
                 {#each loaderVersions as v (v.id)}
@@ -551,6 +572,15 @@
           <label for="inst-jvm">Launch arguments</label>
           <input id="inst-jvm" bind:value={jvmArgs} placeholder="Extra Java arguments" />
         </div>
+
+        {#if loader === "vanilla"}
+          <p class="muted">Vanilla has no mods — pick a loader above to install performance mods after creating.</p>
+        {:else}
+          <label class="opt-check">
+            <input type="checkbox" bind:checked={optimizeAfterCreateChecked} />
+            Install performance mods after creating (Optimize wizard)
+          </label>
+        {/if}
       {:else}
          <!-- Import — name derived from file, isolated -->
          <p class="muted">Import a Modrinth <code>.mrpack</code>, CurseForge zip, or Prism instance zip — mods download automatically (Prism-style).</p>
@@ -831,6 +861,20 @@
   }
   .muted { color: var(--text-muted); font-size: 13px; }
   .path-hint { font-size: 11px; color: var(--text-muted); }
+  .opt-check {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--text-secondary); font-weight: 600;
+    cursor: pointer;
+  }
+  .opt-check input { width: auto; accent-color: var(--accent-primary); }
+  .loader-empty-actions { display: grid; gap: 6px; margin-top: 6px; }
+  .loader-empty-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ghost.mini {
+    padding: 5px 10px; font-size: 12px; border-radius: 999px;
+    border: 1px solid var(--border-color); background: transparent;
+    color: var(--text-secondary); cursor: pointer; font-weight: 700;
+  }
+  .ghost.mini:hover { color: var(--accent-primary); border-color: var(--accent-primary); }
   .field-loader { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
   .template-btn { align-self: flex-start; }
   .template-list { display: grid; gap: 6px; }

@@ -313,6 +313,8 @@
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-color, #dee2e6) 55%, transparent);
   }
   .ch-badge {
+    display: inline-block;
+    vertical-align: baseline;
     font-size: 8px;
     line-height: 1.1;
     max-width: calc(100% + 28px);

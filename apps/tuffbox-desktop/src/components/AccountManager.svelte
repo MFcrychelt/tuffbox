@@ -527,6 +527,13 @@
   .skin-src { font-size: 10px; color: var(--text-muted); }
 
   .active-badge {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 10px; font-weight: 700; color: var(--accent-primary);
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent); padding: 1px 5px; border-radius: 4px;
   }

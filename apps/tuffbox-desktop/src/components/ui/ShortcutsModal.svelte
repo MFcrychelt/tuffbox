@@ -172,6 +172,9 @@
     gap: 4px;
   }
   kbd {
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
     display: inline-block;
     padding: 3px 8px;
     font-size: 11px;

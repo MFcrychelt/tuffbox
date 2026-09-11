@@ -32,9 +32,11 @@
     launcherSettingsLive,
     homeYoutubePlacement,
     ideStageRequest,
+    optimizeAfterCreate,
     type RecentProject,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
+  import { copyText } from "../lib/clipboard";
   import { api } from "../lib/api";
   import { launchWithFeedback, killWithFeedback } from "../lib/launch";
   import { fetchCrashFixBanner, rollbackLastCrashFix } from "../lib/softVerify";
@@ -97,8 +99,6 @@
   const selectedLaunchMessage = $derived(
     selectedPath ? $launchSessions[selectedPath]?.message ?? "Launching…" : "Launching…",
   );
-  const hasInstanceHome = $derived(!!(selectedPath && selectedProject));
-  const hideInstanceHome = $derived(!!$launcherSettingsLive?.hideInstanceHome);
   // Spinner covers spawn + play session, not just the invoke round-trip.
   const launchingHeld = $derived($isLaunching || launchHoldPath !== null);
   const selectedInstanceMeta = $derived.by(() => {
@@ -521,6 +521,85 @@
     }
   }
 
+  async function exportSelected(kind: "mrpack" | "server") {
+    const project = selectedProject;
+    if (!project || heroActionBusy) return;
+    closeHeroOverflow();
+    heroActionBusy = true;
+    try {
+      const exported =
+        kind === "server"
+          ? await api.export.serverPack(null, project.path)
+          : await api.export.modrinthPack(null, project.path);
+      const label = kind === "server" ? "server pack" : ".mrpack";
+      try {
+        await copyText(exported.path);
+        toasts.success(`Exported ${label} — path copied: ${exported.path}`);
+      } catch {
+        toasts.success(`Exported ${label}: ${exported.path}`);
+      }
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      heroActionBusy = false;
+    }
+  }
+
+  async function repairSelected() {
+    const project = selectedProject;
+    if (!project || heroActionBusy) return;
+    closeHeroOverflow();
+    heroActionBusy = true;
+    try {
+      const report = await api.project.repair(project.path);
+      const downloaded = report.downloaded?.length ?? 0;
+      const failed = report.failed?.length ?? 0;
+      if (failed > 0) {
+        toasts.warning(`Repair: ${downloaded} re-downloaded, ${failed} failed — see Content.`, 8000);
+      } else if (downloaded > 0) {
+        toasts.success(`Repair: ${downloaded} file${downloaded === 1 ? "" : "s"} re-downloaded.`);
+      } else {
+        toasts.success("All mod files present and valid.");
+      }
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      heroActionBusy = false;
+    }
+  }
+
+  async function logsZipSelected() {
+    const project = selectedProject;
+    if (!project || heroActionBusy) return;
+    closeHeroOverflow();
+    heroActionBusy = true;
+    try {
+      const zipPath = await api.logs.createZip(project.path);
+      try {
+        await copyText(zipPath);
+        toasts.success(`logs.zip created — path copied: ${zipPath}`);
+      } catch {
+        toasts.success(`logs.zip created: ${zipPath}`);
+      }
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      heroActionBusy = false;
+    }
+  }
+
+  // Post-create flow: AddInstanceModal sets optimizeAfterCreate when the user
+  // asked for performance mods — open IDE → Content. Mods is the sole
+  // consumer (opens the wizard once Content mounts, then clears the request),
+  // so this effect only navigates and never clears.
+  $effect(() => {
+    const pending = $optimizeAfterCreate;
+    if (!pending || !selectedPath) return;
+    if (normalizeInstancePath(pending) !== normalizeInstancePath(selectedPath)) return;
+    ideStageRequest.set("content");
+    currentView = "ide";
+  });
+
   async function deleteSelectedInstance() {
     const project = selectedProject;
     if (!project || heroActionBusy) return;
@@ -593,6 +672,10 @@
         onToggleOverflow={toggleHeroOverflow}
         onRename={openRenamePrompt}
         onClone={openClonePrompt}
+        onExportMrpack={() => void exportSelected("mrpack")}
+        onExportServer={() => void exportSelected("server")}
+        onRepair={() => void repairSelected()}
+        onLogsZip={() => void logsZipSelected()}
         onDelete={() => void deleteSelectedInstance()}
         onCreate={() => openAddInstance("blank")}
         onImport={() => openAddInstance("import")}

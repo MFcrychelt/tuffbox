@@ -3528,6 +3528,13 @@
     padding: 10px 12px;
   }
   .health-chip {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 12px;
     font-weight: 600;
     padding: 3px 10px;

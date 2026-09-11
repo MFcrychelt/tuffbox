@@ -71,7 +71,8 @@ pub struct LauncherSettings {
     /// Round corners on panels/cards/chrome everywhere (CSS `--border-radius-*`).
     #[serde(default = "default_rounded_corners")]
     pub rounded_corners: bool,
-    /// Hide InstanceHome preview block on the home dashboard.
+    /// Legacy: the home-dashboard InstanceHome block moved into the Library
+    /// side rail. Kept so older settings files still deserialize.
     #[serde(default)]
     pub hide_instance_home: bool,
     /// Quartz backdrop panel behind the home dashboard (home-only).
@@ -88,6 +89,9 @@ pub struct LauncherSettings {
     /// Hex bitmask for `manual` mode (e.g. "0xFF0" = first 4 E-cores excluded).
     #[serde(default)]
     pub cpu_affinity_mask: String,
+    /// GPU used for the game: `auto` (discrete when present) | `discrete` | `integrated`.
+    #[serde(default = "default_gpu_preference")]
+    pub gpu_preference: String,
 }
 
 fn default_theme() -> String {
@@ -117,6 +121,10 @@ fn default_home_backdrop() -> bool {
 fn default_ingame_overlay() -> bool {
     true
 }
+fn default_gpu_preference() -> String {
+    "auto".into()
+}
+
 fn default_cpu_affinity_mode() -> String {
     "off".into()
 }
@@ -164,6 +172,7 @@ impl Default for LauncherSettings {
             ingame_overlay: default_ingame_overlay(),
             cpu_affinity_mode: default_cpu_affinity_mode(),
             cpu_affinity_mask: String::new(),
+            gpu_preference: default_gpu_preference(),
         }
     }
 }
@@ -354,11 +363,47 @@ pub fn append_unique_jvm_arg(args: &mut Vec<String>, arg: String) {
     args.push(arg);
 }
 
+/// True when the args already select a garbage collector.
+pub fn jvm_gc_selected(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        [
+            "UseG1GC",
+            "UseZGC",
+            "UseParallelGC",
+            "UseSerialGC",
+            "UseShenandoahGC",
+            "UseEpsilonGC",
+        ]
+        .iter()
+        .any(|gc| a.contains(gc))
+    })
+}
+
+fn is_gc_selector(arg: &str) -> bool {
+    arg.starts_with("-XX:+Use") && arg.ends_with("GC")
+}
+
+/// Append an auto-tuned JVM arg. GC selectors (`-XX:+Use…GC`) are skipped
+/// when ANY collector is already selected — unlike `append_unique_jvm_arg`,
+/// which only dedupes the identical flag and would let G1 + ZGC collide.
+pub fn append_tuned_jvm_arg(args: &mut Vec<String>, arg: String) {
+    if is_gc_selector(&arg) {
+        if jvm_gc_selected(args) {
+            return;
+        }
+        args.push(arg);
+        return;
+    }
+    append_unique_jvm_arg(args, arg);
+}
+
 /// Append launch-stability / low-end JVM flags without overriding user or
 /// profile args that already set the same option.
 pub fn append_stability_jvm_args(args: &mut Vec<String>, potato_pc: bool) {
-    // Prefer G1 on modern JDKs; harmless if already the default.
-    if !jvm_args_contain(args, "UseG1GC") {
+    // Prefer G1 on modern JDKs; harmless if already the default. Skipped when
+    // any collector is already selected — a profile/user/auto-tune choice such
+    // as ZGC wins, since two collectors in one command line refuse to start.
+    if !jvm_gc_selected(args) {
         args.push("-XX:+UseG1GC".into());
     }
     if !jvm_args_contain(args, "MaxGCPauseMillis") {

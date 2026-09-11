@@ -89,7 +89,7 @@
 
   let memory = $state($projectInfo?.memoryMb ?? 4096);
   let memoryManualMb = $state($projectInfo?.memoryMb ?? 4096);
-  let jvmArgs = $state(($projectInfo?.jvmArgs ?? ["-XX:+UseG1GC"]).join(" "));
+  let jvmArgs = $state(($projectInfo?.jvmArgs ?? []).join(" "));
   let javaPath = $state($projectInfo?.javaPath ?? "Auto-detect");
   let javaVersion = $state("");
   let playerName = $state($projectInfo?.playerName ?? "Player");
@@ -106,6 +106,44 @@
   let error = $state("");
   let successMessage = $state("");
   let dirty = $state(false);
+
+  // Per-pack auto-tune preview (heap estimate + JVM profile).
+  let heapRec = $state<{
+    memoryMb: number;
+    baseMb: number;
+    categoryMb: number;
+    modCount: number;
+  } | null>(null);
+  let jvmRec = $state<{ profile: string; args: string[]; note: string } | null>(null);
+  let tuneLoading = $state(false);
+  let tuneLoadedFor = $state<string | null>(null);
+
+  async function loadTuneRecs() {
+    if (!$projectPath || tuneLoading) return;
+    tuneLoading = true;
+    try {
+      const [heap, jvm] = await Promise.all([
+        invoke("recommend_heap_cmd", { path: $projectPath }),
+        invoke("recommend_jvm_cmd", { path: $projectPath }),
+      ]);
+      heapRec = heap as typeof heapRec;
+      jvmRec = jvm as typeof jvmRec;
+    } catch {
+      heapRec = null;
+      jvmRec = null;
+    } finally {
+      tuneLoading = false;
+    }
+  }
+
+  // The view stays mounted across project switches — refetch per project.
+  $effect(() => {
+    const p = $projectPath;
+    if (p && p !== tuneLoadedFor) {
+      tuneLoadedFor = p;
+      void loadTuneRecs();
+    }
+  });
 
   // Schema status
   let schemaVersion = $state("");
@@ -246,9 +284,9 @@
   }
 
   function resetJvmArgs() {
-    jvmArgs = "-XX:+UseG1GC";
+    jvmArgs = "";
     markDirty();
-    successMessage = "Reset to default -XX:+UseG1GC";
+    successMessage = "Reset to auto-tune (empty JVM args).";
   }
 
   onMount(() => {
@@ -341,7 +379,7 @@
       memory = info.memoryMb;
       memoryManualMb = info.memoryMb;
     }
-    if (info.jvmArgs?.length) jvmArgs = info.jvmArgs.join(" ");
+    jvmArgs = (info.jvmArgs ?? []).join(" ");
     if (info.javaPath) javaPath = info.javaPath;
     if (info.playerName) playerName = info.playerName;
   }
@@ -652,6 +690,21 @@
               <strong>Recommended:</strong> 4 GB to 6 GB for light-to-medium packs, 6 GB to 8 GB for heavy quest/tech modpacks. Allocating over 10 GB may increase GC latency unless using modern garbage collectors.
             </span>
           </div>
+          {#if heapRec}
+            <div class="recommendation-box mt-2">
+              <Sparkles size={14} class="rec-icon" />
+              <span>
+                <strong>Auto for this pack:</strong> {formatMemory(heapRec.memoryMb)} ({heapRec.memoryMb} MB) — {heapRec.modCount} mods, base {formatMemory(heapRec.baseMb)} + categories {formatMemory(heapRec.categoryMb)}.
+              </span>
+              <button
+                type="button"
+                class="preset-chip"
+                onclick={() => onMemorySliderChange(heapRec!.memoryMb)}
+              >
+                Apply
+              </button>
+            </div>
+          {/if}
         </section>
 
         <!-- ── Card 4: JVM Launch Arguments ─────────────────────── -->
@@ -680,7 +733,7 @@
               oninput={markDirty}
               rows={4}
               wrap="off"
-              placeholder="-XX:+UseG1GC"
+              placeholder="Empty = auto-tuned for this pack"
               spellcheck="false"
               class="jvm-textarea"
             ></textarea>
@@ -709,6 +762,27 @@
               {/each}
             </div>
           </div>
+          {#if jvmRec}
+            <button
+              type="button"
+              class="jvm-preset-card"
+              class:active={jvmArgs.trim() === jvmRec.args.join(" ").trim()}
+              onclick={() => {
+                jvmArgs = jvmRec!.args.join(" ");
+                markDirty();
+                successMessage = `Auto JVM profile applied (${jvmRec!.profile}).`;
+              }}
+              title={jvmRec.args.join(" ")}
+            >
+              <div class="preset-title-row">
+                <strong>Auto: {jvmRec.profile}</strong>
+                {#if jvmArgs.trim() === jvmRec.args.join(" ").trim()}
+                  <Check size={13} class="check-icon" />
+                {/if}
+              </div>
+              <small>{jvmRec.note} Leave the field empty to apply this automatically at launch.</small>
+            </button>
+          {/if}
         </section>
 
         <!-- ── Card 5: Player & Shared Options ─────────────────── -->

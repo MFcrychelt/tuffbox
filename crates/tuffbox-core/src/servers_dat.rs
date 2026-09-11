@@ -27,6 +27,13 @@ pub struct ServerPingResult {
     pub online: bool,
     pub latency_ms: Option<u64>,
     pub error: Option<String>,
+    /// Players online from the Status Response. `None` when the server
+    /// answered TCP but not the Java status handshake (Bedrock, filtered).
+    #[serde(default)]
+    pub players_online: Option<u32>,
+    /// Max players from the Status Response (`None` — see above).
+    #[serde(default)]
+    pub players_max: Option<u32>,
 }
 
 /// Lists servers from `project_dir/servers.dat`. Empty vec if missing.
@@ -97,7 +104,10 @@ fn get_byte(fields: &[(String, NbtTag)], key: &str) -> Option<i8> {
         })
 }
 
-/// TCP connect latency probe (not full Minecraft handshake).
+/// Java Edition Server List Ping: TCP connect + handshake/status round-trip.
+/// Returns latency plus player counts; when TCP connects but the status
+/// handshake fails (Bedrock server, filtered MOTD), the server is still
+/// reported online with `players_* = None`.
 pub fn ping_server_address(address: &str) -> ServerPingResult {
     let addr = address.trim();
     if addr.is_empty() {
@@ -106,9 +116,12 @@ pub fn ping_server_address(address: &str) -> ServerPingResult {
             online: false,
             latency_ms: None,
             error: Some("empty address".into()),
+            players_online: None,
+            players_max: None,
         };
     }
 
+    let (host, port) = split_host_port(addr);
     let with_port = if addr.contains(':') {
         addr.to_string()
     } else {
@@ -124,20 +137,39 @@ pub fn ping_server_address(address: &str) -> ServerPingResult {
                     online: false,
                     latency_ms: None,
                     error: Some("could not resolve host".into()),
+                    players_online: None,
+                    players_max: None,
                 };
             };
             match TcpStream::connect_timeout(&sock, Duration::from_secs(3)) {
-                Ok(_) => ServerPingResult {
-                    address: address.to_string(),
-                    online: true,
-                    latency_ms: Some(start.elapsed().as_millis() as u64),
-                    error: None,
-                },
+                Ok(stream) => {
+                    let tcp_ms = start.elapsed().as_millis() as u64;
+                    match query_status_players(&stream, &host, port) {
+                        Some((online_count, max_count)) => ServerPingResult {
+                            address: address.to_string(),
+                            online: true,
+                            latency_ms: Some(start.elapsed().as_millis() as u64),
+                            error: None,
+                            players_online: Some(online_count),
+                            players_max: Some(max_count),
+                        },
+                        None => ServerPingResult {
+                            address: address.to_string(),
+                            online: true,
+                            latency_ms: Some(tcp_ms),
+                            error: None,
+                            players_online: None,
+                            players_max: None,
+                        },
+                    }
+                }
                 Err(e) => ServerPingResult {
                     address: address.to_string(),
                     online: false,
                     latency_ms: None,
                     error: Some(e.to_string()),
+                    players_online: None,
+                    players_max: None,
                 },
             }
         }
@@ -146,8 +178,122 @@ pub fn ping_server_address(address: &str) -> ServerPingResult {
             online: false,
             latency_ms: None,
             error: Some(e.to_string()),
+            players_online: None,
+            players_max: None,
         },
     }
+}
+
+/// Split `host[:port]` for the handshake packet. Handles `[v6]:port`;
+/// a bare value without a numeric `:port` tail keeps port 25565.
+fn split_host_port(addr: &str) -> (String, u16) {
+    let addr = addr.trim();
+    if let Some(rest) = addr.strip_prefix('[') {
+        if let Some((host, port_part)) = rest.split_once("]:") {
+            if let Ok(port) = port_part.parse::<u16>() {
+                return (host.to_string(), port);
+            }
+        }
+        let host = addr.trim_start_matches('[').trim_end_matches(']');
+        return (host.to_string(), 25565);
+    }
+    if addr.chars().filter(|c| *c == ':').count() == 1 {
+        if let Some((host, port_part)) = addr.rsplit_once(':') {
+            if let Ok(port) = port_part.parse::<u16>() {
+                return (host.to_string(), port);
+            }
+        }
+    }
+    (addr.to_string(), 25565)
+}
+
+/// Handshake (next state = status) + status request, then parse the
+/// Status Response JSON (`players.online/max`). `None` on any protocol
+/// failure — the caller falls back to the TCP-only result.
+fn query_status_players(stream: &TcpStream, host: &str, port: u16) -> Option<(u32, u32)> {
+    use std::io::{Read, Write};
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok()?;
+
+    // Handshake packet (id 0x00): protocol, host, port, next state = 1 (status).
+    // Servers answer status requests regardless of the protocol version.
+    let mut handshake = Vec::new();
+    write_varint(&mut handshake, 0);
+    write_varint(&mut handshake, 767);
+    write_mc_string(&mut handshake, host);
+    handshake.extend_from_slice(&port.to_be_bytes());
+    write_varint(&mut handshake, 1);
+
+    let mut frame = Vec::new();
+    write_varint(&mut frame, handshake.len() as i32);
+    frame.extend_from_slice(&handshake);
+    // Status request packet: length 1, id 0x00, no fields.
+    frame.push(1);
+    frame.push(0);
+    let mut writer = stream;
+    writer.write_all(&frame).ok()?;
+
+    let mut reader = stream;
+    let packet_len = read_varint(&mut reader)?;
+    if packet_len <= 0 || packet_len > 2_000_000 {
+        return None;
+    }
+    if read_varint(&mut reader)? != 0 {
+        return None;
+    }
+    let json_len = read_varint(&mut reader)?;
+    if json_len <= 0 || json_len > 1_000_000 {
+        return None;
+    }
+    let mut buf = vec![0u8; json_len as usize];
+    reader.read_exact(&mut buf).ok()?;
+    parse_status_players(&buf)
+}
+
+fn write_varint(buf: &mut Vec<u8>, value: i32) {
+    let mut v = value as u32;
+    loop {
+        let mut b = (v & 0x7f) as u8;
+        v >>= 7;
+        if v != 0 {
+            b |= 0x80;
+            buf.push(b);
+        } else {
+            buf.push(b);
+            break;
+        }
+    }
+}
+
+fn write_mc_string(buf: &mut Vec<u8>, s: &str) {
+    write_varint(buf, s.len() as i32);
+    buf.extend_from_slice(s.as_bytes());
+}
+
+fn read_varint(reader: &mut impl std::io::Read) -> Option<i32> {
+    let mut num: i32 = 0;
+    let mut shift = 0u32;
+    let mut byte = [0u8; 1];
+    loop {
+        reader.read_exact(&mut byte).ok()?;
+        let b = byte[0];
+        num |= ((b & 0x7f) as i32) << shift;
+        if b & 0x80 == 0 {
+            return Some(num);
+        }
+        shift += 7;
+        if shift >= 35 {
+            return None;
+        }
+    }
+}
+
+fn parse_status_players(json_bytes: &[u8]) -> Option<(u32, u32)> {
+    let v: serde_json::Value = serde_json::from_slice(json_bytes).ok()?;
+    let players = v.get("players")?;
+    let online = u32::try_from(players.get("online")?.as_u64()?).ok()?;
+    let max = u32::try_from(players.get("max")?.as_u64()?).ok()?;
+    Some((online, max))
 }
 
 /// Append a server to servers.dat (creates file if missing).
@@ -241,6 +387,35 @@ fn write_string(buf: &mut Vec<u8>, s: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn varint_roundtrip() {
+        for v in [0, 1, 2, 127, 128, 255, 767, 2147483647] {
+            let mut buf = Vec::new();
+            write_varint(&mut buf, v);
+            let back = read_varint(&mut buf.as_slice()).unwrap();
+            assert_eq!(back, v, "varint roundtrip for {v}");
+        }
+        assert_eq!(read_varint(&mut [0x80u8, 0x80, 0x80, 0x80, 0x80].as_slice()), None);
+    }
+
+    #[test]
+    fn split_host_port_cases() {
+        assert_eq!(split_host_port("mc.hypixel.net"), ("mc.hypixel.net".into(), 25565));
+        assert_eq!(split_host_port("play.example.com:25570"), ("play.example.com".into(), 25570));
+        assert_eq!(split_host_port("127.0.0.1:25565"), ("127.0.0.1".into(), 25565));
+        assert_eq!(split_host_port("[::1]:25566"), ("::1".into(), 25566));
+        assert_eq!(split_host_port("::1"), ("::1".into(), 25565));
+        assert_eq!(split_host_port("  example.com  "), ("example.com".into(), 25565));
+    }
+
+    #[test]
+    fn parse_status_players_cases() {
+        let json = br#"{"description":{"text":"Hi"},"players":{"max":100,"online":7,"sample":[]},"version":{"name":"1.21.1","protocol":767}}"#;
+        assert_eq!(parse_status_players(json), Some((7, 100)));
+        assert_eq!(parse_status_players(br#"{"players":{"max":20}}"#), None);
+        assert_eq!(parse_status_players(b"not json"), None);
+    }
 
     #[test]
     fn roundtrip_servers_dat() {

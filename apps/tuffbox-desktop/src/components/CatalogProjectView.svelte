@@ -668,6 +668,13 @@
   }
   .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     padding: 2px 8px;
     border-radius: 999px;
     background: var(--bg-tertiary);

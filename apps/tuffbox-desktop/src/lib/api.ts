@@ -1199,6 +1199,8 @@ export interface McServerPing {
   online: boolean;
   latencyMs: number | null;
   error: string | null;
+  playersOnline?: number | null;
+  playersMax?: number | null;
 }
 
 export interface WorldDetail {
@@ -1697,6 +1699,48 @@ export const api = {
       p?: string,
     ) {
       return cmd<Record<string, unknown>>("apply_optimize_custom_plan", {
+        ...pathArg(p),
+        mods,
+        applyConfigs,
+        configPlan,
+      });
+    },
+    previewFoOptimizePack(p?: string) {
+      return cmd<{
+        pack: {
+          projectId: string;
+          slug: string;
+          name: string;
+          versionId: string;
+          versionNumber?: string;
+          minecraftVersion: string;
+          loader: string;
+          modCount: number;
+        };
+        mods: Array<{
+          slug: string;
+          name: string;
+          fileName?: string;
+          provider: string;
+          projectId: string;
+          versionId?: string | null;
+          reason: string;
+          risk: string;
+          alreadyInstalled: boolean;
+        }>;
+        configActions: Record<string, unknown>[];
+        warnings: string[];
+        minecraftVersion: string;
+        loader: string;
+      }>("preview_fo_optimize_pack", pathArg(p));
+    },
+    applyFoOptimizePlan(
+      mods: Array<Record<string, unknown>>,
+      applyConfigs: boolean,
+      configPlan: Record<string, unknown> | null,
+      p?: string,
+    ) {
+      return cmd<Record<string, unknown>>("install_fo_optimize_pack", {
         ...pathArg(p),
         mods,
         applyConfigs,
@@ -3083,6 +3127,7 @@ export const api = {
     save(settings: LauncherSettings) {
       return cmd<LauncherSettings>("save_launcher_settings_cmd", { settings });
     },
+    detectGpus() { return cmd<GpuInfo[]>("detect_gpus"); },
     runtimePathInfo() {
       return cmd<{ current: string; default: string }>("get_runtime_path_info");
     },
@@ -3097,6 +3142,16 @@ export const api = {
     },
   },
 };
+
+export interface GpuInfo {
+  id: string;
+  name: string;
+  vendor: string;
+  kind: string;
+  vramMb: number | null;
+  primary: boolean;
+  pciSlot: string | null;
+}
 
 // ─── AI / Ollama settings ───────────────────────────────────────────
 

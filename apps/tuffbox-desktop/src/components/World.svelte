@@ -524,6 +524,9 @@
     margin-right: 4px;
   }
   .meta-pill {
+    min-width: 0;
+    line-height: 1.4;
+    vertical-align: baseline;
     display: inline-flex;
     align-items: center;
     gap: 4px;
