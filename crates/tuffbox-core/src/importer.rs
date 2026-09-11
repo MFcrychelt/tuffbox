@@ -34,6 +34,8 @@ pub enum ImportError {
     Packwiz(String),
     #[error("hash mismatch: {0}")]
     PackwizHashMismatch(String),
+    #[error("path traversal in archive entry: {0}")]
+    PathTraversal(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -543,6 +545,14 @@ pub fn extract_curseforge_overrides(
         if rel.is_empty() {
             continue;
         }
+        // Zip-slip guard: pack archives come from the internet (CurseForge
+        // mirrors, hand-built zips). An entry like `overrides/../../x` passes
+        // the prefix check but would write outside the instance dir. Reject
+        // traversal segments, absolute paths and Windows drive letters before
+        // they ever reach the filesystem.
+        if is_unsafe_zip_rel_path(rel) {
+            return Err(ImportError::PathTraversal(name.clone()));
+        }
         let dest = instance_dir.as_ref().join(rel);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
@@ -553,6 +563,28 @@ pub fn extract_curseforge_overrides(
     }
     Ok(count)
 }
+
+/// True when a zip-relative path must never be joined under the destination
+/// root: `..` segments, absolute paths (POSIX or Windows), drive letters and
+/// UNC prefixes all allow escaping the instance directory (zip-slip).
+pub fn is_unsafe_zip_rel_path(rel: &str) -> bool {
+    let normalized = rel.replace('\\', "/");
+    if normalized.starts_with('/') {
+        return true;
+    }
+    // Windows drive letter ("C:/...") and UNC ("//server/...").
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' {
+        return true;
+    }
+    if normalized.starts_with("//") {
+        return true;
+    }
+    normalized
+        .split('/')
+        .any(|segment| segment == "..")
+}
+
 
 /// Read the overrides folder name from a CurseForge pack (`"overrides"` by default).
 pub fn curseforge_overrides_folder(pack_zip: impl AsRef<Path>) -> Result<String, ImportError> {
@@ -1282,4 +1314,82 @@ fn parse_ini(raw: &str) -> HashMap<String, String> {
         }
     }
     map
+}
+
+#[cfg(test)]
+mod zip_slip_tests {
+    use super::*;
+
+    fn write_pack_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).expect("create zip");
+        let mut zip = zip::ZipWriter::new(file);
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in entries {
+            zip.start_file(*name, options).expect("zip start_file");
+            std::io::Write::write_all(&mut zip, body).expect("zip write");
+        }
+        zip.finish().expect("zip finish");
+    }
+
+    /// A CurseForge-style pack whose overrides carry `..` segments must be
+    /// refused outright — the import previously wrote outside the instance
+    /// dir (zip-slip, arbitrary file overwrite on the user's machine).
+    #[test]
+    fn curseforge_overrides_reject_parent_traversal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pack = dir.path().join("pack.zip");
+        write_pack_zip(
+            &pack,
+            &[
+                ("overrides/config/ok.toml", b"ok".as_slice()),
+                // instance_dir/../escaped.txt == tempdir/escaped.txt — a
+                // precise, assertable escape target just outside the instance.
+                ("overrides/../escaped.txt", b"evil".as_slice()),
+            ],
+        );
+        let instance = dir.path().join("instance");
+        let err = extract_curseforge_overrides(&pack, &instance, "overrides")
+            .expect_err("traversal entry must fail the import");
+        assert!(
+            err.to_string().contains("traversal"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !dir.path().join("escaped.txt").exists(),
+            "file escaped the instance dir"
+        );
+    }
+
+    #[test]
+    fn curseforge_overrides_absolute_and_drive_paths_rejected() {
+        assert!(is_unsafe_zip_rel_path("/etc/passwd"));
+        assert!(is_unsafe_zip_rel_path("C:/Windows/system32/evil.dll"));
+        assert!(is_unsafe_zip_rel_path(r"..\..\evil.txt"));
+        assert!(is_unsafe_zip_rel_path("a/b/../../../evil.txt"));
+        assert!(is_unsafe_zip_rel_path("//server/share/evil"));
+        assert!(!is_unsafe_zip_rel_path("config/opts.toml"));
+        assert!(!is_unsafe_zip_rel_path("mods/some..name.jar"));
+        assert!(!is_unsafe_zip_rel_path("kubejs/..data/file.txt"));
+    }
+
+    #[test]
+    fn curseforge_overrides_legit_pack_still_extracts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pack = dir.path().join("pack.zip");
+        write_pack_zip(
+            &pack,
+            &[
+                ("overrides/config/a.toml", b"a".as_slice()),
+                ("overrides/mods/.mcmods", b"m".as_slice()),
+                ("manifest.json", b"{}".as_slice()),
+            ],
+        );
+        let instance = dir.path().join("instance");
+        let count = extract_curseforge_overrides(&pack, &instance, "overrides")
+            .expect("legit pack must import");
+        assert_eq!(count, 2);
+        assert!(instance.join("config").join("a.toml").is_file());
+        assert!(!instance.join("manifest.json").exists());
+    }
 }

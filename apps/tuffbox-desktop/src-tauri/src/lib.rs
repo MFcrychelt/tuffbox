@@ -8542,11 +8542,23 @@ fn restore_backup(path: String, backup_id: String) -> Result<(), String> {
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = entry.name().to_string();
+        let name = entry.name().replace('\\', "/");
         if name.ends_with('/') {
             continue;
         }
-        let target = project_dir.join(&name);
+        // Zip-slip guard done lexically: backup zips live inside the project,
+        // but a hand-crafted or corrupted archive must not escape it. The old
+        // canonicalize-based check also false-rejected entries in NEW
+        // subdirectories (nothing to canonicalize yet), breaking restores.
+        let rel = name.trim_start_matches('/');
+        if rel.is_empty() || tuffbox_core::importer::is_unsafe_zip_rel_path(rel) {
+            return Err(format!("zip entry escapes project directory: {name}"));
+        }
+        let target = project_dir.join(rel);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        // Defense in depth: with parents in place, verify the real path.
         let canonical = std::fs::canonicalize(&target)
             .or_else(|_| std::fs::canonicalize(target.parent().unwrap_or(&project_dir)))
             .map_err(|e| e.to_string())?;
@@ -8554,9 +8566,6 @@ fn restore_backup(path: String, backup_id: String) -> Result<(), String> {
             std::fs::canonicalize(&project_dir).map_err(|e| e.to_string())?
         ) {
             return Err(format!("zip entry escapes project directory: {name}"));
-        }
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mut dest = std::fs::File::create(&target).map_err(|e| e.to_string())?;
         std::io::copy(&mut entry, &mut dest).map_err(|e| e.to_string())?;
