@@ -18002,7 +18002,12 @@ fn remove_superseded_mod_files(
         file_name: old_mod.file_name.as_deref(),
         sha1: old_mod.hashes.as_ref().and_then(|h| h.sha1.as_deref()),
     };
-    superseded_cleanup::remove_superseded_in_dir(&content_dir, &old, new_mod.file_name.as_deref());
+    superseded_cleanup::remove_superseded_in_dir(
+        &content_dir,
+        &old,
+        new_mod.file_name.as_deref(),
+        tracked_bases,
+    );
 }
 
 fn refresh_modrinth_file_metadata(

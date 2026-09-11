@@ -49,6 +49,7 @@ pub(crate) fn remove_superseded_in_dir(
     content_dir: &Path,
     old: &SupersededOld<'_>,
     keep_name: Option<&str>,
+    tracked_bases: &std::collections::HashSet<String>,
 ) -> Vec<PathBuf> {
     // Empty stored hash must behave as "unknown", never as a real expectation.
     let old_sha1 = old.sha1.filter(|h| !h.is_empty());
@@ -83,7 +84,9 @@ pub(crate) fn remove_superseded_in_dir(
         // Also drop leftover jars that share the mod slug as a filename prefix
         // (e.g. sodium-fabric-0.5.0.jar after updating to sodium-fabric-0.5.8.jar).
         // Unreachable for keep_name thanks to the guard above.
-        if !remove && slug_prefix_matches(old.id, base) {
+        // Skip files tracked by other mods (e.g. sodium-extra must not be removed
+        // when updating sodium).
+        if !remove && slug_prefix_matches(old.id, base) && !tracked_bases.contains(base) {
             remove = true;
         }
         if remove {
@@ -140,7 +143,7 @@ mod tests {
             sha1: Some(hash.as_str()),
         };
 
-        let removed = remove_superseded_in_dir(&mods, &old, Some("mymod-1.2.jar"));
+        let removed = remove_superseded_in_dir(&mods, &old, Some("mymod-1.2.jar"), &std::collections::HashSet::new());
 
         assert_eq!(removed, vec![mods.join("mymod-1.0.jar.disabled")]);
         assert_eq!(sorted_names(&mods), ["mymod-1.2.jar"]);
@@ -161,7 +164,7 @@ mod tests {
             sha1: Some(hash.as_str()),
         };
 
-        let removed = remove_superseded_in_dir(&mods, &old, Some("mymod-1.2.jar"));
+        let removed = remove_superseded_in_dir(&mods, &old, Some("mymod-1.2.jar"), &std::collections::HashSet::new());
 
         assert_eq!(removed.len(), 2, "old jar and stale leftover both go");
         assert_eq!(sorted_names(&mods), ["mymod-1.2.jar"]);
@@ -180,7 +183,7 @@ mod tests {
             sha1: Some(hash.as_str()),
         };
 
-        let removed = remove_superseded_in_dir(&mods, &old, Some("mymod-1.0.jar"));
+        let removed = remove_superseded_in_dir(&mods, &old, Some("mymod-1.0.jar"), &std::collections::HashSet::new());
 
         assert!(removed.is_empty());
         assert_eq!(sorted_names(&mods), ["mymod-1.0.jar"]);
@@ -205,7 +208,7 @@ mod tests {
             sha1: Some("deadbeef"),
         };
 
-        let removed = remove_superseded_in_dir(&mods, &old, Some("mymod-1.1.jar"));
+        let removed = remove_superseded_in_dir(&mods, &old, Some("mymod-1.1.jar"), &std::collections::HashSet::new());
 
         assert_eq!(removed, vec![mods.join("mymod-1.0.jar.disabled")]);
         assert_eq!(
@@ -236,7 +239,7 @@ mod tests {
             sha1: None,
         };
 
-        let removed = remove_superseded_in_dir(&mods, &old, Some("alpha-2.0.jar"));
+        let removed = remove_superseded_in_dir(&mods, &old, Some("alpha-2.0.jar"), &std::collections::HashSet::new());
 
         assert_eq!(removed, vec![mods.join("alpha-1.0.jar")]);
         assert_eq!(
@@ -263,7 +266,7 @@ mod tests {
         };
 
         let removed =
-            remove_superseded_in_dir(&mods, &old, Some("renderer-next-0.6.0.jar"));
+            remove_superseded_in_dir(&mods, &old, Some("renderer-next-0.6.0.jar"), &std::collections::HashSet::new());
 
         assert_eq!(removed, vec![mods.join("legacy-renderer-0.5.0.jar")]);
         assert_eq!(sorted_names(&mods), ["renderer-next-0.6.0.jar"]);
@@ -280,7 +283,7 @@ mod tests {
             sha1: Some(""),
         };
 
-        let removed = remove_superseded_in_dir(&mods, &old, None);
+        let removed = remove_superseded_in_dir(&mods, &old, None, &std::collections::HashSet::new());
 
         assert!(removed.is_empty());
         assert_eq!(sorted_names(&mods), ["gamma-2.0.jar"]);
