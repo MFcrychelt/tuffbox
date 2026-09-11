@@ -172,10 +172,10 @@ pub fn detect_platform_gpus() -> Result<Vec<GpuInfo>, String> {
             Err(_) => break,
         };
         index += 1;
-        let mut desc: DXGI_ADAPTER_DESC1 = unsafe { std::mem::zeroed() };
-        if unsafe { adapter.GetDesc1(&mut desc) }.is_err() {
-            continue;
-        }
+        let desc = match unsafe { adapter.GetDesc1() } {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
         if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
             continue; // WARP / Basic Render Driver — not a real GPU
         }
