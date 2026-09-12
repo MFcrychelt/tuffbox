@@ -15973,6 +15973,18 @@ async fn install_modpack(
 
         // ── Instance / plain folder import ──────────────────────────
         if source_path.is_dir() {
+            // Content-only drop (resourcepacks/ shaderpacks/ config/ …):
+            // not an instance by itself — stage a copy with the expected
+            // game-dir layout, then run the normal folder flow on it.
+            // The guard cleans the stage up on every exit path below.
+            let mut _stage_guard = StageDirCleanup(None);
+            let source_path = match stage_content_only_dir(&source_path) {
+                Some(staged) => {
+                    _stage_guard.0 = Some(staged.clone());
+                    staged
+                }
+                None => source_path,
+            };
             let (mut manifest, game_dir) =
                 import_instance_directory(&source_path).map_err(|e| e.to_string())?;
             if let Some(name) = instance_name.filter(|n| !n.trim().is_empty()) {
@@ -16094,6 +16106,11 @@ async fn install_modpack(
             PathBuf::from(&source)
         };
 
+        // Dropped .rar / .7z packs: pre-scan for unsafe entries, extract to
+        // a private temp dir and re-pack as zip so the sniffing below (and
+        // every importer) works on a format it already understands.
+        let pack_path = normalize_foreign_pack_archive(&pack_path)?;
+
         if !pack_path.is_file() {
             return Err(format!("pack not found: {}", pack_path.display()));
         }
@@ -16120,8 +16137,12 @@ async fn install_modpack(
         // failed with "archive error: specified file not found in archive"
         // (it looks for instance.cfg, which .mrpack archives don't have).
         let is_cf = is_curseforge_pack(&pack_path);
-        let has_mrpack_index = zip_has_entry(&pack_path, "modrinth.index.json");
-        let has_prism_cfg = zip_has_entry(&pack_path, "instance.cfg");
+        // WinRAR-style single-root wrappers ("MyPack/modrinth.index.json")
+        // are re-rooted before sniffing so wrapped packs are not misrouted
+        // to the Prism importer (or to a "not a modpack archive" error).
+        let zip_root = zip_wrap_prefix_of(&pack_path).unwrap_or_default();
+        let has_mrpack_index = zip_has_entry(&pack_path, &format!("{zip_root}modrinth.index.json"));
+        let has_prism_cfg = zip_has_entry(&pack_path, &format!("{zip_root}instance.cfg"));
         let ext = pack_path
             .extension()
             .and_then(|e| e.to_str())
@@ -16135,7 +16156,17 @@ async fn install_modpack(
             ext.clone()
         };
         let is_mods_zip = effective_ext == "zip" && !is_cf && is_mods_only_zip(&pack_path);
-        let is_prism_zip = effective_ext == "zip" && !is_cf && !has_mrpack_index && !is_mods_zip;
+        // Content zips carry resourcepacks/shaderpacks/config instead of a
+        // pack manifest — previously they fell through to the Prism importer
+        // and failed with "instance.cfg not found".
+        let is_content_zip =
+            effective_ext == "zip" && !is_cf && !has_mrpack_index && !has_prism_cfg && !is_mods_zip
+                && is_content_zip_archive(&pack_path);
+        let is_prism_zip = effective_ext == "zip"
+            && !is_cf
+            && !has_mrpack_index
+            && !is_mods_zip
+            && !is_content_zip;
         let mut manifest = match effective_ext.as_str() {
             "mrpack" => import_modrinth_pack(&pack_path).map_err(|e| e.to_string())?,
             "zip" if is_cf => import_curseforge_pack(&pack_path).map_err(|e| e.to_string())?,
@@ -16147,6 +16178,21 @@ async fn install_modpack(
                 ));
                 std::fs::create_dir_all(tmp_root.join("mods")).map_err(|e| e.to_string())?;
                 extract_mods_only_zip(&pack_path, &tmp_root.join("mods"))?;
+                let (m, _) = import_instance_directory(&tmp_root).map_err(|e| e.to_string())?;
+                let _ = std::fs::remove_dir_all(&tmp_root);
+                m
+            }
+            "zip" if is_content_zip => {
+                // Temporary extract of the whitelisted content dirs →
+                // manifest from the staged game dir (mods/resourcepacks/
+                // shaderpacks all counted), real extraction happens after
+                // the instance dir exists.
+                let tmp_root = std::env::temp_dir().join(format!(
+                    "tuffbox-content-zip-{}",
+                    tuffbox_core::time_util::compact_now()
+                ));
+                std::fs::create_dir_all(tmp_root.join("mods")).map_err(|e| e.to_string())?;
+                extract_content_zip(&pack_path, &tmp_root)?;
                 let (m, _) = import_instance_directory(&tmp_root).map_err(|e| e.to_string())?;
                 let _ = std::fs::remove_dir_all(&tmp_root);
                 m
@@ -16216,6 +16262,27 @@ async fn install_modpack(
             // Re-extract into final instance (temp was cleaned).
             std::fs::create_dir_all(instance_dir.join("mods")).map_err(|e| e.to_string())?;
             extract_mods_only_zip(&pack_path, &instance_dir.join("mods"))?;
+        }
+
+        if is_content_zip {
+            // Content packs: pull resourcepacks/shaderpacks/config/etc. into
+            // the final instance and rescan so loader/version fill in the
+            // same way the Prism zip path does.
+            extract_content_zip(&pack_path, &instance_dir)?;
+            let game = resolve_instance_game_dir(&instance_dir);
+            if game.join("mods").is_dir() {
+                let (scanned, _) =
+                    import_instance_directory(&instance_dir).map_err(|e| e.to_string())?;
+                if !scanned.mods.is_empty() {
+                    manifest.mods = scanned.mods;
+                }
+                if manifest.minecraft.version.is_empty() {
+                    manifest.minecraft.version = scanned.minecraft.version;
+                }
+                if manifest.loader.version.is_empty() {
+                    manifest.loader = scanned.loader;
+                }
+            }
         }
 
         // Modrinth .mrpack bundles config/resourcepack/shader files under
@@ -16435,6 +16502,993 @@ fn remove_part_file(dest: &Path) {
     let part = dest.with_file_name(format!("{name}.tuffbox.part"));
     if part.exists() {
         let _ = std::fs::remove_file(part);
+    }
+}
+
+// ── Drag & drop import (Library tab) ────────────────────────────────────
+//
+// The webview runs with `dragDropEnabled: false`, so drops arrive as DOM
+// File objects without real paths. The frontend stages the bytes here via
+// chunked base64 (4 MiB chunks keep JSON IPC small and give progress), then
+// everything downstream is path-based: `inspect_import_source` previews the
+// archive/folder for the "create a build?" dialog and `install_modpack`
+// performs the actual import (it already understands Modrinth .mrpack,
+// CurseForge zips, Prism instances, mods-only zips and instance folders).
+//
+// Foreign containers (.rar / .7z) are pre-scanned for zip-slip entry names,
+// extracted into a private temp dir, verified for containment, and
+// re-packed as a zip so the existing sniffing pipeline works unchanged.
+
+/// Standard modpack folders the drop dialog reports as present/missing.
+const DROP_STANDARD_DIRS: [&str; 7] = [
+    "mods",
+    "config",
+    "resourcepacks",
+    "shaderpacks",
+    "overrides",
+    "kubejs",
+    "defaultconfigs",
+];
+
+fn drop_stage_root() -> PathBuf {
+    std::env::temp_dir().join("tuffbox-drop-imports")
+}
+
+/// Validate a dropped relative path (webview-supplied). Rejects absolute
+/// paths, traversal and drive letters; normalizes backslashes.
+fn sanitize_drop_rel(rel: &str) -> Result<String, String> {
+    let norm = rel.replace('\\', "/");
+    let trimmed = norm.trim_start_matches('/');
+    if trimmed.is_empty() {
+        return Err("empty dropped file name".into());
+    }
+    if tuffbox_core::importer::is_unsafe_zip_rel_path(trimmed) {
+        return Err(format!("unsafe dropped path: {rel}"));
+    }
+    if trimmed.split('/').any(|seg| {
+        seg.is_empty()
+            || seg == "."
+            || seg == ".."
+            || seg.contains(':')
+            || seg == "CON"
+            || seg == "NUL"
+    }) {
+        return Err(format!("unsafe dropped path: {rel}"));
+    }
+    Ok(trimmed.to_string())
+}
+
+static DROP_STAGES: Lazy<std::sync::Mutex<std::collections::HashMap<String, PathBuf>>> =
+    Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+static DROP_STAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn drop_stage_dir_for(token: &str) -> Result<PathBuf, String> {
+    DROP_STAGES
+        .lock()
+        .map(|stages| stages.get(token).cloned())
+        .map_err(|_| "drop stage lock poisoned".to_string())?
+        .ok_or_else(|| "unknown drop stage (expired?)".to_string())
+}
+
+/// Remove stale staging dirs (crash leftovers older than 12h) — best effort.
+fn prune_drop_stage_root() {
+    let root = drop_stage_root();
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return;
+    };
+    let cutoff = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .saturating_sub(12 * 3600);
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(u64::MAX);
+        if modified < cutoff {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn begin_drop_import(name: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        prune_drop_stage_root();
+        let safe: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let safe = safe.trim().trim_matches('-');
+        let safe = if safe.is_empty() { "import" } else { safe };
+        let token = format!(
+            "{}-{}",
+            tuffbox_core::time_util::compact_now(),
+            DROP_STAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
+        let dir = drop_stage_root().join(format!("{safe}-{token}"));
+        std::fs::create_dir_all(&dir).map_err(|e| format!("stage dir: {e}"))?;
+        DROP_STAGES
+            .lock()
+            .map_err(|_| "drop stage lock poisoned".to_string())?
+            .insert(token.clone(), dir.clone());
+        Ok(serde_json::json!({
+            "token": token,
+            "dir": dir.to_string_lossy(),
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Append one base64 chunk of a staged file at `offset`. Creates parent
+/// dirs on first sight of the rel path. Returns bytes written.
+#[tauri::command(rename_all = "camelCase")]
+async fn write_drop_chunk(
+    token: String,
+    rel: String,
+    offset: u64,
+    data: String,
+) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = drop_stage_dir_for(&token)?;
+        let rel = sanitize_drop_rel(&rel)?;
+        let dest = dir.join(&rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("stage parent: {e}"))?;
+        }
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .map_err(|e| format!("bad chunk payload: {e}"))?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&dest)
+            .map_err(|e| format!("stage open: {e}"))?;
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(offset))
+            .map_err(|e| format!("stage seek: {e}"))?;
+        std::io::Write::write_all(&mut file, &bytes).map_err(|e| format!("stage write: {e}"))?;
+        Ok(serde_json::json!({ "written": bytes.len() }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn finish_drop_import(token: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = drop_stage_dir_for(&token)?;
+        if !dir.is_dir() {
+            return Err("drop stage vanished".into());
+        }
+        DROP_STAGES
+            .lock()
+            .map_err(|_| "drop stage lock poisoned".to_string())?
+            .remove(&token);
+        Ok(serde_json::json!({ "dir": dir.to_string_lossy() }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn cancel_drop_import(token: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = DROP_STAGES
+            .lock()
+            .map_err(|_| "drop stage lock poisoned".to_string())?
+            .remove(&token);
+        if let Some(dir) = dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Removes a staged drop dir when dropped out of scope (error paths).
+struct StageDirCleanup(Option<PathBuf>);
+impl Drop for StageDirCleanup {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+// ── Drop classification (inspect_import_source) ─────────────────────────
+
+/// Where a dropped name resolves per modpack conventions.
+fn content_dir_target(name: &str) -> Option<&'static str> {
+    match name.to_ascii_lowercase().as_str() {
+        "mods" => Some("mods"),
+        "resourcepacks" => Some("resourcepacks"),
+        "shaderpacks" | "shaders" => Some("shaderpacks"),
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+struct DropSummary {
+    total_entries: u64,
+    files: u64,
+    mods: u64,
+    resourcepacks: u64,
+    shaderpacks: u64,
+    has_mrpack_index: bool,
+    has_cf_manifest: bool,
+    has_instance_cfg: bool,
+    has_mmc_pack: bool,
+    has_packwiz: bool,
+    dirs_seen: Vec<String>,
+    unsafe_names: u64,
+    truncated: bool,
+}
+
+/// Single root shared by every entry (WinRAR "PackName/…" wrappers).
+/// Returns `Some("PackName/")` when every file lives under one root that is
+/// itself not a content dir. `names` must be file paths, `/`-separated.
+fn drop_wrap_prefix(names: &[String]) -> Option<String> {
+    let mut root: Option<String> = None;
+    for name in names {
+        let Some(first) = name.split('/').next() else {
+            continue;
+        };
+        if first.is_empty() {
+            return None;
+        }
+        match &root {
+            Some(r) if r == first => {}
+            _ => {
+                if root.is_some() {
+                    return None; // second distinct root → not wrapped
+                }
+                root = Some(first.to_string());
+            }
+        }
+    }
+    let root = root?;
+    if content_dir_target(&root).is_some() || root.eq_ignore_ascii_case("overrides") {
+        return None;
+    }
+    Some(format!("{root}/"))
+}
+
+/// Feed one `/`-separated entry name (files only) into the summary.
+/// `wrap` strips a detected single-root wrapper first.
+fn drop_classify_name(name: &str, wrap: &str, sum: &mut DropSummary) {
+    let rel = name
+        .strip_prefix(wrap)
+        .unwrap_or(name)
+        .trim_start_matches('/');
+    if rel.is_empty() {
+        return;
+    }
+    sum.total_entries += 1;
+    let lower = rel.to_ascii_lowercase();
+    match lower.as_str() {
+        "modrinth.index.json" => sum.has_mrpack_index = true,
+        "manifest.json" => sum.has_cf_manifest = true,
+        "instance.cfg" => sum.has_instance_cfg = true,
+        "mmc-pack.json" => sum.has_mmc_pack = true,
+        "packwiz.toml" => sum.has_packwiz = true,
+        _ => {}
+    }
+    let segments: Vec<&str> = rel.split('/').collect();
+    let top = segments[0].to_ascii_lowercase();
+    if !sum.dirs_seen.iter().any(|d| d == &top) {
+        sum.dirs_seen.push(top.clone());
+    }
+    let is_file_at = |folder: &str, depth: usize| {
+        segments.len() == depth + 1 && top == folder && !rel.ends_with('/')
+    };
+    let ext = segments
+        .last()
+        .and_then(|s| s.rsplit('.').next())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if is_file_at("mods", 1) && ext == "jar" {
+        sum.mods += 1;
+        sum.files += 1;
+    } else if rel.split('/').count() == 1 && ext == "jar" {
+        // jars loose at the archive root are mods (is_mods_only_zip rule)
+        sum.mods += 1;
+        sum.files += 1;
+    } else if is_file_at("resourcepacks", 1) && (ext == "zip" || ext == "jar") {
+        sum.resourcepacks += 1;
+        sum.files += 1;
+    } else if is_file_at("shaderpacks", 1) && (ext == "zip" || ext == "jar") {
+        sum.shaderpacks += 1;
+        sum.files += 1;
+    } else if segments.len() == 1 {
+        sum.files += 1;
+    } else {
+        sum.files += 1;
+    }
+}
+
+fn drop_format_of(sum: &DropSummary) -> &'static str {
+    if sum.has_mrpack_index {
+        "modrinth"
+    } else if sum.has_cf_manifest {
+        "curseforge"
+    } else if sum.has_packwiz {
+        "packwiz"
+    } else if sum.has_instance_cfg || sum.has_mmc_pack {
+        "prism"
+    } else if sum.mods > 0 || sum.resourcepacks > 0 || sum.shaderpacks > 0 {
+        "content"
+    } else if sum.dirs_seen.iter().any(|d| d == "config" || d == "saves") {
+        "instance"
+    } else if sum.files == 0 {
+        "empty"
+    } else {
+        "unknown"
+    }
+}
+
+/// present/missing for the dialog + all counts, shaped for the frontend.
+fn drop_summary_json(kind: &str, name: &str, sum: &DropSummary) -> serde_json::Value {
+    let dirs: Vec<String> = sum
+        .dirs_seen
+        .iter()
+        .filter(|d| DROP_STANDARD_DIRS.contains(&d.as_str()))
+        .cloned()
+        .collect();
+    let present: Vec<String> = DROP_STANDARD_DIRS
+        .iter()
+        .filter(|d| {
+            let dir_name: &str = d;
+            dirs.iter().any(|x| x.as_str() == dir_name)
+                || (dir_name == "mods" && sum.mods > 0)
+                || (dir_name == "resourcepacks" && sum.resourcepacks > 0)
+                || (dir_name == "shaderpacks" && sum.shaderpacks > 0)
+        })
+        .map(|d| d.to_string())
+        .collect();
+    let missing: Vec<String> = DROP_STANDARD_DIRS
+        .iter()
+        .filter(|d| !present.iter().any(|x| x == *d))
+        .map(|d| d.to_string())
+        .collect();
+    let mut warnings: Vec<String> = Vec::new();
+    if sum.unsafe_names > 0 {
+        warnings.push(format!(
+            "{} entries with unsafe paths were skipped",
+            sum.unsafe_names
+        ));
+    }
+    if sum.truncated {
+        warnings.push("listing truncated (archive too large to scan fully)".into());
+    }
+    if sum.total_entries == 0 {
+        warnings.push("the archive contains no files".into());
+    }
+    serde_json::json!({
+        "kind": kind,
+        "format": drop_format_of(sum),
+        "name": name,
+        "totalEntries": sum.total_entries,
+        "counts": {
+            "mods": sum.mods,
+            "resourcepacks": sum.resourcepacks,
+            "shaderpacks": sum.shaderpacks,
+            "files": sum.files,
+        },
+        "present": present,
+        "missing": missing,
+        "warnings": warnings,
+    })
+}
+
+fn summarize_drop_dir(dir: &Path) -> Result<serde_json::Value, String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    let mut sum = DropSummary::default();
+    while let Some(current) = stack.pop() {
+        if names.len() > 50_000 {
+            sum.truncated = true;
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Some(rel) = path.strip_prefix(dir).ok().and_then(|p| p.to_str()) {
+                names.push(rel.replace('\\', "/"));
+            }
+        }
+    }
+    let wrap = drop_wrap_prefix(&names).unwrap_or_default();
+    for name in &names {
+        drop_classify_name(name, &wrap, &mut sum);
+    }
+    let name = dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("dropped folder")
+        .to_string();
+    Ok(drop_summary_json("dir", &name, &sum))
+}
+
+fn summarize_drop_zip(zip_path: &Path) -> Result<serde_json::Value, String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("open: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("corrupt zip: {e}"))?;
+    let mut names: Vec<String> = Vec::new();
+    let mut sum = DropSummary::default();
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index(i) else { continue };
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().replace('\\', "/");
+        if tuffbox_core::importer::is_unsafe_zip_rel_path(&name) {
+            sum.unsafe_names += 1;
+            continue;
+        }
+        names.push(name);
+    }
+    let wrap = drop_wrap_prefix(&names).unwrap_or_default();
+    for name in &names {
+        drop_classify_name(name, &wrap, &mut sum);
+    }
+    let name = zip_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("archive")
+        .to_string();
+    let kind = if zip_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("mrpack"))
+        .unwrap_or(false)
+    {
+        "mrpack"
+    } else {
+        "zip"
+    };
+    Ok(drop_summary_json(kind, &name, &sum))
+}
+
+/// Entry names of a .rar / .7z without extracting (listing only).
+fn list_foreign_archive_names(path: &Path) -> Result<Vec<String>, String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "7z" {
+        let mut reader = sevenz_rust::SevenZReader::open(path, sevenz_rust::Password::empty())
+            .map_err(|e| {
+                format!(
+                    "cannot open 7z archive (encrypted archives are not supported): {e}"
+                )
+            })?;
+        let mut names = Vec::new();
+        reader
+            .for_each_entries(|entry, _reader| {
+                names.push(entry.name().replace('\\', "/"));
+                Ok(true)
+            })
+            .map_err(|e| format!("scan 7z failed: {e}"))?;
+        return Ok(names);
+    }
+    // RAR
+    let archive = unrar::Archive::new(path)
+        .open_for_listing()
+        .map_err(|e| format!("cannot open rar archive: {e}"))?;
+    let mut names = Vec::new();
+    for entry in archive {
+        let entry = entry.map_err(|e| format!("scan rar failed: {e}"))?;
+        if entry.is_dir() {
+            continue;
+        }
+        names.push(entry.filename().as_str().replace('\\', "/"));
+    }
+    Ok(names)
+}
+
+fn summarize_drop_foreign(path: &Path) -> Result<serde_json::Value, String> {
+    let names = list_foreign_archive_names(path)?;
+    let mut sum = DropSummary::default();
+    let mut safe_names: Vec<String> = Vec::new();
+    for name in &names {
+        if tuffbox_core::importer::is_unsafe_zip_rel_path(name) {
+            sum.unsafe_names += 1;
+            continue;
+        }
+        safe_names.push(name.clone());
+    }
+    let wrap = drop_wrap_prefix(&safe_names).unwrap_or_default();
+    for name in &safe_names {
+        drop_classify_name(name, &wrap, &mut sum);
+    }
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("archive")
+        .to_string();
+    let kind = if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("rar"))
+        .unwrap_or(false)
+    {
+        "rar"
+    } else {
+        "7z"
+    };
+    Ok(drop_summary_json(kind, &name, &sum))
+}
+
+/// Preview a dropped archive/folder for the "create a build?" dialog.
+#[tauri::command(rename_all = "camelCase")]
+async fn inspect_import_source(path: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = PathBuf::from(&path);
+        if path.is_dir() {
+            summarize_drop_dir(&path)
+        } else if path.is_file() {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            match ext.as_str() {
+                "zip" | "mrpack" => summarize_drop_zip(&path),
+                "rar" | "7z" => summarize_drop_foreign(&path),
+                other => Err(format!("unsupported import format: .{other}")),
+            }
+        } else {
+            Err(format!("path not found: {}", path.display()))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ── .rar / .7z → zip normalization for the install pipeline ─────────────
+
+/// Extract a pre-scanned .rar/.7z into `dest` (containment-verified).
+fn extract_foreign_archive(src: &Path, dest: &Path) -> Result<(), String> {
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    std::fs::create_dir_all(dest).map_err(|e| format!("extract dir: {e}"))?;
+    if ext == "7z" {
+        sevenz_rust::decompress_file(src, dest)
+            .map_err(|e| format!("7z extraction failed: {e}"))?;
+    } else {
+        let mut archive = unrar::Archive::new(src)
+            .open_for_processing()
+            .map_err(|e| format!("cannot open rar archive: {e}"))?;
+        while let Some(header) = archive.read_header().map_err(|e| format!("rar read: {e}"))? {
+            let header = header.map_err(|e| format!("rar header: {e}"))?;
+            archive = if header.entry().is_dir() {
+                header.skip().map_err(|e| format!("rar skip: {e}"))?
+            } else {
+                header
+                    .extract_to(dest)
+                    .map_err(|e| format!("rar extract: {e}"))?
+            };
+        }
+    }
+    // Defense in depth: every produced file must stay inside dest.
+    let canon_dest = dest.canonicalize().map_err(|e| e.to_string())?;
+    let mut stack = vec![dest.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current).map_err(|e| e.to_string())?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let canon = path
+                    .canonicalize()
+                    .map_err(|e| format!("verify {}: {e}", path.display()))?;
+                if !canon.starts_with(&canon_dest) {
+                    return Err(format!(
+                        "archive tried to escape the extraction folder: {}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Repack an extracted directory tree into a flat zip (rel `/` names).
+fn dir_to_zip(src_dir: &Path, dest_zip: &Path) -> Result<(), String> {
+    let output = std::fs::File::create(dest_zip)
+        .map_err(|e| format!("create {}: {e}", dest_zip.display()))?;
+    let mut zip = zip::ZipWriter::new(output);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    fn add_dir(
+        zip: &mut zip::ZipWriter<std::fs::File>,
+        opts: zip::write::SimpleFileOptions,
+        base: &Path,
+        dir: &Path,
+    ) -> Result<(), String> {
+        for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(base)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if path.is_dir() {
+                zip.add_directory(&rel, opts)
+                    .map_err(|e| format!("zip dir {rel}: {e}"))?;
+                add_dir(zip, opts, base, &path)?;
+            } else if path.is_file() {
+                zip.start_file(&rel, opts)
+                    .map_err(|e| format!("zip file {rel}: {e}"))?;
+                let mut f = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+                std::io::copy(&mut f, zip).map_err(|e| format!("zip copy {rel}: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+    add_dir(&mut zip, opts, src_dir, src_dir)?;
+    zip.finish()
+        .map_err(|e| format!("finish zip: {e}"))?;
+    Ok(())
+}
+
+/// .rar / .7z packs are extracted to a private temp dir and re-packed as a
+/// zip so the existing content sniffing (Modrinth/CurseForge/Prism/mods)
+/// works unchanged. zip/mrpack inputs pass through untouched.
+fn normalize_foreign_pack_archive(pack_path: &Path) -> Result<PathBuf, String> {
+    let ext = pack_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext != "rar" && ext != "7z" {
+        return Ok(pack_path.to_path_buf());
+    }
+    let names = list_foreign_archive_names(pack_path)?;
+    let unsafe_hit = names
+        .iter()
+        .find(|n| tuffbox_core::importer::is_unsafe_zip_rel_path(n))
+        .cloned();
+    if let Some(name) = unsafe_hit {
+        return Err(format!(
+            "archive contains an unsafe entry ({name}) and was rejected"
+        ));
+    }
+    let tag = tuffbox_core::time_util::compact_now();
+    let extract_dir = std::env::temp_dir().join(format!("tuffbox-archive-ext-{tag}"));
+    let _guard = StageDirCleanup(Some(extract_dir.clone()));
+    extract_foreign_archive(pack_path, &extract_dir)?;
+    let zip_path = std::env::temp_dir().join(format!("tuffbox-archive-{tag}.zip"));
+    dir_to_zip(&extract_dir, &zip_path)?;
+    Ok(zip_path)
+}
+
+// ── Content zips (mods / resourcepacks / shaderpacks / config) ──────────
+
+const DROP_CONTENT_DIRS: [&str; 9] = [
+    "mods",
+    "resourcepacks",
+    "shaderpacks",
+    "config",
+    "defaultconfigs",
+    "kubejs",
+    "scripts",
+    "datapacks",
+    "overrides",
+];
+
+/// File rel names inside a zip (unsafe entries skipped), `/`-separated.
+fn zip_file_rel_names(zip_path: &Path) -> Result<(Vec<String>, u64), String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("open: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("corrupt zip: {e}"))?;
+    let mut names = Vec::new();
+    let mut skipped = 0u64;
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index(i) else { continue };
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().replace('\\', "/");
+        if tuffbox_core::importer::is_unsafe_zip_rel_path(&name) {
+            skipped += 1;
+            continue;
+        }
+        names.push(name);
+    }
+    Ok((names, skipped))
+}
+
+/// Wrap prefix of a zip on disk (see `drop_wrap_prefix`), empty for non-zips.
+fn zip_wrap_prefix_of(zip_path: &Path) -> Option<String> {
+    let (names, _) = zip_file_rel_names(zip_path).ok()?;
+    drop_wrap_prefix(&names)
+}
+
+/// Whether a manifest-less zip carries modpack content folders (or loose
+/// mod jars) — after unwrapping a single-root wrapper.
+fn is_content_zip_archive(zip_path: &Path) -> bool {
+    let Ok((names, _)) = zip_file_rel_names(zip_path) else {
+        return false;
+    };
+    if names.iter().any(|n| {
+        matches!(
+            n.as_str(),
+            "modrinth.index.json" | "manifest.json" | "instance.cfg" | "mmc-pack.json"
+        )
+    }) {
+        return false;
+    }
+    let wrap = drop_wrap_prefix(&names).unwrap_or_default();
+    names.iter().any(|name| {
+        let rel = name.strip_prefix(&wrap.as_str()).unwrap_or(name);
+        let segments: Vec<&str> = rel.split('/').collect();
+        if segments.len() == 1 {
+            return rel.to_ascii_lowercase().ends_with(".jar");
+        }
+        DROP_CONTENT_DIRS.contains(&segments[0].to_ascii_lowercase().as_str())
+    })
+}
+
+/// Extract whitelisted content folders (and root-level mod jars) from a
+/// zip into `dest_root`. Unsafe entries are skipped (counted in Err-free
+/// form — the inspect step already warns about them).
+fn extract_content_zip(zip_path: &Path, dest_root: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("open: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("corrupt zip: {e}"))?;
+    // Pass 1: collect names to detect the wrapper root.
+    let mut names = Vec::new();
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index(i) else { continue };
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().replace('\\', "/");
+        if tuffbox_core::importer::is_unsafe_zip_rel_path(&name) {
+            continue;
+        }
+        names.push(name);
+    }
+    let wrap = drop_wrap_prefix(&names).unwrap_or_default();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().replace('\\', "/");
+        if tuffbox_core::importer::is_unsafe_zip_rel_path(&name) {
+            continue;
+        }
+        let rel = name
+            .strip_prefix(wrap.as_str())
+            .unwrap_or(name.as_str())
+            .trim_start_matches('/')
+            .to_string();
+        if rel.is_empty() {
+            continue;
+        }
+        let segments: Vec<&str> = rel.split('/').collect();
+        let target_rel = if segments.len() == 1
+            && rel.to_ascii_lowercase().ends_with(".jar")
+        {
+            format!("mods/{rel}")
+        } else if DROP_CONTENT_DIRS.contains(&segments[0].to_ascii_lowercase().as_str()) {
+            rel.clone()
+        } else {
+            continue;
+        };
+        let dest = dest_root.join(&target_rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
+        }
+        let mut out = std::fs::File::create(&dest)
+            .map_err(|e| format!("write {target_rel}: {e}"))?;
+        std::io::copy(&mut entry, &mut out)
+            .map_err(|e| format!("extract {target_rel}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// A dropped folder that is itself a content folder (`mods`, `resourcepacks`,
+/// `shaderpacks`/`shaders`, `config`) — stage a copy with the expected game
+/// layout (empty `mods/` included) so the normal folder import accepts it.
+/// Returns `None` when the folder already imports through the standard path.
+fn stage_content_only_dir(path: &Path) -> Option<PathBuf> {
+    let folder_name = path.file_name().and_then(|s| s.to_str())?;
+    let mut copies: Vec<(PathBuf, &'static str)> = Vec::new();
+    if let Some(target) = content_dir_target(folder_name) {
+        // `mods` alone already passes the standard instance check.
+        if target == "mods" {
+            return None;
+        }
+        copies.push((path.to_path_buf(), target));
+    } else {
+        // Parent folder with only content dirs inside (no instance markers).
+        if path.join("instance.cfg").is_file()
+            || path.join("mmc-pack.json").is_file()
+            || path.join("manifest.json").is_file()
+            || path.join("modrinth.index.json").is_file()
+            || path.join("minecraftinstance.json").is_file()
+        {
+            return None;
+        }
+        let mut saw_content = false;
+        for entry in std::fs::read_dir(path).ok()?.flatten() {
+            let child = entry.path();
+            if !child.is_dir() {
+                continue;
+            }
+            let child_name = child.file_name()?.to_str()?;
+            if child_name.starts_with('.') {
+                continue;
+            }
+            let Some(target) = content_dir_target(child_name) else {
+                return None; // any non-content child → use the standard flow
+            };
+            if target != "config" {
+                saw_content = true;
+            }
+            copies.push((child, target));
+        }
+        if !saw_content {
+            return None;
+        }
+    }
+    let slug: String = folder_name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let stage = std::env::temp_dir().join(format!(
+        "tuffbox-content-dir-{}-{}",
+        slug,
+        tuffbox_core::time_util::compact_now()
+    ));
+    std::fs::create_dir_all(stage.join("mods")).ok()?;
+    for (src, target) in &copies {
+        if crate::helpers::copy_dir_recursive(src, &stage.join(target)).is_err() {
+            let _ = std::fs::remove_dir_all(&stage);
+            return None;
+        }
+    }
+    Some(stage)
+}
+
+#[cfg(test)]
+mod drop_import_tests {
+    use super::*;
+
+    fn write_zip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in entries {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn sanitize_drop_rel_rejects_traversal_and_accepts_normal() {
+        assert!(sanitize_drop_rel("../escaped.txt").is_err());
+        assert!(sanitize_drop_rel("mods/../../escape.jar").is_err());
+        assert!(sanitize_drop_rel("/absolute/path.zip").is_err());
+        assert!(sanitize_drop_rel("C:/system32/x.dll").is_err());
+        assert!(sanitize_drop_rel("a//b.zip").is_err());
+        assert_eq!(
+            sanitize_drop_rel("mods\\jei-1.0.jar").unwrap(),
+            "mods/jei-1.0.jar"
+        );
+    }
+
+    #[test]
+    fn wrap_prefix_detects_single_root_and_ignores_content_roots() {
+        let names = vec!["Pack/mods/a.jar".to_string(), "Pack/config/x.toml".to_string()];
+        assert_eq!(drop_wrap_prefix(&names).as_deref(), Some("Pack/"));
+        let mixed = vec!["Pack/a".to_string(), "Other/b".to_string()];
+        assert_eq!(drop_wrap_prefix(&mixed), None);
+        let content = vec!["mods/a.jar".to_string()];
+        assert_eq!(drop_wrap_prefix(&content), None);
+    }
+
+    #[test]
+    fn classify_counts_content_and_markers() {
+        let mut sum = DropSummary::default();
+        for name in [
+            "Pack/modrinth.index.json",
+            "Pack/overrides/mods/jei.jar",
+            "Pack/resourcepacks/fancy.zip",
+            "Pack/shaderpacks/soft.zip",
+        ] {
+            drop_classify_name(name, "Pack/", &mut sum);
+        }
+        assert_eq!(drop_format_of(&sum), "modrinth");
+        assert_eq!(sum.mods, 1);
+        assert_eq!(sum.resourcepacks, 1);
+        assert_eq!(sum.shaderpacks, 1);
+    }
+
+    #[test]
+    fn content_zip_detection_covers_resourcepacks_and_wrappers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pack.zip");
+        write_zip(&path, &[("resourcepacks/fancy.zip", b"pk3")]);
+        assert!(is_content_zip_archive(&path));
+
+        let wrapped = dir.path().join("wrapped.zip");
+        write_zip(&wrapped, &[("MyPack/mods/a.jar", b"jar")]);
+        assert!(is_content_zip_archive(&wrapped));
+
+        let cf = dir.path().join("cf.zip");
+        write_zip(&cf, &[("manifest.json", b"{}")]);
+        assert!(!is_content_zip_archive(&cf));
+
+        let junk = dir.path().join("junk.zip");
+        write_zip(&junk, &[("readme.txt", b"hi")]);
+        assert!(!is_content_zip_archive(&junk));
+    }
+
+    #[test]
+    fn extract_content_zip_unwraps_and_reroots_jars() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("in.zip");
+        write_zip(
+            &zip_path,
+            &[
+                ("MyPack/mods/a.jar", b"jar-a"),
+                ("MyPack/resourcepacks/fancy.zip", b"pk3"),
+                ("loose.jar", b"loose"),
+                ("MyPack/ignore.txt", b"nope"),
+            ],
+        );
+        let out = dir.path().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        extract_content_zip(&zip_path, &out).unwrap();
+        assert!(out.join("mods/a.jar").is_file());
+        assert!(out.join("resourcepacks/fancy.zip").is_file());
+        assert!(out.join("mods/loose.jar").is_file());
+        assert!(!out.join("ignore.txt").exists());
+    }
+
+    #[test]
+    fn stage_content_only_dir_scaffolds_game_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let rp = dir.path().join("resourcepacks");
+        std::fs::create_dir_all(&rp).unwrap();
+        std::fs::write(rp.join("fancy.zip"), b"pk3").unwrap();
+
+        // A bare content folder stages; `mods` alone goes through the
+        // standard flow unchanged.
+        let staged = stage_content_only_dir(&rp).expect("resourcepacks folder stages");
+        assert!(staged.join("mods").is_dir());
+        assert!(staged.join("resourcepacks/fancy.zip").is_file());
+        let _ = std::fs::remove_dir_all(staged);
+
+        let mods_dir = dir.path().join("mods");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+        assert!(stage_content_only_dir(&mods_dir).is_none());
     }
 }
 
@@ -20070,6 +21124,11 @@ pub fn run() {
             search_curseforge_modpacks,
             get_curseforge_modpack_files,
             install_modpack,
+            inspect_import_source,
+            begin_drop_import,
+            write_drop_chunk,
+            finish_drop_import,
+            cancel_drop_import,
             retry_failed_mod_downloads,
             has_crashed,
             open_project_folder,
