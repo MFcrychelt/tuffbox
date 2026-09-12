@@ -362,7 +362,7 @@ Foundation (Brief|Setup) | Build (Content|Resolve|History) | Create (…) | Veri
 
 - Brief → storefront `manifest.listing` + collapsed Author notes (`manifest.brief`);
 - Setup → ProjectSettings;
-- Content → Mods (Import/Resync, CF+MR bulk, wrong-loader, **Optimize pack** curated/custom, Ideas «Often together», Resolve/History trails);
+- Content → Mods (Import/Resync, CF+MR bulk, wrong-loader, **Optimize pack** curated/FO/custom, Ideas «Often together», Resolve/History trails);
 - Resolve → Graph;
 - Tune → ConfigEditor (roots + search jump + format/lint + snippets + snapshot trail);
 - History → ChangeHistory (chrono timeline, delta scan, AI context);

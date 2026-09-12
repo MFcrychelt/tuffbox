@@ -144,7 +144,7 @@
     </div>
     <div class="flex items-center gap-1.5 flex-wrap">
       <label class="flex items-center gap-1.5 text-[color:var(--text-muted)] text-[12px] cursor-pointer" title="Toggle auto-scroll">
-        <input type="checkbox" class="w-auto accent-emerald-500" bind:checked={autoScroll} /> Auto-scroll
+        <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={autoScroll} /> Auto-scroll
       </label>
       {#if log}
         <button class="icon-btn" onclick={copyLog} title="Copy log to clipboard" aria-label="Copy log">
@@ -155,11 +155,11 @@
         </button>
       {/if}
       {#if activeLogRoot && activeLogRoot !== projectPath}
-        <button class="icon-btn" onclick={onopenserver} title="Open server console">
+        <button class="icon-btn" onclick={onopenserver} title="Open server console" aria-label="Open server console">
           <Terminal size={13} />
         </button>
       {/if}
-      <button class="icon-btn" onclick={ondiagnose} title="Open in Diagnose">
+      <button class="icon-btn" onclick={ondiagnose} title="Open in Diagnose" aria-label="Open in Diagnose">
         <Stethoscope size={13} />
       </button>
       {#if watching}
@@ -208,9 +208,9 @@
         <Terminal size={34} class="mx-auto opacity-60" />
         <p class="mt-3 text-[13px] font-semibold text-[color:var(--text-secondary)]">Waiting for output</p>
         <p class="mt-1 text-[12px] text-[color:var(--text-muted)] max-w-[280px] mx-auto leading-relaxed">
-          latest.log will appear here after the first run.
-          Launch a profile, or press{" "}
-          <kbd class="kbd">Ctrl</kbd> + <kbd class="kbd">R</kbd> to smoke-test the selected target.
+          latest.log appears here once a profile runs. Start one from the bar above, or press{" "}
+          <kbd class="kbd">Ctrl</kbd> + <kbd class="kbd">Shift</kbd> + <kbd class="kbd">P</kbd> to
+          launch from anywhere in the IDE.
         </p>
       </div>
     </div>
@@ -222,9 +222,10 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12.5px;
     line-height: 1.6;
-    color: #d4d4d8;
+    color: var(--text-secondary);
     white-space: pre-wrap;
-    background: rgba(0, 0, 0, 0.35);
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border-color);
   }
   .console-status {
     display: inline-flex;
@@ -241,16 +242,16 @@
     display: inline-block;
   }
   .status-dot.live {
-    background: #34d399;
-    box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+    background: var(--accent-primary);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--accent-primary) 60%, transparent);
   }
   .status-dot.busy {
-    background: #fbbf24;
-    box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+    background: var(--accent-warning);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--accent-warning) 60%, transparent);
     animation: pulse 1.2s ease-in-out infinite;
   }
   .status-dot.off {
-    background: #52525b;
+    background: var(--text-muted);
   }
   @keyframes pulse {
     0%, 100% { opacity: 1; }
@@ -277,7 +278,10 @@
   }
   .seg-control button.active {
     background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
-    color: var(--accent-primary);
+    /* Accent-on-accent-tint measured 2.62:1 in the light themes; the mix with
+       the primary text colour keeps the hue and restores contrast in every
+       theme (darker on light panels, lighter on dark ones). */
+    color: color-mix(in srgb, var(--accent-primary) 62%, var(--text-primary));
   }
   .icon-btn {
     width: 30px;
@@ -317,8 +321,32 @@
   }
   .search-input:focus {
     outline: none;
-    border-color: rgba(16, 185, 129, 0.5);
+    border-color: var(--accent-primary);
   }
-  .console-empty kbd { font-family: ui-monospace, monospace; font-size: 11px; padding: 2px 6px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.06); color: #d1d5db; }
-  .kbd { font-family: ui-monospace, monospace; font-size: 11px; padding: 2px 6px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.06); color: #d1d5db; }
+  .console-empty kbd {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+  }
+  .kbd {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+  }
 </style>

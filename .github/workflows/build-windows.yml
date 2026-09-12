@@ -23,6 +23,34 @@ jobs:
     runs-on: windows-latest
 
     steps:
+    - name: Free disk space
+      shell: pwsh
+      run: |
+        Write-Host "=== Before cleanup ==="
+        Get-PSDrive C | Format-Table Used, Free
+        # Remove pre-installed bloat that's never used
+        $targets = @(
+          "C:\Android",
+          "C:\Program Files\Microsoft SQL Server",
+          "C:\Program Files\dotnet",
+          "C:\Program Files\MongoDB",
+          "C:\Program Files\MySQL",
+          "C:\Program Files\PostgreSQL",
+          "C:\Program Files\Java\jdk-17*",
+          "C:\Program Files\Java\jdk-21*",
+          "C:\hostedtoolcache\windows\CodeQL"
+        )
+        foreach ($t in $targets) {
+          if (Test-Path $t) {
+            Write-Host "Removing $t"
+            Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+          }
+        }
+        # Clean npm/pip caches
+        npm cache clean --force 2>$null
+        Write-Host "=== After cleanup ==="
+        Get-PSDrive C | Format-Table Used, Free
+
     - name: Checkout repository
       uses: actions/checkout@v4
 

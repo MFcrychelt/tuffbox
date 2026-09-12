@@ -168,6 +168,24 @@ impl ModrinthProvider {
         Ok((info, body))
     }
 
+    /// Batch project metadata (`GET /v2/projects?ids=["a","b"]`), chunked so
+    /// large packs (an FO set is ~100+ mods) resolve in a few requests.
+    /// Accepts ids or slugs; unknown ones are silently absent from the result.
+    pub fn get_projects_batch(&self, ids: &[String]) -> Result<Vec<ProjectInfo>, ProviderError> {
+        const CHUNK: usize = 100;
+        let mut out = Vec::new();
+        for chunk in ids.chunks(CHUNK) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let arr = serde_json::to_string(chunk).map_err(ProviderError::Parse)?;
+            let path = format!("/projects?ids={}", urlencode(&arr));
+            let projects: Vec<ModrinthProject> = self.get_json(&path)?;
+            out.extend(projects.into_iter().map(Into::into));
+        }
+        Ok(out)
+    }
+
     /// Full project detail for the in-launcher catalog page: everything
     /// [`Self::get_project_with_body`] returns plus gallery images, loaders,
     /// game-version lines, external links (discord / wiki / donate) and the

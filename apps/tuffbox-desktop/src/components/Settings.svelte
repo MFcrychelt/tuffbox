@@ -8,7 +8,7 @@
     Bot, Network, Coffee, Terminal, HardDrive, Settings2,
     MessageCircle, ExternalLink,
   } from "@lucide/svelte";
-  import { api } from "../lib/api";
+  import { api, type GpuInfo } from "../lib/api";
   import type { PresenceSettings, LauncherSettings, SidebarMode, UiScaleMode } from "../lib/store";
   import {
     autoHideWorkflowRail,
@@ -192,16 +192,33 @@
     ingameOverlay: true,
     cpuAffinityMode: "off",
     cpuAffinityMask: null,
+    gpuPreference: "auto",
     autoHideWorkflowRail: false,
     sidebarMode: "full",
     uiScalePercent: 100,
     uiScaleMode: "auto",
     roundedCorners: true,
-    hideInstanceHome: false,
     homeBackdrop: true,
   });
   let launcherSaving = $state(false);
   let launcherMsg = $state("");
+
+  let gpus = $state<GpuInfo[]>([]);
+  let gpusLoading = $state(false);
+  let gpusError = $state("");
+
+  async function loadGpus() {
+    if (gpusLoading) return;
+    gpusLoading = true;
+    gpusError = "";
+    try {
+      gpus = await api.launcher.detectGpus();
+    } catch (e) {
+      gpusError = String(e);
+    } finally {
+      gpusLoading = false;
+    }
+  }
 
   // Auto memory tuning (Millida tuning.rs-inspired): measures total RAM in
   // Rust and recommends heap + GC flags. Mod count comes from the active
@@ -1090,6 +1107,7 @@
     await loadIntegrations();
     await loadPresence();
     await loadLauncher();
+    await loadGpus();
   });
 
   onDestroy(() => {
@@ -1609,6 +1627,39 @@
             />
           </label>
         {/if}
+        <label>
+          GPU
+          <div class="path-row">
+            <select
+              bind:value={launcher.gpuPreference}
+              onchange={() => persistLauncher({ gpuPreference: launcher.gpuPreference })}
+            >
+              <option value="auto">Auto (discrete when available)</option>
+              <option value="discrete">Discrete GPU</option>
+              <option value="integrated">Integrated GPU</option>
+            </select>
+            <button
+              type="button"
+              class="secondary"
+              disabled={gpusLoading}
+              title="Re-detect GPUs"
+              onclick={() => void loadGpus()}
+            >
+              {gpusLoading ? "Detecting…" : "Detect"}
+            </button>
+          </div>
+          <small class="auto-tune-msg">
+            {#if gpusError}
+              GPU detection failed: {gpusError}
+            {:else if gpusLoading && gpus.length === 0}
+              Detecting GPUs…
+            {:else if gpus.length === 0}
+              No GPUs detected — the game will use the OS default renderer.
+            {:else}
+              {#each gpus as g, i}{i > 0 ? " · " : ""}{g.name} ({g.kind}{g.primary ? ", primary" : ""}{g.vramMb != null && g.vramMb > 0 ? `, ${(g.vramMb / 1024).toFixed(1)} GB` : ""}){/each}
+            {/if}
+          </small>
+        </label>
         <label>
           Default memory (MB)
           <div class="path-row">
@@ -2665,7 +2716,21 @@
 
   .shortcut-list { display: grid; gap: 4px; margin-top: 4px; width: 100%; }
   .shortcut-row { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-radius: 6px; background: var(--bg-tertiary); }
-  .shortcut-row kbd { font-family: ui-monospace,monospace; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); border: 1px solid var(--border-color); color: var(--text-primary); min-width: 60px; text-align: center; }
+  .shortcut-row kbd {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    font-family: ui-monospace,monospace;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    min-width: 60px;
+    text-align: center;
+  }
   .shortcut-row span { flex: 1; color: var(--text-secondary); font-size: 12px; }
   .shortcut-row small { color: var(--text-muted); font-size: 10px; }
 

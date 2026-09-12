@@ -30,6 +30,7 @@
   import LibraryInstancesPane from "./LibraryInstancesPane.svelte";
   import PromptDialog from "./PromptDialog.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import DropImportDialog from "./DropImportDialog.svelte";
   import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
@@ -47,10 +48,30 @@
   let importing = $state(false);
   let importMenuOpen = $state(false);
   let githubImportOpen = $state(false);
+
+  // ── Drag & drop import (Library tab) ────────────────────────────────
+  let dragDepth = $state(0);
+  let dropStaging = $state<{ total: number; done: number } | null>(null);
+  let offerOpen = $state(false);
+  let offerInspect = $state<any>(null);
+  let offerPath = $state("");
+  let offerToken = $state("");
+  let offerName = $state("");
+  let offerBusy = $state(false);
   let githubConfirmOpen = $state(false);
   let githubInstallActive = $state(false);
   let githubPendingSource = $state("");
   let githubInspectSummary = $state("");
+  // Import menu a11y: trigger element ref — Escape-close must return focus.
+  let importBtnEl: HTMLButtonElement | null = $state(null);
+  // Download-dir dirty tracking: testers must SEE that a typed path is not
+  // saved yet (Enter / Save apply it; Browse saves immediately).
+  // (`downloadDirDirty` is derived next to `downloadDir`'s declaration below.)
+  let lastSavedDir = $state("");
+  // Tab keyboard navigation (Left/Right/Home/End) needs element refs.
+  let tabYoursEl: HTMLButtonElement | null = null;
+  let tabDiscoverEl: HTMLButtonElement | null = null;
+  let tabCreateEl: HTMLButtonElement | null = null;
 
   async function loadSwarm() {
     try {
@@ -156,6 +177,176 @@
     }
   }
 
+  // ── Drag & drop staging (DOM drops — dragDropEnabled:false webview) ──
+  const DROP_CHUNK = 4 * 1024 * 1024;
+
+  function u8ToB64(bytes: Uint8Array): string {
+    let bin = "";
+    const step = 0x8000;
+    for (let i = 0; i < bytes.length; i += step) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + step));
+    }
+    return btoa(bin);
+  }
+
+  type DroppedFile = { rel: string; file: File };
+
+  /** webkitGetAsEntry must run synchronously inside the drop event —
+      DataTransfer items are invalidated by the first await. */
+  function collectDropEntriesSync(dt: DataTransfer): Array<FileSystemEntry | File> {
+    const out: Array<FileSystemEntry | File> = [];
+    for (const item of Array.from(dt.items ?? [])) {
+      const entry = (item as unknown as { webkitGetAsEntry?: () => FileSystemEntry | null })
+        .webkitGetAsEntry?.();
+      if (entry) out.push(entry);
+    }
+    if (out.length === 0) {
+      for (const file of Array.from(dt.files ?? [])) out.push(file);
+    }
+    return out;
+  }
+
+  async function walkDropEntry(
+    entry: FileSystemEntry | File,
+    prefix: string,
+    out: DroppedFile[],
+  ): Promise<void> {
+    if (entry instanceof File) {
+      out.push({ rel: prefix + entry.name, file: entry });
+      return;
+    }
+    const fileEntry = entry as FileSystemFileEntry;
+    if (fileEntry.isFile) {
+      const file = await new Promise<File | null>((resolve) =>
+        fileEntry.file((f) => resolve(f), () => resolve(null)),
+      );
+      if (file) out.push({ rel: prefix + file.name, file });
+      return;
+    }
+    const dirEntry = entry as FileSystemDirectoryEntry;
+    const reader = dirEntry.createReader();
+    for (;;) {
+      // readEntries returns at most 100 per call — loop until empty.
+      const batch = await new Promise<FileSystemEntry[]>((resolve) =>
+        reader.readEntries(
+          (entries) => resolve(entries as FileSystemEntry[]),
+          () => resolve([]),
+        ),
+      );
+      if (batch.length === 0) break;
+      for (const child of batch) await walkDropEntry(child, `${prefix}${dirEntry.name}/`, out);
+    }
+  }
+
+  function onLibraryDragEnter(e: DragEvent) {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+    e.preventDefault();
+    dragDepth += 1;
+  }
+  function onLibraryDragOver(e: DragEvent) {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  }
+  function onLibraryDragLeave() {
+    dragDepth = Math.max(0, dragDepth - 1);
+  }
+
+  async function onLibraryDrop(e: DragEvent) {
+    e.preventDefault();
+    dragDepth = 0;
+    if (importing || dropStaging || offerOpen) return;
+    if (!e.dataTransfer) return;
+    const items = collectDropEntriesSync(e.dataTransfer);
+    if (items.length === 0) return;
+    await handleDroppedItems(items);
+  }
+
+  async function handleDroppedItems(items: Array<FileSystemEntry | File>) {
+    const files: DroppedFile[] = [];
+    for (const item of items) await walkDropEntry(item, "", files);
+    if (files.length === 0) {
+      toasts.error("Nothing importable in the dropped selection.");
+      return;
+    }
+    const first = files[0].rel;
+    const rootName = first.includes("/")
+      ? first.split("/")[0]
+      : first.replace(/\.(zip|mrpack|rar|7z)$/i, "");
+    let stage: { token: string; dir: string } | null = null;
+    try {
+      stage = (await invoke("begin_drop_import", { name: rootName })) as {
+        token: string;
+        dir: string;
+      };
+      const total = files.reduce((acc, f) => acc + f.file.size, 0);
+      dropStaging = { total, done: 0 };
+      for (const { rel, file } of files) {
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        for (let offset = 0; offset < bytes.length; offset += DROP_CHUNK) {
+          const chunk = bytes.subarray(offset, Math.min(offset + DROP_CHUNK, bytes.length));
+          await invoke("write_drop_chunk", {
+            token: stage.token,
+            rel,
+            offset,
+            data: u8ToB64(chunk),
+          });
+          dropStaging = { total, done: dropStaging.done + chunk.length };
+        }
+      }
+      const { dir } = (await invoke("finish_drop_import", { token: stage.token })) as {
+        dir: string;
+      };
+      // A single dropped file imports as itself; anything else (folder /
+      // multi-folder drop) imports as the staged root directory.
+      const singleFile = files.length === 1 && !first.includes("/") ? first : null;
+      offerPath = singleFile ? `${dir}/${singleFile}` : dir;
+      offerToken = stage.token;
+      offerInspect = await invoke("inspect_import_source", { path: offerPath });
+      offerName = String(offerInspect?.name || rootName || "Imported pack");
+      offerOpen = true;
+    } catch (err) {
+      toasts.error(String(err));
+      if (stage) await invoke("cancel_drop_import", { token: stage.token }).catch(() => {});
+    } finally {
+      dropStaging = null;
+    }
+  }
+
+  async function confirmDropImport() {
+    if (!offerPath || !offerName.trim()) return;
+    offerBusy = true;
+    try {
+      const targetDir = await resolveImportTargetDir();
+      if (!targetDir) {
+        toasts.error("Set an instances folder in Settings first.");
+        return;
+      }
+      const result: any = await invoke("install_modpack", {
+        source: offerPath,
+        targetDir,
+        instanceName: offerName.trim(),
+      });
+      await invoke("cancel_drop_import", { token: offerToken }).catch(() => {});
+      offerOpen = false;
+      offerToken = "";
+      await finishImportedPack(result);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      offerBusy = false;
+    }
+  }
+
+  function cancelDropImport() {
+    offerOpen = false;
+    if (offerToken) void invoke("cancel_drop_import", { token: offerToken }).catch(() => {});
+    offerToken = "";
+    offerPath = "";
+    offerInspect = null;
+  }
+
   async function importPackFile() {
     importMenuOpen = false;
     const selected = await open({
@@ -245,9 +436,43 @@
 
   function onGlobalKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
-      importMenuOpen = false;
+      if (importMenuOpen) {
+        importMenuOpen = false;
+        importBtnEl?.focus();
+      }
       githubImportOpen = false;
     }
+  }
+
+  function toggleImportMenu() {
+    importMenuOpen = !importMenuOpen;
+  }
+
+  /** Roving focus over the section tabs: Left/Right/Home/End, per WAI-ARIA.
+   *  Automation and screen readers get a real tablist, not three buttons. */
+  function onTablistKeydown(e: KeyboardEvent) {
+    const order: Tab[] = ["yours", "discover", "create"];
+    const idx = order.indexOf(tab);
+    let next: Tab | null = null;
+    if (e.key === "ArrowRight") next = order[(idx + 1) % order.length];
+    else if (e.key === "ArrowLeft") next = order[(idx - 1 + order.length) % order.length];
+    else if (e.key === "Home") next = order[0];
+    else if (e.key === "End") next = order[order.length - 1];
+    if (!next) return;
+    e.preventDefault();
+    switchTab(next);
+    const el = next === "yours" ? tabYoursEl : next === "discover" ? tabDiscoverEl : tabCreateEl;
+    el?.focus();
+  }
+
+  /** Cover gradient; letter-fallback mode adds a dark scrim so the white
+   *  initial stays readable over ANY theme accent (Solar amber, Frost cyan,
+   *  light themes — the old bare gradient failed contrast on ~half of them). */
+  function coverBackground(name: string, slugOrId: string, withScrim: boolean): string {
+    const grad = `linear-gradient(135deg, ${gradientFrom(name)}, ${gradientFrom(slugOrId || name)})`;
+    return withScrim
+      ? `linear-gradient(rgba(0, 0, 0, 0.32), rgba(0, 0, 0, 0.32)), ${grad}`
+      : grad;
   }
 
   // ── Discover (Modrinth / CurseForge modpacks) ───────────────────
@@ -261,6 +486,11 @@
   let adding = $state(new Set<string>());
   let discoverProvider = $state<DiscoverProvider>("modrinth");
   let downloadDir = $state("");
+  // Dirty indicator for the "Download to" row: a typed-but-unsaved path must
+  // be visible to the user (and to QA) instead of silently lost on Enter.
+  const downloadDirDirty = $derived(
+    downloadDir.trim() !== "" && downloadDir.trim() !== lastSavedDir,
+  );
   let defaultDownloadDir = $state("");
   let brokenIcons = $state<string[]>([]);
   let catalogViewResult = $state<DiscoverResult | null>(null);
@@ -275,8 +505,10 @@
         /[\\/]+$/,
         "",
       );
+      lastSavedDir = downloadDir;
     } catch {
       downloadDir = "";
+      lastSavedDir = "";
     }
   }
 
@@ -291,6 +523,7 @@
     try {
       const settings = await api.launcher.get();
       await api.launcher.save({ ...settings, instancesPath: selected });
+      lastSavedDir = selected;
       toasts.success("Download folder saved.");
     } catch (e) {
       toasts.error(String(e));
@@ -307,6 +540,7 @@
       await api.launcher.validateInstancesPath(path);
       const settings = await api.launcher.get();
       await api.launcher.save({ ...settings, instancesPath: path });
+      lastSavedDir = downloadDir.trim();
       toasts.success("Download folder saved.");
     } catch (e) {
       toasts.error(String(e));
@@ -568,71 +802,180 @@
         ? "Search modpacks…"
         : "Search Modrinth modpacks…",
   );
+
+  /** Observable search outcome: total + per-provider split + echoed query.
+   *  QA asserted "did the search actually run" before by counting cards —
+   *  now the state is announced in one place (and to screen readers). */
+  const discoverStatus = $derived.by(() => {
+    if (loadingDiscover && results.length === 0) return "Searching catalogs…";
+    if (results.length === 0) return "";
+    const mr = results.filter((r) => (r.provider ?? "modrinth") !== "curseforge").length;
+    const cf = results.length - mr;
+    const parts: string[] = [`${results.length} packs`];
+    if (discoverProvider === "both" && mr > 0 && cf > 0) {
+      parts.push(`Modrinth ${mr} · CurseForge ${cf}`);
+    }
+    const q = query.trim();
+    if (q) parts.push(`for “${q}”`);
+    return parts.join(" · ");
+  });
 </script>
 
-<div class="library fade-slide-in">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- Drop target for modpack archives/folders. The drag events only open the
+     overlay; the keyboard path is the existing Import menu above. -->
+<div
+  class="library fade-slide-in"
+  class:drop-target={dragDepth > 0}
+  ondragenter={onLibraryDragEnter}
+  ondragover={onLibraryDragOver}
+  ondragleave={onLibraryDragLeave}
+  ondrop={(e) => void onLibraryDrop(e)}
+>
+  {#if dragDepth > 0 && !dropStaging && !offerOpen}
+    <div class="drop-overlay" data-testid="library-drop-overlay" aria-hidden="true">
+      <div class="drop-overlay-card">
+        <Download size={26} />
+        <strong>Drop to import</strong>
+        <span>.mrpack · Prism / CurseForge .zip · .rar · .7z · mods / resourcepacks / shaders</span>
+      </div>
+    </div>
+  {/if}
+  {#if dropStaging}
+    <div class="drop-overlay" data-testid="library-drop-staging" aria-hidden="true">
+      <div class="drop-overlay-card">
+        <strong>Copying dropped files…</strong>
+        <div
+          class="drop-progress"
+          role="progressbar"
+          aria-label="Copying dropped files"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={dropStaging.total
+            ? Math.round((dropStaging.done / dropStaging.total) * 100)
+            : 0}
+        >
+          <div
+            class="drop-progress-fill"
+            style={`width: ${dropStaging.total ? Math.round((dropStaging.done / dropStaging.total) * 100) : 0}%`}
+          ></div>
+        </div>
+      </div>
+    </div>
+  {/if}
   {#snippet tabButtons()}
-    <div class="tabs" role="tablist" aria-label="Library">
-      <button type="button" class:active={tab === "yours"} onclick={() => switchTab("yours")}>
+    <!-- svelte-ignore a11y_interactive_supports_focus -->
+    <!-- Keydown lands here by bubbling from the focused tab button; the
+         container itself is intentionally not tabbable. -->
+    <div
+      class="tabs"
+      role="tablist"
+      aria-label="Library sections"
+      data-testid="library-tabs"
+      onkeydown={onTablistKeydown}
+    >
+      <button
+        bind:this={tabYoursEl}
+        type="button"
+        role="tab"
+        id="library-tab-yours"
+        aria-selected={tab === "yours"}
+        aria-controls="library-panel-yours"
+        class:active={tab === "yours"}
+        onclick={() => switchTab("yours")}
+        data-testid="library-tab-yours"
+      >
         <LayoutGrid size={15} /> Your packs
       </button>
-      <button type="button" class:active={tab === "discover"} onclick={() => switchTab("discover")}>
+      <button
+        bind:this={tabDiscoverEl}
+        type="button"
+        role="tab"
+        id="library-tab-discover"
+        aria-selected={tab === "discover"}
+        aria-controls="library-panel-discover"
+        class:active={tab === "discover"}
+        onclick={() => switchTab("discover")}
+        data-testid="library-tab-discover"
+      >
         <Compass size={15} /> Discover
       </button>
       <button
+        bind:this={tabCreateEl}
         type="button"
+        role="tab"
+        id="library-tab-create"
+        aria-selected={tab === "create"}
+        aria-controls="library-panel-create"
         class:active={tab === "create"}
         onclick={() => switchTab("create")}
         title="Create a new instance"
+        data-testid="library-tab-create"
       >
         <Plus size={15} /> Create
       </button>
     </div>
   {/snippet}
 
-  {#if tab !== "yours"}
-    <div class="library-subnav lib-header-enter">
-      {@render tabButtons()}
-      <div class="import-wrap">
-        <button
-          type="button"
-          class="header-btn"
-          class:busy={importing}
-          disabled={importing}
-          onclick={(e) => { e.stopPropagation(); (importMenuOpen = !importMenuOpen);  }}
-          title="Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance"
-        >
-          {#if importing}
-            <span class="mini-spinner dark"></span> Importing…
-          {:else}
-            <Download size={15} /> Import
-          {/if}
-        </button>
-        {#if importMenuOpen}
-          <div class="import-menu" role="menu">
-            <button type="button" role="menuitem" onclick={importPackFile}>
-              File (.mrpack / .zip)
-            </button>
-            <button type="button" role="menuitem" onclick={importInstanceFolder}>
-              Instance folder
-            </button>
-            <button type="button" role="menuitem" onclick={importGithubRepo}>
-              GitHub repository
-            </button>
-          </div>
+  <!-- Stable section rail: identical position on every tab. Previously the
+       tab strip jumped (it lived inside the instances toolbar on "yours"
+       and in this row elsewhere) — every tab switch visibly relocated the
+       control, and Import was unreachable from the packs list. -->
+  <div class="library-subnav lib-header-enter" data-testid="library-subnav">
+    {@render tabButtons()}
+    <div class="import-wrap" data-testid="library-import-wrap">
+      <button
+        bind:this={importBtnEl}
+        type="button"
+        class="header-btn"
+        class:busy={importing}
+        disabled={importing}
+        aria-haspopup="menu"
+        aria-expanded={importMenuOpen}
+        onclick={(e) => { e.stopPropagation(); toggleImportMenu(); }}
+        title="Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance"
+        data-testid="library-import-btn"
+      >
+        {#if importing}
+          <span class="mini-spinner" aria-hidden="true"></span> Importing…
+        {:else}
+          <Download size={15} /> Import
         {/if}
-      </div>
+      </button>
+      {#if importMenuOpen}
+        <div class="import-menu" role="menu" aria-label="Import sources" data-testid="library-import-menu">
+          <button type="button" role="menuitem" onclick={importPackFile} data-testid="library-import-file">
+            File (.mrpack / .zip)
+          </button>
+          <button type="button" role="menuitem" onclick={importInstanceFolder} data-testid="library-import-folder">
+            Instance folder
+          </button>
+          <button type="button" role="menuitem" onclick={importGithubRepo} data-testid="library-import-github">
+            GitHub repository
+          </button>
+        </div>
+      {/if}
     </div>
-  {/if}
+  </div>
 
   {#if tab === "yours"}
-    <div class="yours-wrap">
-      <LibraryInstancesPane bind:currentView>
-        {#snippet toolbarLeading()}{@render tabButtons()}{/snippet}
-      </LibraryInstancesPane>
+    <div
+      class="yours-wrap"
+      id="library-panel-yours"
+      role="tabpanel"
+      aria-labelledby="library-tab-yours"
+      data-testid="library-panel-yours"
+    >
+      <LibraryInstancesPane bind:currentView />
     </div>
   {:else if tab === "discover"}
-  <div class="tab-scroll">
+  <div
+    class="tab-scroll"
+    id="library-panel-discover"
+    role="tabpanel"
+    aria-labelledby="library-tab-discover"
+    data-testid="library-panel-discover"
+  >
     {#if catalogViewResult}
       <CatalogProjectView
         result={catalogViewResult}
@@ -647,22 +990,25 @@
       />
     {:else}
     <Stack direction="row" gap="3" wrap class="discover-bar">
-      <div class="provider-toggle" role="group" aria-label="Catalog provider">
+      <div class="provider-toggle" role="group" aria-label="Catalog provider" data-testid="library-provider-toggle">
         <button
           type="button"
           class:active={discoverProvider === "modrinth"}
           onclick={() => setDiscoverProvider("modrinth")}
+          data-testid="library-provider-modrinth"
         >Modrinth</button>
         <button
           type="button"
           class:active={discoverProvider === "curseforge"}
           onclick={() => setDiscoverProvider("curseforge")}
+          data-testid="library-provider-curseforge"
         >CurseForge</button>
         <button
           type="button"
           class:active={discoverProvider === "both"}
           onclick={() => setDiscoverProvider("both")}
           title="Search both catalogs at once"
+          data-testid="library-provider-both"
         >Both</button>
       </div>
       <div class="search">
@@ -672,61 +1018,83 @@
           bind:value={query}
           placeholder={discoverPlaceholder}
           onkeydown={(e) => e.key === "Enter" && search()}
+          data-testid="library-search-input"
         />
       </div>
-      <button class="search-btn" onclick={() => search()} disabled={loadingDiscover}>
-        {loadingDiscover ? "Searching…" : "Search"}
+      <button
+        class="search-btn"
+        onclick={() => search()}
+        disabled={loadingDiscover}
+        data-testid="library-search-btn"
+      >
+        {#if loadingDiscover}<span class="mini-spinner" aria-hidden="true"></span>{/if}
+        Search
       </button>
     </Stack>
 
-    <div class="download-path">
-      <label for="lib-download-dir">Download to</label>
+    {#if discoverStatus}
+      <p class="discover-status" role="status" aria-live="polite" data-testid="library-results-status">
+        {discoverStatus}
+      </p>
+    {/if}
+
+    <form
+      class="download-path"
+      onsubmit={(e) => { e.preventDefault(); void applyDownloadDir(); }}
+      data-testid="library-download-form"
+    >
+      <label for="lib-download-dir">
+        Download to {#if downloadDirDirty}<span class="unsaved">· unsaved</span>{/if}
+      </label>
       <div class="path-row">
         <input
           id="lib-download-dir"
           bind:value={downloadDir}
           placeholder={defaultDownloadDir || "Choose a folder for modpacks"}
+          data-testid="library-download-dir"
         />
-        <button type="button" class="path-btn" onclick={browseDownloadDir} title="Browse">
+        <button type="button" class="path-btn" onclick={browseDownloadDir} title="Browse" data-testid="library-download-browse">
           <FolderOpen size={15} />
         </button>
-        <button type="button" class="path-btn save" onclick={applyDownloadDir}>Save</button>
+        <button type="submit" class="path-btn save" disabled={!downloadDirDirty} data-testid="library-download-save">Save</button>
       </div>
-    </div>
+    </form>
 
     {#if discoverError}
       <div class={results.length > 0 ? "catalog-warn" : "error"}>{discoverError}</div>
     {/if}
 
     {#if loadingDiscover && results.length === 0}
-      <div class="loading-state">Loading modpacks…</div>
+      <div class="loading-state" data-testid="library-loading" role="status">
+        <span class="mini-spinner big" aria-hidden="true"></span>
+        Loading modpacks…
+      </div>
     {:else if results.length === 0}
-      <div class="empty-state">
+      <div class="empty-state" data-testid="library-empty">
         <div class="empty-icon"><Compass size={40} /></div>
         <h3>No packs found</h3>
-        <p>Try a different search.</p>
+        <p>
+          {#if query.trim()}Nothing matches “{query.trim()}”{:else}Try a different search{/if}{#if discoverProvider !== "both"} in {discoverProvider === "curseforge" ? "CurseForge" : "Modrinth"}{/if}.
+        </p>
       </div>
     {:else}
       <Grid autoMin={220} gap="4" class="tb-stagger">
         {#each results as result, i (resultKey(result))}
           {@const key = resultKey(result)}
           {@const showIcon = !!result.iconUrl && !brokenIcons.includes(key)}
-          <div
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+          <!-- Whole-card click is mouse convenience only; the keyboard path
+               is the real buttons inside (open / page / add). -->
+          <article
             class="pack-card discover-card tb-card"
             style={`--i: ${Math.min(i, 8)}`}
-            role="button"
-            tabindex="0"
             onclick={() => openCatalogInApp(result)}
-            onkeydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                openCatalogInApp(result);
-              }
-            }}
+            data-testid="library-result-card"
+            data-provider={result.provider ?? "modrinth"}
           >
             <div
               class="pack-cover"
-              style={`background: linear-gradient(135deg, ${gradientFrom(result.name)}, ${gradientFrom(result.slug || result.id)})`}
+              style={`background: ${coverBackground(result.name, result.slug || result.id, !showIcon)}`}
             >
               {#if showIcon}
                 <img
@@ -751,6 +1119,7 @@
                     e.stopPropagation();
                     openCatalogInApp(result);
                   }}
+                  data-testid="library-result-open"
                 >{result.name}</button>
                 {#if discoverProvider === "both"}
                   <span
@@ -776,6 +1145,7 @@
                     e.stopPropagation();
                     openCatalogInApp(result);
                   }}
+                  data-testid="library-result-page"
                 >
                   <ExternalLink size={14} /> Page
                 </button>
@@ -786,6 +1156,7 @@
                     e.stopPropagation();
                     void addModpack(result);
                   }}
+                  data-testid="library-result-add"
                 >
                   {#if adding.has(key)}
                     <span class="mini-spinner"></span> Adding…
@@ -795,14 +1166,20 @@
                 </button>
               </div>
             </div>
-          </div>
+          </article>
         {/each}
       </Grid>
     {/if}
     {/if}
   </div>
   {:else if tab === "create"}
-  <div class="tab-scroll">
+  <div
+    class="tab-scroll"
+    id="library-panel-create"
+    role="tabpanel"
+    aria-labelledby="library-tab-create"
+    data-testid="library-panel-create"
+  >
     <div class="create-pane">
       <header class="create-hero">
         <div class="create-hero-top">
@@ -892,6 +1269,18 @@
   />
 {/if}
 
+{#if offerOpen && offerInspect}
+  <DropImportDialog
+    inspect={offerInspect}
+    busy={offerBusy}
+    onconfirm={(name) => {
+      offerName = name;
+      void confirmDropImport();
+    }}
+    oncancel={cancelDropImport}
+  />
+{/if}
+
 <GithubPackInstallProgress active={githubInstallActive} onclose={() => (githubInstallActive = false)} />
 
 <svelte:window onmousedown={onGlobalPointerDown} onkeydown={onGlobalKeydown} />
@@ -906,6 +1295,14 @@
     flex: 1;
     min-height: 0;
     height: 100%;
+    /* Pill look for rounded themes; sharp themes (win95/pixelato define 0px
+       radius tokens) flatten it — hardcoded 999px used to stay round there
+       and looked foreign next to the square toolbar. */
+    --lib-pill-radius: 999px;
+  }
+  :global([data-theme="win95"]) .library,
+  :global([data-theme="pixelato"]) .library {
+    --lib-pill-radius: 0px;
   }
   .library .yours-wrap {
     flex: 1;
@@ -931,7 +1328,7 @@
     align-items: center;
     justify-content: space-between;
     margin-top: 4px;
-    margin-bottom: 14px;
+    margin-bottom: 10px;
     gap: 16px;
     flex-wrap: wrap;
   }
@@ -943,7 +1340,7 @@
     align-items: center;
     gap: 6px;
     padding: 8px 14px;
-    border-radius: 999px;
+    border-radius: var(--lib-pill-radius);
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--accent-primary);
@@ -996,7 +1393,7 @@
     align-items: center;
     gap: 6px;
     padding: 8px 14px;
-    border-radius: 999px;
+    border-radius: var(--lib-pill-radius);
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     color: var(--text-secondary);
@@ -1166,20 +1563,20 @@
       background var(--motion-fast) var(--motion-ease);
   }
   .create-plus.import {
-    border-color: rgba(59, 130, 246, 0.28);
+    border-color: color-mix(in srgb, var(--accent-secondary) 28%, transparent);
     background:
-      linear-gradient(135deg, rgba(59, 130, 246, 0.1), transparent 55%),
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary) 10%, transparent), transparent 55%),
       var(--bg-secondary);
   }
   .create-plus.import .plus-ring {
-    background: rgba(59, 130, 246, 0.14);
-    color: #60a5fa;
-    border-color: rgba(59, 130, 246, 0.35);
+    background: color-mix(in srgb, var(--accent-secondary) 14%, transparent);
+    color: var(--accent-secondary);
+    border-color: color-mix(in srgb, var(--accent-secondary) 35%, transparent);
   }
   .create-plus.browse {
-    border-color: rgba(245, 158, 11, 0.28);
+    border-color: color-mix(in srgb, var(--accent-warning) 28%, transparent);
     background:
-      linear-gradient(135deg, rgba(245, 158, 11, 0.1), transparent 55%),
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-warning) 10%, transparent), transparent 55%),
       var(--bg-secondary);
   }
   .create-plus.browse .plus-ring {
@@ -1192,10 +1589,10 @@
     color: var(--text-primary);
   }
   .create-plus.import:hover {
-    border-color: rgba(59, 130, 246, 0.55);
+    border-color: color-mix(in srgb, var(--accent-secondary) 55%, transparent);
   }
   .create-plus.browse:hover {
-    border-color: rgba(245, 158, 11, 0.55);
+    border-color: color-mix(in srgb, var(--accent-warning) 55%, transparent);
   }
   .create-plus:disabled {
     opacity: 0.6;
@@ -1219,7 +1616,7 @@
   .plus-ring {
     width: 48px;
     height: 48px;
-    border-radius: 14px;
+    border-radius: var(--border-radius-md);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1236,9 +1633,11 @@
       grid-template-columns: 1fr;
     }
   }
-  .mini-spinner.dark {
-    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
-    border-top-color: var(--accent-primary);
+  .mini-spinner.big {
+    width: 22px;
+    height: 22px;
+    border-width: 3px;
+    color: var(--accent-primary);
   }
 
   .pack-stats {
@@ -1307,11 +1706,20 @@
      in markup — scoped styles on component roots don't apply, so this lives
      on the class passed through to the Stack's div. */
   :global(.discover-bar) {
-    margin-bottom: 20px;
+    margin-bottom: 12px;
     padding: 10px 12px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
+  }
+  .discover-status {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .download-path .unsaved {
+    color: var(--accent-warning);
+    font-weight: 700;
   }
   .provider-toggle {
     display: inline-flex;
@@ -1380,7 +1788,7 @@
   .download-path {
     display: grid;
     gap: 6px;
-    margin: -8px 0 18px;
+    margin: 0 0 18px;
   }
   .download-path label {
     font-size: 12px;
@@ -1424,7 +1832,7 @@
   }
 
   .discover-card {
-    cursor: default;
+    cursor: pointer;
   }
   .pack-title-row {
     display: flex;
@@ -1458,11 +1866,15 @@
     color: #f16436;
   }
 
+  /* Inherits currentColor: on accent buttons it is --on-accent, in the
+     header button --accent-primary — visible on every theme (the old
+     hardcoded #000 vanished on dark surfaces, #fff-style variants were a
+     per-callsite guessing game). */
   .mini-spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid rgba(0, 0, 0, 0.25);
-    border-top-color: #000;
+    border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+    border-top-color: currentColor;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     display: inline-block;
@@ -1524,6 +1936,40 @@
     color: var(--text-secondary);
   }
 
+  /* ── Glass transparency toggle support ─────────────────────────────
+     themes.css glassifies .tb-card only; without this the Discover pane
+     answered the transparency toggle half-way (translucent cards over an
+     opaque toolbar/menu). Mirror the same recipe for the page chrome.
+     Sharp themes keep solid fills; potato-pc keeps translucency, no blur. */
+  :global(html[data-glass="on"] .discover-bar),
+  :global(html[data-glass="on"] .empty-state),
+  :global(html[data-glass="on"] .loading-state),
+  :global(html[data-glass="on"] .import-menu) {
+    background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    backdrop-filter: blur(16px) saturate(140%);
+  }
+  :global(html[data-glass="on"] .import-menu) {
+    background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+    -webkit-backdrop-filter: blur(22px) saturate(140%);
+    backdrop-filter: blur(22px) saturate(140%);
+  }
+  :global(html[data-glass="on"]:is([data-theme="win95"], [data-theme="pixelato"]) .discover-bar),
+  :global(html[data-glass="on"]:is([data-theme="win95"], [data-theme="pixelato"]) .empty-state),
+  :global(html[data-glass="on"]:is([data-theme="win95"], [data-theme="pixelato"]) .loading-state),
+  :global(html[data-glass="on"]:is([data-theme="win95"], [data-theme="pixelato"]) .import-menu) {
+    background: var(--bg-secondary);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  :global(html[data-glass="on"].potato-pc .discover-bar),
+  :global(html[data-glass="on"].potato-pc .empty-state),
+  :global(html[data-glass="on"].potato-pc .loading-state),
+  :global(html[data-glass="on"].potato-pc .import-menu) {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
   @keyframes lib-page-header {
     from { opacity: 0; transform: translateY(-8px); }
     to { opacity: 1; transform: none; }
@@ -1536,5 +1982,60 @@
     .lib-header-enter {
       animation: none !important;
     }
+  }
+  /* ── Drag & drop import ─────────────────────────────────────────── */
+  .library {
+    position: relative;
+  }
+  .library.drop-target {
+    outline: 2px dashed color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    outline-offset: -6px;
+  }
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    border-radius: var(--border-radius-xl);
+    pointer-events: none;
+  }
+  .drop-overlay-card {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    padding: 26px 34px;
+    text-align: center;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: 2px dashed color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow-lg);
+  }
+  .drop-overlay-card strong {
+    font-size: 15px;
+    color: var(--text-primary);
+  }
+  .drop-overlay-card span {
+    font-size: 12px;
+    color: var(--text-muted);
+    max-width: 380px;
+  }
+  .drop-progress {
+    width: 240px;
+    height: 6px;
+    margin-top: 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    overflow: hidden;
+  }
+  .drop-progress-fill {
+    height: 100%;
+    background: var(--accent-primary);
+    transition: width 120ms var(--ease-out, ease);
   }
 </style>

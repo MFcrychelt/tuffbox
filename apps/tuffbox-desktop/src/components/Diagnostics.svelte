@@ -1,11 +1,13 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { launchWithFeedback } from "../lib/launch";
+  import { killWithFeedback, launchWithFeedback, launchingPath } from "../lib/launch";
   import { onMount, tick } from "svelte";
   import {
     Stethoscope,
     Play,
+    Square,
+    FolderOpen,
     RefreshCw,
     AlertCircle,
     AlertTriangle,
@@ -14,6 +16,10 @@
     Trash2,
     Database,
     ArrowDownToLine,
+    FileText,
+    Bug,
+    Terminal,
+    Shield,
   } from "@lucide/svelte";
   import {
     diagnoseFocus,
@@ -25,6 +31,11 @@
     ideNeedsHealth,
     requestIdeIssuesRefresh,
     historyFocusFingerprintKey,
+    launchSessions,
+    isProjectLaunching,
+    isProjectRunning,
+    openLaunchLog,
+    runningInstances,
     changeOptionKey,
     getFixPreference,
     setFixPreference,
@@ -158,6 +169,17 @@
   };
 
   let diagnosis = $state<CrashDiagnosis | null>(null);
+  /** Aggregated HealthReport (diagnostics + crash + export blockers + missing). */
+  let health = $state<{
+    errorCount?: number;
+    warningCount?: number;
+    hasCrash?: boolean;
+    crashReports?: string[];
+    exportBlockers?: { code: string; message: string; target?: string | null }[];
+    missingCount?: number;
+    hashMismatchCount?: number;
+  } | null>(null);
+  let healthLoading = $state(false);
   let selectedReportId = $state("");
   let preferLatestLog = $state(true);
   let preferLauncherLog = $state(false);
@@ -209,7 +231,12 @@
   let planning = $state(false);
   let applying = $state(false);
   let applyingHintId = $state<string | null>(null);
-  let launching = $state(false);
+  const launchSession = $derived($launchSessions[$projectPath ?? ""] ?? null);
+  const launching = $derived(isProjectLaunching($projectPath, $launchSessions));
+  const projectRunning = $derived(isProjectRunning($projectPath, $runningInstances));
+  // launching is derived from the shared launch store so the button stays in the
+  // launching state until the game is running or the run ends.
+  const launchingFromPath = $derived($launchingPath === $projectPath);
   let fixingIdx = $state<number | null>(null);
   let disablingModId = $state<string | null>(null);
   let error = $state<string | null>(null);
@@ -312,6 +339,18 @@
     }
   }
 
+  async function loadHealth() {
+    if (!$projectPath) return;
+    healthLoading = true;
+    try {
+      health = await invoke("get_health_report", { path: $projectPath });
+    } catch {
+      health = null;
+    } finally {
+      healthLoading = false;
+    }
+  }
+
   async function load(force = false) {
     if (!$projectPath) return;
     const requestedPath = $projectPath;
@@ -347,6 +386,7 @@
       }
       plan = data.fixPlan ?? null;
       preselectFixOption();
+      void loadHealth();
       detectWrongLoaderMods();
       detectDuplicateModJars();
       if (data.sessionHealthy && preferLatestLog) {
@@ -1165,17 +1205,17 @@
       } catch {
         // non-fatal
       }
-      try {
-        const prep = await invoke<{ ok?: boolean; model?: string; skipped?: boolean }>(
-          "ensure_ollama_model",
-        );
-        if (!opts.quiet) {
-          if (prep?.model) message = `AI ready (${prep.model}). Analyzing crash…`;
-          else message = "Preparing local AI…";
-        }
-      } catch (prepErr) {
+      // Daemon warm-up and the heavy context build are independent — run
+      // them concurrently. Serializing them stacked the Ollama probe time
+      // (up to tens of seconds on a sick daemon) on top of the context
+      // build before the AI cascade even started.
+      const prepPromise = invoke<{ ok?: boolean; model?: string; skipped?: boolean }>(
+        "ensure_ollama_model",
+      ).catch((prepErr) => {
         console.warn("[AI] ensure_ollama_model:", prepErr);
-      }
+        return null;
+      });
+      if (!opts.quiet) message = "Preparing local AI…";
       const reportId = activeReportId();
       const context: any = await invoke("build_ai_crash_context", {
         path: $projectPath,
@@ -1185,6 +1225,10 @@
       aiContext = context;
       aiPrompt = context.prompt ?? "";
       aiShowPrompt = false;
+      const prep = await prepPromise;
+      if (!opts.quiet && prep?.model) {
+        message = `AI ready (${prep.model}). Analyzing crash…`;
+      }
       const result = await invoke("analyze_crash_with_ai", {
         path: $projectPath,
         reportId,
@@ -2156,10 +2200,10 @@
   /// Soft-verify is started by `launchWithFeedback` → `confirm_crash_resolution_after_launch`
   /// (do not invoke confirm again here).
   async function runTest() {
-    if (!$projectPath || launching) return;
-    launching = true;
+    if (!$projectPath || launching || projectRunning) return;
     error = null;
-    message = "Launching Test profile — reproduce the crash, then come back.";
+    message = "Preparing Test launch — reproduce the crash, then come back.";
+    // launchWithFeedback drives the shared launch store; no local reset.
     const result = await launchWithFeedback(
       { path: $projectPath, profile: "client" },
       {
@@ -2190,12 +2234,15 @@
       setTimeout(() => {
         if (!exited) {
           unlisten();
-          launching = false;
         }
       }, 15000);
       return;
     }
-    launching = false;
+  }
+
+  async function stopTest() {
+    if (!$projectPath || !projectRunning) return;
+    await killWithFeedback($projectPath);
   }
 
   /// Opens the project folder in the OS file manager (quick access to
@@ -2791,14 +2838,40 @@
           <RefreshCw size={15} class={analysisBusy ? "spin" : ""} />
           {analysisBusy ? "Analyzing…" : "Re-analyze"}
         </button>
-        <button class="primary" onclick={runTest} disabled={!$projectPath || launching || loading}>
-          <Play size={15} class={launching ? "spin" : ""} />
-          {launching ? "Launching…" : "Test launch"}
-        </button>
+        {#if projectRunning}
+          <button class="primary" onclick={stopTest} disabled={!$projectPath}>
+            <Square size={14} fill="currentColor" /> Stop test
+          </button>
+        {:else}
+          <button class="primary" onclick={runTest} disabled={!$projectPath || launching || loading}>
+            <Play size={15} class={launching ? "spin" : ""} />
+            {launching ? (launchSession?.message || "Launching…") : "Test launch"}
+          </button>
+        {/if}
+        {#if launchSession && (launching || projectRunning || launchSession.phase === "failed")}
+          <button class="ghost" type="button" onclick={() => $projectPath && openLaunchLog($projectPath)}>
+            <FileText size={15} /> Live log
+          </button>
+        {/if}
       </div>
     </div>
 
     {#if error}<div class="notice error">{error}</div>{/if}
+    {#if launchSession && (launching || launchSession.phase === "failed" || launchSession.phase === "exited")}
+      <div class="notice" class:error={launchSession.phase === "failed"} class:warning={launching}>
+        <span>{launchSession.message || (launching ? "Preparing Test launch…" : "Test launch ended.")}</span>
+        <div class="trail-links">
+          <button class="ghost mini" type="button" onclick={() => $projectPath && openLaunchLog($projectPath)}>
+            <FileText size={12} /> Live log
+          </button>
+          {#if launchSession.phase === "failed"}
+            <button class="ghost mini" type="button" onclick={() => ideStageRequest.set("diagnose")}>
+              <Bug size={12} /> Crash findings
+            </button>
+          {/if}
+        </div>
+      </div>
+    {/if}
     {#if message}
       <div class="notice success trail-notice">
         <span>{message}</span>
@@ -2814,7 +2887,7 @@
       <div class="notice warning verify-banner">
         <span>Fix applied. Run a Test launch to confirm it worked?</span>
         <div class="trail-links">
-          <button class="primary small" type="button" onclick={() => { verifyPrompt = false; void runTest(); }} disabled={launching}>
+          <button class="primary small" type="button" onclick={() => { verifyPrompt = false; void runTest(); }} disabled={launching || projectRunning}>
             Test launch
           </button>
           <button class="ghost mini" type="button" onclick={() => (verifyPrompt = false)}>Later</button>
@@ -2936,6 +3009,40 @@
       onFixAll={openFixAllReview}
     />
 
+    {#if health}
+      <section class="health-strip panel" aria-label="Pack health summary">
+        {#if health.hasCrash}
+          <span class="health-chip bad" title={(health.crashReports ?? []).join("\n")}>
+            ⚠ {health.crashReports?.length ?? 1} crash report{((health.crashReports?.length ?? 1) !== 1) ? "s" : ""}
+          </span>
+        {/if}
+        <span class="health-chip" class:bad={(health.errorCount ?? 0) > 0}>
+          {health.errorCount ?? 0} errors
+        </span>
+        <span class="health-chip" class:bad={(health.warningCount ?? 0) > 0}>
+          {health.warningCount ?? 0} warnings
+        </span>
+        <span class="health-chip" class:bad={(health.missingCount ?? 0) > 0}>
+          {health.missingCount ?? 0} missing
+        </span>
+        {#if (health.hashMismatchCount ?? 0) > 0}
+          <span class="health-chip bad">{health.hashMismatchCount} hash mismatch</span>
+        {/if}
+        <span class="health-chip" class:bad={(health.exportBlockers?.length ?? 0) > 0}>
+          {health.exportBlockers?.length ?? 0} export blocker{((health.exportBlockers?.length ?? 0) !== 1) ? "s" : ""}
+        </span>
+        {#if (health.exportBlockers?.length ?? 0) > 0}
+          <div class="health-blockers">
+            {#each health.exportBlockers ?? [] as b (b.code)}
+              <code>{b.code}</code><span>{b.message}</span>
+            {/each}
+          </div>
+        {/if}
+      </section>
+    {:else if healthLoading}
+      <div class="loading compact health-strip-loading">Loading health…</div>
+    {/if}
+
     {#if !sessionOk}
       <DiagnoseVerdictHero
         sessionOk={sessionOk}
@@ -2973,7 +3080,7 @@
       <div class="dx-empty-sources panel">
         <span>No crash reports yet.</span>
         <button type="button" class="ghost mini" onclick={chooseLatestLog}>Game log</button>
-        <button type="button" class="ghost mini" onclick={runTest} disabled={launching}>Test launch</button>
+        <button type="button" class="ghost mini" onclick={runTest} disabled={launching || projectRunning}>Test launch</button>
       </div>
     {/if}
 
@@ -3372,6 +3479,101 @@
   }
   .title, h2 { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .actions { gap: 8px; flex-wrap: wrap; }
+  .primary-actions { gap: 8px; flex-wrap: wrap; }
+  .primary-actions .primary, .primary-actions .secondary, .primary-actions .ghost { cursor: pointer; }
+  .ghost.icon-only { padding: 8px; min-width: 36px; justify-content: center; }
+
+  .tools-strip {
+    padding: 0;
+    margin-bottom: 14px;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+  }
+  .tools-strip > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    cursor: pointer;
+    list-style: none;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+  .tools-strip > summary::-webkit-details-marker { display: none; }
+  .tools-strip > summary span:first-child {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .tools-strip[open] .tools-hint :global(svg) { transform: rotate(180deg); }
+  .tools-strip-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 14px 12px;
+    border-top: 1px solid var(--border-color);
+  }
+  .tools-primary-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding-top: 10px;
+  }
+  .health-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+  }
+  .health-chip {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 999px;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
+    border: 1px solid var(--border-color);
+  }
+  .health-chip.bad {
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.5);
+    background: rgba(239, 68, 68, 0.08);
+  }
+  .health-blockers {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    background: rgba(251, 191, 36, 0.08);
+    border: 1px solid rgba(251, 191, 36, 0.25);
+  }
+  .health-blockers code {
+    font-size: 11px;
+    color: #fbbf24;
+  }
+  .health-blockers span {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .health-strip-loading {
+    margin-bottom: 14px;
+  }
   .recent-pack-panel {
     margin-bottom: 14px;
   }

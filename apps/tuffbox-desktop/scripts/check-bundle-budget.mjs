@@ -45,7 +45,9 @@ const BUDGETS_GZIP_BYTES = {
   // so each migration doesn't require a gate edit.
   // 2026-08 third bump (40 -> 44): Snapshots/Quests/TestRuns Tailwind
   // migrations add per-screen utility sets.
-  ".css": 44 * 1024,
+  // 2026-09 bump (44 -> 46): BriefEditor/ProjectSettings/Mods UI polish pass
+  // adds category chips, sync pill, rich MdToolbar, and panel hints.
+  ".css": 46 * 1024,
 };
 
 if (!existsSync(indexHtmlPath)) {

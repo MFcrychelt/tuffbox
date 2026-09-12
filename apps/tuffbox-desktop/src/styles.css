@@ -1,5 +1,16 @@
-/* Tailwind v4 без preflight: префлайт-ресет ломает существующие scoped-стили
-   приложения. Подключаем только theme-переменные и utilities. */
+/* Tailwind v4 without preflight: the preflight reset breaks the app's existing
+   scoped styles, so only theme variables + utilities are pulled in.
+
+   Layer order MUST be declared before the imports. Tailwind's own index.css
+   ships `@layer theme, base, components, utilities;`; importing theme.css /
+   utilities.css individually leaves the order implicit, and any later `base`
+   block would then outrank `utilities`. Unlayered CSS (this file's element
+   skins, themes.css) outranks every layer — that is why the legacy global
+   `*`/`button`/`input` rules silently killed the Tailwind utilities the UI is
+   migrating to: a button marked `bg-transparent px-3.5 py-3` still rendered as
+   the flat ore-grey 6/12px default. Element-level defaults now live in `base`
+   so utilities win; component/theme skins stay unlayered on purpose. */
+@layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 @import "@tuffbox/layout-lib/styles.css";
@@ -191,165 +202,197 @@ html[data-ui-scaled="1"] #app {
   --badge-ygg-border: #000080;
 }
 
-/* Light themes: tokens instead of hardcoded gray. The old rule forced
-   `#39393b` on EVERY button, overriding component theme-token skins
-   (Library tabs, toolbar buttons) with the Ore gray. Buttons now follow
-   --bg-elevated / --border-color so component skins stay in control; the
-   Ore-style pressed edge is kept via border-bottom width. */
-[data-theme="light"] button,
-[data-theme="tuffbox-light"] button {
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-  border-color: var(--border-color);
-  border-bottom-color: color-mix(in srgb, var(--border-color) 60%, transparent);
+/* Element-level defaults live in the `base` layer so Tailwind utilities
+   (bg-*, px-*, text-*, …) applied in markup always win. */
+@layer base {
+  /* Light themes: tokens instead of hardcoded gray. The old rule forced
+     `#39393b` on EVERY button, overriding component theme-token skins
+     (Library tabs, toolbar buttons) with the Ore gray. Buttons now follow
+     --bg-elevated / --border-color so component skins stay in control; the
+     Ore-style pressed edge is kept via border-bottom width. */
+  [data-theme="light"] button,
+  [data-theme="tuffbox-light"] button {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border-color: var(--border-color);
+    border-bottom-color: color-mix(in srgb, var(--border-color) 60%, transparent);
+  }
+
+  [data-theme="light"] button.primary,
+  [data-theme="tuffbox-light"] button.primary {
+    background: #491ac0;
+    border-color: #491ac0;
+    border-bottom-color: #32127f;
+    color: #ffffff;
+  }
+
+  /* The skins below carry an explicit `button.<class>` selector so they outrank
+     the unclassed `button.secondary` skin in the layer (equal specificity, later
+     in this file wins — without it light themes kept the ore-grey fill and the
+     dark-theme text colour, i.e. ~1.2:1 contrast). Win95 is a light theme too,
+     so it gets the same treatment as TuffBox Light. */
+  [data-theme="light"] button.secondary,
+  [data-theme="tuffbox-light"] button.secondary,
+  [data-theme="win95"] button.secondary,
+  [data-theme="light"] button.secondary:hover:not(:disabled),
+  [data-theme="tuffbox-light"] button.secondary:hover:not(:disabled),
+  [data-theme="win95"] button.secondary:hover:not(:disabled) {
+    background: var(--bg-elevated);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+  }
+
+  [data-theme="light"] button.secondary:hover:not(:disabled),
+  [data-theme="tuffbox-light"] button.secondary:hover:not(:disabled),
+  [data-theme="win95"] button.secondary:hover:not(:disabled) {
+    filter: brightness(0.96);
+  }
+
+  [data-theme="win95"] button.secondary {
+    border: 2px solid;
+    border-color: #dfdfdf #000 #000 #dfdfdf;
+  }
+
+  [data-theme="light"] button.ghost,
+  [data-theme="tuffbox-light"] button.ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-secondary);
+  }
+
+  [data-theme="light"] button.secondary:hover,
+  [data-theme="light"] button.ghost:hover,
+  [data-theme="tuffbox-light"] button.secondary:hover,
+  [data-theme="tuffbox-light"] button.ghost:hover {
+    color: var(--text-primary);
+  }
+
+  [data-theme="light"] pre,
+  [data-theme="light"] textarea,
+  [data-theme="tuffbox-light"] pre,
+  [data-theme="tuffbox-light"] textarea {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  [data-theme="light"] .sidebar,
+  [data-theme="tuffbox-light"] .sidebar {
+    background: var(--bg-secondary);
+    border-color: var(--border-color);
+  }
+
+  [data-theme="light"] .header,
+  [data-theme="tuffbox-light"] .header {
+    background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+    border-color: var(--border-color);
+  }
+
+  [data-theme="light"] code,
+  [data-theme="tuffbox-light"] code {
+    color: var(--accent-primary);
+    background: var(--bg-elevated);
+  }
 }
 
-[data-theme="light"] button.primary,
-[data-theme="tuffbox-light"] button.primary {
-  background: #491ac0;
-  border-color: #491ac0;
-  border-bottom-color: #32127f;
-  color: #ffffff;
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+    width: 100%;
+    /* One scroll owner: panes inside .app-shell — never the document. */
+    overflow: hidden;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    font-size: var(--font-base, 14px);
+    line-height: 1.5;
+  }
+
+  /* Buttons in the Ore UI (Minecraft) style, per Prism "Dark Amethyst" theme:
+     near-square, flat fill, and a darker bottom edge that visually depresses
+     when pressed (border-bottom shrinks + button shifts down). Accent fill is
+     amethyst #491AC0 via .primary. */
+  button {
+    font-family: inherit;
+    cursor: pointer;
+    border: 1px solid #39393b;
+    border-bottom-width: 3px;
+    border-radius: 3px;
+    padding: 6px 12px 5px;
+    background: #39393b;
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 13px;
+    transition: background 0.1s ease, border-color 0.1s ease, margin-top 0.05s ease,
+      padding 0.05s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  /* Hover/press must brighten/darken whatever fill a button already has —
+     overriding `background` here paints accent/danger buttons gray (Ore UI
+     theme regression), so tint via filter instead of a hard color swap. */
+  button:hover:not(:disabled) {
+    filter: brightness(1.18);
+  }
+
+  button:active:not(:disabled) {
+    filter: brightness(0.82);
+    border-bottom-width: 1px;
+    margin-top: 2px;
+  }
+
+  button.primary {
+    background: #491ac0;
+    border-color: #491ac0;
+    border-bottom-color: #32127f;
+  }
+
+  button.primary:hover:not(:disabled) {
+    background: #5c2dd5;
+    border-color: #5c2dd5;
+    border-bottom-color: #3f1a96;
+  }
+
+  button.secondary {
+    background: #39393b;
+    color: #ffffff;
+    border: 1px solid #39393b;
+    border-bottom-width: 3px;
+    border-bottom-color: #232425;
+  }
+
+  button.secondary:hover {
+    background: #47484a;
+  }
+
+  button.ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border-color: transparent;
+    border-bottom-width: 1px;
+  }
+
+  button.ghost:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+
+  /* ── Focus-visible (keyboard-only) ─────────────────────────────── */
 }
-
-[data-theme="light"] button.secondary,
-[data-theme="light"] button.ghost,
-[data-theme="tuffbox-light"] button.secondary,
-[data-theme="tuffbox-light"] button.ghost {
-  color: var(--text-secondary);
-}
-
-[data-theme="light"] button.secondary:hover,
-[data-theme="light"] button.ghost:hover,
-[data-theme="tuffbox-light"] button.secondary:hover,
-[data-theme="tuffbox-light"] button.ghost:hover {
-  color: var(--text-primary);
-}
-
-[data-theme="light"] pre,
-[data-theme="light"] textarea,
-[data-theme="tuffbox-light"] pre,
-[data-theme="tuffbox-light"] textarea {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-}
-
-[data-theme="light"] .sidebar,
-[data-theme="tuffbox-light"] .sidebar {
-  background: var(--bg-secondary);
-  border-color: var(--border-color);
-}
-
-[data-theme="light"] .header,
-[data-theme="tuffbox-light"] .header {
-  background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
-  border-color: var(--border-color);
-}
-
-[data-theme="light"] code,
-[data-theme="tuffbox-light"] code {
-  color: var(--accent-primary);
-  background: var(--bg-elevated);
-}
-
-
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
-html,
-body,
-#app {
-  height: 100%;
-  width: 100%;
-  /* One scroll owner: panes inside .app-shell — never the document. */
-  overflow: hidden;
-}
-
-body {
-  font-family: var(--font-sans);
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  -webkit-font-smoothing: antialiased;
-  font-size: var(--font-base, 14px);
-  line-height: 1.5;
-}
-
-/* Buttons in the Ore UI (Minecraft) style, per Prism "Dark Amethyst" theme:
-   near-square, flat fill, and a darker bottom edge that visually depresses
-   when pressed (border-bottom shrinks + button shifts down). Accent fill is
-   amethyst #491AC0 via .primary. */
-button {
-  font-family: inherit;
-  cursor: pointer;
-  border: 1px solid #39393b;
-  border-bottom-width: 3px;
-  border-radius: 3px;
-  padding: 6px 12px 5px;
-  background: #39393b;
-  color: #ffffff;
-  font-weight: 600;
-  font-size: 13px;
-  transition: background 0.1s ease, border-color 0.1s ease, margin-top 0.05s ease,
-    padding 0.05s ease;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-/* Hover/press must brighten/darken whatever fill a button already has —
-   overriding `background` here paints accent/danger buttons gray (Ore UI
-   theme regression), so tint via filter instead of a hard color swap. */
-button:hover:not(:disabled) {
-  filter: brightness(1.18);
-}
-
-button:active:not(:disabled) {
-  filter: brightness(0.82);
-  border-bottom-width: 1px;
-  margin-top: 2px;
-}
-
-button.primary {
-  background: #491ac0;
-  border-color: #491ac0;
-  border-bottom-color: #32127f;
-}
-
-button.primary:hover:not(:disabled) {
-  background: #5c2dd5;
-  border-color: #5c2dd5;
-  border-bottom-color: #3f1a96;
-}
-
-button.secondary {
-  background: #39393b;
-  color: #ffffff;
-  border: 1px solid #39393b;
-  border-bottom-width: 3px;
-  border-bottom-color: #232425;
-}
-
-button.secondary:hover {
-  background: #47484a;
-}
-
-button.ghost {
-  background: transparent;
-  color: var(--text-secondary);
-  border-color: transparent;
-  border-bottom-width: 1px;
-}
-
-button.ghost:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-
-/* ── Focus-visible (keyboard-only) ─────────────────────────────── */
 
 button:focus-visible,
 input:focus-visible,
@@ -437,40 +480,42 @@ textarea:focus-visible,
   }
 }
 
-h1,
-h2,
-h3,
-h4 {
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
 
-/* Text fields only — radio/checkbox/range break if padded like text inputs */
-input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]),
-select,
-textarea {
-  font-family: inherit;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius-md);
-  padding: 10px 14px;
-  color: var(--text-primary);
-  font-size: 14px;
-  outline: none;
-}
+  /* Text fields only — radio/checkbox/range break if padded like text inputs */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]),
+  select,
+  textarea {
+    font-family: inherit;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    padding: 10px 14px;
+    color: var(--text-primary);
+    font-size: 14px;
+    outline: none;
+  }
 
-input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):focus,
-select:focus,
-textarea:focus {
-  border-color: var(--accent-primary);
-}
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):focus,
+  select:focus,
+  textarea:focus {
+    border-color: var(--accent-primary);
+  }
 
-/* Checkbox / radio adopt the theme accent instead of the system blue.
-   Range follows too so any slider stays on-palette. */
-input[type="checkbox"],
-input[type="radio"],
-input[type="range"] {
-  accent-color: var(--accent-primary);
+  /* Checkbox / radio adopt the theme accent instead of the system blue.
+     Range follows too so any slider stays on-palette. */
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"] {
+    accent-color: var(--accent-primary);
+  }
 }
 
 * {
@@ -567,19 +612,21 @@ html.potato-pc .spin * {
   animation: tb-spin 900ms linear infinite !important;
 }
 
-/* Press feedback (Prism-style: background only, no transform). Calm delayed
-   hover, instant press. Signature easing token from :root. */
-button {
-  transition: background var(--motion-fast) var(--motion-ease),
-    border-color var(--motion-fast) var(--motion-ease),
-    color var(--motion-fast) var(--motion-ease);
-  transition-delay: 0ms;
-}
-button:hover:not(:disabled) {
-  transition-delay: var(--motion-hover-delay, 70ms);
-}
-button:active:not(:disabled) {
-  transition-delay: 0ms;
+@layer base {
+  /* Press feedback (Prism-style: background only, no transform). Calm delayed
+     hover, instant press. Signature easing token from :root. */
+  button {
+    transition: background var(--motion-fast) var(--motion-ease),
+      border-color var(--motion-fast) var(--motion-ease),
+      color var(--motion-fast) var(--motion-ease);
+    transition-delay: 0ms;
+  }
+  button:hover:not(:disabled) {
+    transition-delay: var(--motion-hover-delay, 70ms);
+  }
+  button:active:not(:disabled) {
+    transition-delay: 0ms;
+  }
 }
 
 /* ── Search fields with overlaid glyph ─────────────────────────────

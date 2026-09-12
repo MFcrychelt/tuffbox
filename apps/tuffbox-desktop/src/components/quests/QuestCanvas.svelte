@@ -12,7 +12,7 @@
   } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
   import { tick } from "svelte";
-  import { Maximize2, Plus, LayoutGrid, ChevronDown, AlignLeft } from "@lucide/svelte";
+  import { Maximize2, Plus, LayoutGrid, ChevronDown, AlignLeft, Search } from "@lucide/svelte";
   import {
     iconDisplayId,
     type QuestChapter,
@@ -66,11 +66,8 @@
     onMove: (q: QuestData, x: number, y: number) => void;
     onAddAt: (x: number, y: number) => void;
     onLink: (fromId: string, toDepId: string) => void;
-    /** Remove dependency edge: questId lists depId in dependencies. */
     onUnlink?: (questId: string, depId: string) => void;
-    /** Fired when a dependency edge is selected or cleared. */
     onEdgeSelect?: (edge: { questId: string; depId: string } | null) => void;
-    /** Open another chapter (cross-chapter ghost click). */
     onOpenChapter?: (chapterId: string, questId?: string) => void;
     onSelectMultiple?: (ids: string[]) => void;
     fitToken?: number;
@@ -79,7 +76,6 @@
     filterTotal?: number;
     onQuestFilterChange?: (value: string) => void;
     onApplyLayout?: (kind: "tree" | "grid" | "circle") => void;
-    /** Multi-select align/distribute (P1): quests are the selected subset. */
     onAlign?: (mode: "left" | "right" | "top" | "bottom" | "centerX" | "centerY") => void;
     onDistribute?: (mode: "horizontally" | "vertically") => void;
   } = $props();
@@ -94,15 +90,11 @@
   let lastLayout = $state<"tree" | "grid" | "circle" | null>(null);
   let alignMenuOpen = $state(false);
 
-  /** Apply align/distribute to the selected subset (P1). Moves each quest
-   *  through onMove so the editor records a single history snapshot per
-   *  action and marks the chapter dirty. */
   function doAlign(mode: "left" | "right" | "top" | "bottom" | "centerX" | "centerY") {
     alignMenuOpen = false;
     if (!onAlign) return;
     const selected = quests.filter((q) => selectedIds.has(q.id));
     if (selected.length < 2) return;
-    // Positions come from quest-lib; forward each move to the editor.
     const moves = alignQuests(
       selected.map((q) => ({ id: q.id, x: q.x, y: q.y })),
       mode,
@@ -134,7 +126,6 @@
     }
   }
 
-  /** Live zoom for the toolbar readout — SvelteFlow moves the viewport via translate/scale. */
   let zoomPercent = $state(100);
   $effect(() => {
     const el = document.querySelector(".svelte-flow__viewport");
@@ -150,13 +141,19 @@
   });
 
   $effect(() => {
-    if (!layoutMenuOpen) return;
+    if (!layoutMenuOpen && !alignMenuOpen) return;
     const onPtr = (e: PointerEvent) => {
       const target = e.target as HTMLElement | null;
-      if (!target?.closest?.(".layout-pop")) layoutMenuOpen = false;
+      if (!target?.closest?.(".layout-pop")) {
+        layoutMenuOpen = false;
+        alignMenuOpen = false;
+      }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") layoutMenuOpen = false;
+      if (e.key === "Escape") {
+        layoutMenuOpen = false;
+        alignMenuOpen = false;
+      }
     };
     window.addEventListener("pointerdown", onPtr, true);
     window.addEventListener("keydown", onKey, true);
@@ -178,12 +175,8 @@
   let edges = $state<Edge[]>([]);
   let viewportEl = $state<HTMLDivElement | null>(null);
 
-  /** Marquee in flow/world px (same space as node.position). */
   let marqueeWorld = $state<null | { x1: number; y1: number; x2: number; y2: number }>(null);
-  /** Overlay box in container-local CSS px for drawing. */
-  let marqueeScreen = $state<null | { left: number; top: number; width: number; height: number }>(
-    null,
-  );
+  let marqueeScreen = $state<null | { left: number; top: number; width: number; height: number }>(null);
   let marqueeOriginScreen = $state<null | { x: number; y: number }>(null);
   let marqueeActive = $state(false);
 
@@ -253,7 +246,6 @@
     const newEdges: Edge[] = [];
     for (const q of quests) {
       for (const depId of q.dependencies) {
-        // FTB may store a task id as dependency — resolve to owning quest node.
         let sourceId = depId;
         let targetExists = quests.some((oq) => oq.id === depId);
         let external = false;
@@ -303,13 +295,13 @@
             progressStatuses[depId] === "completed");
 
         let style =
-          "stroke: var(--ftbq-line, #5c8a9e); stroke-width: 3; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));";
+          "stroke: var(--accent-primary); stroke-width: 2.5; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));";
         if (!targetExists || external) {
           style =
-            "stroke: var(--ftbq-quest-started); stroke-width: 2.5; stroke-dasharray: 6 4; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));";
+            "stroke: var(--accent-warning); stroke-width: 2; stroke-dasharray: 5 4; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));";
         } else if (depDone) {
           style =
-            "stroke: var(--ftbq-line-done, #55c95a); stroke-width: 3.5; filter: drop-shadow(0 0 3px rgba(85,201,90,0.6));";
+            "stroke: var(--accent-primary); stroke-width: 3.5; filter: drop-shadow(0 0 4px var(--accent-primary));";
         }
 
         newEdges.push({
@@ -318,8 +310,7 @@
           target: q.id,
           type: "smoothstep",
           style,
-          // Direction arrow at the dependent end: dependency flows prereq → quest.
-          markerEnd: { type: "arrowclosed", width: 16, height: 16, color: "#5c8a9e" },
+          markerEnd: { type: "arrowclosed", width: 14, height: 14, color: "var(--accent-primary)" },
           selectable: !external,
           data: { depId, dependentId: q.id },
           selected: selectedEdgeId === `e-${depId}-${q.id}`,
@@ -331,7 +322,6 @@
     edges = newEdges;
   });
 
-  // Sync marquee / multi-select from Svelte Flow back to parent
   let lastMultiSelection = $state<readonly string[]>([]);
   $effect(() => {
     const selectedNodes = nodes.filter((n) => n.selected && !n.id.startsWith("ext:"));
@@ -437,7 +427,6 @@
     if (e.button !== 0) return;
     if (!isEmptyPaneTarget(e.target)) return;
     focusCanvas();
-    // Let middle/right pan alone; left on empty pane = marquee.
     const container = flowContainer();
     if (!container) return;
     const { x: panX, y: panY, zoom } = getViewport();
@@ -516,7 +505,6 @@
     nodes: Node[];
     event: MouseEvent | TouchEvent;
   }) {
-    // Persist all selected nodes (multi-drag) plus the primary target.
     const toPersist = new Set<string>();
     if (targetNode && !targetNode.id.startsWith("ext:")) toPersist.add(targetNode.id);
     for (const n of flowNodes) {
@@ -539,7 +527,6 @@
       const tgt = connection.target.startsWith("ext:")
         ? connection.target.slice(4)
         : connection.target;
-      // Edge is prereq (source) → dependent (target); dependent lists prereq in dependencies.
       onLink(tgt, src);
     }
   }
@@ -547,7 +534,6 @@
   function isValidConnection(connection: Edge | Connection | null | undefined): boolean {
     if (!connection?.source || !connection?.target) return false;
     if (connection.source === connection.target) return false;
-    // Dependent (target) must be a local chapter quest — cannot depend "into" a ghost.
     if (connection.target.startsWith("ext:")) return false;
     const src = connection.source.startsWith("ext:")
       ? connection.source.slice(4)
@@ -577,7 +563,7 @@
       selected: ed.id === edge.id,
       style:
         ed.id === edge.id
-          ? `${String(ed.style ?? "").replace(/stroke:[^;]+;?/g, "").replace(/stroke-width:[^;]+;?/g, "")} stroke: var(--ftbq-accent-teal); stroke-width: 4;`
+          ? `${String(ed.style ?? "").replace(/stroke:[^;]+;?/g, "").replace(/stroke-width:[^;]+;?/g, "")} stroke: var(--accent-primary); stroke-width: 4;`
           : ed.style,
     }));
     onEdgeSelect?.({ questId: dependentId, depId });
@@ -585,7 +571,6 @@
   }
 
   function handlePaneClick({ event }: { event: MouseEvent }) {
-    // Double-click create is handled via ondblclick on the viewport (getWorldCoordinates).
     if (event.detail >= 2) return;
     if (marqueeActive) return;
     clearEdgeSelection();
@@ -610,6 +595,37 @@
     }
   }
 
+  /** Clearance kept between a freshly added quest and every other quest, in
+   *  FTBQ units (1 unit == BASE px). 2.5 units is wider than the node label
+   *  (capped at 2 units), so two quests placed on the same row can never have
+   *  their titles overlap. */
+  const PLACE_CLEARANCE = 2.5;
+
+  /** Nearest free cell around (x, y) on the half-unit quest grid. Without this
+   *  every "+ Add Quest" dropped the quest on the viewport centre, so repeated
+   *  adds stacked nodes (and their labels) on top of each other. */
+  function findFreeSlot(x: number, y: number) {
+    const free = (cx: number, cy: number) =>
+      quests.every(
+        (q) => Math.abs(q.x - cx) >= PLACE_CLEARANCE || Math.abs(q.y - cy) >= PLACE_CLEARANCE,
+      );
+    // Half-unit lattice == one grid step; ring 0 is the requested point itself,
+    // so the quest stays as close to the viewport centre as space allows.
+    const offsets: [number, number][] = [[0, 0]];
+    for (let ring = 0.5; ring <= 12; ring += 0.5) {
+      for (let i = -ring; i <= ring; i += 0.5) {
+        if (Math.abs(i) !== ring) offsets.push([i, -ring], [i, ring]);
+        offsets.push([-ring, i], [ring, i]);
+      }
+    }
+    for (const [dx, dy] of offsets) {
+      const cx = snap(x + dx);
+      const cy = snap(y + dy);
+      if (free(cx, cy)) return { x: cx, y: cy };
+    }
+    return { x, y };
+  }
+
   function addAtCenter() {
     const container = flowContainer();
     if (container) {
@@ -618,17 +634,18 @@
       const cy = rect.top + rect.height / 2;
       const { x: panX, y: panY, zoom } = getViewport();
       const world = getWorldCoordinates({ clientX: cx, clientY: cy }, container, panX, panY, zoom);
-      onAddAt(snap(world.x / BASE), snap(world.y / BASE));
+      const slot = findFreeSlot(snap(world.x / BASE), snap(world.y / BASE));
+      onAddAt(slot.x, slot.y);
     } else {
       const pos = screenToFlowPosition({
         x: window.innerWidth / 2,
         y: window.innerHeight / 2,
       });
-      onAddAt(snap(pos.x / BASE), snap(pos.y / BASE));
+      const slot = findFreeSlot(snap(pos.x / BASE), snap(pos.y / BASE));
+      onAddAt(slot.x, slot.y);
     }
   }
 
-  /** Move selection among chapter quests (list order). */
   function selectQuestByIndex(index: number) {
     if (!quests.length) return;
     const clamped = Math.max(0, Math.min(index, quests.length - 1));
@@ -686,108 +703,140 @@
   }
 </script>
 
-<div class="canvas-wrap ftbq-canvas">
-  <div class="canvas-toolbar">
-    {#if onQuestFilterChange}
-      <input
-        type="search"
-        class="tb-filter"
-        placeholder="Filter…"
-        title="Hide nodes that don’t match (canvas filter). Ctrl+F searches fields and jumps."
-        aria-label="Filter quests on canvas"
-        value={questFilter}
-        oninput={(e) => onQuestFilterChange?.((e.currentTarget as HTMLInputElement).value)}
-        onkeydown={(e) => {
-          if (e.key === "Escape") {
-            onQuestFilterChange?.("");
-          }
-          if (e.key === "Enter") {
-            e.preventDefault();
-            const first = quests[0];
-            if (first) onSelect(first);
-          }
-        }}
-      />
-      {#if questFilter}
-        <span class="filt-count">{quests.length}/{filterTotal}</span>
+<div class="canvas-wrap flex flex-col h-full min-h-0 bg-[var(--bg-primary)] overflow-hidden">
+  <!-- Top HUD Toolbar -->
+  <div class="canvas-toolbar flex items-center justify-between gap-2 px-3 py-2 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] flex-shrink-0 z-10">
+    <div class="flex items-center gap-2 flex-1 min-w-0">
+      {#if onQuestFilterChange}
+        <div class="relative flex items-center min-w-[140px] max-w-[240px] flex-1">
+          <Search size={13} class="absolute left-2.5 text-[var(--text-muted)] pointer-events-none" />
+          <input
+            type="search"
+            class="tb-filter w-full pl-7 pr-2 py-1 text-xs bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-md text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+            placeholder="Filter canvas nodes…"
+            value={questFilter}
+            oninput={(e) => onQuestFilterChange?.((e.currentTarget as HTMLInputElement).value)}
+            onkeydown={(e) => {
+              if (e.key === "Escape") onQuestFilterChange?.("");
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const first = quests[0];
+                if (first) onSelect(first);
+              }
+            }}
+          />
+        </div>
+        {#if questFilter}
+          <span class="text-[11px] font-mono font-semibold text-[var(--text-muted)] bg-[var(--bg-card)] px-2 py-0.5 rounded border border-[var(--border-color)]">
+            {quests.length}/{filterTotal}
+          </span>
+        {/if}
       {/if}
-    {/if}
-    <button type="button" class="tb" title="Fit view" aria-label="Fit view" onclick={() => flowFitView({ padding: 0.2 })}>
-      <Maximize2 size={14} class="flex-shrink-0" /> Fit
-    </button>
-    <span class="zoom-pct" title="Zoom level">{zoomPercent}%</span>
-    <button type="button" class="tb" title="Add quest at center (N or double-click)" aria-label="Add quest at center" onclick={addAtCenter}>
-      <Plus size={14} class="flex-shrink-0" /> Add quest
-    </button>
-    {#if onApplyLayout}
-      <div class="layout-pop">
-        <button
-          type="button"
-          class="tb"
-          class:active={layoutMenuOpen}
-          title="Auto-layout current chapter"
-          aria-haspopup="menu"
-          aria-expanded={layoutMenuOpen}
-          onclick={() => (layoutMenuOpen = !layoutMenuOpen)}
-        >
-          <LayoutGrid size={14} class="flex-shrink-0" /> Layout
-          <ChevronDown size={12} class="flex-shrink-0" />
-        </button>
-        {#if layoutMenuOpen}
-          <div class="layout-menu" role="menu">
-            <button role="menuitemradio" aria-checked={lastLayout === "tree"} onclick={() => pickLayout("tree")}>
-              Tree
-            </button>
-            <button role="menuitemradio" aria-checked={lastLayout === "grid"} onclick={() => pickLayout("grid")}>
-              Grid
-            </button>
-            <button role="menuitemradio" aria-checked={lastLayout === "circle"} onclick={() => pickLayout("circle")}>
-              Circle
-            </button>
-          </div>
-        {/if}
-      </div>
-    {/if}
-    {#if onAlign && onDistribute && selectedIds.size >= 2}
-      <div class="layout-pop">
-        <button
-          type="button"
-          class="tb"
-          class:active={alignMenuOpen}
-          title="Align / distribute selected quests"
-          aria-haspopup="menu"
-          aria-expanded={alignMenuOpen}
-          onclick={() => (alignMenuOpen = !alignMenuOpen)}
-        >
-          <AlignLeft size={14} class="flex-shrink-0" /> Align
-          <ChevronDown size={12} class="flex-shrink-0" />
-        </button>
-        {#if alignMenuOpen}
-          <div class="layout-menu" role="menu">
-            <div class="align-group-label">Align</div>
-            <button role="menuitem" onclick={() => doAlign("left")}>Left</button>
-            <button role="menuitem" onclick={() => doAlign("right")}>Right</button>
-            <button role="menuitem" onclick={() => doAlign("top")}>Top</button>
-            <button role="menuitem" onclick={() => doAlign("bottom")}>Bottom</button>
-            <button role="menuitem" onclick={() => doAlign("centerX")}>Center horizontally</button>
-            <button role="menuitem" onclick={() => doAlign("centerY")}>Center vertically</button>
-            <div class="align-group-label">Distribute</div>
-            <button role="menuitem" onclick={() => doDistribute("horizontally")}>Evenly horizontal</button>
-            <button role="menuitem" onclick={() => doDistribute("vertically")}>Evenly vertical</button>
-          </div>
-        {/if}
-      </div>
-    {/if}
+
+      <button
+        type="button"
+        class="hud-btn flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition"
+        title="Add quest at center (N or double-click)"
+        onclick={addAtCenter}
+      >
+        <Plus size={13} class="text-[var(--accent-primary)]" />
+        <span>Add Quest</span>
+      </button>
+    </div>
+
+    <!-- Right Controls: Fit, Zoom, Layout, Align -->
+    <div class="flex items-center gap-2 flex-shrink-0">
+      <button
+        type="button"
+        class="hud-btn flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition"
+        title="Fit canvas to content (Ctrl+0)"
+        onclick={() => flowFitView({ padding: 0.2 })}
+      >
+        <Maximize2 size={13} />
+        <span>Fit</span>
+      </button>
+
+      <span class="zoom-pct text-[11px] font-mono font-bold text-[var(--text-muted)] px-1.5 py-0.5 rounded bg-[var(--bg-card)] border border-[var(--border-color)]" title="Current zoom level">
+        {zoomPercent}%
+      </span>
+
+      {#if onApplyLayout}
+        <div class="layout-pop relative">
+          <button
+            type="button"
+            class="hud-btn flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition {layoutMenuOpen ? 'border-[var(--accent-primary)] bg-[var(--bg-hover)]' : ''}"
+            title="Auto-layout nodes"
+            onclick={() => (layoutMenuOpen = !layoutMenuOpen)}
+          >
+            <LayoutGrid size={13} class="text-[var(--accent-primary)]" />
+            <span>Layout</span>
+            <ChevronDown size={11} />
+          </button>
+          {#if layoutMenuOpen}
+            <div class="layout-menu absolute top-full right-0 mt-1.5 w-32 p-1 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg shadow-lg z-50 flex flex-col gap-0.5" role="menu">
+              <button
+                type="button"
+                class="w-full text-left px-2.5 py-1.5 text-xs font-medium rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)] {lastLayout === 'tree' ? 'text-[var(--accent-primary)] font-bold' : ''}"
+                onclick={() => pickLayout("tree")}
+              >
+                Hierarchical Tree
+              </button>
+              <button
+                type="button"
+                class="w-full text-left px-2.5 py-1.5 text-xs font-medium rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)] {lastLayout === 'grid' ? 'text-[var(--accent-primary)] font-bold' : ''}"
+                onclick={() => pickLayout("grid")}
+              >
+                Compact Grid
+              </button>
+              <button
+                type="button"
+                class="w-full text-left px-2.5 py-1.5 text-xs font-medium rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)] {lastLayout === 'circle' ? 'text-[var(--accent-primary)] font-bold' : ''}"
+                onclick={() => pickLayout("circle")}
+              >
+                Radial Circle
+              </button>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      {#if onAlign && onDistribute && selectedIds.size >= 2}
+        <div class="layout-pop relative">
+          <button
+            type="button"
+            class="hud-btn flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition {alignMenuOpen ? 'border-[var(--accent-primary)] bg-[var(--bg-hover)]' : ''}"
+            title="Align or distribute selected quests"
+            onclick={() => (alignMenuOpen = !alignMenuOpen)}
+          >
+            <AlignLeft size={13} class="text-[var(--accent-primary)]" />
+            <span>Align ({selectedIds.size})</span>
+            <ChevronDown size={11} />
+          </button>
+          {#if alignMenuOpen}
+            <div class="layout-menu absolute top-full right-0 mt-1.5 w-44 p-1.5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg shadow-lg z-50 flex flex-col gap-1" role="menu">
+              <span class="text-[10px] uppercase font-bold text-[var(--text-muted)] px-2 py-0.5">Align Nodes</span>
+              <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("left")}>Align Left</button>
+              <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("right")}>Align Right</button>
+              <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("top")}>Align Top</button>
+              <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("bottom")}>Align Bottom</button>
+              <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("centerX")}>Center Horizontally</button>
+              <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("centerY")}>Center Vertically</button>
+              <span class="text-[10px] uppercase font-bold text-[var(--text-muted)] px-2 py-0.5 border-t border-[var(--border-color)] mt-1">Distribute</span>
+              <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doDistribute("horizontally")}>Evenly Horizontal</button>
+              <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doDistribute("vertically")}>Evenly Vertical</button>
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
   </div>
 
-  <!-- Focusable canvas widget: arrow/Home/End/Escape selection via existing onSelect -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <!-- SvelteFlow Canvas Stage -->
   <div
-    class="viewport"
+    class="viewport flex-1 min-h-0 relative focus:outline-none"
     role="application"
     tabindex="0"
-    aria-label="Quest canvas. Arrow keys select next or previous quest. Home and End jump. Escape clears selection. Shift+Arrow outside canvas nudges selected quests."
+    aria-label="Quest canvas"
     bind:this={viewportEl}
     onpointerdown={onMarqueePointerDown}
     onpointermove={onMarqueePointerMove}
@@ -797,14 +846,18 @@
     onkeydown={handleCanvasKeydown}
   >
     {#if quests.length === 0}
-      <div class="empty-hint">
+      <div class="empty-hint absolute inset-0 flex flex-col items-center justify-center gap-3 z-10 pointer-events-none text-center">
         {#if showEmptyAddCta}
-          <button type="button" class="empty-add" onclick={(e) => { e.stopPropagation(); addAtCenter(); }}>
-            + Add first quest
+          <button
+            type="button"
+            class="empty-add pointer-events-auto px-4 py-2 bg-[var(--accent-primary)] text-[var(--on-accent)] font-bold text-xs rounded-lg hover:brightness-110 shadow-md transition"
+            onclick={(e) => { e.stopPropagation(); addAtCenter(); }}
+          >
+            + Add First Quest
           </button>
-          <span class="empty-sub">Double-click canvas · Press N · Use toolbar button</span>
+          <span class="text-xs text-[var(--text-muted)]">Double-click canvas · Press N · Use toolbar button</span>
         {:else}
-          <span>{emptyHint}</span>
+          <span class="text-xs text-[var(--text-muted)]">{emptyHint}</span>
         {/if}
       </div>
     {/if}
@@ -827,15 +880,14 @@
       fitViewOptions={{ padding: 0.2 }}
       defaultEdgeOptions={{
         type: "smoothstep",
-        style:
-          "stroke: var(--ftbq-line, #5c8a9e); stroke-width: 3; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));",
+        style: "stroke: var(--accent-primary); stroke-width: 2.5; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));",
       }}
     >
       <Background
         variant={BackgroundVariant.Dots}
         gap={20}
-        size={1}
-        patternColor="rgba(255,255,255,0.07)"
+        size={1.5}
+        patternColor="var(--border-color)"
       />
       <Controls />
       <MiniMap
@@ -843,252 +895,55 @@
         zoomable
         nodeStrokeWidth={2}
         maskColor="rgba(0, 0, 0, 0.45)"
-        bgColor="var(--ftbq-bg-panel, #1a1a1e)"
-        nodeColor={() => "var(--ftbq-accent-teal)"}
+        bgColor="var(--bg-secondary)"
+        nodeColor={() => "var(--accent-primary)"}
         ariaLabel="Chapter minimap"
       />
     </SvelteFlow>
 
     {#if marqueeScreen && (marqueeScreen.width > 0 || marqueeScreen.height > 0)}
       <div
-        class="marquee-box"
+        class="marquee-box absolute pointer-events-none z-20 border border-[var(--accent-primary)] bg-[var(--accent-primary)]/15"
         style="left:{marqueeScreen.left}px; top:{marqueeScreen.top}px; width:{marqueeScreen.width}px; height:{marqueeScreen.height}px;"
       ></div>
     {/if}
-    <div class="vignette" aria-hidden="true"></div>
   </div>
 </div>
 
 <style>
-  .canvas-wrap {
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.18);
-      border: none;
-      border-left: 1px solid rgba(255, 255, 255, 0.06);
-      border-right: 1px solid rgba(255, 255, 255, 0.06);
-      overflow: hidden;
-    }
-    .canvas-toolbar {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 8px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-      background: rgba(255, 255, 255, 0.02);
-      flex-shrink: 0;
-      flex-wrap: wrap;
-    }
-  .tb-filter {
-    min-width: 120px;
-    flex: 1;
-    max-width: 220px;
-    font-size: 12px;
-    padding: 4px 8px;
-    background: var(--ftbq-input-bg);
-    border: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text);
-    border-radius: var(--ftbq-radius-control);
-  }
-  .canvas-toolbar .tb-filter:focus {
-    border-color: var(--ftbq-focus-border);
-    box-shadow: 0 0 0 2px var(--ftbq-focus-ring);
-  }
-  .canvas-toolbar .tb:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal);
-    outline-offset: 1px;
-  }
-  .filt-count {
-    font-size: 11px;
-    color: var(--ftbq-text-muted);
-  }
-  .zoom-pct {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--ftbq-text-muted);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  .layout-pop {
-    position: relative;
-    flex-shrink: 0;
-    margin-left: auto;
-  }
-  .layout-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 40;
-    min-width: 130px;
-    padding: 4px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    background: var(--bg-secondary, var(--ftbq-bg-panel));
-    border: 1px solid var(--ftbq-frame);
-    border-radius: var(--ftbq-radius-panel);
-    box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.35));
-  }
-  .layout-menu button {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    width: 100%;
-    text-align: left;
-    padding: 7px 10px;
-    border: none;
-    border-radius: var(--ftbq-radius-control);
-    background: transparent;
-    color: var(--ftbq-text);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    text-shadow: none;
-  }
-  .layout-menu button:hover,
-  .layout-menu button[aria-checked="true"] {
-    background: var(--bg-hover, var(--ftbq-btn-hover-top));
-  }
-  .layout-menu button[aria-checked="true"]::after {
-    content: "✓";
-    color: var(--ftbq-accent-teal);
-  }
-  .tb {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    border-radius: var(--ftbq-radius-control);
-    border: 1px solid var(--ftbq-frame);
-    background: var(--bg-secondary, var(--ftbq-bg-panel));
-    color: var(--ftbq-text);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    text-shadow: none;
-    box-shadow: none;
-  }
-  .tb:hover {
-    border-color: var(--ftbq-frame);
-    background: var(--bg-hover, var(--ftbq-btn-hover-top));
-    color: var(--ftbq-text);
-  }
-  .tb:active {
-    background: var(--bg-active, var(--ftbq-btn-hover-bottom));
-    box-shadow: none;
-  }
-  .viewport {
-    position: relative;
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-  }
-  .viewport:focus {
-    outline: none;
-  }
-  .viewport:focus-visible {
-    outline: 2px solid var(--ftbq-accent-teal);
-    outline-offset: -2px;
-  }
-  .empty-hint {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    pointer-events: none;
-    z-index: 10;
-    color: var(--ftbq-text-muted);
-    font-size: 12px;
-    font-weight: 600;
-    text-shadow: none;
-  }
-  .empty-add {
-    pointer-events: auto;
-    padding: 6px 12px;
-    font-size: 12px;
-    font-weight: 700;
-    border: 1px solid var(--ftbq-accent-teal);
-    border-radius: var(--ftbq-radius-control);
-    background: rgba(61, 184, 168, 0.15);
-    color: var(--ftbq-accent-teal);
-    cursor: pointer;
-    text-shadow: none;
-  }
-  .empty-add:hover {
-    background: rgba(61, 184, 168, 0.28);
-  }
-  .empty-sub {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--ftbq-text-muted);
-  }
-  .vignette {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: 5;
-    box-shadow: inset 0 0 64px rgba(0, 0, 0, 0.25);
-  }
-
-  .marquee-box {
-    position: absolute;
-    z-index: 8;
-    pointer-events: none;
-    border: 1px solid color-mix(in srgb, var(--ftbq-accent-teal) 85%, #fff);
-    background: color-mix(in srgb, var(--ftbq-accent-teal) 18%, transparent);
-    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
-  }
-
-  :global(.flex-shrink-0) {
-    flex-shrink: 0;
-  }
-
   :global(.svelte-flow__background) {
-    background-color: var(--ftbq-bg-canvas);
+    background-color: var(--bg-primary) !important;
   }
-  /* Only restyle the visible path — the invisible interaction path (20px hit
-     target) must keep its default width or edge clicks stop registering. */
   :global(.svelte-flow__edge .svelte-flow__edge-path) {
-    stroke-width: 3;
+    stroke-width: 2.5;
   }
-  :global(.ftbq-canvas .svelte-flow__handle.connectionindicator),
-  :global(.ftbq-canvas .svelte-flow__node:hover .svelte-flow__handle) {
+  :global(.svelte-flow__handle.connectionindicator),
+  :global(.svelte-flow__node:hover .svelte-flow__handle) {
     pointer-events: all !important;
   }
   :global(.svelte-flow__edge:hover path) {
-    stroke: var(--ftbq-line-hover);
+    stroke: var(--accent-primary) !important;
+    stroke-width: 3.5 !important;
   }
   :global(.svelte-flow__minimap) {
     display: none !important;
   }
   :global(.svelte-flow__controls) {
-    border: 1px solid var(--ftbq-frame);
-    border-radius: var(--ftbq-radius-control);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm, 6px);
     overflow: hidden;
-    box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
-      0 4px 10px rgba(0, 0, 0, 0.45);
+    background: var(--bg-card);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
   }
   :global(.svelte-flow__controls button) {
-    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
+    background: var(--bg-card);
     border: none;
-    border-bottom: 1px solid var(--ftbq-frame);
-    color: var(--ftbq-text);
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+    transition: background 0.15s ease;
   }
   :global(.svelte-flow__controls button:hover) {
-    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
-  }
-  :global(.svelte-flow__controls button svg),
-  :global(.ftbq-canvas .tb svg),
-  :global(.ftbq-canvas .flex-shrink-0) {
-    flex-shrink: 0;
-    fill: var(--ftbq-text);
+    background: var(--bg-hover);
   }
   :global(.svelte-flow__attribution) {
     display: none;

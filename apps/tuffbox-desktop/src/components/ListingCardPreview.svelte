@@ -47,6 +47,9 @@
   const cfExtraCats = $derived(Math.max(0, catChips.length - 1));
   const cfGameMeta = $derived([minecraftVersion, loaderLabel].filter(Boolean).join(" "));
 
+  const hasName = $derived(!!name && name.trim().length > 0);
+  const hasSummary = $derived(!!summary && summary.trim().length > 0);
+
   function prettyCat(c: string) {
     return c
       .split("-")
@@ -66,14 +69,16 @@
       <header class="mr-page-head">
         <div class="mr-page-icon">
           {#if iconUrl}
-            <img src={iconUrl} alt="" />
+            <img src={iconUrl} alt="Modpack icon" />
           {:else}
             <div class="icon-ph">?</div>
           {/if}
         </div>
         <div class="mr-page-titles">
-          <h2>{name || "Untitled pack"}</h2>
-          <p class="mr-summary">{summary || "No summary yet."}</p>
+          <h2 class:is-placeholder={!hasName}>{hasName ? name : "Untitled pack"}</h2>
+          <p class="mr-summary" class:is-placeholder={!hasSummary}>
+            {hasSummary ? summary : "No summary yet."}
+          </p>
           <div class="mr-page-badges">
             {#if version}<span class="mr-badge">v{version}</span>{/if}
             {#if minecraftVersion}<span class="mr-badge">MC {minecraftVersion}</span>{/if}
@@ -97,7 +102,7 @@
         {#if safeBodyHtml}
           {@html safeBodyHtml}
         {:else}
-          <p class="muted">Long description preview appears here.</p>
+          <p class="muted is-placeholder">Long description preview appears here.</p>
         {/if}
       </div>
     </article>
@@ -105,17 +110,19 @@
     <article class="mr-card" aria-label="Modrinth-style listing preview">
       <div class="mr-icon">
         {#if iconUrl}
-          <img src={iconUrl} alt="" />
+          <img src={iconUrl} alt="Modpack icon" />
         {:else}
           <div class="icon-ph">?</div>
         {/if}
       </div>
       <div class="mr-center">
         <div class="mr-title-line">
-          <h3>{name || "Untitled pack"}</h3>
+          <h3 class:is-placeholder={!hasName}>{hasName ? name : "Untitled pack"}</h3>
           <span class="mr-by">by {authorLabel}</span>
         </div>
-        <p class="mr-summary card-summary">{summary || "No summary yet."}</p>
+        <p class="mr-summary card-summary" class:is-placeholder={!hasSummary}>
+          {hasSummary ? summary : "No summary yet."}
+        </p>
         <div class="mr-tags">
           <span class="mr-tag env"><Monitor size={11} /> Client</span>
           {#each catChips as c (c)}
@@ -163,15 +170,17 @@
       <header class="cf-page-head">
         <div class="cf-page-icon">
           {#if iconUrl}
-            <img src={iconUrl} alt="" />
+            <img src={iconUrl} alt="Modpack icon" />
           {:else}
             <div class="icon-ph">?</div>
           {/if}
         </div>
         <div class="cf-page-titles">
           <div class="cf-kicker">Minecraft · Modpacks</div>
-          <h2>{name || "Untitled pack"}</h2>
-          <p class="cf-summary">{summary || "No summary yet."}</p>
+          <h2 class:is-placeholder={!hasName}>{hasName ? name : "Untitled pack"}</h2>
+          <p class="cf-summary" class:is-placeholder={!hasSummary}>
+            {hasSummary ? summary : "No summary yet."}
+          </p>
           <div class="cf-page-meta">
             {#if minecraftVersion}<span>{minecraftVersion}</span>{/if}
             {#if loaderLabel}<span>{loaderLabel}</span>{/if}
@@ -191,7 +200,7 @@
         {#if safeBodyHtml}
           {@html safeBodyHtml}
         {:else}
-          <p class="muted">Long description preview appears here.</p>
+          <p class="muted is-placeholder">Long description preview appears here.</p>
         {/if}
       </div>
     </article>
@@ -200,7 +209,7 @@
       <div class="cf-thumb-wrap">
         <div class="cf-icon">
           {#if iconUrl}
-            <img src={iconUrl} alt="" />
+            <img src={iconUrl} alt="Modpack icon" />
           {:else}
             <div class="icon-ph">?</div>
           {/if}
@@ -208,9 +217,11 @@
         <span class="cf-badge">Modpacks</span>
       </div>
       <div class="cf-body">
-        <h3>{name || "Untitled pack"}</h3>
+        <h3 class:is-placeholder={!hasName}>{hasName ? name : "Untitled pack"}</h3>
         <p class="cf-author">By {authorLabel}</p>
-        <p class="cf-summary card-summary">{summary || "No summary yet."}</p>
+        <p class="cf-summary card-summary" class:is-placeholder={!hasSummary}>
+          {hasSummary ? summary : "No summary yet."}
+        </p>
         <div class="cf-meta-row">
           {#if catChips.length}
             <span class="cf-cat-tag">{prettyCat(catChips[0])}</span>
@@ -272,25 +283,41 @@
     margin: 0;
     font-size: 16px;
     font-weight: 700;
-    color: #ecf0f3;
+    color: #f1f5f9;
     line-height: 1.25;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
+  .mr-title-line h3.is-placeholder,
+  h2.is-placeholder,
+  .cf-body h3.is-placeholder {
+    color: #64748b;
+    font-style: italic;
+    font-weight: 600;
+  }
+
   .mr-by {
     font-size: 13px;
-    color: #8b949e;
+    color: #94a3b8;
     white-space: nowrap;
     flex-shrink: 0;
   }
 
   .mr-summary {
     margin: 0;
-    color: #a8b0b9;
+    color: #cbd5e1;
     font-size: 13px;
     line-height: 1.45;
+  }
+
+  .mr-summary.is-placeholder,
+  .cf-summary.is-placeholder,
+  .muted.is-placeholder {
+    color: #64748b;
+    font-style: italic;
+    opacity: 0.85;
   }
 
   .card-summary {
@@ -318,23 +345,24 @@
     align-items: center;
     gap: 4px;
     font-size: 11px;
+    font-weight: 600;
     padding: 3px 8px;
     border-radius: 999px;
     border: 1px solid #3a3f47;
-    color: #b0b8c1;
+    color: #cbd5e1;
     background: #22262c;
     line-height: 1.2;
   }
 
   .mr-tag.loader {
     border-color: rgba(196, 130, 60, 0.55);
-    color: #e8b87a;
-    background: rgba(196, 130, 60, 0.15);
+    color: #fcd34d;
+    background: rgba(196, 130, 60, 0.18);
   }
 
   .mr-tag.env {
     border-color: #3a3f47;
-    color: #9aa3ad;
+    color: #94a3b8;
     background: #1e2228;
   }
 
@@ -385,7 +413,7 @@
     border-radius: 6px;
     border: 1px solid #3a3f47;
     background: transparent;
-    color: #8b949e;
+    color: #94a3b8;
     cursor: default;
     pointer-events: none;
   }
@@ -395,7 +423,7 @@
     align-items: center;
     gap: 12px;
     font-size: 12px;
-    color: #8b949e;
+    color: #94a3b8;
   }
 
   .mr-stat-row.time {
@@ -475,7 +503,7 @@
 
   .cf-summary {
     margin: 0;
-    color: #a8b0b9;
+    color: #cbd5e1;
     font-size: 13px;
     line-height: 1.4;
   }
@@ -487,20 +515,21 @@
     gap: 10px;
     margin-top: 6px;
     font-size: 12px;
-    color: #8b949e;
+    color: #94a3b8;
   }
 
   .cf-cat-tag {
     padding: 2px 8px;
     border-radius: 4px;
     border: 1px solid #52525b;
-    color: #d4d4d8;
+    color: #e4e4e7;
     background: transparent;
     font-size: 11px;
+    font-weight: 600;
   }
 
   .cf-cat-more {
-    color: #71717a;
+    color: #a1a1aa;
     font-size: 11px;
   }
 
@@ -512,7 +541,7 @@
   }
 
   .cf-meta-item.game {
-    color: #a1a1aa;
+    color: #cbd5e1;
   }
 
   /* ── Shared icon placeholder ── */
@@ -531,7 +560,7 @@
     font-weight: 700;
   }
 
-  /* ── Page layouts (unchanged) ── */
+  /* ── Page layouts ── */
   h2 {
     margin: 0;
     font-size: 20px;
@@ -605,18 +634,26 @@
   .chip,
   .mr-badge,
   .cf-cats span {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 11px;
+    font-weight: 600;
     padding: 2px 7px;
     border-radius: 999px;
     border: 1px solid #2d323a;
-    color: #c5ccd4;
+    color: #e2e8f0;
     background: #22262c;
   }
 
   .chip {
     border-color: rgba(30, 181, 116, 0.45);
-    color: #9ae6c0;
-    background: rgba(30, 181, 116, 0.1);
+    color: #a7f3d0;
+    background: rgba(30, 181, 116, 0.15);
   }
 
   .mr-badge.loader {
@@ -634,7 +671,7 @@
 
   .cf-page-meta span {
     font-size: 12px;
-    color: #a1a1aa;
+    color: #cbd5e1;
   }
 
   .mr-page-cta {
@@ -660,7 +697,7 @@
 
   .mr-stat {
     font-size: 11px;
-    color: #8b949e;
+    color: #94a3b8;
     text-align: center;
   }
 
@@ -683,12 +720,12 @@
     border-top: 1px solid #2d323a;
     max-height: 360px;
     overflow: auto;
-    color: #c5ccd4;
+    color: #e2e8f0;
     font-size: 13px;
   }
 
   .muted {
-    color: #8b949e;
+    color: #94a3b8;
   }
 
   .prose :global(img) {
@@ -708,6 +745,6 @@
   .prose :global(h2),
   .prose :global(h3) {
     margin: 0.6em 0 0.35em;
-    color: #ecf0f3;
+    color: #f8fafc;
   }
 </style>

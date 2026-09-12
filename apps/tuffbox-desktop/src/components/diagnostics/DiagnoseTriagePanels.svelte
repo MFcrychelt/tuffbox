@@ -434,6 +434,13 @@
     cursor: pointer;
   }
   .pill {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 10px;
     padding: 1px 6px;
     border-radius: 999px;

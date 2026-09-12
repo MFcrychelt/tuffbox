@@ -1,7 +1,7 @@
 <script lang="ts">
   import { X, Zap, Loader2, Check, Package } from "@lucide/svelte";
   import { api } from "../lib/api";
-  import { projectPath, projectInfo } from "../lib/store";
+  import { isProjectLaunching, launchSessions, projectPath, projectInfo } from "../lib/store";
   import { launchWithFeedback } from "../lib/launch";
   import { toasts } from "../lib/toast";
   import { trapFocus } from "../lib/focusTrap";
@@ -17,7 +17,7 @@
     onApplied?: () => void;
   } = $props();
 
-  type Mode = "curated" | "custom";
+  type Mode = "curated" | "fo" | "custom";
 
   type CuratedMod = {
     slug: string;
@@ -30,6 +30,8 @@
   type CustomMod = {
     slug: string;
     name: string;
+    /** Exact jar name — present on FO rows, absent on custom offers. */
+    fileName?: string;
     provider: string;
     projectId: string;
     versionId?: string | null;
@@ -50,6 +52,7 @@
   };
 
   let mode = $state<Mode>("curated");
+  const projectLaunching = $derived(isProjectLaunching($projectPath, $launchSessions));
   let loading = $state(false);
   let applying = $state(false);
   let error = $state<string | null>(null);
@@ -71,6 +74,15 @@
   } | null>(null);
   let curatedMods = $state<CuratedMod[]>([]);
   let customMods = $state<CustomMod[]>([]);
+  let foMods = $state<CustomMod[]>([]);
+  let foMeta = $state<{
+    name: string;
+    slug: string;
+    versionNumber?: string;
+    minecraftVersion: string;
+    loader: string;
+    modCount: number;
+  } | null>(null);
   let catalogSource = $state<"bundled" | "supabase" | string>("bundled");
   let configRows = $state<ConfigRow[]>([]);
   let findings = $state<Record<string, unknown>[]>([]);
@@ -82,6 +94,9 @@
 
   const selectedCustomCount = $derived(
     customMods.filter((m) => m.selected && !m.alreadyInstalled).length,
+  );
+  const selectedFoCount = $derived(
+    foMods.filter((m) => m.selected && !m.alreadyInstalled).length,
   );
   const selectedConfigCount = $derived(
     applyConfigs ? configRows.filter((r) => r.selected).length : 0,
@@ -97,6 +112,7 @@
   const applyDisabled = $derived.by(() => {
     if (applying || loading) return true;
     if (mode === "curated") return !curatedAvailable;
+    if (mode === "fo") return selectedFoCount === 0 && selectedConfigCount === 0;
     return selectedCustomCount === 0 && selectedConfigCount === 0;
   });
   const applyLabel = $derived.by(() => {
@@ -111,9 +127,10 @@
       }
       return parts.length ? `Apply (${parts.join(", ")})` : "Apply (already installed)";
     }
+    const modCount = mode === "fo" ? selectedFoCount : selectedCustomCount;
     const parts: string[] = [];
-    if (selectedCustomCount > 0) {
-      parts.push(`${selectedCustomCount} mod${selectedCustomCount === 1 ? "" : "s"}`);
+    if (modCount > 0) {
+      parts.push(`${modCount} mod${modCount === 1 ? "" : "s"}`);
     }
     if (selectedConfigCount > 0) {
       parts.push(`${selectedConfigCount} config${selectedConfigCount === 1 ? "" : "s"}`);
@@ -124,6 +141,11 @@
   function loaderIsFabricFamily(loader: string | undefined | null): boolean {
     const l = (loader ?? "").toLowerCase();
     return l === "fabric" || l === "quilt";
+  }
+
+  /** Backend redirects curated previews to the FO tab when the mapped project is a modpack. */
+  function isFoRedirect(msg: string | null | undefined): boolean {
+    return !!msg && msg.includes("Fabulously Optimized tab");
   }
 
   function close() {
@@ -170,6 +192,8 @@
     warnings = [];
     curatedMods = [];
     customMods = [];
+    foMods = [];
+    foMeta = null;
     configRows = [];
     findings = [];
     curatedMeta = null;
@@ -208,19 +232,41 @@
           if (gen !== loadGen) return;
         } catch (curatedErr) {
           if (gen !== loadGen) return;
-          // Mapped in JSON but unpublished / missing on Modrinth — keep Custom usable.
-          curatedAvailable = false;
-          mode = "custom";
           const curatedMsg =
             curatedErr instanceof Error ? curatedErr.message : String(curatedErr);
           curatedUnavailableMessage = curatedMsg;
-          await loadCustom(path, false);
-          if (gen !== loadGen) return;
-          warnings = [
-            curatedMsg,
-            "Opened Custom optimize instead — pick performance mods below.",
-            ...warnings,
-          ];
+          if (isFoRedirect(curatedMsg)) {
+            // Mapped project is a modpack (e.g. Fabulously Optimized) — the FO
+            // tab is the curated choice for this instance, open it directly.
+            curatedAvailable = false;
+            mode = "fo";
+            try {
+              await loadFo(path);
+              if (gen !== loadGen) return;
+            } catch (foErr) {
+              if (gen !== loadGen) return;
+              mode = "custom";
+              await loadCustom(path, false);
+              if (gen !== loadGen) return;
+              const foMsg = foErr instanceof Error ? foErr.message : String(foErr);
+              warnings = [
+                foMsg,
+                "Opened Custom optimize instead — pick performance mods below.",
+                ...warnings,
+              ];
+            }
+          } else {
+            // Mapped in JSON but unpublished / missing on Modrinth — keep Custom usable.
+            curatedAvailable = false;
+            mode = "custom";
+            await loadCustom(path, false);
+            if (gen !== loadGen) return;
+            warnings = [
+              curatedMsg,
+              "Opened Custom optimize instead — pick performance mods below.",
+              ...warnings,
+            ];
+          }
         }
       } else {
         await loadCustom(path, false);
@@ -267,6 +313,28 @@
     );
     curatedAvailable = true;
     curatedUnavailableMessage = null;
+  }
+
+  async function loadFo(path: string) {
+    const preview = await api.mods.previewFoOptimizePack(path);
+    foMeta = {
+      name: preview.pack.name,
+      slug: preview.pack.slug,
+      versionNumber: preview.pack.versionNumber,
+      minecraftVersion: preview.minecraftVersion,
+      loader: preview.loader,
+      modCount: preview.pack.modCount,
+    };
+    foMods = (preview.mods ?? []).map((m) => ({
+      ...m,
+      selected: !m.alreadyInstalled,
+    }));
+    warnings = preview.warnings ?? [];
+    configRows = (preview.configActions ?? []).map((a, i) =>
+      actionToRow(a as Record<string, unknown>, i),
+    );
+    projectLoader = preview.loader || projectLoader;
+    projectMcVersion = preview.minecraftVersion || projectMcVersion;
   }
 
   async function loadCustom(path: string, ai: boolean) {
@@ -329,16 +397,40 @@
           if (gen !== loadGen) return;
           curatedAvailable = false;
           curatedUnavailableMessage = e instanceof Error ? e.message : String(e);
-          mode = "custom";
-          await loadCustom(path, useAiConfigs);
-          if (gen !== loadGen) return;
-          warnings = [
-            curatedUnavailableMessage,
-            "Opened Custom optimize instead — pick performance mods below.",
-            ...warnings,
-          ];
-          error = null;
+          if (isFoRedirect(curatedUnavailableMessage)) {
+            mode = "fo";
+            try {
+              await loadFo(path);
+              if (gen !== loadGen) return;
+              error = null;
+            } catch (foErr) {
+              if (gen !== loadGen) return;
+              mode = "custom";
+              await loadCustom(path, useAiConfigs);
+              if (gen !== loadGen) return;
+              warnings = [
+                foErr instanceof Error ? foErr.message : String(foErr),
+                "Opened Custom optimize instead — pick performance mods below.",
+                ...warnings,
+              ];
+              error = null;
+            }
+          } else {
+            mode = "custom";
+            await loadCustom(path, useAiConfigs);
+            if (gen !== loadGen) return;
+            warnings = [
+              curatedUnavailableMessage,
+              "Opened Custom optimize instead — pick performance mods below.",
+              ...warnings,
+            ];
+            error = null;
+          }
         }
+      } else if (next === "fo") {
+        await loadFo(path);
+        if (gen !== loadGen) return;
+        error = null;
       } else {
         await loadCustom(path, useAiConfigs);
         if (gen !== loadGen) return;
@@ -376,7 +468,9 @@
       humanExplanation:
         mode === "curated"
           ? "Optimize pack (curated) config templates"
-          : "Optimize pack custom: safe client/performance config patches",
+          : mode === "fo"
+            ? "Optimize pack (FO set) config templates"
+            : "Optimize pack custom: safe client/performance config patches",
       confidence: 0.85,
       suspectedMods: [],
       needsUserReview: true,
@@ -407,7 +501,10 @@
         doneMessage = "Curated optimize pack installed.";
         toasts.success("Optimize pack applied (curated)");
       } else {
-        const mods = customMods
+        // FO and Custom share the selectable-offer shape; FO installs exact
+        // pinned builds, Custom resolves latest compatible builds.
+        const source = mode === "fo" ? foMods : customMods;
+        const mods = source
           .filter((m) => m.selected && !m.alreadyInstalled)
           .map((m) => ({
             slug: m.slug,
@@ -420,7 +517,9 @@
             alreadyInstalled: m.alreadyInstalled,
           }));
         const configPlan = applyConfigs ? selectedConfigPlan() : null;
-        const result = await api.mods.applyOptimizeCustomPlan(
+        const applyPlan =
+          mode === "fo" ? api.mods.applyFoOptimizePlan : api.mods.applyOptimizeCustomPlan;
+        const result = await applyPlan(
           mods,
           applyConfigs && !!configPlan,
           configPlan,
@@ -432,7 +531,7 @@
           toasts.error("Optimize pack finished with errors");
         } else {
           doneMessage = `Installed ${((result.installed as string[]) ?? []).length} item(s).`;
-          toasts.success("Optimize pack applied (custom)");
+          toasts.success(mode === "fo" ? "Optimize pack applied (FO set)" : "Optimize pack applied (custom)");
         }
       }
       onApplied?.();
@@ -446,7 +545,7 @@
 
   async function testLaunch() {
     const path = get(projectPath);
-    if (!path) return;
+    if (!path || projectLaunching) return;
     await launchWithFeedback({ path, profile: "client" });
   }
 
@@ -485,6 +584,7 @@
           <h2><Zap size={18} /> Optimize pack</h2>
           <p>
             Add performance mods and safe config patches. Curated uses the author Modrinth pack;
+            FO installs the exact Fabulously Optimized mod set (pinned builds);
             Custom resolves missing whitelist mods (Modrinth → CurseForge).
           </p>
         </div>
@@ -512,6 +612,17 @@
         >
           Curated pack
           {#if !curatedAvailable}<span class="hint">n/a</span>{/if}
+        </button>
+        <button
+          type="button"
+          class:active={mode === "fo"}
+          role="tab"
+          aria-selected={mode === "fo"}
+          disabled={loading || applying}
+          title="Fabulously Optimized — the exact tested mod set (pinned builds)"
+          onclick={() => switchMode("fo")}
+        >
+          Fabulously Optimized
         </button>
         <button
           type="button"
@@ -544,6 +655,12 @@
             {#if curatedMeta.versionNumber}
               <code>v{curatedMeta.versionNumber}</code>
             {/if}
+          {:else if mode === "fo" && foMeta}
+            · {foMeta.name}
+            {#if foMeta.versionNumber}
+              <code>v{foMeta.versionNumber}</code>
+            {/if}
+            · {foMeta.modCount} mods
           {:else if mode === "custom"}
             · Custom performance list
             {#if catalogSource === "supabase"}
@@ -565,6 +682,16 @@
         {#if !curatedAvailable}
           <div class="opt-empty-block">
             <p class="opt-empty">{curatedEmptyCopy()}</p>
+            {#if isFoRedirect(curatedUnavailableMessage)}
+              <button
+                type="button"
+                class="secondary opt-empty-cta"
+                disabled={applying}
+                onclick={() => switchMode("fo")}
+              >
+                Open FO set
+              </button>
+            {/if}
             <button
               type="button"
               class="secondary opt-empty-cta"
@@ -602,6 +729,44 @@
             {/if}
           </div>
         {/if}
+      {/if}
+
+      {#if mode === "fo" && !loading}
+        <div class="opt-section">
+          <h3>
+            Fabulously Optimized mod set
+            {#if foMods.length}
+              <span class="count">{selectedFoCount} selected · {foMods.length} total</span>
+            {/if}
+          </h3>
+          {#if !foMods.length}
+            <p class="opt-empty">
+              FO set is empty for {contextLabel} — every entry is already installed or unresolvable.
+            </p>
+          {:else}
+            <div class="opt-list">
+              {#each foMods as m (m.provider + m.projectId + m.slug)}
+                <label class="opt-row selectable">
+                  <input
+                    type="checkbox"
+                    bind:checked={m.selected}
+                    disabled={m.alreadyInstalled || applying}
+                  />
+                  <div class="opt-meta-col">
+                    <strong>{m.name}</strong>
+                    <code>{m.slug}</code>
+                    {#if m.fileName}<span class="muted">{m.fileName}</span>{/if}
+                  </div>
+                  {#if m.alreadyInstalled}
+                    <span class="pill ok">installed</span>
+                  {:else}
+                    <span class="pill">pinned</span>
+                  {/if}
+                </label>
+              {/each}
+            </div>
+          {/if}
+        </div>
       {/if}
 
       {#if mode === "custom" && !loading}
@@ -648,7 +813,7 @@
         </label>
       {/if}
 
-      {#if !loading && configRows.length && (mode === "custom" || curatedAvailable)}
+      {#if !loading && configRows.length && (mode === "custom" || mode === "fo" || curatedAvailable)}
         <div class="opt-section">
           <h3>
             Config patches
@@ -684,7 +849,7 @@
         </details>
       {/if}
 
-      {#if !loading && (mode === "custom" || curatedAvailable)}
+      {#if !loading && (mode === "custom" || mode === "fo" || curatedAvailable)}
         <label class="opt-check">
           <input type="checkbox" bind:checked={applyConfigs} disabled={applying} />
           Apply safe config templates after installing mods
@@ -695,8 +860,8 @@
       <div class="opt-footer">
         <button class="ghost" type="button" onclick={close} disabled={applying}>Close</button>
         {#if doneMessage}
-          <button class="secondary" type="button" onclick={testLaunch} disabled={applying}>
-            Test launch
+          <button class="secondary" type="button" onclick={testLaunch} disabled={applying || projectLaunching}>
+            {projectLaunching ? "Launching…" : "Test launch"}
           </button>
         {/if}
         <button

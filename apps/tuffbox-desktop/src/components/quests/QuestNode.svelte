@@ -95,7 +95,7 @@
       {#if q.optional}<span class="opt">?</span>{/if}
       {#if prog === "completed"}<span class="check" title="Completed">✓</span>{/if}
     </div>
-    <span class="node-label">{q.title}</span>
+    <span class="node-label" title={q.title}>{q.title}</span>
     {#if external && data.chapterTitle}
       <span class="ch-badge">{data.chapterTitle}</span>
     {/if}
@@ -292,10 +292,18 @@
     max-width: 70%;
     max-height: 70%;
   }
+  /* The label sizes .node-wrap (the wrap shrinks to its content), so an
+     unbounded max-content width made long titles stretch the node far past its
+     24px cell and collide with the neighbouring quests. Cap it at two layout
+     units (2 * BASE 24px) — the clearance the auto-placer keeps between nodes
+     and the narrowest chip that is still readable — so titles never overlap in
+     hand-placed or laid-out books (the 3-unit default layouts then keep a
+     comfortable gutter). Any tighter and the chip is unreadable, so the full
+     title stays available through the node/label tooltip. */
   .node-label {
     font-size: clamp(8px, 10px, 11px);
     line-height: 1.15;
-    max-width: calc(100% + 24px);
+    max-width: 48px;
     min-width: 0;
     text-align: center;
     overflow: hidden;
@@ -313,9 +321,13 @@
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-color, #dee2e6) 55%, transparent);
   }
   .ch-badge {
+    display: inline-block;
+    vertical-align: baseline;
     font-size: 8px;
     line-height: 1.1;
-    max-width: calc(100% + 28px);
+    /* Same cap as the label: this span also sizes the wrap, so a percentage
+       width only ever resolved against the already-stretched wrap. */
+    max-width: 48px;
     text-align: center;
     overflow: hidden;
     text-overflow: ellipsis;

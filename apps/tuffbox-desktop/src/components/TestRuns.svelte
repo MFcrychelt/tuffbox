@@ -5,15 +5,25 @@
   import {
     PlayCircle, RefreshCw, TimerReset,
     Square, Stethoscope, Activity,
+    Terminal, Shield,
   } from "@lucide/svelte";
-  import { onDestroy, onMount } from "svelte";
-  import { ideStageRequest, openLaunchLog, projectPath, projectInfo } from "../lib/store";
+  import { onDestroy, onMount, tick } from "svelte";
+  import {
+    ideStageRequest,
+    isProjectLaunching,
+    isProjectRunning,
+    launchSessions,
+    openLaunchLog,
+    projectPath,
+    projectInfo,
+    runningInstances,
+  } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import TestHardwareCard from "./test/TestHardwareCard.svelte";
   import TestLoadChart from "./test/TestLoadChart.svelte";
   import TestLabConsole from "./test/TestLabConsole.svelte";
   import TestLabOptions from "./test/TestLabOptions.svelte";
-  import { launchWithFeedback } from "../lib/launch";
+  import { killWithFeedback, launchWithFeedback } from "../lib/launch";
   import type { TestRunRecord } from "../lib/api";
   import { gb1, peaksFromSamples, pushLoadSample, type LoadSample } from "../lib/testLoad";
 
@@ -143,6 +153,10 @@
   const selected = $derived(profiles.find((p) => p.id === selectedProfile));
   /** Resolved memory for the main run button (null = profile default). */
   const mainRunMb = $derived(MEM_PRESETS.find((m) => m.id === memPreset)?.mb ?? null);
+  const sharedLaunch = $derived($launchSessions[$projectPath ?? ""] ?? null);
+  const sharedLaunching = $derived(isProjectLaunching($projectPath, $launchSessions));
+  const sharedRunning = $derived(isProjectRunning($projectPath, $runningInstances));
+  const launchBusy = $derived(running || matrixRunning || sharedLaunching || sharedRunning);
   const elapsed = $derived(startedAt ? Math.floor((now - startedAt) / 1000) : 0);
   const validationCritical = $derived(!!validationReport && (
     !validationReport.passed
@@ -181,7 +195,7 @@
   });
   const statusLabel = $derived((() => {
     switch (livePhase) {
-      case "launching": return "Launching…";
+      case "launching": return sharedLaunch?.message || "Launching…";
       case "bootstrapping": return `Bootstrapping… ${elapsed}s`;
       case "pass": return `Pass (${startupSeconds ?? elapsed}s)`;
       case "fail": return "Fail";
@@ -190,6 +204,38 @@
       default: return live?.instance || running ? `${elapsed}s` : "idle";
     }
   })());
+
+  // Process lifecycle is authoritative. The debug sampler below remains for
+  // CPU/RAM and log metrics, but it no longer decides whether a Play action
+  // became a running game or silently reset after invoke.
+  $effect(() => {
+    const lifecycle = sharedLaunch;
+    if (!lifecycle) return;
+    if (lifecycle.phase === "running") {
+      sawProcess = true;
+      if (!startedAt) startedAt = (lifecycle.startedAt || 0) * 1000 || Date.now();
+      if (livePhase === "idle" || livePhase === "launching") livePhase = "bootstrapping";
+      if (!watching) startPolling();
+      return;
+    }
+    if (lifecycle.phase === "failed" && (livePhase === "launching" || livePhase === "bootstrapping")) {
+      error = lifecycle.error?.message || lifecycle.message || "Launch failed.";
+      verdictReason = error;
+      livePhase = "fail";
+      running = false;
+      return;
+    }
+    if (lifecycle.phase === "exited" && live?.instance) {
+      live = { ...live, instance: null };
+    }
+    if (lifecycle.phase === "exited" && running && !finalizeInFlight && livePhase === "bootstrapping") {
+      void finalizeActive(
+        lifecycle.error ? "crashed" : "fail",
+        lifecycle.error?.message || lifecycle.message || "Process exited before pass signal",
+      );
+    }
+  });
+
   $effect(() => {
     if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
   });
@@ -211,13 +257,13 @@
         return "border-[color-mix(in_srgb,var(--accent-primary)_28%,transparent)]";
       case "fail":
       case "failed":
-        return "border-[rgba(239,68,68,0.35)]";
+        return "border-[color-mix(in_srgb,var(--accent-danger)_40%,transparent)]";
       case "crashed":
-        return "border-[rgba(248,113,113,0.55)]";
+        return "border-[color-mix(in_srgb,var(--accent-danger)_55%,transparent)]";
       case "timedOut":
-        return "border-[rgba(245,158,11,0.45)]";
+        return "border-[color-mix(in_srgb,var(--accent-warning)_45%,transparent)]";
       case "started":
-        return "border-[rgba(245,158,11,0.28)]";
+        return "border-[color-mix(in_srgb,var(--accent-warning)_28%,transparent)]";
       default:
         return "border-[var(--border-color)]";
     }
@@ -367,7 +413,7 @@
       .toString()
       .replace(/[<>:"/\\|?*]+/g, "-")
       .trim() || "modpack";
-    return dir ? `${dir}\\${name}-server` : `${name}-server`;
+    return dir ? `${dir}/${name}-server` : `${name}-server`;
   }
 
   async function ensureServerDir(): Promise<string | null> {
@@ -402,7 +448,7 @@
   }
 
   function canLaunch(): boolean {
-    if (!$projectPath || running || matrixRunning) return false;
+    if (!$projectPath || launchBusy) return false;
     if (validationCritical && !forceRun) {
       error = "Validation has critical issues. Enable Force run to launch anyway.";
       return false;
@@ -436,7 +482,7 @@
     startupSeconds = null;
     activeRunId = null;
     activeLogRoot = opts.serverDir
-      ? `${opts.serverDir.replace(/[/\\]+$/, "")}\\tuffbox.project.json`
+      ? `${opts.serverDir.replace(/[/\\]+$/, "")}/tuffbox.project.json`
       : $projectPath;
     try {
       await maybeSnapshot(opts.label);
@@ -448,7 +494,6 @@
           targetDir: opts.serverDir,
         });
       }
-      await invoke("record_launch", { path: $projectPath });
       const res = await launchWithFeedback(
         {
           path: $projectPath!,
@@ -467,8 +512,10 @@
         },
       );
       if (!res) {
+        const lifecycle = $launchSessions[$projectPath ?? ""];
         running = false;
-        livePhase = "idle";
+        livePhase = lifecycle?.phase === "failed" ? "fail" : "idle";
+        if (lifecycle?.error?.message) error = lifecycle.error.message;
         activeLogRoot = null;
         return false;
       }
@@ -489,11 +536,6 @@
       activeLogRoot = null;
       return false;
     }
-  }
-
-  async function smokeClient() {
-    activeLogRoot = $projectPath;
-    await beginRun({ profile: selectedProfile, label: "Smoke client", openServerConsole: false });
   }
 
   /** Main run button: launch the selected target with the active memory preset. */
@@ -576,8 +618,7 @@
     const shouldKill = kill || matrixRunning;
     if (shouldKill && $projectPath) {
       try {
-        await invoke("kill_running_instance", { instanceId: $projectPath });
-        live = live ? { ...live, instance: null } : null;
+        await killWithFeedback($projectPath);
       } catch {
         // ignore
       }
@@ -706,7 +747,7 @@
 
   async function openRunLogs(run: TestRunRecord) {
     if (!$projectPath) return;
-    const captureDir = `${projectDir()}/.tuffbox/test-runs/${run.id}`.replace(/\//g, "\\");
+    const captureDir = `${projectDir()}/.tuffbox/test-runs/${run.id}`;
     try {
       if (!capturedRunIds[run.id]) await captureRunLogs(run, true);
       await openShell(captureDir);
@@ -734,25 +775,24 @@
     killing = true;
     error = null;
     try {
-      message = await invoke("kill_running_instance", { instanceId: $projectPath });
-      live = live ? { ...live, instance: null } : null;
+      const stopped = await killWithFeedback($projectPath);
+      if (!stopped) return;
+      message = "Stopping game…";
       if (running && !finalizeInFlight && livePhase === "bootstrapping") {
-        await finalizeActive("fail", "Killed by user");
+        await finalizeActive("fail", "Stopped by user");
       } else {
         running = false;
         if (livePhase === "launching" || livePhase === "bootstrapping") livePhase = "idle";
       }
       await refreshLog();
       await loadRuns();
-    } catch (e) {
-      error = String(e);
     } finally {
       killing = false;
     }
   }
 
   async function runMatrix() {
-    if (!$projectPath || running || matrixRunning) return;
+    if (!$projectPath || launchBusy) return;
     if (validationCritical && !forceRun) {
       error = "Validation has critical issues. Enable Force run to launch matrix.";
       return;
@@ -918,12 +958,28 @@
         <RefreshCw size={14} class={loading ? "spin" : ""} />
         Profiles
       </button>
+      <button class="secondary" onclick={refreshLog} disabled={!$projectPath}>
+        <Terminal size={14} /> Tail log
+      </button>
+      <button class="secondary" onclick={runValidation} disabled={!$projectPath || validationLoading}>
+        <Shield size={14} />
+        {validationLoading ? "Checking…" : "Validate"}
+      </button>
+      {#if validationBadge}
+        <span class="val-badge" class:ok={validationBadge.ok} class:bad={!validationBadge.ok}>
+          {validationBadge.label}
+        </span>
+      {/if}
+      <button class="danger" onclick={killInstance} disabled={!$projectPath || (!live?.instance && !sharedRunning) || killing} title="Kill game/server process">
+        <Square size={14} />
+        {killing ? "Stopping…" : "Kill"}
+      </button>
     </div>
   </div>
 
-  {#if error}<div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] mb-2 border shrink-0 text-[#fecaca] bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.28)]">{error}</div>{/if}
+  {#if error}<div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] mb-2 border shrink-0 text-[var(--accent-danger)] bg-[color-mix(in_srgb,var(--accent-danger)_8%,transparent)] border-[color-mix(in_srgb,var(--accent-danger)_28%,transparent)]">{error}</div>{/if}
   {#if message}<div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] mb-2 border shrink-0 text-[var(--accent-primary)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)] border-[color-mix(in_srgb,var(--accent-primary)_25%,transparent)]">{message}</div>{/if}
-  {#if validationError}<div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] mb-2 border shrink-0 text-[#fecaca] bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.28)]">{validationError}</div>{/if}
+  {#if validationError}<div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] mb-2 border shrink-0 text-[var(--accent-danger)] bg-[color-mix(in_srgb,var(--accent-danger)_8%,transparent)] border-[color-mix(in_srgb,var(--accent-danger)_28%,transparent)]">{validationError}</div>{/if}
 
   {#if !$projectPath}
     <EmptyState icon={PlayCircle} title="No project selected" description="Open a project to run test profiles." />
@@ -1011,11 +1067,13 @@
         <div class="min-w-0 min-h-0 flex flex-col gap-4">
           <div class="shrink-0 flex flex-col overflow-hidden glass-card px-4 py-3 gap-2.5">
             <h3 class="m-0 text-[12px] font-bold text-[color:var(--text-secondary)] shrink-0 flex items-center gap-2">
-              <Activity size={14} class="text-emerald-400" />
+              <Activity size={14} class="text-[var(--accent-primary)]" />
               Load
             </h3>
             <TestLoadChart samples={loadSamples} xmxMb={activeXmxMb} potato={potatoPc} />
-            <TestHardwareCard samples={loadSamples} xmxMb={activeXmxMb} />
+            {#if loadSamples.length > 0}
+              <TestHardwareCard samples={loadSamples} xmxMb={activeXmxMb} />
+            {/if}
           </div>
           <TestLabConsole
             bind:log
@@ -1061,7 +1119,6 @@
               projectPath={$projectPath}
               bind:profiles
               bind:selectedProfile
-              {loading}
               {running}
               {matrixRunning}
               {validationLoading}
@@ -1078,8 +1135,6 @@
               bind:startupSeconds
               bind:livePhase
               {formatRam}
-              onrefresh={() => loadProfiles(true)}
-              onvalidate={runValidation}
               onquickplay={quickPlay}
               onbrowseserver={() => void ensureServerDir()}
               ondefaultserver={() => (serverDir = defaultServerDir())}
@@ -1154,17 +1209,17 @@
                   <div class="p-3 border border-[var(--border-color)] rounded-[var(--border-radius-md)] bg-[var(--bg-tertiary)] grid gap-1.5">
                     <h3 class="text-[var(--text-secondary)] text-[12px] m-0 uppercase tracking-[0.04em]">Launch stats</h3>
                     <div class="grid grid-cols-3 gap-2 mb-1">
-                      <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                      <div class="stat-tile">
                         <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Launches</span>
                         <strong class="text-[15px] text-[var(--text-primary)] tabular-nums">{ launchStats.totalLaunches }</strong>
                       </div>
-                      <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                      <div class="stat-tile" class:bad={launchStats.totalCrashes > 0} title={launchStats.totalCrashes > 0 ? "Crashes recorded for this pack — see Diagnose" : "No crashes recorded"}>
                         <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Crashes</span>
-                        <strong class="text-[15px] tabular-nums { launchStats.totalCrashes > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ launchStats.totalCrashes }</strong>
+                        <strong class="text-[15px] text-[var(--text-primary)] tabular-nums">{ launchStats.totalCrashes }</strong>
                       </div>
-                      <div class="grid gap-0.5 p-2 rounded-[var(--border-radius-sm)] bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                      <div class="stat-tile" class:warn={passRate < 80 && runs.length > 0} title={passRate < 80 && runs.length > 0 ? "Fewer than 8 in 10 runs reach a healthy state" : "Share of runs that reached a healthy state"}>
                         <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Pass rate</span>
-                        <strong class="text-[15px] tabular-nums { passRate < 80 && runs.length > 0 ? "text-[#fbbf24]" : "text-[var(--text-primary)]" }">{ passRate }%</strong>
+                        <strong class="text-[15px] text-[var(--text-primary)] tabular-nums">{ passRate }%</strong>
                       </div>
                     </div>
                     {#if avgRunSeconds != null}
@@ -1230,17 +1285,33 @@
 </div>
 
 <style>
-  /* Layout is Tailwind utilities; scoped styles only for things Tailwind
-     cannot express: the shared .ghost/.secondary/.danger button skins
-     (defined app-wide) tweaks specific to this view, verdict badges and the
-     spin animation. */
+  /* Layout comes from Tailwind utilities; scoped styles only cover what
+     utilities cannot express: this view's tweaks to the shared button skins,
+     the verdict badges, the launch controls and the two shell surfaces. */
 
   .mini { padding: 5px 9px; font-size: 12px; justify-self: start; }
-  .danger { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
-  .danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
 
-  /* Form fields: labeled column so selects align with buttons and don't
-     jump in height next to Ore-style buttons. */
+  .danger {
+    background: color-mix(in srgb, var(--accent-danger) 18%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger) 40%, transparent);
+    color: color-mix(in srgb, var(--accent-danger) 62%, var(--text-primary));
+  }
+  .danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-danger) 28%, transparent);
+  }
+  /* Disabled destructive actions must not read as live controls: without this
+     "Kill" stayed fully saturated red while nothing was running. */
+  .danger:disabled,
+  .kill-btn:disabled,
+  .run-main:disabled {
+    opacity: 0.45;
+    cursor: default;
+    box-shadow: none;
+    filter: grayscale(0.35);
+  }
+
+  /* Form fields: labeled column so selects align with the buttons next to
+     them instead of jumping in height. */
   .field {
     display: flex;
     flex-direction: column;
@@ -1264,6 +1335,27 @@
     border-color: var(--accent-primary);
   }
 
+  /* Stat tiles: the number always stays on the primary text colour so it is
+     readable in every theme; a bad/warn state is carried by the tile tint.
+     (Colouring the digits with --accent-warning/danger drops to ~2.2:1 on the
+     win95 silver panel.) */
+  .stat-tile {
+    display: grid;
+    gap: 2px;
+    padding: 8px;
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+  }
+  .stat-tile.bad {
+    border-color: color-mix(in srgb, var(--accent-danger) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-danger) 10%, var(--bg-secondary));
+  }
+  .stat-tile.warn {
+    border-color: color-mix(in srgb, var(--accent-warning) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-warning) 10%, var(--bg-secondary));
+  }
+
   .side-tab-dot {
     width: 6px;
     height: 6px;
@@ -1273,225 +1365,118 @@
     background: var(--accent-primary);
   }
   .side-tab-dot.bad {
-    background: rgba(239, 68, 68, 0.9);
+    background: var(--accent-danger);
   }
 
   /* Status chip: quiet themed pill, no gray Ore button skin. */
-  .status-chip { border: 1px solid var(--border-color); border-bottom-width: 1px; }
+  .status-chip {
+    border: 1px solid var(--border-color);
+  }
   .status-chip.idle {
     color: var(--text-secondary);
     background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-secondary));
     border-color: color-mix(in srgb, var(--accent-primary) 22%, var(--border-color));
   }
   .status-chip.pass {
-    color: var(--accent-primary);
+    color: color-mix(in srgb, var(--accent-primary) 62%, var(--text-primary));
     background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
   }
   .status-chip.fail {
-    color: #fca5a5;
-    background: rgba(239, 68, 68, 0.14);
-    border-color: rgba(239, 68, 68, 0.4);
+    color: color-mix(in srgb, var(--accent-danger) 62%, var(--text-primary));
+    background: color-mix(in srgb, var(--accent-danger) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent-danger) 40%, transparent);
+  }
+  .status-chip.running {
+    color: color-mix(in srgb, var(--accent-warning) 62%, var(--text-primary));
+    background: color-mix(in srgb, var(--accent-warning) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent-warning) 40%, transparent);
   }
 
   /* History filter chips: accent when active, quiet otherwise. */
-  .ghost.mini { border-radius: 999px; border: 1px solid transparent; }
+  .ghost.mini {
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
   .ghost.mini.active {
-    color: var(--accent-primary);
+    color: color-mix(in srgb, var(--accent-primary) 62%, var(--text-primary));
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
 
-  .vbadge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-color); }
-  .vbadge.pass, .vbadge.finished { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
-  .vbadge.fail, .vbadge.failed { color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
-  .vbadge.crashed { color: #fecaca; background: rgba(239, 68, 68, 0.12); }
-  .vbadge.timedOut { color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); }
-  .vbadge.started, .vbadge.running { color: #93c5fd; }
-  .vbadge.skipped { color: var(--text-muted); }
-
-  .filters .active { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
-
-  .test-runs {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    overflow: hidden;
-    max-width: none;
-    width: 100%;
-  }
-  .toolbar, .title, .status, .status-strip, .log-tools, .preflight, .opts-row, .matrix-head, .run-top, .run-actions, .history-head, .filters, .log-tools-right, .launch-bar, .launch-actions { display: flex; align-items: center; }
-  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 8px; flex-shrink: 0; }
-  .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
-  .terminal-body {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow-x: hidden;
-    overflow-y: auto;
-    gap: 8px;
-  }
-  .status-strip { flex-shrink: 0; gap: 10px; flex-wrap: wrap; }
-  .launch-bar {
-    flex-shrink: 0;
-    gap: 12px;
-    flex-wrap: wrap;
-    padding: 10px 12px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-  }
-  .profile-select {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+  .vbadge {
     font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+  }
+  .vbadge.pass,
+  .vbadge.finished {
+    color: color-mix(in srgb, var(--accent-primary) 62%, var(--text-primary));
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+  }
+  .vbadge.fail,
+  .vbadge.failed {
+    color: color-mix(in srgb, var(--accent-danger) 62%, var(--text-primary));
+    border-color: color-mix(in srgb, var(--accent-danger) 40%, transparent);
+  }
+  .vbadge.crashed {
+    color: color-mix(in srgb, var(--accent-danger) 62%, var(--text-primary));
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+  }
+  .vbadge.timedOut {
+    color: color-mix(in srgb, var(--accent-warning) 62%, var(--text-primary));
+    border-color: color-mix(in srgb, var(--accent-warning) 40%, transparent);
+  }
+  .vbadge.started,
+  .vbadge.running {
+    color: var(--accent-secondary);
+  }
+  .vbadge.skipped {
     color: var(--text-muted);
   }
-  .profile-select select { min-width: 180px; }
-  .launch-actions { gap: 8px; flex-wrap: wrap; flex: 1; }
-  .preset { display: inline-flex; align-items: center; gap: 8px; }
-  .preset.primary { background: color-mix(in srgb, var(--accent-primary) 18%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); color: var(--accent-primary); font-weight: 700; }
-  .work {
-    flex: 1 1 auto;
-    min-height: 0;
-    min-width: 0;
-    display: grid;
-    grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.1fr);
-    gap: 8px;
+
+  .val-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
   }
-  .load-panel,
-  .log-panel {
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    background: var(--bg-secondary);
+  .val-badge.ok {
+    color: color-mix(in srgb, var(--accent-primary) 62%, var(--text-primary));
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  }
+  .val-badge.bad {
+    color: color-mix(in srgb, var(--accent-danger) 62%, var(--text-primary));
+    border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
+  }
+
+  /* ── Glassmorphism shell for panels ──────────────────────────── */
+  .glass-card {
+    background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    backdrop-filter: blur(20px) saturate(140%);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--text-muted) 10%, transparent),
+      0 14px 44px rgba(0, 0, 0, 0.16);
   }
-  .load-panel {
-    padding: 10px 12px;
-    gap: 8px;
-  }
-  .load-panel h3 {
-    margin: 0;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-secondary);
-    flex-shrink: 0;
-  }
-  .secondary-panel {
-    flex: 0 0 auto;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    overflow: hidden;
-  }
-  .secondary-panel summary {
-    cursor: pointer;
-    padding: 10px 14px;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-secondary);
-    user-select: none;
-    list-style: none;
-  }
-  .secondary-panel summary::-webkit-details-marker { display: none; }
-  .secondary-panel[open] summary { border-bottom: 1px solid var(--border-color); }
-  .secondary-body { padding: 12px 14px; }
-  .profiles-panel { max-height: 360px; overflow: auto; }
-  .profile-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-  .preflight { gap: 14px; flex-wrap: wrap; margin-bottom: 10px; color: var(--text-muted); font-size: 12px; }
-  .chk { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-  .chk input { width: auto; }
-  .timeout { display: inline-flex; align-items: center; gap: 6px; }
-  .timeout input { width: 72px; }
-  .hint { color: var(--text-secondary); }
-  .metric { color: var(--accent-primary); font-weight: 700; }
-  .val-badge { font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border-color); }
-  .val-badge.ok { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
-  .val-badge.bad { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); }
-  .opts-row { gap: 12px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
-  .opts-row label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-muted); }
-  .opts-row input[type="text"], .opts-row select { min-width: 180px; }
-  .matrix-panel { display: grid; gap: 10px; }
-  .matrix-head { gap: 12px; flex-wrap: wrap; }
-  .matrix-checks { display: flex; flex-wrap: wrap; gap: 10px 16px; }
-  .matrix-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  .matrix-table th, .matrix-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border-color); }
-  .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 8px; border: 1px solid var(--border-color); flex-shrink: 0; }
-  .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
-  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
-  .profile-card { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-color); padding: 12px; text-align: left; }
-  .profile-card:hover, .profile-card.selected { transform: none; border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
-  .profile-card strong { color: var(--text-primary); }
-  .profile-card span, .profile-card small, .muted { color: var(--text-muted); }
-  .history-head { margin-top: 12px; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-  .history-head h2 { margin: 0; font-size: 15px; }
-  .filters { gap: 4px; flex-wrap: wrap; }
-  .filters .active { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
-  .run-history { display: grid; gap: 8px; margin-top: 10px; }
-  .run-row { display: grid; gap: 3px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-  .run-row strong { color: var(--text-primary); }
-  .run-row span, .run-row small { color: var(--text-muted); font-size: 12px; }
-  .run-top { justify-content: space-between; gap: 8px; }
-  .run-actions { gap: 4px; flex-wrap: wrap; margin-top: 4px; }
-  .run-row.fail, .run-row.failed { border-color: rgba(239, 68, 68, .35); }
-  .run-row.pass, .run-row.finished { border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent); }
-  .run-row.crashed { border-color: rgba(248, 113, 113, .55); }
-  .run-row.timedOut { border-color: rgba(245, 158, 11, .45); }
-  .run-row.started { border-color: rgba(245, 158, 11, .28); }
-  .vbadge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border-color); }
-  .vbadge.pass, .vbadge.finished { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
-  .vbadge.fail, .vbadge.failed { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 40%, transparent); }
-  .vbadge.crashed { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 12%, transparent); }
-  .vbadge.timedOut { color: var(--accent-warning); border-color: color-mix(in srgb, var(--accent-warning) 40%, transparent); }
-  .vbadge.started, .vbadge.running { color: var(--accent-secondary); }
-  .vbadge.skipped { color: var(--text-muted); }
-  .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
-  .peak-badge { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-  .status { gap: 8px; color: var(--text-muted); background: var(--bg-tertiary); border-radius: 999px; padding: 8px 12px; }
-  .status.running { color: var(--accent-primary); }
-  .status.pass { color: var(--accent-primary); }
-  .status.fail { color: var(--accent-danger); }
-  .log-tools { justify-content: space-between; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
-  .log-tools-right { gap: 6px; flex-wrap: wrap; }
-  .log-trunc-hint, .log-paused-hint { font-size: 11px; color: var(--text-muted); }
-  .log-paused-hint { color: var(--accent-warning); }
-  .auto-scroll { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
-  .auto-scroll input { width: auto; }
-  .log { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 18px; background: var(--bg-elevated); color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
-  .danger { background: color-mix(in srgb, var(--accent-danger) 18%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 40%, transparent); color: var(--accent-danger); }
-  .danger:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
-  .launch-stats-card { padding: 12px; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); background: var(--bg-tertiary); margin-bottom: 14px; display: grid; gap: 6px; }
-  .launch-stats-card h3 { color: var(--text-secondary); font-size: 12px; margin: 0 0 4px; text-transform: uppercase; letter-spacing: .04em; }
-  .ls-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
-  .ls-row span { color: var(--text-muted); }
-  .ls-row strong { color: var(--text-primary); font-size: 16px; }
-  .ls-row strong.danger { color: var(--accent-danger); }
-  .ls-row span:last-child { font-size: 10px; color: var(--text-muted); }
 
-  :global(.spin) { animation: spin 900ms linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .mini-spinner {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    border: 2px solid color-mix(in srgb, var(--on-accent) 30%, transparent);
-    border-top-color: var(--on-accent);
-    animation: spin 700ms linear infinite;
-    flex-shrink: 0;
+  .launch-bar {
+    padding: 14px 16px;
   }
+  .launch-note {
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
   .run-main {
     display: inline-flex;
     align-items: center;
@@ -1521,30 +1506,13 @@
     border-bottom-width: 1px;
     transform: translateY(2px);
   }
-  .run-main:disabled { opacity: 0.5; cursor: default; }
+  .run-main:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
   .run-main.run {
     background: color-mix(in srgb, var(--accent-primary) 70%, #000);
     border-color: color-mix(in srgb, var(--accent-primary) 70%, #000);
-  }
-
-  /* ── Glassmorphism shell for panels ──────────────────────────── */
-  .glass-card {
-    background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
-    -webkit-backdrop-filter: blur(20px) saturate(140%);
-    backdrop-filter: blur(20px) saturate(140%);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    box-shadow:
-      inset 0 1px 0 color-mix(in srgb, var(--text-muted) 10%, transparent),
-      0 14px 44px rgba(3, 6, 10, 0.16);
-  }
-
-  .launch-bar {
-    padding: 14px 16px;
-  }
-  .launch-note {
-    color: var(--text-muted);
-    line-height: 1.4;
   }
 
   .kill-btn {
@@ -1556,34 +1524,35 @@
     align-self: flex-end;
     padding: 0 16px;
     border-radius: var(--border-radius-md);
-    border: 1px solid rgba(244, 63, 94, 0.4);
-    border-bottom-color: color-mix(in srgb, #e11d48 60%, #000);
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 40%, transparent);
+    border-bottom-color: color-mix(in srgb, var(--accent-danger) 70%, #000);
     border-bottom-width: 3px;
-    background: rgba(244, 63, 94, 0.16);
-    color: #fda4af;
+    background: color-mix(in srgb, var(--accent-danger) 16%, transparent);
+    color: color-mix(in srgb, var(--accent-danger) 62%, var(--text-primary));
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     transition: background var(--motion-fast, 160ms) ease;
   }
   .kill-btn:hover:not(:disabled) {
-    background: rgba(244, 63, 94, 0.28);
+    background: color-mix(in srgb, var(--accent-danger) 28%, transparent);
   }
 
   .chip-pid {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 10px;
     font-weight: 600;
     padding: 2px 7px;
     border-radius: 999px;
-    background: rgba(0, 0, 0, 0.3);
+    background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+    color: var(--text-secondary);
     font-family: ui-monospace, monospace;
-  }
-
-  /* Status chip running (amber tint while bootstrapping). */
-  .status-chip.running {
-    color: #fcd34d;
-    background: rgba(245, 158, 11, 0.14);
-    border-color: rgba(245, 158, 11, 0.4);
   }
 
   /* Segmented tabs (right panel header). */
@@ -1609,22 +1578,29 @@
     gap: 6px;
     transition: background var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
   }
+  /* Accent-on-accent-tint text (segmented tabs, verdict badges, filter chips)
+     sits around 3:1 in the light themes. Mixing the accent toward the primary
+     text colour keeps the hue readable: darker on light panels, lighter on dark
+     ones, in every theme. */
   .seg-tab.active {
     background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
-    color: var(--accent-primary);
+    color: color-mix(in srgb, var(--accent-primary) 62%, var(--text-primary));
     box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 20%, transparent);
   }
+  .seg-tab.active :global(svg) {
+    color: inherit;
+  }
 
-  .validation-report { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 14px; }
-  .validation-report.compact { padding: 12px; }
-  .val-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 8px; }
-  .val-header h3 { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-primary); margin: 0; }
-  .val-failed { display: flex; align-items: center; gap: 6px; color: var(--accent-danger); font-weight: 700; font-size: 12px; }
-  .val-stats { display: grid; grid-template-columns: repeat(3, minmax(70px, 1fr)); gap: 8px; margin-bottom: 8px; }
-  .val-stat { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 8px; display: grid; gap: 2px; text-align: center; }
-  .val-stat strong { font-size: 18px; color: var(--text-primary); }
-  .val-stat span { font-size: 11px; color: var(--text-muted); }
-  .val-stat.danger { border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.06); }
-  .val-stat.danger strong { color: var(--accent-danger); }
+  .mini-spinner {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--on-accent) 30%, transparent);
+    border-top-color: var(--on-accent);
+    animation: spin 700ms linear infinite;
+    flex-shrink: 0;
+  }
 
+  :global(.spin) { animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>

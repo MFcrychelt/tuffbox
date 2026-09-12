@@ -36,8 +36,17 @@
     Pencil,
     Save,
     Eraser,
+    Sparkles,
+    SlidersHorizontal,
+    Code,
+    Check,
+    Layers,
+    Info,
+    BookOpen,
+    Tag,
   } from "@lucide/svelte";
-  import { projectPath } from "../lib/store";
+  import { isProjectLaunching, launchSessions, projectPath } from "../lib/store";
+  import { launchWithFeedback } from "../lib/launch";
   import VanillaClientJarPrompt from "./VanillaClientJarPrompt.svelte";
 
   type FocusMode = "recipes" | "uses";
@@ -60,19 +69,20 @@
     | "stonecutting"
     | "tags";
 
-  const ITEMS_PER_PAGE = 60;
+  const ITEMS_PER_PAGE = 72;
   const ICON_BATCH_SIZE = 48;
   const BOOKMARK_KEY = "tuffbox.jei.bookmarks";
   const DRAG_MIME = "application/x-tuffbox-item";
-  const EDITOR_KINDS: { id: EditorKind; label: string }[] = [
-    { id: "crafting", label: "Craft" },
-    { id: "smelting", label: "Smelt" },
-    { id: "blasting", label: "Blast" },
-    { id: "smoking", label: "Smoke" },
-    { id: "campfire", label: "Campfire" },
-    { id: "smithing", label: "Smith" },
-    { id: "stonecutting", label: "Cut" },
-    { id: "tags", label: "Tags" },
+
+  const EDITOR_KINDS: { id: EditorKind; label: string; icon: any }[] = [
+    { id: "crafting", label: "Crafting", icon: Grid3x3 },
+    { id: "smelting", label: "Furnace", icon: Flame },
+    { id: "blasting", label: "Blast Furnace", icon: Flame },
+    { id: "smoking", label: "Smoker", icon: Flame },
+    { id: "campfire", label: "Campfire", icon: Flame },
+    { id: "smithing", label: "Smithing", icon: Anvil },
+    { id: "stonecutting", label: "Stonecutter", icon: Scissors },
+    { id: "tags", label: "Item Tags", icon: Tag },
   ];
 
   let recipes = $state<ScannedRecipe[]>([]);
@@ -101,7 +111,9 @@
   let runtimeStatus = $state<RecipeRuntimeStatus | null>(null);
   let runtimeCategories = $state<RuntimeRecipeCategory[]>([]);
   let runtimePoller: ReturnType<typeof setInterval> | null = null;
+  const projectLaunching = $derived(isProjectLaunching($projectPath, $launchSessions));
 
+  // Editor State
   let editorOpen = $state(false);
   let editorKind = $state<EditorKind>("crafting");
   let editGrid = $state<(string | null)[]>(Array(9).fill(null));
@@ -125,7 +137,10 @@
   let tagRemove = $state<string[]>([]);
   let tagRemoveAll = $state(false);
   let tagLoadingMembers = $state(false);
+  let codeSnippet = $state<string | null>(null);
+  let snippetCopied = $state(false);
 
+  // Vanilla Jar State
   const dismissedVanillaPrompt = new Set<string>();
   let vanillaPromptOpen = $state(false);
   let vanillaPromptVersion = $state("");
@@ -133,6 +148,7 @@
   let vanillaDownloading = $state(false);
   let vanillaDownloadError = $state<string | null>(null);
 
+  // Icon Cache
   type IconState = "loading" | "missing" | string;
   let iconCache = $state<Record<string, IconState>>({});
   const iconInFlight = new Set<string>();
@@ -229,13 +245,13 @@
     scheduleIconPreload(ids);
   }
 
-  const CATEGORY_META: Record<string, { label: string; icon: "craft" | "cook" | "smith" | "cut" | "other" }> = {
-    all: { label: "All", icon: "other" },
-    crafting: { label: "Crafting", icon: "craft" },
-    cooking: { label: "Cooking", icon: "cook" },
-    smithing: { label: "Smithing", icon: "smith" },
-    stonecutting: { label: "Cutting", icon: "cut" },
-    other: { label: "Other", icon: "other" },
+  const CATEGORY_META: Record<string, { label: string; icon: any }> = {
+    all: { label: "All Recipes", icon: Layers },
+    crafting: { label: "Crafting", icon: Grid3x3 },
+    cooking: { label: "Furnace", icon: Flame },
+    smithing: { label: "Smithing", icon: Anvil },
+    stonecutting: { label: "Stonecutter", icon: Scissors },
+    other: { label: "Custom", icon: Hammer },
   };
 
   onMount(() => {
@@ -260,7 +276,7 @@
 
   function onKey(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement)?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     if (e.key === "r" || e.key === "R") {
       if (selectedItem) {
         focusMode = "recipes";
@@ -294,7 +310,7 @@
       vanillaDownloadError = null;
       vanillaPromptOpen = true;
     } catch {
-      // Badge already surfaces the missing jar; skip the modal.
+      /* ignore */
     }
   }
 
@@ -357,7 +373,7 @@
           message = `Indexed ${recipes.length} recipes (limit reached; ${result.totalScanned} files scanned).`;
         } else {
           message = `Indexed ${recipes.length} recipes from ${result.jarCount} jars` +
-            (result.datapackFiles ? ` + ${result.datapackFiles} datapack files` : "") + ".";
+            (result.datapackFiles ? ` + ${result.datapackFiles} datapacks` : "") + ".";
         }
         await maybeOfferVanillaJar(result.vanillaJarFound);
       }
@@ -367,11 +383,11 @@
       if (!preserveSelection) categoryFilter = "all";
       selectedItem = previousSelection && recipes.some(
         (recipe) => recipe.outputId === previousSelection || recipe.inputIds.includes(previousSelection)
-      ) ? previousSelection : "";
+      ) ? previousSelection : (recipes[0]?.outputId ?? "");
       recipeIndex = 0;
       itemPage = 0;
-      if (!preserveSelection) historyStack = [];
-      } catch (e) {
+      if (!preserveSelection) historyStack = selectedItem ? [selectedItem] : [];
+    } catch (e) {
       if (preferLive && runtimeStatus?.connected) {
         try {
           const fallback = await api.recipes.scan($projectPath);
@@ -401,27 +417,6 @@
     }
   }
 
-  function applyOfflineResult(result: RecipeScanResult) {
-    recipes = result.recipes ?? [];
-    runtimeCategories = [];
-    recipeSource = "offline";
-    scanMeta = {
-      jarCount: result.jarCount,
-      datapackFiles: result.datapackFiles,
-      truncated: result.truncated,
-      totalScanned: result.totalScanned,
-      vanillaJarFound: result.vanillaJarFound,
-    };
-    if (result.truncated) {
-      message = `Indexed ${recipes.length} recipes (limit reached; ${result.totalScanned} files scanned).`;
-    } else {
-      message = `Indexed ${recipes.length} recipes from ${result.jarCount} jars` +
-        (result.datapackFiles ? ` + ${result.datapackFiles} datapack files` : "") + ".";
-    }
-    void tick().then(() => loadFullItemCatalog(recipes));
-    void maybeOfferVanillaJar(result.vanillaJarFound);
-  }
-
   async function checkRuntimeTransition() {
     if (!$projectPath || loading) return;
     try {
@@ -434,7 +429,7 @@
         await loadRecipes(false, true);
       }
     } catch {
-      // Keep the current snapshot; the next poll can recover.
+      /* ignore */
     }
   }
 
@@ -445,9 +440,10 @@
       const profiles = await api.project.listProfiles($projectPath);
       const profile = profiles.find((entry) => entry.side.toLowerCase() !== "server") ?? profiles[0];
       if (!profile) throw new Error("Create a client profile before launching JEI Live.");
-      await api.launch.profile(profile.id, $projectPath);
-      message = `Launching ${profile.name}. Live recipes connect after JEI finishes loading.`;
-      runtimeStatus = { connected: false, supported: true, message: "Waiting for JEI…", minecraftVersion: null, pid: null };
+      const result = await launchWithFeedback({ path: $projectPath, profile: profile.id });
+      if (!result) return;
+      message = `Launching ${profile.name}. Live recipes connect once the game loads.`;
+      runtimeStatus = { connected: false, supported: true, message: "Waiting for game runtime…", minecraftVersion: null, pid: null };
     } catch (e) {
       error = String(e);
     }
@@ -470,7 +466,6 @@
     return h;
   }
 
-  /** JEI ElementPrefixParser: @mod #tag &id, -negation, plain name */
   function matchesJeiSearch(itemId: string, query: string, displayName?: string): boolean {
     const q = query.trim().toLowerCase();
     if (!q) return true;
@@ -599,19 +594,21 @@
   async function copyKubeJS(r: ScannedRecipe) {
     const script = await api.recipes.generateScript("remove", [r.id]);
     await navigator.clipboard.writeText(script.content);
-    message = "KubeJS remove copied to clipboard";
+    message = "KubeJS recipe remove snippet copied to clipboard.";
+    snippetCopied = true;
+    setTimeout(() => (snippetCopied = false), 2000);
   }
 
   async function queueRemove(r: ScannedRecipe) {
     pendingRemoves = new Set([...pendingRemoves, r.id]);
-    message = `Queued ${pendingRemoves.size} recipe(s) for KubeJS remove`;
+    message = `Queued ${pendingRemoves.size} recipe(s) for KubeJS remove.`;
   }
 
   async function flushRemoves() {
     if (!$projectPath || pendingRemoves.size === 0) return;
     try {
       const path = await api.recipes.writeRemoves([...pendingRemoves], $projectPath);
-      message = `Wrote ${pendingRemoves.size} removes → ${path}`;
+      message = `Wrote ${pendingRemoves.size} recipe removes to ${path}`;
       pendingRemoves = new Set();
     } catch (e) {
       error = String(e);
@@ -651,7 +648,6 @@
     try {
       knownTags = await api.recipes.listItemTags($projectPath);
     } catch (e) {
-      console.warn("listItemTags failed", e);
       knownTags = [];
     } finally {
       tagsLoading = false;
@@ -667,7 +663,6 @@
     try {
       tagMembers = await api.recipes.getTagEntries(tagId.trim(), $projectPath);
     } catch (e) {
-      console.warn("getTagEntries failed", e);
       tagMembers = [];
     } finally {
       tagLoadingMembers = false;
@@ -691,8 +686,8 @@
     await ensureTagsLoaded();
     message =
       kind === "tags"
-        ? "Pick or type a tag, drag or click items to add, click members to remove, then Save."
-        : `Click or drag ingredients for ${kind}, then Add.`;
+        ? "Select or enter a tag, click or drag items to add members, click to remove, then click Save."
+        : `Compose ingredients for ${kind} recipe, then click Add.`;
   }
 
   function cookingKindFromType(recipeType: string): EditorKind {
@@ -723,7 +718,6 @@
     return slot.ingredients[0] ?? null;
   }
 
-  /** Prefer normalized grid; fall back to JEI runtime slots by position. */
   function gridFromRecipe(r: ScannedRecipe): (IngredientDisplay | null)[] {
     const grid = Array(9).fill(null) as (IngredientDisplay | null)[];
     const hasGrid = (r.layout.grid ?? []).some((s) => !!s);
@@ -749,7 +743,6 @@
       const idx = row * 3 + col;
       if (!grid[idx]) grid[idx] = firstIngredient(slot);
     }
-    // If everything landed in one cell, pack left-to-right.
     if (grid.filter(Boolean).length <= 1 && slots.length > 1) {
       for (let i = 0; i < Math.min(9, slots.length); i++) {
         grid[i] = firstIngredient(slots[i]);
@@ -807,7 +800,7 @@
       editCount = Math.min(64, Math.max(1, r.layout.outputCount || 1));
       replaceRecipeId = r.id;
     } else {
-      message = "This recipe type cannot be edited here yet — use Replace with crafting.";
+      message = "This custom recipe type cannot be edited in-place — use Replace with crafting.";
       return;
     }
     editorOpen = true;
@@ -821,7 +814,6 @@
       editAddition,
       ...editGrid,
     ]);
-    message = `Editing ${r.id} — Save writes event.remove + new KubeJS recipe (+ datapack JSON).`;
   }
 
   async function openReplaceWithCrafting(r: ScannedRecipe) {
@@ -848,7 +840,6 @@
     paletteMode = "items";
     await ensureTagsLoaded();
     scheduleIconPreload([editOutput, ...editGrid]);
-    message = `Replace ${r.id} with a crafting recipe — Save removes the old id and adds a new craft.`;
   }
 
   function closeEditor() {
@@ -885,13 +876,11 @@
 
   function onDragStartItem(e: DragEvent, id: string) {
     if (!e.dataTransfer) return;
-    // text/plain first — WebView2 often refuses drops that only carry a custom MIME.
     e.dataTransfer.setData("text/plain", id);
     e.dataTransfer.setData(DRAG_MIME, id);
     e.dataTransfer.effectAllowed = "copy";
   }
 
-  /** Must call preventDefault on dragenter + dragover or the OS shows the "no drop" cursor. */
   function allowEditorDrop(e: DragEvent) {
     if (!editorOpen) return;
     e.preventDefault();
@@ -906,7 +895,6 @@
   }
 
   function markDropJustHappened() {
-    // Chromium fires a click after drop on <button> targets — ignore it briefly.
     suppressSlotClickUntil = Date.now() + 250;
   }
 
@@ -926,7 +914,7 @@
     markDropJustHappened();
     const id = readDragId(e);
     if (!id || id.startsWith("#")) {
-      message = "Output must be an item id (not a tag).";
+      message = "Recipe output must be a valid item ID (not a tag).";
       return;
     }
     editOutput = id;
@@ -964,11 +952,6 @@
     tagRemove = tagRemove.filter((x) => x !== id);
   }
 
-  /**
-   * JEI-style fallback for native drag & drop (which is unreliable in some
-   * WebView2 setups): clicking a palette item while the editor is open places
-   * it into the first empty slot of the current editor layout.
-   */
   function placePaletteItem(id: string) {
     if (!editorOpen || !id) return;
     if (editorKind === "tags") {
@@ -986,7 +969,7 @@
         editOutput = id;
         return;
       }
-      message = "Crafting grid and output are full — right-click a slot to clear it.";
+      message = "Crafting grid and output slots are full. Right-click a slot to clear it.";
       return;
     }
     if (isCookingKind(editorKind) || editorKind === "stonecutting") {
@@ -998,7 +981,7 @@
         editOutput = id;
         return;
       }
-      message = "Input and output are full — right-click a slot to clear it.";
+      message = "Input and output slots are full. Right-click to clear.";
       return;
     }
     if (editorKind === "smithing") {
@@ -1018,14 +1001,13 @@
         editOutput = id;
         return;
       }
-      message = "Smithing slots are full — right-click a slot to clear it.";
+      message = "Smithing slots are full. Right-click to clear.";
       return;
     }
   }
 
   let quickAddId = $state("");
 
-  /** Type-in fallback so recipes can be built even when the item palette is empty. */
   function submitQuickAdd() {
     const id = quickAddId.trim();
     if (!id) return;
@@ -1099,7 +1081,7 @@
           removeAll: tagRemoveAll,
         };
         const path = await api.recipes.writeTags(draft, $projectPath);
-        message = `Saved tag edits → ${path}`;
+        message = `Saved tag modifications to ${path}`;
         knownTags = [];
         await ensureTagsLoaded();
         closeEditor();
@@ -1123,7 +1105,7 @@
         addition: editAddition,
       };
       const path = await api.recipes.writeCraft(draft, $projectPath);
-      message = replaceRecipeId ? `Saved edit → ${path}` : `Added ${kind} recipe → ${path}`;
+      message = replaceRecipeId ? `Updated recipe in ${path}` : `Added ${kind} recipe in ${path}`;
       closeEditor();
       await loadRecipes(false, true);
     } catch (e) {
@@ -1167,18 +1149,18 @@
   }
 
   function categoryLabel(cat: string): string {
-    if (cat === "all") return CATEGORY_META.all.label;
+    if (cat === "all") return "All";
     return CATEGORY_META[cat]?.label ?? runtimeCategory(cat)?.title ?? prettifyItem(cat);
   }
 
-  function categoryIcon(cat: string): "craft" | "cook" | "smith" | "cut" | "other" {
+  function categoryIconComponent(cat: string) {
     if (CATEGORY_META[cat]?.icon) return CATEGORY_META[cat].icon;
     const hay = `${cat} ${runtimeCategory(cat)?.title ?? ""}`.toLowerCase();
-    if ((hay.includes("craft") || hay.includes("workbench")) && !hay.includes("smith")) return "craft";
-    if (hay.includes("smelt") || hay.includes("furnace") || hay.includes("blast") || hay.includes("cook")) return "cook";
-    if (hay.includes("smith")) return "smith";
-    if (hay.includes("stonecut") || hay.includes("cutting") || hay.includes("saw")) return "cut";
-    return "other";
+    if ((hay.includes("craft") || hay.includes("workbench")) && !hay.includes("smith")) return Grid3x3;
+    if (hay.includes("smelt") || hay.includes("furnace") || hay.includes("blast") || hay.includes("cook")) return Flame;
+    if (hay.includes("smith")) return Anvil;
+    if (hay.includes("stonecut") || hay.includes("cutting") || hay.includes("saw")) return Scissors;
+    return Hammer;
   }
 
   function buildFilteredCounts(
@@ -1205,11 +1187,6 @@
     return map;
   }
 
-  function rebuildIndexes(list: ScannedRecipe[]) {
-    items = buildItemCatalog(list);
-    catalogReady = true;
-  }
-
   async function loadFullItemCatalog(list: ScannedRecipe[]) {
     const fromRecipes = buildItemCatalog(list);
     const map = new Map(fromRecipes.map((i) => [i.id, i]));
@@ -1232,7 +1209,7 @@
         }
       }
     } catch (e) {
-      console.warn("listItemCatalog failed", e);
+      console.warn("listItemCatalog error", e);
     }
     items = [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
     catalogReady = true;
@@ -1283,6 +1260,7 @@
   const bookmarkItems = $derived(bookmarks
     .map((id) => items.find((i) => i.id === id) ?? { id, name: prettifyItem(id), modNs: itemNamespace(id), recipeCount: 0, useCount: 0 })
     .filter(Boolean));
+
   $effect(() => {
     preloadIcons(pageItems.map((item) => item.id));
   });
@@ -1294,245 +1272,319 @@
   });
   $effect(() => {
     if (currentRecipe) {
-        preloadIcons([
-          currentRecipe.outputId,
-          currentRecipe.layout.output?.id,
-          ...(currentRecipe.layout.output?.alts?.map((a) => a.id) ?? []),
-          ...currentRecipe.layout.grid.flatMap((slot) => [
-            resolveSlot(slot)?.id,
-            ...(slot?.alts?.map((a) => a.id) ?? []),
-          ]),
-          ...(currentRecipe.layout.slots ?? []).flatMap((slot) =>
-            slot.ingredients.flatMap((ingredient) => [
-              ingredient.id,
-              ...(ingredient.alts?.map((a) => a.id) ?? []),
-            ])
-          ),
-          ...(runtimeCategory(currentRecipe.category)?.stations ?? []).map((station) => station.id),
-        ]);
-      }
+      preloadIcons([
+        currentRecipe.outputId,
+        currentRecipe.layout.output?.id,
+        ...(currentRecipe.layout.output?.alts?.map((a) => a.id) ?? []),
+        ...currentRecipe.layout.grid.flatMap((slot) => [
+          resolveSlot(slot)?.id,
+          ...(slot?.alts?.map((a) => a.id) ?? []),
+        ]),
+        ...(currentRecipe.layout.slots ?? []).flatMap((slot) =>
+          slot.ingredients.flatMap((ingredient) => [
+            ingredient.id,
+            ...(ingredient.alts?.map((a) => a.id) ?? []),
+          ])
+        ),
+        ...(runtimeCategory(currentRecipe.category)?.stations ?? []).map((station) => station.id),
+      ]);
+    }
   });
   $effect(() => {
     if ($projectPath && $projectPath !== lastLoadedPath) {
-        knownTags = [];
-        closeEditor();
-        loadRecipes();
-      }
+      knownTags = [];
+      closeEditor();
+      loadRecipes();
+    }
   });
   $effect(() => {
     if (filter) itemPage = 0;
   });
 </script>
 
-<div class="jei" class:busy={loading}>
-  <header class="jei-hd">
-    <div class="jei-brand">
-      <div class="jei-logo">JEI</div>
-      <div>
-        <h2>Just Enough Items</h2>
-        <p class="sub">
-          {#if scanMeta}
-            <span class="source-badge" class:live={recipeSource === "runtime"}>
-              <Radio size={11} /> {recipeSource === "runtime" ? "Live JEI" : "Offline files"}
-            </span>
-            · {recipes.length} recipes · {items.length} items
-            {#if recipeSource === "offline"} · {scanMeta.jarCount} jars{/if}
-            {#if recipeSource === "offline" && scanMeta.datapackFiles} · {scanMeta.datapackFiles} datapacks{/if}
-            {#if scanMeta.truncated} · truncated{/if}
-            {#if recipeSource === "offline" && scanMeta.vanillaJarFound === false}
-              · <button
-                type="button"
-                class="tag warn vanilla-missing-btn"
-                title="Download the vanilla client jar"
-                onclick={() => {
-                  if ($projectPath) dismissedVanillaPrompt.delete($projectPath);
-                  void maybeOfferVanillaJar(false);
-                }}
-              >no vanilla jar</button>
-            {/if}
-          {:else}
-            Recipe browser for your modpack
+<div class="recipe-workspace flex flex-col w-full h-full min-h-0 bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden" class:busy={loading}>
+  <!-- Top Workspace Toolbar -->
+  <header class="workspace-header flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] flex-shrink-0">
+    <div class="flex items-center gap-3 min-w-0">
+      <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 font-bold flex-shrink-0">
+        🍲
+      </div>
+      <div class="min-w-0">
+        <div class="flex items-center gap-2">
+          <h1 class="text-sm font-bold text-[var(--text-primary)] m-0 leading-tight">
+            {editorOpen ? "Recipe & Tag Editor" : "Recipe Browser"}
+          </h1>
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold {recipeSource === 'runtime' ? 'bg-emerald-500/10 text-[var(--accent-primary)] border border-emerald-500/20' : 'bg-[var(--bg-card)] text-[var(--text-muted)] border border-[var(--border-color)]'}">
+            <Radio size={10} class={recipeSource === 'runtime' ? 'text-[var(--accent-primary)]' : 'text-[var(--text-muted)]'} />
+            {recipeSource === "runtime" ? "Live JEI" : "Offline Files"}
+          </span>
+        </div>
+        <div class="text-[11px] font-medium text-[var(--text-muted)] truncate mt-0.5">
+          {recipes.length} recipes · {items.length} items
+          {#if scanMeta?.jarCount} · {scanMeta.jarCount} JARs{/if}
+          {#if scanMeta?.datapackFiles} · {scanMeta.datapackFiles} datapacks{/if}
+          {#if scanMeta?.vanillaJarFound === false}
+            · <button
+              type="button"
+              class="text-[var(--accent-warning)] hover:underline font-semibold"
+              onclick={() => {
+                if ($projectPath) dismissedVanillaPrompt.delete($projectPath);
+                void maybeOfferVanillaJar(false);
+              }}
+            >Vanilla JAR missing</button>
           {/if}
-        </p>
+        </div>
       </div>
     </div>
-    <div class="hd-actions">
-      <button class="ghost" title="Keyboard shortcuts" onclick={() => (showHelp = !showHelp)}>
-        <Keyboard size={16} />
+
+    <!-- Center Search & Filter Group -->
+    <div class="flex items-center gap-2 flex-1 max-w-xl mx-2 min-w-[280px]">
+      <div class="relative flex-1 flex items-center">
+        <Search size={14} class="absolute left-3 text-[var(--text-muted)] pointer-events-none" />
+        <input
+          class="w-full pl-8 pr-7 py-1.5 text-xs bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-primary)] transition"
+          bind:value={filter}
+          placeholder="Search name, @mod, #tag, &id, -exclude…"
+          spellcheck="false"
+        />
+        {#if filter}
+          <button
+            type="button"
+            class="absolute right-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] p-0.5"
+            onclick={() => (filter = "")}
+            aria-label="Clear search"
+          >
+            <X size={13} />
+          </button>
+        {/if}
+      </div>
+
+      <select
+        bind:value={modFilter}
+        class="text-xs py-1.5 px-2.5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg text-[var(--text-secondary)] focus:outline-none focus:border-[var(--accent-primary)] cursor-pointer max-w-[140px] truncate"
+        title="Filter by mod namespace"
+      >
+        {#each modNamespaces as ns (ns)}
+          <option value={ns}>{ns === "all" ? "All mods" : `@${ns}`}</option>
+        {/each}
+      </select>
+    </div>
+
+    <!-- Right Header Actions -->
+    <div class="flex items-center gap-2 flex-shrink-0">
+      <button
+        type="button"
+        class="hud-icon-btn p-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition"
+        title="Keyboard shortcuts & help"
+        onclick={() => (showHelp = !showHelp)}
+      >
+        <Keyboard size={15} />
       </button>
-      <button class="ghost" class:active={showBookmarks} onclick={() => (showBookmarks = !showBookmarks)}>
-        <Bookmark size={16} />
+
+      <button
+        type="button"
+        class="hud-icon-btn p-2 rounded-lg border transition {showBookmarks ? 'border-amber-400/40 bg-amber-400/10 text-[var(--accent-warning)]' : 'border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+        title="Toggle bookmarks sidebar"
+        onclick={() => (showBookmarks = !showBookmarks)}
+      >
+        <Bookmark size={15} />
       </button>
+
       {#if runtimeStatus?.supported && !runtimeStatus.connected}
-        <button class="live-launch" onclick={launchJeiLive} disabled={!$projectPath || loading} title={runtimeStatus.message}>
-          <Play size={15} /> Launch JEI Live
+        <button
+          type="button"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-500/10 text-[var(--accent-primary)] border border-emerald-500/25 hover:bg-emerald-500/20 transition disabled:opacity-50"
+          onclick={launchJeiLive}
+          disabled={!$projectPath || loading || projectLaunching}
+          title={projectLaunching ? "Launch in progress" : runtimeStatus.message}
+        >
+          <Play size={13} /> {projectLaunching ? "Launching…" : "Launch Live JEI"}
         </button>
       {/if}
-      <button class="ghost" onclick={() => openNewRecipeEditor("crafting")} disabled={!$projectPath || loading} title="New recipe or tag edit">
-        <Plus size={16} /> New recipe
+
+      {#if pendingRemoves.size > 0}
+        <button
+          type="button"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/15 text-[var(--accent-warning)] border border-amber-500/30 hover:bg-amber-500/25 transition"
+          onclick={flushRemoves}
+        >
+          <FileCode size={13} /> Write {pendingRemoves.size} removes
+        </button>
+      {/if}
+
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg bg-[var(--accent-primary)] text-[var(--on-accent)] hover:brightness-110 shadow-sm transition disabled:opacity-50"
+        onclick={() => openNewRecipeEditor("crafting")}
+        disabled={!$projectPath || loading}
+      >
+        <Plus size={14} /> New recipe
       </button>
-      <button class="ghost" onclick={() => openNewRecipeEditor("tags")} disabled={!$projectPath || loading} title="Edit item tags">
-        <Bookmark size={16} /> Edit tags
-      </button>
-      <button class="primary-scan" onclick={() => loadRecipes(true, true)} disabled={!$projectPath || loading}>
-        <RefreshCw size={16} class={loading ? "spin" : ""} />
-        {loading ? "Loading…" : recipeSource === "runtime" ? "Refresh live" : "Rescan"}
+
+      <button
+        type="button"
+        class="hud-icon-btn p-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition disabled:opacity-50"
+        onclick={() => loadRecipes(true, true)}
+        disabled={!$projectPath || loading}
+        title="Rescan recipe files & datapacks"
+      >
+        <RefreshCw size={15} class={loading ? "spin" : ""} />
       </button>
     </div>
   </header>
 
+  <!-- Help & Shortcuts Banner -->
   {#if showHelp}
-    <div class="help-bar">
-      <span><kbd>R</kbd> Recipes</span>
-      <span><kbd>U</kbd> Uses</span>
-      <span><kbd>B</kbd> Bookmark</span>
+    <div class="flex flex-wrap items-center gap-3 px-4 py-2 bg-[var(--bg-secondary)] border-b border-[var(--border-color)] text-xs text-[var(--text-secondary)]">
+      <span><kbd>R</kbd> Recipes for item</span>
+      <span><kbd>U</kbd> Uses for item</span>
+      <span><kbd>B</kbd> Bookmark toggle</span>
       <span><kbd>←</kbd><kbd>→</kbd> Recipe pages</span>
       <span><kbd>Backspace</kbd> History back</span>
-      <span>LMB = Recipes · RMB = Uses</span>
-      <span>New recipe: drag items/tags onto the craft grid</span>
-      <button class="ghost tiny" onclick={() => (showHelp = false)}><X size={14} /></button>
+      <span class="text-[var(--text-muted)]">| LMB = Recipes · RMB = Uses</span>
+      <button type="button" class="ml-auto text-[var(--text-muted)] hover:text-[var(--text-primary)]" onclick={() => (showHelp = false)}>
+        <X size={14} />
+      </button>
     </div>
   {/if}
 
-  {#if error}<div class="notice error">{error}</div>{/if}
-  {#if message}<div class="notice ok">{message}</div>{/if}
-
-  <div class="jei-search-row">
-    <div class="jei-search">
-      <Search size={14} />
-      <input bind:value={filter} placeholder="Search: name  @mod  #tag  &id  $tooltip  -exclude" spellcheck="false" />
-      {#if filter}
-        <button class="clear" onclick={() => (filter = "")}><X size={12} /></button>
-      {/if}
+  <!-- Error / Success Notices -->
+  {#if error}
+    <div class="px-4 py-2 bg-red-500/10 border-b border-red-500/20 text-[var(--accent-danger)] text-xs flex items-center justify-between">
+      <span>{error}</span>
+      <button type="button" class="text-[var(--accent-danger)] hover:text-[var(--accent-danger)] font-bold" onclick={() => (error = null)}>×</button>
     </div>
-    <select bind:value={modFilter} class="mod-select" title="Filter by mod namespace">
-      {#each modNamespaces as ns (ns)}
-        <option value={ns}>{ns === "all" ? "All mods" : ns}</option>
-      {/each}
-    </select>
-    {#if pendingRemoves.size > 0}
-      <button class="warn-btn" onclick={flushRemoves}>
-        <FileCode size={14} /> Write {pendingRemoves.size} removes
-      </button>
-    {/if}
-  </div>
+  {/if}
+  {#if message}
+    <div class="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 text-[var(--accent-primary)] text-xs flex items-center justify-between">
+      <span>{message}</span>
+      <button type="button" class="text-[var(--accent-primary)] hover:text-[var(--accent-primary)] font-bold" onclick={() => (message = null)}>×</button>
+    </div>
+  {/if}
 
+  <!-- Main Stage -->
   {#if !$projectPath}
-    <div class="empty">
-      <Package size={40} />
-      <h3>Open a project</h3>
-      <p>Scan mod JARs, datapacks and KubeJS data like JEI.</p>
+    <div class="flex-1 flex flex-col items-center justify-center p-8 text-center text-[var(--text-muted)]">
+      <Package size={48} class="mb-3 opacity-40 text-[var(--accent-primary)]" />
+      <h3 class="text-base font-bold text-[var(--text-primary)] mb-1">Open a project to explore recipes</h3>
+      <p class="text-xs max-w-sm leading-relaxed">
+        Scan mod JARs, datapacks, and KubeJS recipes to inspect or craft custom items.
+      </p>
     </div>
   {:else if (loading || !catalogReady) && !editorOpen}
-    <div class="empty">
-      <RefreshCw size={40} class="spin" />
-      <h3>Indexing recipes…</h3>
-      <p>Reading JAR data packs — this can take a moment on large packs.</p>
+    <div class="flex-1 flex flex-col items-center justify-center p-8 text-center text-[var(--text-muted)]">
+      <RefreshCw size={44} class="spin mb-3 text-[var(--accent-primary)]" />
+      <h3 class="text-base font-bold text-[var(--text-primary)] mb-1">Indexing recipe catalog…</h3>
+      <p class="text-xs max-w-sm leading-relaxed">
+        Reading mod data packs and item tags. This will take just a moment.
+      </p>
     </div>
   {:else if recipes.length === 0 && !editorOpen}
-    <div class="empty">
-      <Grid3x3 size={40} />
-      <h3>No recipes found</h3>
+    <div class="flex-1 flex flex-col items-center justify-center p-8 text-center text-[var(--text-muted)]">
+      <Grid3x3 size={48} class="mb-3 opacity-40 text-[var(--accent-primary)]" />
+      <h3 class="text-base font-bold text-[var(--text-primary)] mb-1">No recipes found</h3>
       {#if scanMeta?.vanillaJarFound === false}
-        <p>
-          The vanilla client jar for this Minecraft version isn't installed.
-          Download it when prompted (or press <b>Scan now</b> again to reopen the prompt).
+        <p class="text-xs max-w-sm leading-relaxed mb-4">
+          Vanilla Minecraft client jar is not found. Download it to index vanilla recipes.
         </p>
       {:else}
-        <p>Put mods in <code>mods/</code> or datapacks under <code>datapacks/</code>.</p>
+        <p class="text-xs max-w-sm leading-relaxed mb-4">
+          Install mods in your profile or create custom KubeJS recipes.
+        </p>
       {/if}
-      <div class="empty-actions">
-        <button onclick={() => loadRecipes()}>Scan now</button>
-        <button class="secondary" onclick={() => openNewRecipeEditor("crafting")}><Plus size={14} /> New recipe</button>
+      <div class="flex gap-2">
+        <button
+          type="button"
+          class="px-4 py-2 bg-[var(--accent-primary)] text-[var(--on-accent)] font-bold text-xs rounded-lg hover:brightness-110 shadow-sm"
+          onclick={() => loadRecipes()}
+        >
+          Scan now
+        </button>
+        <button
+          type="button"
+          class="px-4 py-2 bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)] font-semibold text-xs rounded-lg hover:bg-[var(--bg-hover)]"
+          onclick={() => openNewRecipeEditor("crafting")}
+        >
+          + Create first recipe
+        </button>
       </div>
     </div>
   {:else}
-    <div class="jei-body" class:with-bookmarks={showBookmarks}>
-      <!-- Category tabs (JEI left rail) -->
-      <nav class="cat-rail" aria-label="Recipe categories">
-        {#each categories as cat (cat)}
-          <button
-            type="button"
-            class="cat-tab"
-            class:active={categoryFilter === cat}
-            title={categoryLabel(cat)}
-            onclick={() => {
-              categoryFilter = cat;
-              recipeIndex = 0;
-              itemPage = 0;
-            }}
-          >
-            {#if categoryIcon(cat) === "craft"}
-              <Grid3x3 size={18} />
-            {:else if categoryIcon(cat) === "cook"}
-              <Flame size={18} />
-            {:else if categoryIcon(cat) === "smith"}
-              <Anvil size={18} />
-            {:else if categoryIcon(cat) === "cut"}
-              <Scissors size={18} />
-            {:else}
-              <Hammer size={18} />
-            {/if}
-            <span>{categoryLabel(cat)}</span>
-          </button>
-        {/each}
-      </nav>
-
-      <!-- Recipe GUI -->
-      <main class="jei-gui">
+    <!-- Split Layout: Left/Center Recipe Canvas Stage + Right Item Catalog Grid -->
+    <div class="flex-1 flex min-h-0 items-stretch overflow-hidden">
+      <!-- Central Recipe View Area -->
+      <main class="flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--bg-primary)] border-r border-[var(--border-color)] overflow-hidden">
         {#if editorOpen}
-          <div class="recipe-view editor-view">
-            <div class="gui-top">
-              <div class="focus-item">
+          <!-- Recipe Editor Mode -->
+          <div class="flex-1 flex flex-col min-h-0 p-4 overflow-y-auto">
+            <div class="flex items-center justify-between pb-3 mb-4 border-b border-[var(--border-color)]">
+              <div class="flex items-center gap-3">
                 <span class="mc-slot mini" style="--hue: {itemHue(editOutput ?? editTagId)}">
                   {#if editorKind === "tags"}
                     <span class="letter">#</span>
                   {:else if editOutput && iconSrc(editOutput)}
                     <img src={iconSrc(editOutput)} alt="" class="slot-icon" />
                   {:else}
-                    <Plus size={14} />
+                    <Plus size={14} class="text-[var(--accent-primary)]" />
                   {/if}
                 </span>
                 <div>
-                  <strong>
+                  <h2 class="text-sm font-bold text-[var(--text-primary)] m-0">
                     {#if editorKind === "tags"}
-                      {editTagId ? `Tag #${editTagId}` : "Edit item tags"}
+                      {editTagId ? `Tag #${editTagId}` : "Item Tags Editor"}
                     {:else}
-                      {replaceRecipeId ? "Edit recipe" : "New recipe"}
+                      {replaceRecipeId ? `Edit Recipe (${replaceRecipeId})` : `New ${editorKind} Recipe`}
                     {/if}
-                  </strong>
-                  <small>{replaceRecipeId ?? (editorKind === "tags" ? "ServerEvents.tags('item')" : `KubeJS ${editorKind}`)}</small>
+                  </h2>
+                  <span class="text-xs text-[var(--text-muted)]">
+                    {replaceRecipeId ? "Replaces existing ID in KubeJS" : "Saves to server_scripts/tuffbox_recipes.js"}
+                  </span>
                 </div>
               </div>
+
+              <!-- Recipe Kind Switcher -->
+              {#if !replaceRecipeId}
+                <div class="flex bg-[var(--bg-card)] p-1 rounded-lg border border-[var(--border-color)] gap-1">
+                  {#each EDITOR_KINDS as k (k.id)}
+                    <button
+                      type="button"
+                      class="px-2.5 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 {editorKind === k.id ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+                      onclick={() => {
+                        editorKind = k.id;
+                        paletteMode = k.id === "tags" ? "tags" : "items";
+                      }}
+                    >
+                      <svelte:component this={k.icon} size={13} />
+                      <span>{k.label}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
             </div>
 
-            {#if !replaceRecipeId}
-              <div class="editor-kind-row">
-                {#each EDITOR_KINDS as k (k.id)}
+            <!-- Editor Work Area -->
+            <div class="flex-1 flex flex-col items-center justify-center p-2 min-h-0">
+              {#if editorKind === "crafting"}
+                <div class="flex gap-2 mb-3">
                   <button
                     type="button"
-                    class="mode-btn"
-                    class:on={editorKind === k.id}
-                    onclick={() => {
-                      editorKind = k.id;
-                      if (k.id === "tags") paletteMode = "tags";
-                      else paletteMode = "items";
-                    }}
-                  >{k.label}</button>
-                {/each}
-              </div>
-            {/if}
+                    class="px-3 py-1 text-xs font-bold rounded-md border transition {editShaped ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] border-transparent' : 'border-[var(--border-color)] text-[var(--text-muted)] hover:bg-[var(--bg-hover)]'}"
+                    onclick={() => (editShaped = true)}
+                  >
+                    Shaped (Exact 3×3)
+                  </button>
+                  <button
+                    type="button"
+                    class="px-3 py-1 text-xs font-bold rounded-md border transition {!editShaped ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] border-transparent' : 'border-[var(--border-color)] text-[var(--text-muted)] hover:bg-[var(--bg-hover)]'}"
+                    onclick={() => (editShaped = false)}
+                  >
+                    Shapeless
+                  </button>
+                </div>
 
-            {#if editorKind === "crafting"}
-              <div class="editor-toggles">
-                <button type="button" class="mode-btn" class:on={editShaped} onclick={() => (editShaped = true)}>Shaped</button>
-                <button type="button" class="mode-btn" class:on={!editShaped} onclick={() => (editShaped = false)}>Shapeless</button>
-              </div>
-              <div class="mc-panel" data-cat="crafting">
-                <div class="panel-title">Crafting Table {#if !editShaped}<span class="badge shapeless">Shapeless</span>{/if}</div>
-                <div class="panel-body craft">
+                <div class="mc-panel p-4 bg-[var(--bg-secondary)] border-2 border-[var(--border-color)] rounded-xl shadow-xl flex items-center gap-6">
                   <div
-                    class="craft-grid"
+                    class="craft-grid grid grid-cols-3 gap-2 p-2 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg"
                     role="presentation"
                     ondragenter={allowEditorDrop}
                     ondragover={allowEditorDrop}
@@ -1540,615 +1592,729 @@
                     {#each editGrid as slotId, i (i)}
                       <button
                         type="button"
-                        class="mc-slot"
+                        class="mc-slot w-14 h-14 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
                         class:empty={!slotId}
-                        class:tag={!!slotId && slotId.startsWith("#")}
-                        class:drop-target={true}
                         style="--hue: {itemHue(slotId ?? '')}"
-                        title={slotId ?? "Drop ingredient"}
+                        title={slotId ? `${slotId}\nRight-click to remove` : "Drop item or click to place"}
                         ondragenter={allowEditorDrop}
                         ondragover={allowEditorDrop}
                         ondrop={(e) => onDropGrid(e, i)}
-                        oncontextmenu={(e) => { e.preventDefault(); setEditSlot(i, null); } }
+                        oncontextmenu={(e) => { e.preventDefault(); setEditSlot(i, null); }}
                         onclick={() => clearEditSlotIfClick(i)}
                       >
                         {#if slotId && iconSrc(slotId)}
-                          <img src={iconSrc(slotId)} alt="" class="slot-icon" onerror={() => onIconError(slotId)} />
+                          <img src={iconSrc(slotId)} alt="" class="slot-icon w-10 h-10 object-contain pixelated" onerror={() => onIconError(slotId)} />
                         {:else if slotId}
-                          <span class="letter">{slotId.startsWith("#") ? "#" : prettifyItem(slotId).slice(0, 3)}</span>
+                          <span class="letter font-bold text-xs text-white">{slotId.startsWith("#") ? "#" : prettifyItem(slotId).slice(0, 3)}</span>
+                        {:else}
+                          <span class="text-[10px] text-[var(--text-muted)] font-mono">{i + 1}</span>
                         {/if}
                       </button>
                     {/each}
                   </div>
-                  <ArrowRight size={22} class="arr" />
-                  <button
-                    type="button"
-                    class="mc-slot out"
-                    class:empty={!editOutput}
-                    class:drop-target={true}
-                    style="--hue: {itemHue(editOutput ?? '')}"
-                    title={editOutput ? `${editOutput}\nShift+click: stack count` : "Drop output item"}
-                    ondragenter={allowEditorDrop}
-                        ondragover={allowEditorDrop}
-                    ondrop={onDropOutput}
-                    oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
-                    onclick={onOutputClick}
-                  >
-                    {#if editOutput && iconSrc(editOutput)}
-                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" onerror={() => onIconError(editOutput)} />
-                    {:else if editOutput}
-                      <span class="letter">{prettifyItem(editOutput).slice(0, 3)}</span>
-                    {/if}
-                    {#if editOutput && editCount > 1}
-                      <em class="stack">{editCount}</em>
-                    {/if}
-                  </button>
-                </div>
-              </div>
-            {:else if isCookingKind(editorKind) || editorKind === "stonecutting"}
-              <div class="mc-panel" data-cat={editorKind === "stonecutting" ? "stonecutting" : "cooking"}>
-                <div class="panel-title">
-                  {editorKind === "stonecutting" ? "Stonecutter" : editorKind}
-                </div>
-                <div class="panel-body cook">
-                  <button
-                    type="button"
-                    class="mc-slot large"
-                    class:empty={!editInput}
-                    class:tag={!!editInput && editInput.startsWith("#")}
-                    class:drop-target={true}
-                    style="--hue: {itemHue(editInput ?? '')}"
-                    title={editInput ?? "Drop input"}
-                    ondragenter={allowEditorDrop}
-                        ondragover={allowEditorDrop}
-                    ondrop={onDropSingleInput}
-                    oncontextmenu={(e) => { e.preventDefault(); (editInput = null); } }
-                    onclick={clearInputIfClick}
-                  >
-                    {#if editInput && iconSrc(editInput)}
-                      <img src={iconSrc(editInput)} alt="" class="slot-icon" onerror={() => onIconError(editInput)} />
-                    {:else if editInput}
-                      <span class="letter">{editInput.startsWith("#") ? "#" : prettifyItem(editInput).slice(0, 3)}</span>
-                    {/if}
-                  </button>
-                  {#if isCookingKind(editorKind)}
-                    <div class="flame-col">
-                      <Flame size={26} class="flame" />
-                      <label class="editor-field">XP <input type="number" min="0" step="0.05" bind:value={editXp} /></label>
-                      <label class="editor-field">Ticks <input type="number" min="1" bind:value={editCookTime} /></label>
-                    </div>
-                  {:else}
-                    <Scissors size={22} class="arr" />
-                  {/if}
-                  <ArrowRight size={28} class="arr" />
-                  <button
-                    type="button"
-                    class="mc-slot out large"
-                    class:empty={!editOutput}
-                    class:drop-target={true}
-                    style="--hue: {itemHue(editOutput ?? '')}"
-                    title={editOutput ? `${editOutput}\nShift+click: stack` : "Drop output"}
-                    ondragenter={allowEditorDrop}
-                        ondragover={allowEditorDrop}
-                    ondrop={onDropOutput}
-                    oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
-                    onclick={onOutputClick}
-                  >
-                    {#if editOutput && iconSrc(editOutput)}
-                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" onerror={() => onIconError(editOutput)} />
-                    {:else if editOutput}
-                      <span class="letter">{prettifyItem(editOutput).slice(0, 3)}</span>
-                    {/if}
-                    {#if editOutput && editCount > 1}
-                      <em class="stack">{editCount}</em>
-                    {/if}
-                  </button>
-                </div>
-              </div>
-            {:else if editorKind === "smithing"}
-              <div class="mc-panel" data-cat="smithing">
-                <div class="panel-title">Smithing Table</div>
-                <div class="panel-body smith">
-                  {#each [
-                    { key: "template", label: "Template", val: editTemplate },
-                    { key: "base", label: "Base", val: editBase },
-                    { key: "addition", label: "Addition", val: editAddition },
-                  ] as slot, i (slot.key)}
+
+                  <ArrowRight size={28} class="text-[var(--text-secondary)]" />
+
+                  <div class="flex flex-col items-center gap-1.5">
+                    <span class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Output</span>
                     <button
                       type="button"
-                      class="mc-slot large"
-                      class:empty={!slot.val}
-                      class:drop-target={true}
-                      style="--hue: {itemHue(slot.val ?? '')}"
-                      title={slot.val ?? slot.label}
+                      class="mc-slot out w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] hover:brightness-110 flex items-center justify-center relative cursor-pointer shadow-md"
+                      class:empty={!editOutput}
+                      style="--hue: {itemHue(editOutput ?? '')}"
+                      title={editOutput ? `${editOutput}\nShift+click to change count (${editCount})` : "Drop output item here"}
                       ondragenter={allowEditorDrop}
-                        ondragover={allowEditorDrop}
-                      ondrop={(e) => onDropSmithing(e, slot.key as "template" | "base" | "addition")}
-                      oncontextmenu={(e) => {
-                        e.preventDefault();
-                        if (slot.key === "template") editTemplate = null;
-                        else if (slot.key === "base") editBase = null;
-                        else editAddition = null;
-                      }}
-                      onclick={() => clearSmithingIfClick(slot.key as "template" | "base" | "addition")}
+                      ondragover={allowEditorDrop}
+                      ondrop={onDropOutput}
+                      oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
+                      onclick={onOutputClick}
                     >
-                      {#if slot.val && iconSrc(slot.val)}
-                        <img src={iconSrc(slot.val)} alt="" class="slot-icon" onerror={() => onIconError(slot.val)} />
-                      {:else if slot.val}
-                        <span class="letter">{prettifyItem(slot.val).slice(0, 3)}</span>
+                      {#if editOutput && iconSrc(editOutput)}
+                        <img src={iconSrc(editOutput)} alt="" class="slot-icon w-12 h-12 object-contain pixelated" onerror={() => onIconError(editOutput)} />
+                      {:else if editOutput}
+                        <span class="letter font-bold text-xs text-white">{prettifyItem(editOutput).slice(0, 3)}</span>
                       {:else}
-                        <span class="letter">{slot.label.slice(0, 1)}</span>
+                        <Plus size={20} class="text-[var(--text-muted)]" />
+                      {/if}
+                      {#if editOutput && editCount > 1}
+                        <em class="absolute bottom-1 right-1.5 text-xs font-black text-[var(--accent-warning)] font-mono not-italic">{editCount}</em>
                       {/if}
                     </button>
-                    {#if i < 2}<span class="plus">+</span>{/if}
-                  {/each}
-                  <ArrowRight size={28} class="arr" />
-                  <button
-                    type="button"
-                    class="mc-slot out large"
-                    class:empty={!editOutput}
-                    class:drop-target={true}
-                    style="--hue: {itemHue(editOutput ?? '')}"
-                    ondragenter={allowEditorDrop}
-                        ondragover={allowEditorDrop}
-                    ondrop={onDropOutput}
-                    oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
-                    onclick={onOutputClick}
-                  >
-                    {#if editOutput && iconSrc(editOutput)}
-                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" onerror={() => onIconError(editOutput)} />
-                    {:else if editOutput}
-                      <span class="letter">{prettifyItem(editOutput).slice(0, 3)}</span>
-                    {/if}
-                  </button>
+                    <span class="text-[10px] text-[var(--text-muted)]">Shift+Click for count</span>
+                  </div>
                 </div>
-              </div>
-            {:else if editorKind === "tags"}
-              <div class="mc-panel tag-editor-panel">
-                <div class="panel-title">Item tags</div>
-                <div class="tag-editor">
-                  <label class="editor-field wide">
-                    Tag id
+
+              {:else if isCookingKind(editorKind) || editorKind === "stonecutting"}
+                <!-- Furnace / Cooker / Stonecutter -->
+                <div class="mc-panel p-5 bg-[var(--bg-secondary)] border-2 border-[var(--border-color)] rounded-xl shadow-xl flex items-center gap-6">
+                  <div class="flex flex-col items-center gap-1.5">
+                    <span class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Input</span>
+                    <button
+                      type="button"
+                      class="mc-slot w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                      class:empty={!editInput}
+                      style="--hue: {itemHue(editInput ?? '')}"
+                      title={editInput ?? "Drop input item"}
+                      ondragenter={allowEditorDrop}
+                      ondragover={allowEditorDrop}
+                      ondrop={onDropSingleInput}
+                      oncontextmenu={(e) => { e.preventDefault(); editInput = null; }}
+                      onclick={clearInputIfClick}
+                    >
+                      {#if editInput && iconSrc(editInput)}
+                        <img src={iconSrc(editInput)} alt="" class="slot-icon w-12 h-12 object-contain pixelated" onerror={() => onIconError(editInput)} />
+                      {:else if editInput}
+                        <span class="letter font-bold text-xs text-white">{editInput.startsWith("#") ? "#" : prettifyItem(editInput).slice(0, 3)}</span>
+                      {:else}
+                        <Plus size={20} class="text-[var(--text-muted)]" />
+                      {/if}
+                    </button>
+                  </div>
+
+                  <div class="flex flex-col items-center gap-2 px-2">
+                    {#if isCookingKind(editorKind)}
+                      <Flame size={28} class="text-[var(--accent-warning)] animate-pulse" />
+                      <div class="flex items-center gap-2 text-xs">
+                        <label class="text-[11px] text-[var(--text-secondary)]">XP <input type="number" step="0.1" min="0" bind:value={editXp} class="w-14 px-1.5 py-0.5 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded text-[var(--text-primary)] text-center" /></label>
+                        <label class="text-[11px] text-[var(--text-secondary)]">Ticks <input type="number" min="1" bind:value={editCookTime} class="w-14 px-1.5 py-0.5 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded text-[var(--text-primary)] text-center" /></label>
+                      </div>
+                    {:else}
+                      <Scissors size={28} class="text-[var(--text-secondary)]" />
+                    {/if}
+                  </div>
+
+                  <ArrowRight size={28} class="text-[var(--text-secondary)]" />
+
+                  <div class="flex flex-col items-center gap-1.5">
+                    <span class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Output</span>
+                    <button
+                      type="button"
+                      class="mc-slot out w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] hover:brightness-110 flex items-center justify-center relative cursor-pointer shadow-md"
+                      class:empty={!editOutput}
+                      style="--hue: {itemHue(editOutput ?? '')}"
+                      title={editOutput ? `${editOutput}\nShift+click for count` : "Drop output item"}
+                      ondragenter={allowEditorDrop}
+                      ondragover={allowEditorDrop}
+                      ondrop={onDropOutput}
+                      oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
+                      onclick={onOutputClick}
+                    >
+                      {#if editOutput && iconSrc(editOutput)}
+                        <img src={iconSrc(editOutput)} alt="" class="slot-icon w-12 h-12 object-contain pixelated" onerror={() => onIconError(editOutput)} />
+                      {:else if editOutput}
+                        <span class="letter font-bold text-xs text-white">{prettifyItem(editOutput).slice(0, 3)}</span>
+                      {:else}
+                        <Plus size={20} class="text-[var(--text-muted)]" />
+                      {/if}
+                      {#if editOutput && editCount > 1}
+                        <em class="absolute bottom-1 right-1.5 text-xs font-black text-[var(--accent-warning)] font-mono not-italic">{editCount}</em>
+                      {/if}
+                    </button>
+                  </div>
+                </div>
+
+              {:else if editorKind === "smithing"}
+                <!-- Smithing Table -->
+                <div class="mc-panel p-5 bg-[var(--bg-secondary)] border-2 border-[var(--border-color)] rounded-xl shadow-xl flex items-center gap-4">
+                  {#each [
+                    { key: "template", label: "Template", val: editTemplate },
+                    { key: "base", label: "Base Item", val: editBase },
+                    { key: "addition", label: "Addition", val: editAddition },
+                  ] as slot, i (slot.key)}
+                    <div class="flex flex-col items-center gap-1.5">
+                      <span class="text-[10px] font-bold text-[var(--text-secondary)] uppercase">{slot.label}</span>
+                      <button
+                        type="button"
+                        class="mc-slot w-14 h-14 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                        class:empty={!slot.val}
+                        style="--hue: {itemHue(slot.val ?? '')}"
+                        ondragenter={allowEditorDrop}
+                        ondragover={allowEditorDrop}
+                        ondrop={(e) => onDropSmithing(e, slot.key as "template" | "base" | "addition")}
+                        oncontextmenu={(e) => {
+                          e.preventDefault();
+                          if (slot.key === "template") editTemplate = null;
+                          else if (slot.key === "base") editBase = null;
+                          else editAddition = null;
+                        }}
+                        onclick={() => clearSmithingIfClick(slot.key as "template" | "base" | "addition")}
+                      >
+                        {#if slot.val && iconSrc(slot.val)}
+                          <img src={iconSrc(slot.val)} alt="" class="slot-icon w-10 h-10 object-contain pixelated" onerror={() => onIconError(slot.val)} />
+                        {:else if slot.val}
+                          <span class="letter font-bold text-xs text-white">{prettifyItem(slot.val).slice(0, 3)}</span>
+                        {:else}
+                          <Plus size={16} class="text-[var(--text-muted)]" />
+                        {/if}
+                      </button>
+                    </div>
+                    {#if i < 2}<span class="text-lg font-bold text-[var(--text-muted)] mt-4">+</span>{/if}
+                  {/each}
+
+                  <ArrowRight size={28} class="text-[var(--text-secondary)] mt-4 mx-2" />
+
+                  <div class="flex flex-col items-center gap-1.5">
+                    <span class="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Result</span>
+                    <button
+                      type="button"
+                      class="mc-slot out w-14 h-14 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer shadow-md"
+                      class:empty={!editOutput}
+                      style="--hue: {itemHue(editOutput ?? '')}"
+                      ondragenter={allowEditorDrop}
+                      ondragover={allowEditorDrop}
+                      ondrop={onDropOutput}
+                      oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
+                      onclick={onOutputClick}
+                    >
+                      {#if editOutput && iconSrc(editOutput)}
+                        <img src={iconSrc(editOutput)} alt="" class="slot-icon w-10 h-10 object-contain pixelated" onerror={() => onIconError(editOutput)} />
+                      {:else if editOutput}
+                        <span class="letter font-bold text-xs text-white">{prettifyItem(editOutput).slice(0, 3)}</span>
+                      {:else}
+                        <Plus size={16} class="text-[var(--text-muted)]" />
+                      {/if}
+                    </button>
+                  </div>
+                </div>
+
+              {:else if editorKind === "tags"}
+                <!-- Tags Editor -->
+                <div class="w-full max-w-xl p-4 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl flex flex-col gap-3">
+                  <label class="flex flex-col gap-1">
+                    <span class="text-xs font-semibold text-[var(--text-secondary)]">Tag Identifier (e.g. <code>c:iron_ingots</code> or <code>forge:ores/copper</code>)</span>
                     <input
                       type="text"
-                      placeholder="c:apples"
+                      class="px-3 py-1.5 text-xs font-mono bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)]"
+                      placeholder="forge:ingots/copper"
                       bind:value={editTagId}
                       onchange={() => editTagId && loadTagMembers(editTagId)}
                       onblur={() => editTagId && loadTagMembers(editTagId)}
                     />
                   </label>
-                  <label class="editor-check">
+
+                  <label class="flex items-center gap-2 cursor-pointer text-xs text-[var(--text-secondary)]">
                     <input type="checkbox" bind:checked={tagRemoveAll} />
-                    removeAll (clear tag before adds)
+                    <span>Clear existing tag items before applying additions (<code>removeAll</code>)</span>
                   </label>
+
                   <div
-                    class="tag-drop-zone"
+                    class="p-3 border-2 border-dashed border-[var(--border-color)] rounded-lg bg-[var(--bg-card)] min-h-16 flex flex-col justify-center"
                     role="region"
-                    aria-label="Drop items to add to tag"
+                    aria-label="Drop items to add"
                     ondragenter={allowEditorDrop}
-                        ondragover={allowEditorDrop}
+                    ondragover={allowEditorDrop}
                     ondrop={onDropTagAdd}
                   >
-                    Drop items/tags here to <strong>add</strong>
-                    {#if tagAdd.length === 0}
-                      <span class="muted"> — empty</span>
-                    {:else}
-                      <div class="tag-chip-row">
+                    <span class="text-xs font-medium text-[var(--text-muted)]">
+                      Drop items or tags here to <strong class="text-[var(--accent-primary)]">add</strong>
+                    </span>
+                    {#if tagAdd.length > 0}
+                      <div class="flex flex-wrap gap-1.5 mt-2">
                         {#each tagAdd as id (id)}
-                          <button type="button" class="tag-chip add" title={id} onclick={() => removePendingAdd(id)}>
-                            + {id} ×
+                          <button
+                            type="button"
+                            class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-[var(--accent-primary)] border border-emerald-500/30 flex items-center gap-1"
+                            onclick={() => removePendingAdd(id)}
+                          >
+                            + {id} <X size={11} />
                           </button>
                         {/each}
                       </div>
                     {/if}
                   </div>
-                  <div class="tag-members">
-                    <div class="overlay-h">Current members {tagLoadingMembers ? "…" : `(${tagMembers.length})`}</div>
-                    <div class="tag-chip-row">
+
+                  <div class="border-t border-[var(--border-color)] pt-2">
+                    <span class="text-xs font-semibold text-[var(--text-muted)] block mb-1">
+                      Current tag members {tagLoadingMembers ? "…" : `(${tagMembers.length})`}
+                    </span>
+                    <div class="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1 bg-[var(--bg-card)] rounded-lg border border-[var(--border-color)]">
                       {#each tagMembers as id (id)}
                         <button
                           type="button"
-                          class="tag-chip"
-                          class:remove={tagRemove.includes(id)}
-                          title={tagRemove.includes(id) ? "Will be removed" : "Click to remove"}
+                          class="text-xs px-2 py-0.5 rounded border transition {tagRemove.includes(id) ? 'bg-red-500/20 text-[var(--accent-danger)] border-red-500/30 line-through' : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--accent-danger)]'}"
+                          title={tagRemove.includes(id) ? "Marked for removal" : "Click to mark for removal"}
                           onclick={() => toggleTagRemove(id)}
                         >
                           {tagRemove.includes(id) ? "− " : ""}{id}
                         </button>
                       {/each}
                       {#if !tagLoadingMembers && tagMembers.length === 0}
-                        <span class="muted">No known members (new tag or empty)</span>
+                        <span class="text-xs text-[var(--text-muted)] p-1">Tag has no known members (new tag)</span>
                       {/if}
                     </div>
                   </div>
                 </div>
-              </div>
-            {/if}
-
-            <div class="editor-hint">
-              {#if editorKind === "tags"}
-                Click a tag to edit it · Click items to add members · Click members to remove
-              {:else}
-                Click an item to place it (or drag from the palette) · Click/right-click a slot to clear · Shift+click output for count (1–64)
               {/if}
             </div>
 
-            <div class="quick-add-row">
-              <input
-                type="text"
-                placeholder="Type item id — e.g. minecraft:stick — then Enter"
-                bind:value={quickAddId}
-                onkeydown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    submitQuickAdd();
-                  }
-                }}
-              />
-              <button class="secondary" onclick={submitQuickAdd} title="Place this item into the next empty slot">
-                <Plus size={12} /> Add id
-              </button>
-            </div>
+            <!-- Editor Footer Toolbar -->
+            <div class="mt-4 pt-3 border-t border-[var(--border-color)] flex flex-wrap items-center justify-between gap-3">
+              <div class="flex items-center gap-2 flex-1 max-w-md">
+                <input
+                  type="text"
+                  class="flex-1 px-3 py-1.5 text-xs bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)] font-mono"
+                  placeholder="Type item ID (e.g. minecraft:iron_ingot)…"
+                  bind:value={quickAddId}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      submitQuickAdd();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  class="px-3 py-1.5 text-xs font-semibold bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] hover:bg-[var(--bg-hover)] flex items-center gap-1"
+                  onclick={submitQuickAdd}
+                >
+                  <Plus size={13} /> Add
+                </button>
+              </div>
 
-            <div class="recipe-actions">
-              <button class="primary-scan" disabled={!editorCanSave() || editorSaving} onclick={saveCraftRecipe}>
-                <Save size={14} />
-                {editorSaving ? "Writing…" : (replaceRecipeId || editorKind === "tags") ? "Save" : "Add"}
-              </button>
-              <button class="secondary" onclick={clearEditorGrid}><Eraser size={14} /> Clear</button>
-              <button class="secondary" onclick={closeEditor}><X size={14} /> Cancel</button>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  class="px-3 py-1.5 text-xs font-semibold bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] flex items-center gap-1"
+                  onclick={clearEditorGrid}
+                >
+                  <Eraser size={13} /> Clear
+                </button>
+                <button
+                  type="button"
+                  class="px-3 py-1.5 text-xs font-semibold bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+                  onclick={closeEditor}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  class="px-4 py-1.5 text-xs font-bold rounded-lg bg-[var(--accent-primary)] text-[var(--on-accent)] hover:brightness-110 shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+                  disabled={!editorCanSave() || editorSaving}
+                  onclick={saveCraftRecipe}
+                >
+                  <Save size={13} />
+                  {editorSaving ? "Saving…" : (replaceRecipeId || editorKind === "tags") ? "Save" : "Add Recipe"}
+                </button>
+              </div>
             </div>
           </div>
+
         {:else if !selectedItem}
-          <div class="gui-empty">
-            <div class="mc-panel preview">
-              <div class="craft-grid dim">
-                {#each Array(9) as _, i (i)}
-                  <div class="mc-slot"></div>
-                {/each}
+          <!-- Empty Selection State -->
+          <div class="flex-1 flex flex-col items-center justify-center p-8 text-center text-[var(--text-muted)]">
+            <div class="p-6 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-sm max-w-md flex flex-col items-center">
+              <div class="w-12 h-12 rounded-xl bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 flex items-center justify-center mb-3">
+                <Grid3x3 size={24} />
               </div>
-              <ArrowRight size={22} class="arr" />
-              <div class="mc-slot out"></div>
+              <h3 class="text-base font-bold text-[var(--text-primary)] mb-1">Select an item from the catalog</h3>
+              <p class="text-xs text-[var(--text-secondary)] leading-relaxed mb-4">
+                Click any item in the grid on the right to view recipes, or right-click to view item uses.
+              </p>
+
+              <div class="grid grid-cols-2 gap-2 w-full pt-2 border-t border-[var(--border-color)]">
+                <button
+                  type="button"
+                  class="px-3 py-2 text-xs font-bold rounded-lg bg-[var(--accent-primary)] text-[var(--on-accent)] hover:brightness-110 shadow-sm flex items-center justify-center gap-1.5"
+                  onclick={() => openNewRecipeEditor("crafting")}
+                >
+                  <Plus size={13} /> + Crafting Recipe
+                </button>
+                <button
+                  type="button"
+                  class="px-3 py-2 text-xs font-semibold rounded-lg bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] flex items-center justify-center gap-1.5"
+                  onclick={() => openNewRecipeEditor("tags")}
+                >
+                  <Tag size={13} /> Edit Item Tags
+                </button>
+              </div>
             </div>
-            <h3>Select an item</h3>
-            <p>Or create a new crafting recipe with KubeJS.</p>
-            <p class="hint">Right-click for Uses · Press <kbd>R</kbd> / <kbd>U</kbd></p>
-            <button class="secondary" onclick={() => openNewRecipeEditor("crafting")}><Plus size={14} /> New recipe</button>
           </div>
+
         {:else}
-          <div class="gui-top">
-            <button class="ghost" disabled={historyStack.length < 2} onclick={goBack} title="Back">
-              <History size={16} />
-            </button>
-            <div class="focus-tabs">
-              <button
-                type="button"
-                class:active={focusMode === "recipes"}
-                onclick={() => { focusMode = "recipes"; recipeIndex = 0; }}
-              >
-                Recipes <em>{recipesForItem(selectedItem, "recipes").length}</em>
-              </button>
-              <button
-                type="button"
-                class:active={focusMode === "uses"}
-                onclick={() => { focusMode = "uses"; recipeIndex = 0; }}
-              >
-                Uses <em>{recipesForItem(selectedItem, "uses").length}</em>
-              </button>
-            </div>
-            <div class="focus-item">
-              <span class="mc-slot mini" style="--hue: {itemHue(selectedItem)}">
-                {#if iconSrc(selectedItem)}
-                  <img src={iconSrc(selectedItem)} alt="" class="slot-icon" onerror={() => onIconError(selectedItem)} />
-                {:else}
-                  <span class="letter">{prettifyItem(selectedItem).slice(0, 2)}</span>
-                {/if}
-              </span>
-              <div>
-                <strong>{prettifyItem(selectedItem)}</strong>
-                <code>{selectedItem}</code>
-              </div>
-              <button
-                class="star"
-                class:on={bookmarks.includes(selectedItem)}
-                title="Bookmark (B)"
-                onclick={() => toggleBookmark(selectedItem)}
-              >
-                <Star size={16} />
-              </button>
-            </div>
-          </div>
-
-          {#if activeRecipes.length === 0}
-            <div class="gui-empty compact">
-              <p>No {focusMode} for this item{categoryFilter !== "all" ? ` in ${categoryLabel(categoryFilter)}` : ""}.</p>
-            </div>
-          {:else if currentRecipe}
-            <div class="recipe-stage">
-              <div class="recipe-nav">
-                <button class="nav-btn" onclick={prevRecipe} disabled={recipeIndex === 0}>
-                  <ChevronLeft size={18} />
+          <!-- Active Item Recipe Viewer Stage -->
+          <div class="flex-1 flex flex-col min-h-0 overflow-hidden">
+            <!-- Top Item Context & Recipe/Uses Switcher -->
+            <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] flex-shrink-0">
+              <div class="flex items-center gap-3 min-w-0">
+                <button
+                  type="button"
+                  class="p-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                  disabled={historyStack.length < 2}
+                  onclick={goBack}
+                  title="Back (Backspace)"
+                >
+                  <History size={14} />
                 </button>
-                <span class="page">{recipeIndex + 1} / {activeRecipes.length}</span>
-                <button class="nav-btn" onclick={nextRecipe} disabled={recipeIndex >= activeRecipes.length - 1}>
-                  <ChevronRight size={18} />
-                </button>
-              </div>
 
-              <div class="mc-panel" data-cat={currentRecipe.layout.category}>
-                <div class="panel-title">
-                  {CATEGORY_META[currentRecipe.layout.category]?.label ?? runtimeCategory(currentRecipe.category)?.title ?? currentRecipe.layout.category}
-                  {#if currentRecipe.layout.shapeless}<span class="badge shapeless">Shapeless</span>{/if}
+                <div class="flex items-center gap-2.5 min-w-0">
+                  <span class="mc-slot mini w-9 h-9 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-color)] flex items-center justify-center flex-shrink-0" style="--hue: {itemHue(selectedItem)}">
+                    {#if iconSrc(selectedItem)}
+                      <img src={iconSrc(selectedItem)} alt="" class="slot-icon w-7 h-7 object-contain pixelated" onerror={() => onIconError(selectedItem)} />
+                    {:else}
+                      <span class="letter font-bold text-xs text-white">{prettifyItem(selectedItem).slice(0, 2)}</span>
+                    {/if}
+                  </span>
+                  <div class="min-w-0">
+                    <strong class="text-sm font-bold text-[var(--text-primary)] truncate block">{prettifyItem(selectedItem)}</strong>
+                    <code class="text-[11px] text-[var(--text-muted)] font-mono truncate block">{selectedItem}</code>
+                  </div>
                 </div>
 
-                {#if currentRecipe.layout.slots?.length}
-                  {@const liveCategory = runtimeCategory(currentRecipe.category)}
-                  <div
-                    class="runtime-layout"
-                    style={`--runtime-width:${Math.max(120, liveCategory?.width ?? 160)}px;--runtime-height:${Math.max(70, liveCategory?.height ?? 90)}px`}
-                  >
-                    {#each currentRecipe.layout.slots as slot, si (si)}
-                      {@const ingredient = runtimeSlotIngredient(slot)}
+                <button
+                  type="button"
+                  class="p-1.5 rounded-lg border transition {bookmarks.includes(selectedItem) ? 'border-amber-400 bg-amber-400/10 text-[var(--accent-warning)]' : 'border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-muted)] hover:text-[var(--accent-warning)]'}"
+                  title="Bookmark item (B)"
+                  onclick={() => toggleBookmark(selectedItem)}
+                >
+                  <Star size={14} />
+                </button>
+              </div>
+
+              <!-- Recipes vs Uses Switcher -->
+              <div class="flex bg-[var(--bg-card)] p-0.5 rounded-lg border border-[var(--border-color)]">
+                <button
+                  type="button"
+                  class="px-3 py-1 text-xs font-bold rounded-md transition flex items-center gap-1.5 {focusMode === 'recipes' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+                  onclick={() => { focusMode = "recipes"; recipeIndex = 0; }}
+                >
+                  <span>Recipes</span>
+                  <span class="text-[10px] px-1.5 py-0.2 rounded-full {focusMode === 'recipes' ? 'bg-white/20 text-white' : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'}">
+                    {recipesForItem(selectedItem, "recipes").length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  class="px-3 py-1 text-xs font-bold rounded-md transition flex items-center gap-1.5 {focusMode === 'uses' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+                  onclick={() => { focusMode = "uses"; recipeIndex = 0; }}
+                >
+                  <span>Uses</span>
+                  <span class="text-[10px] px-1.5 py-0.2 rounded-full {focusMode === 'uses' ? 'bg-white/20 text-white' : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'}">
+                    {recipesForItem(selectedItem, "uses").length}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Horizontal Category Tabs -->
+            <div class="flex items-center gap-1 px-4 py-2 border-b border-[var(--border-color)] bg-[var(--bg-card)] overflow-x-auto flex-shrink-0">
+              {#each categories as cat (cat)}
+                {@const IconComp = categoryIconComponent(cat)}
+                <button
+                  type="button"
+                  class="px-3 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 whitespace-nowrap {categoryFilter === cat ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+                  onclick={() => {
+                    categoryFilter = cat;
+                    recipeIndex = 0;
+                  }}
+                >
+                  <IconComp size={13} />
+                  <span>{categoryLabel(cat)}</span>
+                </button>
+              {/each}
+            </div>
+
+            <!-- Active Recipe Content Stage -->
+            <div class="flex-1 flex flex-col items-center justify-center p-4 overflow-y-auto min-h-0">
+              {#if activeRecipes.length === 0}
+                <div class="text-center text-[var(--text-muted)] py-12">
+                  <p class="text-xs">No {focusMode} found for this item in {categoryLabel(categoryFilter)}.</p>
+                </div>
+              {:else if currentRecipe}
+                <div class="flex flex-col items-center gap-4 max-w-xl w-full">
+                  <!-- Pagination Bar -->
+                  <div class="flex items-center justify-between w-full max-w-md">
+                    <button
+                      type="button"
+                      class="p-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                      onclick={prevRecipe}
+                      disabled={recipeIndex === 0}
+                      title="Previous recipe (Left Arrow)"
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs font-mono font-bold text-[var(--text-primary)]">
+                        {recipeIndex + 1} of {activeRecipes.length}
+                      </span>
+                      <span class="text-xs text-[var(--text-muted)] uppercase font-semibold">
+                        · {CATEGORY_META[currentRecipe.layout.category]?.label ?? runtimeCategory(currentRecipe.category)?.title ?? currentRecipe.layout.category}
+                      </span>
+                      {#if currentRecipe.layout.shapeless}
+                        <span class="text-[10px] font-bold text-[var(--accent-secondary)] bg-cyan-400/10 px-1.5 py-0.5 rounded">Shapeless</span>
+                      {/if}
+                    </div>
+
+                    <button
+                      type="button"
+                      class="p-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                      onclick={nextRecipe}
+                      disabled={recipeIndex >= activeRecipes.length - 1}
+                      title="Next recipe (Right Arrow)"
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+
+                  <!-- Recipe Frame Layout -->
+                  <div class="mc-panel p-5 bg-[var(--bg-secondary)] border-2 border-[var(--border-color)] rounded-xl shadow-xl flex items-center justify-center gap-6 w-full max-w-md">
+                    {#if currentRecipe.layout.category === "crafting"}
+                      <div class="craft-grid grid grid-cols-3 gap-2 p-2 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg">
+                        {#each currentRecipe.layout.grid as slot, i (i)}
+                          {@const resolved = resolveSlot(slot)}
+                          <button
+                            type="button"
+                            class="mc-slot w-14 h-14 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative {slot ? 'cursor-pointer' : 'cursor-default'}"
+                            class:empty={!slot}
+                            style={slot ? `--hue: ${itemHue(resolved?.id ?? '')}` : ''}
+                            title={slotTitle(slot)}
+                            disabled={!slot}
+                            onclick={() => navigateSlot(slot, "uses")}
+                            oncontextmenu={(e) => { e.preventDefault(); navigateSlot(slot, "recipes"); }}
+                          >
+                            {#if slot}
+                              {#if iconSrc(resolved?.id, resolved?.iconUrl)}
+                                <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon w-10 h-10 object-contain pixelated" onerror={() => onIconError(resolved?.id)} />
+                              {:else}
+                                <span class="letter font-bold text-xs text-white">{slotLabel(slot)}</span>
+                              {/if}
+                              {#if slot.alts && slot.alts.length > 1}
+                                <span class="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                              {/if}
+                            {/if}
+                          </button>
+                        {/each}
+                      </div>
+
+                      <ArrowRight size={28} class="text-[var(--text-secondary)] flex-shrink-0" />
+
                       <button
-                        class="mc-slot runtime-slot"
-                        class:empty={!ingredient}
-                        class:output={slot.role === "OUTPUT"}
-                        style={`left:${slot.x}px;top:${slot.y}px;width:${Math.max(18, slot.width)}px;height:${Math.max(18, slot.height)}px;--hue:${itemHue(ingredient?.id ?? "")}`}
-                        title={ingredient?.tooltip?.join("\n") || ingredient?.name || ingredient?.id || slot.name || slot.role}
-                        disabled={!ingredient}
-                        onclick={() => navigateSlot(ingredient, slot.role === "OUTPUT" ? "recipes" : "uses")}
-                        oncontextmenu={(e) => { e.preventDefault(); navigateSlot(ingredient, "recipes"); } }
+                        type="button"
+                        class="mc-slot out w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer shadow-md flex-shrink-0 hover:brightness-110"
+                        style="--hue: {itemHue(currentRecipe.layout.output.id)}"
+                        title={currentRecipe.layout.output.id}
+                        onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
+                        oncontextmenu={(e) => { e.preventDefault(); navigateSlot(currentRecipe.layout.output, "uses"); }}
                       >
-                        {#if ingredient}
-                          {#if iconSrc(ingredient.id, ingredient.iconUrl)}
-                            <img src={iconSrc(ingredient.id, ingredient.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(ingredient.id)} />
-                          {:else}
-                            <span class="letter">{(ingredient.name || prettifyItem(ingredient.id)).slice(0, 3)}</span>
-                          {/if}
-                          {#if (ingredient.count ?? 1) > 1}<em class="stack">{ingredient.count}</em>{/if}
-                          {#if slot.ingredients.length > 1}<span class="cycle-dot"></span>{/if}
+                        {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
+                          <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon w-12 h-12 object-contain pixelated" onerror={() => onIconError(currentRecipe.layout.output.id)} />
+                        {:else}
+                          <span class="letter font-bold text-xs text-white">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                        {/if}
+                        {#if currentRecipe.layout.outputCount > 1}
+                          <em class="absolute bottom-1 right-1.5 text-xs font-black text-[var(--accent-warning)] font-mono not-italic">{currentRecipe.layout.outputCount}</em>
                         {/if}
                       </button>
-                    {/each}
-                  </div>
-                  {#if liveCategory?.stations?.length}
-                    <div class="stations">
-                      <span>Stations</span>
-                      {#each liveCategory.stations as station (station.id)}
+
+                    {:else if currentRecipe.layout.category === "cooking"}
+                      {@const input = resolveSlot(currentRecipe.layout.grid[4])}
+                      <button
+                        type="button"
+                        class="mc-slot w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                        style="--hue: {itemHue(input?.id ?? '')}"
+                        title={slotTitle(currentRecipe.layout.grid[4])}
+                        onclick={() => navigateSlot(currentRecipe.layout.grid[4], "uses")}
+                      >
+                        {#if iconSrc(input?.id, input?.iconUrl)}
+                          <img src={iconSrc(input?.id, input?.iconUrl)} alt="" class="slot-icon w-12 h-12 object-contain pixelated" onerror={() => onIconError(input?.id)} />
+                        {:else}
+                          <span class="letter font-bold text-xs text-white">{slotLabel(currentRecipe.layout.grid[4])}</span>
+                        {/if}
+                      </button>
+
+                      <div class="flex flex-col items-center gap-1">
+                        <Flame size={26} class="text-[var(--accent-warning)] animate-pulse" />
+                        {#if currentRecipe.layout.cookTime}
+                          <span class="text-[10px] font-mono text-[var(--text-secondary)]">{(currentRecipe.layout.cookTime / 20).toFixed(1)}s</span>
+                        {/if}
+                        {#if currentRecipe.layout.experience}
+                          <span class="text-[10px] font-bold text-[var(--accent-primary)] font-mono">+{currentRecipe.layout.experience} XP</span>
+                        {/if}
+                      </div>
+
+                      <ArrowRight size={28} class="text-[var(--text-secondary)]" />
+
+                      <button
+                        type="button"
+                        class="mc-slot out w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer shadow-md"
+                        style="--hue: {itemHue(currentRecipe.layout.output.id)}"
+                        onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
+                      >
+                        {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
+                          <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon w-12 h-12 object-contain pixelated" onerror={() => onIconError(currentRecipe.layout.output.id)} />
+                        {:else}
+                          <span class="letter font-bold text-xs text-white">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                        {/if}
+                        {#if currentRecipe.layout.outputCount > 1}
+                          <em class="absolute bottom-1 right-1.5 text-xs font-black text-[var(--accent-warning)] font-mono not-italic">{currentRecipe.layout.outputCount}</em>
+                        {/if}
+                      </button>
+
+                    {:else if currentRecipe.layout.category === "smithing"}
+                      {#each [0, 1, 2] as i (i)}
+                        {@const slot = currentRecipe.layout.grid[3 + i]}
+                        {@const resolved = resolveSlot(slot)}
                         <button
-                          class="mc-slot mini"
-                          title={station.tooltip?.join("\n") || station.name || station.id}
-                          style={`--hue:${itemHue(station.id)}`}
-                          onclick={() => navigateSlot(station, "recipes")}
-                        >
-                          {#if iconSrc(station.id, station.iconUrl)}
-                            <img src={iconSrc(station.id, station.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(station.id)} />
-                          {:else}
-                            <span class="letter">{(station.name || prettifyItem(station.id)).slice(0, 2)}</span>
-                          {/if}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                {:else if currentRecipe.layout.category === "crafting"}
-                  <div class="panel-body craft">
-                    <div class="craft-grid">
-                      {#each currentRecipe.layout.grid as slot, i (i)}
-                        <button
-                          class="mc-slot"
+                          type="button"
+                          class="mc-slot w-14 h-14 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] flex items-center justify-center relative {slot ? 'cursor-pointer' : 'cursor-default'}"
                           class:empty={!slot}
-                          class:tag={slot?.kind === "tag" || slot?.id?.startsWith("#")}
-                          style={slot ? `--hue: ${itemHue(resolveSlot(slot)?.id ?? "")}` : ""}
+                          style={slot ? `--hue: ${itemHue(resolved?.id ?? '')}` : ''}
                           title={slotTitle(slot)}
                           disabled={!slot}
                           onclick={() => navigateSlot(slot, "uses")}
-                          oncontextmenu={(e) => { e.preventDefault(); navigateSlot(slot, "recipes"); } }
                         >
                           {#if slot}
-                            {@const resolved = resolveSlot(slot)}
                             {#if iconSrc(resolved?.id, resolved?.iconUrl)}
-                              <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(resolved?.id)} />
+                              <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon w-10 h-10 object-contain pixelated" onerror={() => onIconError(resolved?.id)} />
                             {:else}
-                              <span class="letter">{slotLabel(slot)}</span>
-                            {/if}
-                            {#if slot.alts && slot.alts.length > 1}
-                              <span class="cycle-dot"></span>
+                              <span class="letter font-bold text-xs text-white">{slotLabel(slot)}</span>
                             {/if}
                           {/if}
                         </button>
+                        {#if i < 2}<span class="text-base font-bold text-[var(--text-muted)]">+</span>{/if}
                       {/each}
-                    </div>
-                    <ArrowRight size={28} class="arr" />
-                    <button
-                      class="mc-slot out"
-                      style="--hue: {itemHue(currentRecipe.layout.output.id)}"
-                      title={currentRecipe.layout.output.id}
-                      onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
-                      oncontextmenu={(e) => { e.preventDefault(); navigateSlot(currentRecipe.layout.output, "uses"); } }
-                    >
-                      {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(currentRecipe.layout.output.id)} />
-                      {:else}
-                        <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
-                      {/if}
-                      {#if currentRecipe.layout.outputCount > 1}
-                        <em class="stack">{currentRecipe.layout.outputCount}</em>
-                      {/if}
-                    </button>
-                  </div>
-                {:else if currentRecipe.layout.category === "cooking"}
-                  {@const input = resolveSlot(currentRecipe.layout.grid[4])}
-                  <div class="panel-body cook">
-                    <button
-                      class="mc-slot large"
-                      style="--hue: {itemHue(resolveSlot(currentRecipe.layout.grid[4])?.id ?? '')}"
-                      title={slotTitle(currentRecipe.layout.grid[4])}
-                      onclick={() => navigateSlot(currentRecipe.layout.grid[4], "uses")}
-                    >
-                      {#if iconSrc(input?.id, input?.iconUrl)}
-                        <img src={iconSrc(input?.id, input?.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(input?.id)} />
-                      {:else}
-                        <span class="letter">{slotLabel(currentRecipe.layout.grid[4])}</span>
-                      {/if}
-                    </button>
-                    <div class="flame-col">
-                      <Flame size={26} class="flame" />
-                      {#if currentRecipe.layout.cookTime}
-                        <span>{(currentRecipe.layout.cookTime / 20).toFixed(1)}s</span>
-                      {/if}
-                      {#if currentRecipe.layout.experience}
-                        <span class="xp">+{currentRecipe.layout.experience} XP</span>
-                      {/if}
-                    </div>
-                    <ArrowRight size={28} class="arr" />
-                    <button
-                      class="mc-slot out large"
-                      style="--hue: {itemHue(currentRecipe.layout.output.id)}"
-                      onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
-                    >
-                      {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(currentRecipe.layout.output.id)} />
-                      {:else}
-                        <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
-                      {/if}
-                      {#if currentRecipe.layout.outputCount > 1}
-                        <em class="stack">{currentRecipe.layout.outputCount}</em>
-                      {/if}
-                    </button>
-                  </div>
-                {:else if currentRecipe.layout.category === "smithing"}
-                  <div class="panel-body smith">
-                    {#each [0, 1, 2] as i (i)}
-                      {@const slot = currentRecipe.layout.grid[3 + i]}
+
+                      <ArrowRight size={28} class="text-[var(--text-secondary)]" />
+
                       <button
-                        class="mc-slot large"
-                        class:empty={!slot}
-                        style={slot ? `--hue: ${itemHue(resolveSlot(slot)?.id ?? "")}` : ""}
-                        title={slotTitle(slot)}
-                        disabled={!slot}
-                        onclick={() => navigateSlot(slot, "uses")}
+                        type="button"
+                        class="mc-slot out w-14 h-14 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                        style="--hue: {itemHue(currentRecipe.layout.output.id)}"
+                        onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                       >
-                        {#if slot}
-                          {@const resolved = resolveSlot(slot)}
-                          {#if iconSrc(resolved?.id, resolved?.iconUrl)}
-                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(resolved?.id)} />
-                          {:else}
-                            <span class="letter">{slotLabel(slot)}</span>
-                          {/if}
+                        {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
+                          <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon w-10 h-10 object-contain pixelated" onerror={() => onIconError(currentRecipe.layout.output.id)} />
+                        {:else}
+                          <span class="letter font-bold text-xs text-white">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                         {/if}
                       </button>
-                      {#if i < 2}<span class="plus">+</span>{/if}
-                    {/each}
-                    <ArrowRight size={28} class="arr" />
+
+                    {:else}
+                      <!-- Generic / Custom layout -->
+                      <div class="flex flex-wrap gap-2 items-center justify-center">
+                        {#each currentRecipe.layout.grid.filter(Boolean) as slot, idx (resolveSlot(slot)?.id ?? idx)}
+                          {@const resolved = resolveSlot(slot)}
+                          <button
+                            type="button"
+                            class="mc-slot w-12 h-12 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] flex items-center justify-center relative cursor-pointer"
+                            style="--hue: {itemHue(resolved?.id ?? '')}"
+                            title={slotTitle(slot)}
+                            onclick={() => navigateSlot(slot, "uses")}
+                          >
+                            {#if iconSrc(resolved?.id, resolved?.iconUrl)}
+                              <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon w-9 h-9 object-contain pixelated" onerror={() => onIconError(resolved?.id)} />
+                            {:else}
+                              <span class="letter font-bold text-xs text-white">{slotLabel(slot)}</span>
+                            {/if}
+                          </button>
+                        {/each}
+                      </div>
+
+                      <ArrowRight size={28} class="text-[var(--text-secondary)]" />
+
+                      <button
+                        type="button"
+                        class="mc-slot out w-14 h-14 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                        style="--hue: {itemHue(currentRecipe.layout.output.id)}"
+                        onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
+                      >
+                        {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
+                          <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon w-10 h-10 object-contain pixelated" onerror={() => onIconError(currentRecipe.layout.output.id)} />
+                        {:else}
+                          <span class="letter font-bold text-xs text-white">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                        {/if}
+                      </button>
+                    {/if}
+                  </div>
+
+                  <!-- Metadata Chips -->
+                  <div class="flex items-center gap-2 flex-wrap justify-center">
+                    <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-muted)]">
+                      {currentRecipe.recipeType.replace(/^minecraft:/, '')}
+                    </span>
+                    <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 truncate max-w-xs" title={currentRecipe.sourceFile}>
+                      {currentRecipe.modSource}
+                    </span>
+                    <code class="text-[10px] font-mono text-[var(--text-muted)]">{currentRecipe.id}</code>
+                  </div>
+
+                  <!-- Recipe Action Buttons -->
+                  <div class="flex items-center gap-2 flex-wrap justify-center pt-2">
+                    {#if ["crafting", "cooking", "smithing", "stonecutting"].includes(editableCategory(currentRecipe))}
+                      <button
+                        type="button"
+                        class="px-3 py-1.5 text-xs font-bold rounded-lg bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] flex items-center gap-1.5"
+                        onclick={() => openEditRecipe(currentRecipe)}
+                      >
+                        <Pencil size={13} /> Edit Recipe
+                      </button>
+                    {:else}
+                      <button
+                        type="button"
+                        class="px-3 py-1.5 text-xs font-bold rounded-lg bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] flex items-center gap-1.5"
+                        onclick={() => openReplaceWithCrafting(currentRecipe)}
+                      >
+                        <Pencil size={13} /> Replace with Crafting
+                      </button>
+                    {/if}
+
                     <button
-                      class="mc-slot out large"
-                      style="--hue: {itemHue(currentRecipe.layout.output.id)}"
-                      onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
+                      type="button"
+                      class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] flex items-center gap-1.5"
+                      onclick={() => copyKubeJS(currentRecipe)}
+                      title="Copy KubeJS remove script snippet"
                     >
-                      {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(currentRecipe.layout.output.id)} />
+                      {#if snippetCopied}
+                        <Check size={13} class="text-[var(--accent-primary)]" />
+                        <span class="text-[var(--accent-primary)] font-bold">Copied</span>
                       {:else}
-                        <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                        <Copy size={13} /> Copy KubeJS
                       {/if}
                     </button>
-                  </div>
-                {:else}
-                  <div class="panel-body cook">
-                    <div class="craft-grid loose">
-                      {#each currentRecipe.layout.grid.filter(Boolean) as slot, idx (resolveSlot(slot)?.id ?? idx)}
-                        {@const resolved = resolveSlot(slot)}
-                        <button
-                          class="mc-slot"
-                          style="--hue: {itemHue(resolved?.id ?? '')}"
-                          title={slotTitle(slot)}
-                          onclick={() => navigateSlot(slot, "uses")}
-                        >
-                          {#if iconSrc(resolved?.id, resolved?.iconUrl)}
-                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(resolved?.id)} />
-                          {:else}
-                            <span class="letter">{slotLabel(slot)}</span>
-                          {/if}
-                        </button>
-                      {/each}
-                    </div>
-                    <ArrowRight size={28} class="arr" />
+
                     <button
-                      class="mc-slot out"
-                      style="--hue: {itemHue(currentRecipe.layout.output.id)}"
-                      onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
+                      type="button"
+                      class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-500/10 border border-red-500/20 text-[var(--accent-danger)] hover:bg-red-500/20 flex items-center gap-1.5"
+                      onclick={() => queueRemove(currentRecipe)}
+                      title="Queue this recipe for removal in KubeJS"
                     >
-                      {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(currentRecipe.layout.output.id)} />
-                      {:else}
-                        <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
-                      {/if}
-                      {#if currentRecipe.layout.outputCount > 1}
-                        <em class="stack">{currentRecipe.layout.outputCount}</em>
-                      {/if}
+                      <Trash2 size={13} /> Queue Remove
                     </button>
                   </div>
-                {/if}
-              </div>
-
-              <div class="recipe-meta">
-                <span class="tag type">{currentRecipe.recipeType.replace(/^minecraft:/, "")}</span>
-                {#if currentRecipe.isConditional}<span class="tag warn">conditional</span>{/if}
-                <span class="tag mod" title={currentRecipe.sourceFile}>{currentRecipe.modSource}</span>
-              </div>
-              <code class="recipe-id">{currentRecipe.id}</code>
-
-              <div class="recipe-actions">
-                {#if ["crafting", "cooking", "smithing", "stonecutting"].includes(editableCategory(currentRecipe))}
-                  <button class="secondary" onclick={() => openEditRecipe(currentRecipe)}>
-                    <Pencil size={14} /> Edit
-                  </button>
-                {:else}
-                  <button class="secondary" onclick={() => openReplaceWithCrafting(currentRecipe)}>
-                    <Pencil size={14} /> Replace with crafting
-                  </button>
-                {/if}
-                <button class="secondary" onclick={() => copyKubeJS(currentRecipe)}>
-                  <Copy size={14} /> Copy KubeJS
-                </button>
-                <button class="secondary" onclick={() => queueRemove(currentRecipe)}>
-                  <Trash2 size={14} /> Queue remove
-                </button>
-                <button
-                  class="secondary"
-                  class:on={bookmarks.includes(currentRecipe.outputId)}
-                  onclick={() => toggleBookmark(currentRecipe.outputId)}
-                >
-                  <Star size={14} /> Bookmark
-                </button>
-              </div>
+                </div>
+              {/if}
             </div>
-          {/if}
+          </div>
         {/if}
       </main>
 
-      <!-- Right: bookmarks + ingredient list (JEI overlay) -->
-      <aside class="jei-overlay">
+      <!-- Right Item Catalog Sidebar (JEI Item Matrix) -->
+      <aside class="w-96 min-w-[340px] max-w-md flex flex-col min-h-0 bg-[var(--bg-secondary)] overflow-hidden flex-shrink-0">
+        <!-- Bookmark Strip (if any) -->
         {#if showBookmarks && bookmarkItems.length > 0}
-          <div class="bm-strip">
-            <div class="overlay-h"><Star size={12} /> Bookmarks</div>
-            <div class="item-grid compact">
+          <div class="px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-card)] flex flex-col gap-1.5 flex-shrink-0">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-bold uppercase tracking-wider text-[var(--accent-warning)] flex items-center gap-1">
+                <Star size={11} /> Bookmarks ({bookmarkItems.length})
+              </span>
+            </div>
+            <div class="grid grid-cols-8 gap-1 max-h-20 overflow-y-auto">
               {#each bookmarkItems as item (item.id)}
                 <button
-                  class="item-slot"
-                  class:sel={selectedItem === item.id}
+                  type="button"
+                  class="item-slot w-8 h-8 rounded bg-[var(--bg-secondary)] border border-[var(--border-color)] hover:border-amber-400 flex items-center justify-center relative cursor-pointer {selectedItem === item.id ? 'border-amber-400 shadow-sm' : ''}"
                   style="--hue: {itemHue(item.id)}"
-                  title={item.id}
+                  title="{item.id} — {item.name}"
                   draggable={editorOpen ? "true" : "false"}
                   ondragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
                   onclick={() => editorOpen ? placePaletteItem(item.id) : selectItem(item.id, "recipes")}
-                  oncontextmenu={(e) => { e.preventDefault(); !editorOpen && selectItem(item.id, "uses"); } }
+                  oncontextmenu={(e) => { e.preventDefault(); !editorOpen && selectItem(item.id, "uses"); }}
                 >
                   {#if iconSrc(item.id)}
-                    <img src={iconSrc(item.id)} alt="" class="item-icon" onerror={() => onIconError(item.id)} />
-                  {:else if iconCache[item.id] === "loading"}
-                    <span class="item-letter icon-pending"></span>
+                    <img src={iconSrc(item.id)} alt="" class="w-6 h-6 object-contain pixelated" onerror={() => onIconError(item.id)} />
                   {:else}
-                    <span class="item-letter">{item.name.slice(0, 2)}</span>
+                    <span class="text-[9px] font-bold text-[var(--text-primary)] uppercase">{item.name.slice(0, 2)}</span>
                   {/if}
                 </button>
               {/each}
@@ -2156,124 +2322,136 @@
           </div>
         {/if}
 
-        <div class="overlay-h">
+        <!-- Catalog Header -->
+        <div class="flex items-center justify-between px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] flex-shrink-0">
           {#if editorOpen}
-            <div class="palette-tabs">
+            <div class="flex bg-[var(--bg-card)] p-0.5 rounded-lg border border-[var(--border-color)]">
               <button
                 type="button"
-                class="mode-btn"
-                class:on={paletteMode === "items"}
+                class="px-2.5 py-0.5 text-xs font-bold rounded-md transition {paletteMode === 'items' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)]' : 'text-[var(--text-muted)]'}"
                 onclick={() => { paletteMode = "items"; itemPage = 0; }}
-              >Items</button>
+              >
+                Items ({filteredItems.length})
+              </button>
               <button
                 type="button"
-                class="mode-btn"
-                class:on={paletteMode === "tags"}
+                class="px-2.5 py-0.5 text-xs font-bold rounded-md transition {paletteMode === 'tags' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)]' : 'text-[var(--text-muted)]'}"
                 onclick={() => { paletteMode = "tags"; itemPage = 0; ensureTagsLoaded(); }}
-              >Tags</button>
+              >
+                Tags ({filteredTags.length})
+              </button>
             </div>
-            <small>{paletteMode === "tags" ? filteredTags.length : filteredItems.length}</small>
           {:else}
-            <span>Items</span>
-            <small>{filteredItems.length}</small>
+            <span class="text-xs font-bold text-[var(--text-primary)]">Item Catalog</span>
+            <span class="text-[11px] font-mono text-[var(--text-muted)]">{filteredItems.length} items</span>
           {/if}
+
+          <!-- Page Navigation -->
+          <div class="flex items-center gap-1.5">
+            <button
+              type="button"
+              class="p-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-40"
+              disabled={itemPage === 0}
+              onclick={() => (itemPage = Math.max(0, itemPage - 1))}
+            >
+              <ChevronLeft size={13} />
+            </button>
+            <span class="text-[11px] font-mono font-semibold text-[var(--text-muted)]">
+              {itemPage + 1} / {overlayPageCount}
+            </span>
+            <button
+              type="button"
+              class="p-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] disabled:opacity-40"
+              disabled={itemPage >= overlayPageCount - 1}
+              onclick={() => (itemPage = Math.min(overlayPageCount - 1, itemPage + 1))}
+            >
+              <ChevronRight size={13} />
+            </button>
+          </div>
         </div>
-        <div class="item-grid">
+
+        <!-- Catalog Grid (High Density) -->
+        <div class="flex-1 p-2 overflow-y-auto min-h-0 bg-[var(--bg-card)]">
           {#if editorOpen && paletteMode === "tags"}
             {#if tagsLoading}
-              <div class="palette-empty">Loading tags…</div>
+              <div class="text-center text-xs text-[var(--text-muted)] py-8">Loading tags…</div>
             {:else if pageTags.length === 0}
-              <div class="palette-empty">No tags match</div>
+              <div class="text-center text-xs text-[var(--text-muted)] py-8">No tags match query</div>
             {:else}
-              {#each pageTags as tagId (tagId)}
-                <button
-                  type="button"
-                  class="item-slot tag-slot"
-                  class:sel={editorKind === "tags" && editTagId === tagId.replace(/^#/, "")}
-                  draggable="true"
-                  style="--hue: 180"
-                  title={tagId}
-                  ondragstart={(e) => onDragStartItem(e, tagId)}
-                  onclick={() => {
-                    if (editorKind === "tags") selectEditTag(tagId);
-                  }}
-                >
-                  <span class="item-letter">#</span>
-                  <span class="tag-path">{tagId.replace(/^#/, "").slice(0, 6)}</span>
-                </button>
-              {/each}
+              <div class="flex flex-col gap-1">
+                {#each pageTags as tagId (tagId)}
+                  <button
+                    type="button"
+                    class="text-left px-2.5 py-1.5 rounded-lg border text-xs font-mono truncate transition flex items-center gap-1.5 {editorKind === 'tags' && editTagId === tagId.replace(/^#/, '') ? 'bg-[var(--accent-primary)]/15 border-[var(--accent-primary)] text-[var(--on-accent)] font-bold' : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}"
+                    draggable="true"
+                    ondragstart={(e) => onDragStartItem(e, tagId)}
+                    onclick={() => {
+                      if (editorKind === "tags") selectEditTag(tagId);
+                    }}
+                  >
+                    <span class="text-[var(--accent-secondary)] font-bold">#</span>
+                    <span class="truncate">{tagId}</span>
+                  </button>
+                {/each}
+              </div>
             {/if}
           {:else}
-            {#each pageItems as item (item.id)}
-              <button
-                type="button"
-                class="item-slot"
-                class:sel={selectedItem === item.id}
-                class:bookmarked={bookmarks.includes(item.id)}
-                style="--hue: {itemHue(item.id)}"
-                title="{item.id} — R: {item.recipeCount} · U: {item.useCount}"
-                draggable={editorOpen ? "true" : "false"}
-                ondragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
-                onclick={() => editorOpen ? placePaletteItem(item.id) : selectItem(item.id, "recipes")}
-                oncontextmenu={(e) => { e.preventDefault(); !editorOpen && selectItem(item.id, "uses"); } }
-                onauxclick={(e) => {
-                  if (e.button === 1) {
-                    e.preventDefault();
-                    toggleBookmark(item.id);
-                  }
-                }}
-              >
-                {#if iconSrc(item.id)}
-                  <img src={iconSrc(item.id)} alt="" class="item-icon" onerror={() => onIconError(item.id)} />
-                {:else if iconCache[item.id] === "loading"}
-                  <span class="item-letter icon-pending"></span>
-                {:else}
-                  <span class="item-letter">{item.name.slice(0, 2)}</span>
-                {/if}
-                {#if !editorOpen && focusCountForItem(item) > 0}
-                  <span class="item-count">{focusCountForItem(item)}</span>
-                {/if}
-              </button>
-            {/each}
+            <div class="grid grid-cols-8 gap-1.5">
+              {#each pageItems as item (item.id)}
+                <button
+                  type="button"
+                  class="item-slot w-10 h-10 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] hover:scale-105 transition flex items-center justify-center relative cursor-pointer {selectedItem === item.id ? 'border-[var(--accent-primary)] shadow-[0_0_8px_color-mix(in_srgb,var(--accent-primary)_30%,transparent)] bg-[var(--bg-hover)]' : ''}"
+                  style="--hue: {itemHue(item.id)}"
+                  title="{item.name}\n{item.id}\nLMB: Recipes ({item.recipeCount}) · RMB: Uses ({item.useCount})"
+                  draggable={editorOpen ? "true" : "false"}
+                  ondragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
+                  onclick={() => editorOpen ? placePaletteItem(item.id) : selectItem(item.id, "recipes")}
+                  oncontextmenu={(e) => { e.preventDefault(); !editorOpen && selectItem(item.id, "uses"); }}
+                  onauxclick={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault();
+                      toggleBookmark(item.id);
+                    }
+                  }}
+                >
+                  {#if iconSrc(item.id)}
+                    <img src={iconSrc(item.id)} alt="" class="w-7 h-7 object-contain pixelated pointer-events-none" onerror={() => onIconError(item.id)} />
+                  {:else}
+                    <span class="text-[10px] font-bold text-[var(--text-primary)] uppercase pointer-events-none">{item.name.slice(0, 2)}</span>
+                  {/if}
+                  {#if bookmarks.includes(item.id)}
+                    <span class="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-amber-400 shadow-sm"></span>
+                  {/if}
+                  {#if !editorOpen && focusCountForItem(item) > 0}
+                    <span class="absolute bottom-0.5 right-1 text-[9px] font-mono font-bold text-[var(--accent-warning)] pointer-events-none">
+                      {focusCountForItem(item)}
+                    </span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
           {/if}
         </div>
-        <div class="overlay-pager">
-          <button
-            class="nav-btn"
-            disabled={itemPage === 0}
-            onclick={() => (itemPage = Math.max(0, itemPage - 1))}
-          >
-            <ChevronLeft size={14} />
-          </button>
-          <span>
-            {itemPage + 1} / {overlayPageCount}
-          </span>
-          <button
-            class="nav-btn"
-            disabled={itemPage >= overlayPageCount - 1}
-            onclick={() => (itemPage = Math.min(overlayPageCount - 1, itemPage + 1))}
-          >
-            <ChevronRight size={14} />
-          </button>
-        </div>
+
+        <!-- Recent History Footer Strip -->
         {#if historyStack.length > 0}
-          <div class="hist-strip">
-            <div class="overlay-h"><History size={12} /> Recent</div>
-            <div class="item-grid compact">
-              {#each [...historyStack].reverse().slice(0, 12) as id (id)}
+          <div class="px-3 py-2 border-t border-[var(--border-color)] bg-[var(--bg-secondary)] flex flex-col gap-1 flex-shrink-0">
+            <span class="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
+              <History size={10} /> Recently Viewed
+            </span>
+            <div class="grid grid-cols-8 gap-1">
+              {#each [...historyStack].reverse().slice(0, 8) as id (id)}
                 <button
-                  class="item-slot"
-                  class:sel={selectedItem === id}
+                  type="button"
+                  class="w-8 h-8 rounded bg-[var(--bg-secondary)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center cursor-pointer {selectedItem === id ? 'border-[var(--accent-primary)]' : ''}"
                   style="--hue: {itemHue(id)}"
                   title={id}
                   onclick={() => selectItem(id, focusMode, false)}
                 >
                   {#if iconSrc(id)}
-                    <img src={iconSrc(id)} alt="" class="item-icon" onerror={() => onIconError(id)} />
-                  {:else if iconCache[id] === "loading"}
-                    <span class="item-letter icon-pending"></span>
+                    <img src={iconSrc(id)} alt="" class="w-6 h-6 object-contain pixelated" onerror={() => onIconError(id)} />
                   {:else}
-                    <span class="item-letter">{prettifyItem(id).slice(0, 2)}</span>
+                    <span class="text-[9px] font-bold text-[var(--text-primary)] uppercase">{prettifyItem(id).slice(0, 2)}</span>
                   {/if}
                 </button>
               {/each}
@@ -2296,572 +2474,22 @@
 />
 
 <style>
-  .jei {
-    --jei-panel: #c6c6c6;
-    --jei-panel-dark: #8b8b8b;
-    --jei-slot: #8b8b8b;
-    --jei-slot-in: #373737;
-    --jei-gold: #fbbf24;
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    min-height: 0;
-    overflow: hidden;
+  .recipe-workspace {
+    font-family: var(--font-sans, inherit);
+    /* Centered cap on 1440p+ — the recipe grid keeps card-sized columns
+       instead of stretching edge-to-edge (matches .graph 1840). */
+    max-width: min(1840px, 100%);
+    margin: 0 auto;
   }
-  .jei.busy { opacity: 0.92; }
-
-  .jei-hd {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-  }
-  .jei-brand { display: flex; align-items: center; gap: 12px; }
-  .jei-logo {
-    width: 44px; height: 44px; border-radius: 10px;
-    background: linear-gradient(145deg, #fbbf24, #d97706);
-    color: #1a1200; font-weight: 900; font-size: 14px;
-    display: grid; place-items: center;
-    box-shadow: 0 4px 14px rgba(251, 191, 36, 0.25);
-    letter-spacing: -0.02em;
-  }
-  .jei-brand h2 { margin: 0; font-size: 16px; font-weight: 700; color: var(--text-primary); }
-  .sub { margin: 2px 0 0; font-size: 12px; color: var(--text-muted); }
-  .hd-actions { display: flex; gap: 8px; align-items: center; }
-  .hd-actions .ghost.active { color: var(--jei-gold); border-color: rgba(251, 191, 36, 0.4); }
-  .primary-scan {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 8px 14px; border-radius: 10px; border: none;
-    background: var(--accent-primary); color: var(--on-accent, #04140a); font-weight: 700; cursor: pointer;
-  }
-  .primary-scan:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .help-bar {
-    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
-    padding: 8px 12px; border-radius: 10px;
-    background: var(--bg-secondary); border: 1px solid var(--border-color);
-    font-size: 12px; color: var(--text-secondary);
-  }
-  .help-bar .tiny { margin-left: auto; }
-  kbd {
-    display: inline-block; padding: 1px 6px; margin: 0 2px;
-    border-radius: 4px; border: 1px solid var(--border-color);
-    background: var(--bg-tertiary); font-size: 11px; font-family: ui-monospace, monospace;
-  }
-
-  .notice { padding: 10px 14px; border-radius: 10px; font-size: 13px; }
-  .notice.error { background: rgba(239, 68, 68, 0.08); color: #fecaca; border: 1px solid rgba(239, 68, 68, 0.25); }
-  .notice.ok { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); color: var(--accent-primary); border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent); }
-
-  .jei-search-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .jei-search { flex: 1; min-width: 220px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-muted); position: relative; }
-  .jei-search :global(svg) { flex-shrink: 0; color: var(--text-muted); position: static; }
-  .jei-search input {
-    flex: 1; min-width: 0; width: 100%; padding: 10px 28px 10px 0; border: 0; border-radius: 0;
-    background: transparent; color: var(--text-primary); outline: none;
-  }
-  .jei-search .clear {
-    position: absolute; right: 8px; background: transparent; border: none;
-    color: var(--text-muted); cursor: pointer; padding: 4px;
-  }
-  .mod-select {
-    padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border-color);
-    background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px;
-  }
-  .warn-btn {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(251, 191, 36, 0.35);
-    background: rgba(251, 191, 36, 0.12); color: #fbbf24; font-weight: 600; cursor: pointer; font-size: 12px;
-  }
-
-  .empty {
-    padding: 72px 24px; text-align: center; color: var(--text-muted);
-    background: var(--bg-secondary); border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    display: flex; flex-direction: column; align-items: center; gap: 10px;
-  }
-  .empty h3 { margin: 0; color: var(--text-secondary); }
-  .empty code { font-size: 12px; color: var(--accent-primary); }
-
-  .jei-body {
-    display: grid;
-    grid-template-columns: 72px minmax(0, 1fr) 300px;
-    gap: 10px;
-    flex: 1;
-    min-height: 0;
-    align-items: stretch;
-  }
-  .jei-body:not(.with-bookmarks) { grid-template-columns: 72px minmax(0, 1fr) 280px; }
-
-  .cat-rail {
-    display: flex; flex-direction: column; gap: 4px;
-    background: var(--bg-secondary); border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg); padding: 8px 6px;
-    min-height: 0;
-    max-height: 100%;
-    overflow-y: auto;
-    overflow-x: hidden;
-    scrollbar-width: thin;
-  }
-  .cat-tab {
-    display: flex; flex-direction: column; align-items: center; gap: 4px;
-    flex: 0 0 auto;
-    padding: 10px 4px; border-radius: 10px; border: 1px solid transparent;
-    background: transparent; color: var(--text-muted); cursor: pointer; font-size: 9px;
-    text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
-    transform: none;
-  }
-  .cat-tab span {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-align: center;
-  }
-  .cat-tab:hover { background: var(--bg-hover); color: var(--text-secondary); transform: none; }
-  .cat-tab.active {
-    background: rgba(251, 191, 36, 0.12); border-color: rgba(251, 191, 36, 0.35); color: var(--jei-gold);
-  }
-
-  .jei-gui {
-    background: var(--bg-secondary); border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg); padding: 14px 16px;
-    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
-  }
-  .gui-empty {
-    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 10px; color: var(--text-muted); text-align: center;
-  }
-  .gui-empty.compact { padding: 40px; }
-  .gui-empty h3 { margin: 0; color: var(--text-secondary); }
-  .gui-empty .hint { font-size: 12px; }
-  .mc-panel.preview { opacity: 0.45; pointer-events: none; margin-bottom: 8px; }
-  .mc-panel.preview .craft-grid.dim .mc-slot { background: #2a2a2e; }
-
-  .gui-top {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px;
-  }
-  .focus-tabs { display: flex; gap: 4px; }
-  .focus-tabs button {
-    padding: 8px 14px; font-size: 12px; border-radius: var(--border-radius-sm);
-    background: var(--bg-tertiary); border: 1px solid var(--border-color);
-    color: var(--text-muted); cursor: pointer;
-    transform: none;
-    font-weight: 600;
-  }
-  .focus-tabs button:hover { transform: none; background: var(--bg-hover); color: var(--text-secondary); }
-  .focus-tabs button em { font-style: normal; opacity: 0.7; margin-left: 4px; }
-  .focus-tabs button.active {
-    background: color-mix(in srgb, var(--accent-primary) 10%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
-    color: var(--accent-primary); font-weight: 700;
-  }
-  .focus-tabs button.active:hover {
-    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-    color: var(--accent-primary);
-  }
-  .focus-item { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-  .focus-item small { display: block; font-size: 10px; color: var(--text-muted); }
-  .editor-view .gui-top { justify-content: space-between; }
-  .recipe-view.editor-view {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
-    min-width: 0;
-  }
-  .focus-item code { font-size: 10px; color: var(--text-muted); }
-  .star {
-    background: transparent; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);
-    color: var(--text-muted); padding: 6px; cursor: pointer;
-  }
-  .star.on { color: var(--jei-gold); border-color: rgba(251, 191, 36, 0.45); }
-
-  .recipe-stage { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 12px; }
-  .recipe-nav { display: flex; align-items: center; gap: 12px; color: var(--text-muted); font-size: 13px; }
-  .nav-btn {
-    width: 32px; height: 32px; border-radius: var(--border-radius-sm); border: 1px solid var(--border-color);
-    background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer;
-    display: grid; place-items: center;
-  }
-  .nav-btn:disabled { opacity: 0.35; cursor: default; }
-  .page { font-variant-numeric: tabular-nums; min-width: 64px; text-align: center; }
-
-  /* Minecraft-style recipe panel */
-  .mc-panel {
-    background: linear-gradient(180deg, #c6c6c6 0%, #8b8b8b 100%);
-    border: 3px solid #373737;
-    box-shadow:
-      inset 2px 2px 0 #ffffff88,
-      inset -2px -2px 0 #00000044,
-      0 8px 24px rgba(0, 0, 0, 0.35);
-    border-radius: 4px;
-    padding: 12px 18px 16px;
-    min-width: 320px;
-    color: #1a1a1a;
-  }
-  .panel-title {
-    font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em;
-    margin-bottom: 10px; display: flex; align-items: center; gap: 8px; color: #222;
-  }
-  .badge.shapeless {
-    font-size: 9px; padding: 2px 6px; border-radius: 4px;
-    background: #67e8f9; color: #083344;
-  }
-  .panel-body { display: flex; align-items: center; gap: 14px; justify-content: center; }
-  .panel-body.craft, .panel-body.cook, .panel-body.smith { min-height: 120px; }
-  .panel-body :global(.arr) { color: #373737; flex-shrink: 0; }
-  .plus { font-weight: 900; font-size: 18px; color: #373737; }
-
-  .craft-grid {
-    display: grid; grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(3, 48px); gap: 3px;
-  }
-  .craft-grid.loose {
-    grid-template-columns: repeat(auto-fill, 48px); grid-template-rows: auto; max-width: 160px;
-  }
-
-  .mc-slot {
-    width: 48px; height: 48px; padding: 0; cursor: pointer;
-    border: 2px solid #373737;
-    background:
-      linear-gradient(135deg, hsl(var(--hue, 0) 28% 38%), hsl(var(--hue, 0) 22% 28%)),
-      #8b8b8b;
-    box-shadow: inset 2px 2px 0 #ffffff55, inset -2px -2px 0 #00000055;
-    display: flex; align-items: center; justify-content: center;
-    position: relative; border-radius: 2px;
-  }
-  .mc-slot.empty, .mc-slot:disabled.empty {
-    background: #373737;
-    box-shadow: inset 2px 2px 0 #00000066, inset -1px -1px 0 #ffffff22;
-    cursor: default;
-  }
-  .mc-slot:not(.empty):hover { outline: 2px solid #fbbf24; outline-offset: 1px; }
-  .mc-slot.out {
-    width: 56px; height: 56px;
-    border-color: #14532d;
-    background: linear-gradient(135deg, hsl(var(--hue) 40% 42%), hsl(var(--hue) 32% 28%));
-  }
-  .mc-slot.large { width: 56px; height: 56px; }
-  .mc-slot.mini { width: 36px; height: 36px; flex-shrink: 0; }
-  .mc-slot.tag { border-style: dashed; border-color: #67e8f9; }
-  .letter {
-    font-size: 10px; font-weight: 800; color: #fff;
-    text-shadow: 0 1px 2px #000, 1px 1px 0 #000; text-align: center; line-height: 1.1;
-    text-transform: uppercase; pointer-events: none;
-  }
-  .slot-icon {
-    width: calc(100% - 4px);
-    height: calc(100% - 4px);
-    object-fit: contain;
+  .pixelated {
     image-rendering: pixelated;
-    pointer-events: none;
   }
-  .stack {
-    position: absolute; bottom: 1px; right: 3px; font-style: normal;
-    font-size: 12px; font-weight: 900; color: #fff; text-shadow: 1px 1px 0 #000;
+  :global(.spin) {
+    animation: spin 0.8s linear infinite;
   }
-  .cycle-dot {
-    position: absolute; top: 3px; right: 3px; width: 5px; height: 5px;
-    border-radius: 50%; background: #67e8f9; box-shadow: 0 0 4px #67e8f9;
-  }
-
-  .flame-col {
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
-    font-size: 11px; font-weight: 700; color: #9a3412;
-  }
-  .flame-col :global(.flame) { color: #ea580c; animation: flicker 1.1s ease-in-out infinite alternate; }
-  .xp { color: #166534; }
-  @keyframes flicker { from { opacity: 0.65; transform: scale(0.95); } to { opacity: 1; transform: scale(1.05); } }
-
-  .recipe-meta { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
-  .tag {
-    font-size: 10px; padding: 3px 8px; border-radius: 6px;
-    text-transform: uppercase; font-weight: 700;
-  }
-  .tag.type { background: rgba(103, 232, 249, 0.12); color: #67e8f9; }
-  .tag.mod { background: var(--bg-tertiary); color: var(--text-muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tag.warn { background: rgba(251, 191, 36, 0.12); color: #fbbf24; }
-  .vanilla-missing-btn {
-    border: none;
-    cursor: pointer;
-    font: inherit;
-    padding: 2px 8px;
-  }
-  .vanilla-missing-btn:hover { filter: brightness(1.1); }
-  .recipe-id {
-    font-size: 10px; color: var(--text-muted); word-break: break-all;
-    text-align: center; max-width: 520px;
-  }
-  .recipe-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-  .recipe-actions .secondary {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 12px; border-radius: var(--border-radius-sm); font-size: 12px;
-    background: var(--bg-tertiary); border: 1px solid var(--border-color);
-    color: var(--text-secondary); cursor: pointer;
-  }
-  .recipe-actions .secondary.on { color: var(--jei-gold); border-color: rgba(251, 191, 36, 0.4); }
-
-  .editor-view .editor-toggles,
-  .palette-tabs {
-    display: flex;
-    gap: 4px;
-  }
-  .editor-kind-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    justify-content: center;
-    margin-bottom: 8px;
-  }
-  .editor-toggles {
-    display: flex;
-    gap: 4px;
-    justify-content: center;
-    margin-bottom: 8px;
-  }
-  .editor-field {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    font-size: 10px;
-    color: #222;
-  }
-  .editor-field input {
-    width: 72px;
-    padding: 2px 4px;
-    border: 1px solid #555;
-    border-radius: 4px;
-  }
-  .editor-field.wide {
-    width: 100%;
-  }
-  .editor-field.wide input {
-    width: 100%;
-    font-family: ui-monospace, monospace;
-  }
-  .editor-check {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: #222;
-  }
-  .tag-editor {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    min-width: 320px;
-  }
-  .tag-drop-zone {
-    border: 2px dashed #555;
-    border-radius: 6px;
-    padding: 10px;
-    min-height: 48px;
-    background: rgba(0, 0, 0, 0.08);
-    font-size: 12px;
-    color: #222;
-  }
-  .tag-chip-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 6px;
-  }
-  .tag-chip {
-    border: 1px solid #555;
-    background: #eee;
-    border-radius: 4px;
-    padding: 2px 6px;
-    font-size: 10px;
-    font-family: ui-monospace, monospace;
-    cursor: pointer;
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .tag-chip.add { background: #d1fae5; border-color: #059669; }
-  .tag-chip.remove { background: #fee2e2; border-color: #dc2626; text-decoration: line-through; }
-  .tag-members .overlay-h { color: #333; border: none; padding: 0; text-transform: none; }
-  .muted { opacity: 0.65; font-size: 11px; }
-  .mc-panel.tag-editor-panel { max-width: 480px; }
-  .mode-btn {
-    border: 1px solid var(--border-color, #3a3a40);
-    background: rgba(0, 0, 0, 0.25);
-    color: var(--text-muted);
-    border-radius: 6px;
-    padding: 4px 10px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .mode-btn.on {
-    color: #1a1200;
-    background: linear-gradient(145deg, #fbbf24, #d97706);
-    border-color: transparent;
-    font-weight: 700;
-  }
-  .editor-hint {
-    text-align: center;
-    font-size: 12px;
-    color: var(--text-muted);
-    margin: 8px 0 4px;
-  }
-  .quick-add-row {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    margin: 6px 0 10px;
-  }
-  .quick-add-row input {
-    width: 300px;
-    max-width: 60%;
-    padding: 6px 10px;
-    font-size: 12px;
-    border: 1px solid var(--border-color, #3a3a40);
-    border-radius: var(--border-radius-sm);
-    background: var(--bg-secondary, #1a1a1e);
-    color: var(--text-primary, #eee);
-    outline: none;
-  }
-  .quick-add-row input:focus {
-    border-color: var(--jei-gold);
-  }
-  .quick-add-row .secondary {
-    padding: 6px 10px;
-    font-size: 12px;
-  }
-  .mc-slot.drop-target {
-    outline: 1px dashed rgba(251, 191, 36, 0.35);
-  }
-  .empty-actions {
-    display: flex;
-    gap: 10px;
-    margin-top: 12px;
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-  .palette-empty {
-    grid-column: 1 / -1;
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 12px;
-    padding: 16px 8px;
-  }
-  .item-slot.tag-slot {
-    flex-direction: column;
-    gap: 2px;
-    border-style: dashed;
-    border-color: #67e8f9;
-  }
-  .tag-path {
-    font-size: 8px;
-    line-height: 1;
-    color: #a5f3fc;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .item-slot[draggable="true"] { cursor: grab; }
-
-  .jei-overlay {
-    background: #0e0e10; border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg); display: flex; flex-direction: column;
-    overflow: hidden; min-height: 0;
-  }
-  .overlay-h {
-    display: flex; justify-content: space-between; align-items: center; gap: 6px;
-    padding: 8px 10px; border-bottom: 1px solid var(--border-color);
-    font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
-    color: var(--text-muted); font-weight: 700;
-  }
-  .item-grid {
-    flex: 1; overflow: auto; padding: 8px;
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
-    gap: 3px; align-content: start;
-  }
-  .item-grid.compact { flex: none; max-height: 88px; }
-  .item-slot {
-    width: 36px; height: 36px; border: 1px solid #3a3a42; border-radius: 3px;
-    background: linear-gradient(135deg, hsl(var(--hue) 32% 24%), hsl(var(--hue) 26% 16%));
-    position: relative; cursor: pointer; padding: 0;
-    box-shadow: inset 1px 1px 0 rgba(255,255,255,0.08);
-  }
-  .item-slot:hover, .item-slot.sel {
-    border-color: var(--jei-gold);
-    box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.45);
-  }
-  .item-slot.bookmarked::after {
-    content: ""; position: absolute; top: 2px; left: 2px;
-    width: 4px; height: 4px; border-radius: 50%; background: var(--jei-gold);
-  }
-  .item-letter {
-    font-size: 9px; font-weight: 800; color: #e8e8ec; text-transform: uppercase;
-    text-shadow: 0 1px 1px #000;
-  }
-  .item-letter.icon-pending {
-    width: 60%;
-    height: 60%;
-    border-radius: 2px;
-    background: linear-gradient(90deg, rgba(255,255,255,0.06) 25%, rgba(255,255,255,0.14) 50%, rgba(255,255,255,0.06) 75%);
-    background-size: 200% 100%;
-    animation: icon-shimmer 1.1s linear infinite;
-  }
-  @keyframes icon-shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-  }
-  .item-icon {
-    width: calc(100% - 4px);
-    height: calc(100% - 4px);
-    object-fit: contain;
-    image-rendering: pixelated;
-    pointer-events: none;
-  }
-  .item-count {
-    position: absolute; bottom: 0; right: 2px;
-    font-size: 8px; font-weight: 800; color: var(--jei-gold);
-  }
-  .overlay-pager {
-    display: flex; align-items: center; justify-content: center; gap: 10px;
-    padding: 8px; border-top: 1px solid var(--border-color);
-    font-size: 11px; color: var(--text-muted);
-  }
-  .bm-strip, .hist-strip { border-bottom: 1px solid var(--border-color); }
-
-  .source-badge {
-    display: inline-flex; align-items: center; gap: 4px;
-    color: var(--text-muted);
-  }
-  .source-badge.live { color: #4ade80; }
-  .live-launch {
-    display: inline-flex; align-items: center; gap: 6px;
-    border: 1px solid rgba(74, 222, 128, 0.4); border-radius: 5px;
-    color: #86efac; background: rgba(34, 197, 94, 0.1);
-    padding: 7px 10px; cursor: pointer;
-  }
-  .runtime-layout {
-    width: var(--runtime-width); height: var(--runtime-height);
-    min-width: 120px; min-height: 70px; position: relative;
-    margin: 10px auto 4px;
-  }
-  .runtime-slot { position: absolute; }
-  .runtime-slot.output { border-color: var(--jei-gold); }
-  .stations {
-    display: flex; align-items: center; justify-content: center; gap: 6px;
-    margin-top: 8px; color: var(--text-muted); font-size: 10px;
-  }
-
-  :global(.spin) { animation: spin 900ms linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  @media (max-width: 1100px) {
-    .jei-body { grid-template-columns: 64px 1fr; }
-    .jei-overlay { grid-column: 1 / -1; max-height: 280px; }
-  }
-  @media (max-width: 700px) {
-    .jei-body { grid-template-columns: 1fr; }
-    .cat-rail { flex-direction: row; overflow-x: auto; }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

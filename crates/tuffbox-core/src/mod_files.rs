@@ -398,7 +398,7 @@ fn ensure_project_mods_downloaded_with_progress_filtered_impl(
                 .as_deref()
                 .is_some_and(|id| crate::task_progress::is_cancel_requested(id))
             {
-                report.lock().unwrap().skipped.push(format!(
+                report.lock().unwrap_or_else(|e| e.into_inner()).skipped.push(format!(
                     "__cancelled__{}",
                     module.id
                 ));
@@ -420,7 +420,7 @@ fn ensure_project_mods_downloaded_with_progress_filtered_impl(
             |_permit, module| {
                 let outcome = materialize_mod_file_with_progress(instance_dir, module, &progress);
                 in_flight.fetch_sub(1, Ordering::SeqCst);
-                let mut report = report.lock().unwrap();
+                let mut report = report.lock().unwrap_or_else(|e| e.into_inner());
                 match outcome {
                     Ok(MaterializeOutcome::Downloaded) => report.downloaded.push(module.id.clone()),
                     Ok(MaterializeOutcome::AlreadyPresent) => {

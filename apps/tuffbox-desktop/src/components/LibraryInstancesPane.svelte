@@ -26,6 +26,7 @@
     Search,
     X,
     Compass,
+    Server,
   } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
@@ -38,6 +39,8 @@
     openAddInstance,
     runningInstances,
     isProjectRunning,
+    launchSessions,
+    isProjectLaunching,
     formatPlaytime,
     authState,
     skinPath,
@@ -52,7 +55,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { api, githubInspectMeta } from "../lib/api";
   import { copyText } from "../lib/clipboard";
-  import { launchWithFeedback, killWithFeedback } from "../lib/launch";
+  import { launchWithFeedback, killWithFeedback, launchingPath } from "../lib/launch";
   import {
     DEFAULT_GROUP,
     loadGroupMap,
@@ -75,6 +78,7 @@
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
+  import LibraryInstanceContent from "./LibraryInstanceContent.svelte";
 
   let {
     currentView = $bindable(),
@@ -89,7 +93,22 @@
   const MOVE_CANCEL_PX = 10;
 
   let selectedPath = $state<string | null>($projectPath);
-  let launching = $state<string | null>(null);
+  /** Per-instance content (mods/packs/shaders/servers) — collapsed by default
+      so the Library side rail stays quiet until needed. */
+  const CONTENT_COLLAPSE_KEY = "tuffbox-library-content-collapsed";
+  let contentCollapsed = $state(
+    typeof localStorage === "undefined"
+      ? true
+      : localStorage.getItem(CONTENT_COLLAPSE_KEY) !== "false",
+  );
+  function toggleContentCollapsed() {
+    contentCollapsed = !contentCollapsed;
+    try {
+      localStorage.setItem(CONTENT_COLLAPSE_KEY, String(contentCollapsed));
+    } catch {
+      /* ignore */
+    }
+  }
   let actionBusy = $state(false);
   let exportMenuOpen = $state(false);
   let addMenuOpen = $state(false);
@@ -171,6 +190,12 @@
   const selected = $derived($recentProjects.find((p) => p.path === selectedPath) ?? null);
   const selectedRunning = $derived(
     isProjectRunning(selectedPath, $runningInstances),
+  );
+  const selectedLaunching = $derived(
+    isProjectLaunching(selectedPath, $launchSessions),
+  );
+  const selectedLaunchMessage = $derived(
+    selectedPath ? $launchSessions[selectedPath]?.message ?? "Launching…" : "Launching…",
   );
   /** Multiplier from the Settings UI-scale (Auto mode derives it from screen size). */
   const sideScale = $derived(($uiScalePercentLive ?? 100) / 100);
@@ -358,55 +383,19 @@
 
   async function launchInstance(project: RecentProject) {
     closeMenus();
+    const path = await selectInstance(project);
     if (
+      isProjectRunning(path, $runningInstances) ||
       isProjectRunning(project.path, $runningInstances)
     ) {
+      await killWithFeedback(path);
+      if (path !== project.path) await killWithFeedback(project.path);
       return;
     }
-    launching = project.path;
+    if (isProjectLaunching(path, $launchSessions)) return;
     try {
-      const path = await selectInstance(project);
-      if (
-        isProjectRunning(path, $runningInstances) ||
-        isProjectRunning(project.path, $runningInstances)
-      ) {
-        return;
-      }
       await invoke("set_last_opened_project", { path });
-      // launchWithFeedback returns as soon as the JVM is spawned; keep the
-      // spinner honest by clearing on process-exited for this instance
-      // (same lifecycle as Dashboard.launch), not synchronously in finally.
-      let exited = false;
-      let unlisten: () => void = () => {};
-      const onExited = (event: { payload?: { id?: string } }) => {
-        if (event.payload?.id === path) {
-          exited = true;
-          unlisten();
-        }
-      };
-      listen<{ id: string; code?: number | null }>("process-exited", onExited).then((fn) => {
-        if (exited) {
-          fn();
-        } else {
-          unlisten = fn;
-        }
-      });
-      try {
-        await launchWithFeedback({ path, profile: "client" });
-        // Fallback: if no exit event arrives (e.g. instance already counted
-        // as running elsewhere), clear after a generous grace period.
-        setTimeout(() => {
-          if (!exited) {
-            unlisten();
-            launching = null;
-          }
-        }, 15000);
-        return;
-      } catch (e) {
-        toasts.error(`Launch failed: ${e}`);
-      } finally {
-        unlisten();
-      }
+      await launchWithFeedback({ path, profile: "client" });
     } finally {
       void loadStats(selectedPath ?? project.path);
     }
@@ -877,6 +866,22 @@
           actionBusy = false;
         }
         break;
+      case "export-server":
+        actionBusy = true;
+        try {
+          const exported = await api.export.serverPack(null, project.path);
+          try {
+            await copyText(exported.path);
+            toasts.success(`Exported server pack — path copied: ${exported.path}`);
+          } catch {
+            toasts.success(`Exported server pack: ${exported.path}`);
+          }
+        } catch (e) {
+          toasts.error(String(e));
+        } finally {
+          actionBusy = false;
+        }
+        break;
       case "copy":
         clonePromptName = `${project.info.name} copy`;
         cloneTarget = project;
@@ -908,10 +913,12 @@
       case "repair":
         actionBusy = true;
         try {
-          const report: { downloaded?: unknown[]; failed?: unknown[] } = await invoke(
-            "repair_project",
-            { path: project.path },
-          );
+          const report: {
+            downloaded?: unknown[];
+            failed?: unknown[];
+            duplicates?: unknown[];
+            wrongLoader?: unknown[];
+          } = await invoke("repair_project", { path: project.path });
           const downloaded = report.downloaded?.length ?? 0;
           const failed = report.failed?.length ?? 0;
 
@@ -928,21 +935,15 @@
             [];
 
           const parts: string[] = [];
-          parts.push(
-            downloaded === 0 && failed === 0
-              ? "All mod files present and valid."
-              : `Re-downloaded ${downloaded} file(s)${failed ? `, ${failed} failed` : ""}.`,
-          );
-          if (dupes.length > 0) {
-            parts.push(`${dupes.length} duplicate group${dupes.length > 1 ? "s" : ""} — resolve in Mods → Duplicates.`);
-          }
-          if (wrongLoader.length > 0) {
-            parts.push(`${wrongLoader.length} wrong-loader jar(s) — disable in Mods → Wrong loader.`);
-          }
-          if (dupes.length === 0 && wrongLoader.length === 0) {
-            toasts.success(parts.join(" "));
+          if (downloaded > 0) parts.push(`${downloaded} re-downloaded`);
+          if (failed > 0) parts.push(`${failed} failed`);
+          if (dupes.length > 0) parts.push(`${dupes.length} duplicate group${dupes.length > 1 ? "s" : ""}`);
+          if (wrongLoader.length > 0) parts.push(`${wrongLoader.length} wrong-loader jar${wrongLoader.length > 1 ? "s" : ""}`);
+          if (parts.length === 0) {
+            toasts.success("All mod files present and valid.");
+          } else if (dupes.length === 0 && wrongLoader.length === 0) {
+            toasts.success(`Repair report: ${parts.join(", ")}.`);
           } else {
-            // Problems found: warn instead of success so it draws the eye.
             toasts.warning(`Repair finished with findings. ${parts.join(" ")}`, 10000);
           }
         } catch (e) {
@@ -1377,11 +1378,11 @@
               <button
                 type="button"
                 class={["side-btn", "launch", { stop: selectedRunning }]}
-                disabled={actionBusy || launching === selected.path}
+                disabled={actionBusy || selectedLaunching}
                 onclick={() => void runAction(selectedRunning ? "stop" : "launch", selected)}
               >
-                {#if launching === selected.path}
-                  <span class="mini-spinner"></span> Launching…
+                {#if selectedLaunching}
+                  <span class="mini-spinner"></span> {selectedLaunchMessage}
                 {:else if selectedRunning}
                   <Square size={16} fill="currentColor" /> Stop
                 {:else}
@@ -1425,6 +1426,9 @@
                     <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
                       <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", selected)}>
                         Export .mrpack
+                      </button>
+                      <button type="button" role="menuitem" onclick={() => void runAction("export-server", selected)}>
+                        Export server pack
                       </button>
                       <button type="button" role="menuitem" onclick={() => void runAction("export-prism", selected)}>
                         Export Prism zip
@@ -1498,6 +1502,26 @@
                 <span class="side-meta-value">{memoryLabel(selected.info.memoryMb)}</span>
               </div>
             </div>
+            <div class="side-content">
+              <button
+                type="button"
+                class="side-content-toggle"
+                aria-expanded={!contentCollapsed}
+                onclick={toggleContentCollapsed}
+              >
+                <span class="side-content-title">Content</span>
+                <span class="side-content-hint">mods · packs · shaders · servers</span>
+                <ChevronDown size={14} class={!contentCollapsed ? "flipped" : ""} />
+              </button>
+              {#if !contentCollapsed}
+                <div class="side-content-body">
+                  <LibraryInstanceContent
+                    projectPath={selected.path}
+                    onOpenMods={() => openInIde(selected)}
+                  />
+                </div>
+              {/if}
+            </div>
           </div>
         {/key}
       {:else}
@@ -1535,7 +1559,7 @@
           isProjectRunning(menuProject.path, $runningInstances) ? "stop" : "launch",
           menuProject,
         )}
-      disabled={actionBusy}
+      disabled={actionBusy || isProjectLaunching(menuProject.path, $launchSessions)}
     >
       {#if isProjectRunning(menuProject.path, $runningInstances)}
         <Square size={14} /> Stop
@@ -1565,6 +1589,12 @@
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("shortcut", menuProject)}>
       <Link2 size={14} /> Create Shortcut
+    </button>
+    <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", menuProject)} disabled={actionBusy}>
+      <Package size={14} /> Export .mrpack
+    </button>
+    <button type="button" role="menuitem" onclick={() => void runAction("export-server", menuProject)} disabled={actionBusy}>
+      <Server size={14} /> Export server pack
     </button>
     <div class="menu-sep"></div>
     <button type="button" role="menuitem" onclick={() => void runAction("copy-path", menuProject)}>
@@ -2610,6 +2640,53 @@
   @keyframes lib-side-in {
     from { opacity: 0; }
     to { opacity: 1; }
+  }
+
+  /* Per-instance content drawer (mods/packs/shaders/servers status board). */
+  .side-content {
+    margin-top: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
+
+  .side-content-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 4px;
+    background: transparent;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    cursor: pointer;
+    color: var(--text);
+  }
+
+  .side-content-toggle:hover {
+    background: var(--surface-hover);
+  }
+
+  .side-content-title {
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .side-content-hint {
+    flex: 1 1 auto;
+    text-align: left;
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .side-content-toggle :global(.flipped) {
+    transform: rotate(180deg);
+  }
+
+  .side-content-body {
+    margin-top: 6px;
   }
 
   .drag-mode .prism-grid-pane {

@@ -14,6 +14,10 @@
     iconUrl?: string | null;
     contentType?: string | null;
     fileName?: string | null;
+    side?: string | null;
+    disabled?: boolean;
+    /** Optional "why this is recommended" note from the mod picker / repair flow. */
+    recommendedReason?: string | null;
   };
 
   type CatalogDetail = {
@@ -34,10 +38,16 @@
     mod,
     onclose,
     onopenlink,
+    ontoggleDisabled,
+    onopenversions,
   }: {
     mod: InspectorMod;
     onclose: () => void;
     onopenlink?: (url: string) => void;
+    /** Toggle disable/enable (jar `.disabled` rename + manifest status). */
+    ontoggleDisabled?: (mod: InspectorMod) => void;
+    /** Open the version picker for this mod. */
+    onopenversions?: (mod: InspectorMod) => void;
   } = $props();
 
   let detail = $state<CatalogDetail | null>(null);
@@ -54,6 +64,17 @@
   const projectId = $derived((mod.projectId || (provider ? mod.id : "") || "").trim());
 
   const displayName = $derived(detail?.name?.trim() || mod.name);
+
+  const sideLabel = $derived.by(() => {
+    const s = (mod.side || "").toLowerCase();
+    switch (s) {
+      case "client": return "Client";
+      case "server": return "Server";
+      case "both": return "Both sides";
+      case "optional": return "Optional";
+      default: return s ? s : "Side unknown";
+    }
+  });
 
   const authors = $derived.by(() => {
     const fromDetail = (detail?.authors ?? []).map((a) => a.trim()).filter(Boolean);
@@ -193,6 +214,45 @@
         <p class="inspector-description">{description}</p>
       </section>
 
+      <section class="inspector-section facts">
+        {#if mod.side}
+          <span class="fact-badge" title="Side">Side: {sideLabel}</span>
+        {/if}
+        {#if mod.contentType}
+          <span class="fact-badge" title="Content type">{mod.contentType}</span>
+        {/if}
+        {#if mod.fileName}
+          <span class="fact-badge mono" title="File name">{mod.fileName}</span>
+        {/if}
+      </section>
+
+      {#if mod.recommendedReason}
+        <section class="inspector-section recommended">
+          <span class="recommended-label">Why recommended</span>
+          <p>{mod.recommendedReason}</p>
+        </section>
+      {/if}
+
+      {#if ontoggleDisabled || onopenversions}
+        <section class="inspector-section actions">
+          {#if ontoggleDisabled}
+            <button
+              type="button"
+              class="inspector-action"
+              class:disabled={mod.disabled}
+              onclick={() => ontoggleDisabled?.(mod)}
+            >
+              {mod.disabled ? "Enable mod" : "Disable mod"}
+            </button>
+          {/if}
+          {#if onopenversions}
+            <button type="button" class="inspector-action" onclick={() => onopenversions?.(mod)}>
+              Open versions
+            </button>
+          {/if}
+        </section>
+      {/if}
+
       {#if issuesUrl}
         <section class="inspector-section links">
           <span class="links-label">Report issues at:</span>
@@ -329,6 +389,77 @@
     color: var(--text-secondary);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+
+  .inspector-section.facts {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .fact-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 3px 8px;
+    border-radius: 999px;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+  }
+  .fact-badge.mono {
+    font-family: ui-monospace, monospace;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .inspector-section.actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .inspector-action {
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  .inspector-action:hover {
+    border-color: var(--accent-primary);
+  }
+  .inspector-action.disabled {
+    color: var(--accent-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
+  }
+
+  .inspector-section.recommended {
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--accent-secondary) 30%, transparent);
+    background: color-mix(in srgb, var(--accent-secondary) 4%, transparent);
+  }
+  .recommended-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent-secondary);
+  }
+  .recommended p {
+    margin: 4px 0 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
   }
 
   .inspector-section.links {

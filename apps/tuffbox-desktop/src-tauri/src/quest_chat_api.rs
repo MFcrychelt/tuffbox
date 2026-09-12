@@ -364,38 +364,38 @@ async fn ai_quest_plan(
     };
     merge_usage(usage_acc, usage);
     let raw1 = value_to_raw(value);
-    match parse_quest_plan(&raw1) {
-        Ok(plan) if quest_plan_has_quests(&plan) => Ok(plan),
-        // Syntactically valid but empty (chapters without quests) — same repair flow.
-        Ok(_) => Err(
-            "chapters contain no quests — each chapter MUST include a non-empty \"quests\" array"
-                .into(),
-        ),
-        Err(first_err) => {
-            let repair = format!(
-                "{user}\n\nYour previous answer was invalid QuestPlan JSON ({first_err}).\n\
-Return ONLY compact JSON. desc/deps/tasks/rewards MUST be arrays (never plain strings).\n\
-Every chapter MUST contain a non-empty \"quests\" array of quest objects ({{ \"title\", \"tasks\" }}) — never a top-level \"quests\" list beside chapters.\n\
-Example: \"desc\": [\"Collect 10 oak wood\"], \"chapters\": [{{ \"title\": \"Chapter\", \"quests\": [{{ \"title\": \"Quest\", \"tasks\": [{{ \"type\": \"item\", \"item\": \"minecraft:oak_log\", \"count\": 10 }}] }}] }}].\n\
-Omit ids/schemaVersion. No markdown fences."
-            );
-            let (value2, usage2) = if let Some(p) = progress {
-                ai_json_stream(system, &repair, history, p, "outline").await?
-            } else {
-                ai_json(system, &repair, history).await?
-            };
-            merge_usage(usage_acc, usage2);
-            let raw2 = value_to_raw(value2);
-            match parse_quest_plan(&raw2) {
-                Ok(plan) if quest_plan_has_quests(&plan) => Ok(plan),
-                Ok(_) => Err(format!(
-                    "QuestPlan has chapters but no quests after retry\n<<<QUEST_RAW_JSON>>>\n{raw2}\n<<<END_QUEST_RAW_JSON>>>"
-                )),
-                Err(e) => Err(format!(
-                    "Invalid QuestPlan JSON after retry: {e}\n<<<QUEST_RAW_JSON>>>\n{raw2}\n<<<END_QUEST_RAW_JSON>>>"
-                )),
-            }
+    let first_parse = parse_quest_plan(&raw1);
+    let first_err = match first_parse {
+        Ok(plan) if quest_plan_has_quests(&plan) => return Ok(plan),
+        Ok(_) => {
+            "chapters contain no quests — each chapter MUST include a non-empty \"quests\" array of quest objects"
+                .to_string()
         }
+        Err(e) => e,
+    };
+
+    let repair = format!(
+        "{user}\n\nYour previous answer was invalid QuestPlan JSON ({first_err}).\n\
+Return ONLY compact JSON. desc/deps/tasks/rewards MUST be arrays (never plain strings).\n\
+Every chapter MUST contain a non-empty \"quests\" array of quest objects ({{\"title\", \"tasks\": [...] }}) — never a top-level \"quests\" list beside chapters, and never empty chapters.\n\
+Example: {{\"why\": \"early game\", \"chapters\": [{{\"title\": \"Chapter 1\", \"quests\": [{{\"title\": \"First Quest\", \"desc\": [\"Collect 10 oak wood\"], \"tasks\": [{{\"type\": \"item\", \"item\": \"minecraft:oak_log\", \"count\": 10}}], \"rewards\": [{{\"type\": \"xp\", \"xp\": 10}}]}}]}}.\n\
+Omit ids/schemaVersion. No markdown fences."
+    );
+    let (value2, usage2) = if let Some(p) = progress {
+        ai_json_stream(system, &repair, history, p, "outline").await?
+    } else {
+        ai_json(system, &repair, history).await?
+    };
+    merge_usage(usage_acc, usage2);
+    let raw2 = value_to_raw(value2);
+    match parse_quest_plan(&raw2) {
+        Ok(plan) if quest_plan_has_quests(&plan) => Ok(plan),
+        Ok(_) => Err(format!(
+            "QuestPlan has chapters but no quests after retry\n<<<QUEST_RAW_JSON>>>\n{raw2}\n<<<END_QUEST_RAW_JSON>>>"
+        )),
+        Err(e) => Err(format!(
+            "Invalid QuestPlan JSON after retry: {e}\n<<<QUEST_RAW_JSON>>>\n{raw2}\n<<<END_QUEST_RAW_JSON>>>"
+        )),
     }
 }
 

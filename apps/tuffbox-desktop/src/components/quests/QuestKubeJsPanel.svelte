@@ -562,6 +562,9 @@
     font-weight: 700;
   }
   .pill {
+    display: inline-block;
+    line-height: 1.4;
+    vertical-align: baseline;
     text-transform: none;
     letter-spacing: 0;
     font-weight: 500;
@@ -605,6 +608,13 @@
     text-overflow: ellipsis;
   }
   .badge {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 9px;
     text-transform: uppercase;
     padding: 1px 5px;

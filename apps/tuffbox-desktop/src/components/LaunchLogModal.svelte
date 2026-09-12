@@ -32,6 +32,8 @@
   let loadGen = 0;
   let analyzeTimer: ReturnType<typeof setTimeout> | null = null;
   let sharing = $state(false);
+  /** Actual target of the Live tab, resolved by the same backend helper as get_launch_log. */
+  let liveSourcePath = $state<string | null>(null);
 
   type SuspectSummary = { id: string; name: string; confidence: number };
   let suspects = $state<SuspectSummary[]>([]);
@@ -39,6 +41,11 @@
 
   function isLiveTab() {
     return selectedLog === "__live__";
+  }
+
+  function displayLiveSource(path: string): string {
+    const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    return separator >= 0 ? path.slice(separator + 1) : path;
   }
 
   async function analyzeLog(text: string) {
@@ -89,8 +96,15 @@
     const gen = ++loadGen;
     try {
       let result: string;
+      let resolvedLiveSource: string | null = null;
       if (selectedLog === "__live__") {
-        result = (await invoke("get_launch_log", { path: projectPath })) as string;
+        // Resolve the label via the exact backend fallback helper, but keep
+        // tailing functional with an older binary that does not expose the
+        // optional source-path command yet.
+        const sourceRequest = invoke<string>("resolve_live_launch_log_path", { path: projectPath })
+          .catch(() => null);
+        result = await invoke<string>("get_launch_log", { path: projectPath });
+        resolvedLiveSource = await sourceRequest;
       } else {
         // Always read the named file — never route latest.log through get_launch_log
         // (that prefers the XML console and showed raw log4j/timestamp markup).
@@ -100,6 +114,7 @@
         })) as string;
       }
       if (gen !== loadGen) return;
+      liveSourcePath = resolvedLiveSource;
 
       const next = result ?? "";
       if (next.length === lastFetchedLen && next === log) {
@@ -207,9 +222,9 @@
             class="log-select-btn"
             class:active={selectedLog === "__live__"}
             onclick={() => switchLog("__live__")}
-            title="Auto: latest.log when ready, else console"
+            title={liveSourcePath ? `Live source: ${liveSourcePath}` : "Auto: latest.log when ready, else console"}
           >
-            <Radio size={13} /> Live
+            <Radio size={13} /> Live{#if liveSourcePath} · {displayLiveSource(liveSourcePath)}{/if}
           </button>
           <button
             class="log-select-btn"

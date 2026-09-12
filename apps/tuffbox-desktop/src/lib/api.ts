@@ -916,14 +916,18 @@ export interface TestRunRecord {
   recommendedRamGb?: number | null;
 }
 
-export interface LaunchResult {
-  exitCode: number | null;
-  logPath: string;
-  pid?: number | null;
-  instanceId?: string | null;
-  profileId?: string | null;
-  startedAt?: number | null;
-}
+/// Stable lifecycle phases emitted by the desktop backend on `launch-phase`.
+/// A command returning only means spawn preparation completed; controls must
+/// use this stream (and `runningInstances`) for their visible state.
+export type LaunchPhase =
+  | "preflight"
+  | "resolving_java"
+  | "downloading"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "exited"
+  | "failed";
 
 /// Structured launch error returned by the launch Tauri commands
 /// (mirrors `tuffbox_core::launch_error::LaunchErrorInfo`).
@@ -931,6 +935,50 @@ export interface LaunchErrorInfo {
   kind: string;
   message: string;
   logPath?: string;
+}
+
+export interface LaunchLifecycleEvent {
+  /** Manifest path — the same key used by `list_running_instances`. */
+  id: string;
+  profile: string;
+  phase: LaunchPhase;
+  message: string;
+  logPath?: string;
+  pid?: number;
+  startedAt?: number;
+  exitCode?: number | null;
+  stopped?: boolean;
+  error?: LaunchErrorInfo;
+}
+
+export interface LaunchCrashEvent {
+  id: string;
+  /** Compatibility alias for older event consumers. */
+  path?: string;
+  profile: string;
+  /** Flattened compatibility copy of `error`. */
+  kind?: string;
+  message?: string;
+  logPath?: string;
+  error: LaunchErrorInfo;
+  exitCode?: number | null;
+}
+
+export interface ProcessExitedEvent {
+  id: string;
+  profile?: string;
+  startedAt?: number;
+  code?: number | null;
+  stopped?: boolean;
+}
+
+export interface LaunchResult {
+  exitCode: number | null;
+  logPath: string;
+  instanceId: string;
+  profile: string;
+  pid: number;
+  startedAt: number;
 }
 
 export interface ExportResult {
@@ -1151,6 +1199,8 @@ export interface McServerPing {
   online: boolean;
   latencyMs: number | null;
   error: string | null;
+  playersOnline?: number | null;
+  playersMax?: number | null;
 }
 
 export interface WorldDetail {
@@ -1465,7 +1515,31 @@ export const api = {
     runValidation(p?: string) { return cmd<Record<string, unknown>>("run_project_validation", pathArg(p)); },
     getDiagnostics(p?: string) { return cmd<Diagnostic[]>("get_diagnostics", pathArg(p)); },
     getDiagnosticCounts(p?: string) { return cmd<DiagnosticCounts>("get_diagnostic_counts", pathArg(p)); },
-    repair(p?: string) { return cmd<ModSyncReport>("repair_project", pathArg(p)); },
+    getHealthReport(p?: string) {
+      return cmd<{
+        manifestPath: string;
+        diagnostics?: { severity: string; code: string; message: string; relatedNodes?: string[] }[];
+        errorCount?: number;
+        warningCount?: number;
+        hasCrash?: boolean;
+        crashReports?: string[];
+        exportBlockers?: { code: string; message: string; target?: string | null }[];
+        missingFiles?: string[];
+        missingHashes?: string[];
+        missingCount?: number;
+        hashMismatchCount?: number;
+      }>("get_health_report", pathArg(p));
+    },
+    repair(p?: string) {
+      return cmd<{
+        downloaded?: string[];
+        failed?: { modId: string; error: string }[];
+        alreadyPresent?: string[];
+        skipped?: string[];
+        duplicates?: Record<string, unknown>[];
+        wrongLoader?: Record<string, unknown>[];
+      }>("repair_project", pathArg(p));
+    },
     cleanup(p?: string) { return cmd<Record<string, unknown>>("cleanup_project", pathArg(p)); },
     listProfiles(p?: string) { return cmd<ProfileSummary[]>("list_profiles", pathArg(p)); },
   },
@@ -1550,8 +1624,16 @@ export const api = {
     changeVersion(modId: string, newVersionId: string, p?: string) { return cmd<Record<string, unknown>>("change_mod_version", { ...pathArg(p), modId, newVersionId }); },
     getVersions(modId: string, minecraftVersion: string, loader?: string | null) { return cmd<Record<string, unknown>[]>("get_mod_versions", { modId, minecraftVersion, loader }); },
     checkUpdates(p?: string) { return cmd<Record<string, unknown>[]>("check_mod_updates", pathArg(p)); },
-    updateAll(p?: string) {
-      return cmd<{ updated: string[]; errors?: string[]; download?: Record<string, unknown> }>("update_all_mods", pathArg(p));
+    updateAll(p?: string, dryRun?: boolean) {
+      return cmd<{
+        dryRun?: boolean;
+        count?: number;
+        preview?: Record<string, unknown>[];
+        updated?: string[];
+        errors?: string[];
+        skipped?: string[];
+        download?: Record<string, unknown>;
+      }>("update_all_mods", { ...pathArg(p), dryRun: dryRun ?? false });
     },
     retryFailedDownloads(modIds: string[], p?: string) {
       return cmd<Record<string, unknown>>("retry_failed_mod_downloads", { ...pathArg(p), modIds });
@@ -1617,6 +1699,48 @@ export const api = {
       p?: string,
     ) {
       return cmd<Record<string, unknown>>("apply_optimize_custom_plan", {
+        ...pathArg(p),
+        mods,
+        applyConfigs,
+        configPlan,
+      });
+    },
+    previewFoOptimizePack(p?: string) {
+      return cmd<{
+        pack: {
+          projectId: string;
+          slug: string;
+          name: string;
+          versionId: string;
+          versionNumber?: string;
+          minecraftVersion: string;
+          loader: string;
+          modCount: number;
+        };
+        mods: Array<{
+          slug: string;
+          name: string;
+          fileName?: string;
+          provider: string;
+          projectId: string;
+          versionId?: string | null;
+          reason: string;
+          risk: string;
+          alreadyInstalled: boolean;
+        }>;
+        configActions: Record<string, unknown>[];
+        warnings: string[];
+        minecraftVersion: string;
+        loader: string;
+      }>("preview_fo_optimize_pack", pathArg(p));
+    },
+    applyFoOptimizePlan(
+      mods: Array<Record<string, unknown>>,
+      applyConfigs: boolean,
+      configPlan: Record<string, unknown> | null,
+      p?: string,
+    ) {
+      return cmd<Record<string, unknown>>("install_fo_optimize_pack", {
         ...pathArg(p),
         mods,
         applyConfigs,
@@ -2561,15 +2685,60 @@ export const api = {
 
   // ── Export ────────────────────────────────────────────────────────
   export: {
-    modrinthPack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_modrinth_pack", { ...pathArg(p), targetPath }); },
-    serverPack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_server_pack", { ...pathArg(p), targetPath }); },
-    prismInstance(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_prism_instance", { ...pathArg(p), targetPath }); },
-    curseforgePack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_curseforge_pack", { ...pathArg(p), targetPath }); },
-    packwizPack(targetPath?: string | null, p?: string) { return cmd<ExportResult>("export_packwiz_pack", { ...pathArg(p), targetPath }); },
-    batchAll(p?: string) { return cmd<Record<string, unknown>[]>("batch_export_all", pathArg(p)); },
-    projectReport(p?: string) { return cmd<Record<string, unknown>>("export_project_report", pathArg(p)); },
-    validateModrinth(p?: string) { return cmd<ExportIssue[]>("validate_modrinth_export", pathArg(p)); },
-    validateCurseforge(p?: string) { return cmd<ExportIssue[]>("validate_curseforge_export", pathArg(p)); },
+    modrinthPack(targetPath?: string | null, p?: string) {
+      return cmd<ExportResult>("export_modrinth_pack", {
+        ...pathArg(p),
+        targetPath: targetPath ?? null,
+      });
+    },
+    serverPack(targetPath?: string | null, p?: string) {
+      return cmd<ExportResult>("export_server_pack", {
+        ...pathArg(p),
+        targetPath: targetPath ?? null,
+      });
+    },
+    prismInstance(targetPath?: string | null, p?: string) {
+      return cmd<ExportResult>("export_prism_instance", {
+        ...pathArg(p),
+        targetPath: targetPath ?? null,
+      });
+    },
+    curseforgePack(targetPath?: string | null, p?: string) {
+      return cmd<ExportResult>("export_curseforge_pack", {
+        ...pathArg(p),
+        targetPath: targetPath ?? null,
+      });
+    },
+    packwizPack(targetPath?: string | null, p?: string) {
+      return cmd<ExportResult>("export_packwiz_pack", {
+        ...pathArg(p),
+        targetPath: targetPath ?? null,
+      });
+    },
+    batchAll(p?: string) {
+      return cmd<
+        Array<{
+          kind: string;
+          status: string;
+          path?: string;
+          files?: number;
+          overrideCount?: number;
+          error?: string;
+        }>
+      >("batch_export_all", pathArg(p));
+    },
+    projectReport(p?: string) {
+      return cmd<Record<string, unknown>>("export_project_report", pathArg(p));
+    },
+    validateModrinth(p?: string) {
+      return cmd<ExportIssue[]>("validate_modrinth_export", pathArg(p));
+    },
+    validateCurseforge(p?: string) {
+      return cmd<ExportIssue[]>("validate_curseforge_export", pathArg(p));
+    },
+    reveal(path: string) {
+      return cmd<void>("reveal_export_path", { path });
+    },
   },
 
   // ── GitHub Pack Transport (public repos, anonymous consume) ─────
@@ -2958,6 +3127,7 @@ export const api = {
     save(settings: LauncherSettings) {
       return cmd<LauncherSettings>("save_launcher_settings_cmd", { settings });
     },
+    detectGpus() { return cmd<GpuInfo[]>("detect_gpus"); },
     runtimePathInfo() {
       return cmd<{ current: string; default: string }>("get_runtime_path_info");
     },
@@ -2972,6 +3142,16 @@ export const api = {
     },
   },
 };
+
+export interface GpuInfo {
+  id: string;
+  name: string;
+  vendor: string;
+  kind: string;
+  vramMb: number | null;
+  primary: boolean;
+  pciSlot: string | null;
+}
 
 // ─── AI / Ollama settings ───────────────────────────────────────────
 

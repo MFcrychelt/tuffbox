@@ -265,7 +265,7 @@
   .cell:hover {
     border-color: var(--ftbq-accent-green);
     color: var(--ftbq-text);
-    background: rgba(85, 201, 90, 0.08);
+    background: color-mix(in srgb, var(--ftbq-accent-green, #55c95a) 8%, transparent);
   }
   .cell img {
     width: 32px;

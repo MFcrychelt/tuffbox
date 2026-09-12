@@ -929,6 +929,8 @@
 
   .root-chips { gap: 4px; flex-wrap: wrap; margin-bottom: 8px; flex-shrink: 0; }
   .chip {
+    line-height: 1.4;
+    white-space: nowrap;
     font-size: 11px; font-weight: 700; text-transform: lowercase; letter-spacing: .02em;
     padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-muted); cursor: pointer;
@@ -1069,7 +1071,22 @@
   .editor-header p { margin: 0; font-size: 12px; color: var(--text-muted); }
   .editor-stats { gap: 10px; white-space: nowrap; }
   .editor-stats strong { color: var(--accent-warning); font-size: 12px; }
-  .lang-badge { background: color-mix(in srgb, var(--accent-secondary) 15%, transparent); color: var(--accent-secondary); padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
+  .lang-badge {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    background: color-mix(in srgb, var(--accent-secondary) 15%, transparent);
+    color: var(--accent-secondary);
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+  }
 
   .cm-wrapper { flex: 1; min-height: 0; overflow: hidden; }
   /* The lib renders .cm-wrapper > .codemirror-wrapper > .cm-editor. The middle

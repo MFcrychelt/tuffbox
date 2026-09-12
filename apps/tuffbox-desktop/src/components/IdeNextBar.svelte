@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { Stethoscope, ArrowRight, X, AlertTriangle } from "@lucide/svelte";
-  import { launchWithFeedback } from "../lib/launch";
+  import { launchWithFeedback, launchingPath } from "../lib/launch";
   import {
     projectPath,
     ideStageRequest,
@@ -20,6 +20,8 @@
     ideNextTrigger,
     ideIssuesRefresh,
     idePlayTrigger,
+    launchSessions,
+    isProjectLaunching,
   } from "../lib/store";
 
   let {
@@ -29,7 +31,11 @@
   } = $props();
 
   let refreshing = $state(false);
-  let launching = $state(false);
+  const launchSession = $derived($launchSessions[$projectPath ?? ""] ?? null);
+  const launching = $derived(isProjectLaunching($projectPath, $launchSessions));
+  // launching is derived from the shared launch store so the Play button stays
+  // disabled until the game is actually running (process-started) or exits.
+  const launchingFromPath = $derived($launchingPath === $projectPath);
 
   const next = $derived(
     computeIdeNextAction({
@@ -117,7 +123,6 @@
 
   async function runPlay() {
     if (!$projectPath || launching) return;
-    launching = true;
     try {
       await launchWithFeedback({ path: $projectPath, profile: "client" });
       // launchWithFeedback returns once the JVM is spawned; keep the spinner
@@ -139,11 +144,10 @@
       setTimeout(() => {
         if (!exited) {
           unlisten();
-          launching = false;
         }
       }, 15000);
     } catch {
-      launching = false;
+      // Error handled by launchWithFeedback's toast
     }
   }
 
@@ -187,6 +191,11 @@
     {/if}
     {#if next.detail}
       <span class="detail">{next.detail}</span>
+    {/if}
+    {#if launching}
+      <span class="detail launch-detail" title={launchSession?.message}>
+        {launchSession?.message || "Launching…"}
+      </span>
     {/if}
   </div>
 

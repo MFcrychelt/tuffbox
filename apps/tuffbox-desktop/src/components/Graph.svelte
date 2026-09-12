@@ -109,6 +109,17 @@
     simulation?.stop();
   }
 
+  /// Cancel a long in-flight graph load / layout: invalidates the generation
+  /// counter (so stale async results are dropped), stops the d3 simulation,
+  /// and clears the loading overlay. The last successful graph stays painted.
+  function cancelGraphLoad() {
+    changePlanGen++;
+    loading = false;
+    changePlanLoading = false;
+    graphRefreshing = false;
+    pauseSimulation();
+  }
+
   $effect(() => {
     if (!changePlan) return;
     const key = `${changePlan.summary}|${changePlan.actions?.length ?? 0}`;
@@ -2463,6 +2474,7 @@
         <div class="graph-loading-overlay" role="status">
           <Loader2 size={20} class="spin" />
           <span>Loading graph…</span>
+          <button type="button" class="ghost mini" onclick={cancelGraphLoad}>Cancel</button>
         </div>
       </section>
     </div>
@@ -2787,6 +2799,7 @@
         <div class="graph-loading-overlay" role="status">
           <Loader2 size={20} class="spin" />
           <span>Loading graph…</span>
+          <button type="button" class="ghost mini" onclick={cancelGraphLoad}>Cancel</button>
         </div>
       {/if}
     </section>
@@ -4618,6 +4631,13 @@
     gap: 8px;
   }
   .conflict-badge {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     flex-shrink: 0;
     padding: 2px 7px;
     border-radius: 999px;
@@ -5132,6 +5152,13 @@
   .dep-target { font-weight: 600; }
   .dep-entry small { flex-basis: 100%; display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
   .dep-installed-pill {
+    display: inline-block;
+    line-height: 1.4;
+    white-space: nowrap;
+    vertical-align: baseline;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     margin-left: 8px;
     font-size: 10px;
     font-weight: 600;

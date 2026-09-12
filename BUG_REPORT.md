@@ -41,30 +41,52 @@ When `invoke("list_worlds")` throws, `lastWorldsPath` is never updated. The reac
 
 ## Bug 2 — Stale state: Dashboard and Library `launching` flag resets instantly
 
-**File:** `src/components/Dashboard.svelte` (lines 101–113), `src/components/Library.svelte` (lines 58–68)  
+**File:** `src/lib/launch.ts`, `src/components/LibraryInstancesPane.svelte`, `src/components/IdeNextBar.svelte`, `src/components/Diagnostics.svelte`  
 **Type:** State bug  
 **Severity:** MEDIUM  
+**Status:** ✅ RESOLVED — shared launch state machine (see checklist below)
 
-```js
-// Dashboard.svelte
-async function launch() {
-  if (!selectedPath) return;
-  launching = true;
-  showLogModal = true;
-  try {
-    await invoke("set_last_opened_project", { path: selectedPath });
-    await invoke("launch_profile", { path: selectedPath, profile: "client" });
-  } catch (e) {
-    toasts.error(`Launch failed: ${e}`);
-  } finally {
-    launching = false;  // ← resets immediately after invoke returns
-  }
-}
-```
+`launch_profile` is fire-and-forget — it spawns the Minecraft process and returns immediately. The old pattern set `launching = true`, awaited the invoke, then cleared it in a `finally` block within milliseconds, so the "Launching..." spinner flashed and vanished without ever reflecting whether the game actually came up.
 
-`launch_profile` is fire-and-forget — it spawns the Minecraft process and returns immediately. `launching` is set to `false` in the `finally` block within milliseconds, so the "Launching..." spinner on the Play button flashes and disappears almost instantly, never reflecting whether the game is actually running. Same pattern exists in `Library.svelte:launchPack`.
+**Fix (implemented):** A single shared launch state machine in `src/lib/launch.ts` is now the single source of truth for "launching". It is driven by backend lifecycle events — `process-started`, `process-exited`, `launch-phase`, `launch-crashed` — so a path stays in the *launching* state (phases `preparing` → `resolving_java` → `downloading` → `starting`) until the backend confirms `running`, and clears only on `running` / `exited` / a failed invoke. `launchWithFeedback` no longer resets state in a `finally`; callers must not either. The Rust backend now emits explicit `launch-phase` events alongside the existing `process-started` / `process-exited` events.
 
-**Fix:** Listen for a Tauri event (e.g. `process-exited`) to set `launching = false`, or poll a backend state endpoint.
+**Status: FIXED (2026-08-11).**
+
+Launch state is now owned by one shared lifecycle contract instead of component-local
+`finally` blocks. The backend emits `launch-phase` (`preflight` →
+`resolving_java` → `downloading` → `starting` → `running` → `exited` / `failed`)
+and `process-exited`; `list_running_instances` remains the startup/reconnect source
+of truth. A Stop request stays visible as `stopping` until the child wait callback
+reports the actual exit.
+
+**Play-surface closure checklist:**
+
+- [x] Dashboard — derives Launching / Running / Stop from shared lifecycle + process registry.
+- [x] Library / `LibraryInstancesPane` — per-instance Launching persists through Running or Failed; Stop uses `kill_running_instance`.
+- [x] Sidebar rail — Play switches to Stop for the active tracked instance.
+- [x] IDE Next Bar — no local `finally` reset; observes the shared session.
+- [x] Diagnose Test launch — observes lifecycle and links directly to the Live log / crash findings.
+- [x] Test Runs — launch lab consumes the same lifecycle for launch/exit truth; polling is telemetry only.
+- [x] Instance Home Quick Play / Join, Recipe Browser JEI Live, Optimize Test launch, command-palette and shortcut launches — all route through `lib/launch.ts`.
+- [x] `LaunchLogModal` — labels and tails the backend-resolved live source (`latest.log` when ready, otherwise TuffBox console).
+
+**Regression rule:** UI code must call `launchWithFeedback` / `killWithFeedback`; it
+must not invoke `launch_profile`, `launch_with_quick_play`, `launch_server`, or
+`kill_running_instance` directly, and it must not use a local `finally` to decide
+whether Minecraft is still launching.
+
+**Checklist — every Play path verified against the shared store (no local `finally` reset):**
+
+| Play button / path | File | Uses shared store |
+|---|---|---|
+| Global `isLaunching` spinner (Header, Dashboard Play/Stop, Sidebar) | `Dashboard.svelte`, `Sidebar.svelte` | ✅ derived from `launchingPath` |
+| Library instance Launch | `LibraryInstancesPane.svelte` | ✅ `$launchingPath === selected.path` |
+| IDE "Next" rail Play | `IdeNextBar.svelte` | ✅ `$derived($launchingPath === $projectPath)` |
+| Diagnostics "Test launch" | `Diagnostics.svelte` | ✅ `$derived($launchingPath === $projectPath)` |
+| CLI `--launch` shortcut / command palette test-launch | `App.svelte` | ✅ via `launchWithFeedback` |
+| `TestRuns.svelte` | own `livePhase` machine (reference UX) | ✅ additive, still feeds the store |
+
+Stop buttons use `kill_running_instance` → backend `process-exited` → shared store clears `launching`/`running`.
 
 ---
 
@@ -202,7 +224,7 @@ import { onMount, onDestroy } from "svelte";
 | # | File | Bug Type | Severity |
 |---|------|----------|----------|
 | 1 | OreGenVisualizer.svelte | Infinite retry loop on failed `loadWorlds` | **HIGH** |
-| 2 | Dashboard.svelte, Library.svelte | `launching` flag resets instantly (fire-and-forget) | MEDIUM |
+| 2 | Dashboard / Library / all Play surfaces | **FIXED:** shared launch lifecycle replaces fire-and-forget local flags | MEDIUM ✅ RESOLVED |
 | 3 | WorldMap.svelte | `flashTimer` not cleaned on destroy | LOW |
 | 4 | SkinPreview3D.svelte | Uncancelled async `loadSkin` race condition | LOW |
 | 5 | Settings.svelte | Theme desync (localStorage, no store) | LOW |
