@@ -817,7 +817,7 @@
         {#if showEmptyAddCta}
           <button
             type="button"
-            class="empty-add pointer-events-auto px-4 py-2 bg-[var(--accent-primary)] text-white font-bold text-xs rounded-lg hover:brightness-110 shadow-md transition"
+            class="empty-add pointer-events-auto px-4 py-2 bg-[var(--accent-primary)] text-[var(--on-accent)] font-bold text-xs rounded-lg hover:brightness-110 shadow-md transition"
             onclick={(e) => { e.stopPropagation(); addAtCenter(); }}
           >
             + Add First Quest

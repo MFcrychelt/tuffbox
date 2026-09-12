@@ -1314,8 +1314,8 @@
           <h1 class="text-sm font-bold text-[var(--text-primary)] m-0 leading-tight">
             {editorOpen ? "Recipe & Tag Editor" : "Recipe Browser"}
           </h1>
-          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold {recipeSource === 'runtime' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-[var(--bg-card)] text-[var(--text-muted)] border border-[var(--border-color)]'}">
-            <Radio size={10} class={recipeSource === 'runtime' ? 'text-emerald-400' : 'text-[var(--text-muted)]'} />
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold {recipeSource === 'runtime' ? 'bg-emerald-500/10 text-[var(--accent-primary)] border border-emerald-500/20' : 'bg-[var(--bg-card)] text-[var(--text-muted)] border border-[var(--border-color)]'}">
+            <Radio size={10} class={recipeSource === 'runtime' ? 'text-[var(--accent-primary)]' : 'text-[var(--text-muted)]'} />
             {recipeSource === "runtime" ? "Live JEI" : "Offline Files"}
           </span>
         </div>
@@ -1326,7 +1326,7 @@
           {#if scanMeta?.vanillaJarFound === false}
             · <button
               type="button"
-              class="text-amber-400 hover:underline font-semibold"
+              class="text-[var(--accent-warning)] hover:underline font-semibold"
               onclick={() => {
                 if ($projectPath) dismissedVanillaPrompt.delete($projectPath);
                 void maybeOfferVanillaJar(false);
@@ -1383,7 +1383,7 @@
 
       <button
         type="button"
-        class="hud-icon-btn p-2 rounded-lg border transition {showBookmarks ? 'border-amber-400/40 bg-amber-400/10 text-amber-400' : 'border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+        class="hud-icon-btn p-2 rounded-lg border transition {showBookmarks ? 'border-amber-400/40 bg-amber-400/10 text-[var(--accent-warning)]' : 'border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
         title="Toggle bookmarks sidebar"
         onclick={() => (showBookmarks = !showBookmarks)}
       >
@@ -1393,7 +1393,7 @@
       {#if runtimeStatus?.supported && !runtimeStatus.connected}
         <button
           type="button"
-          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 transition disabled:opacity-50"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-500/10 text-[var(--accent-primary)] border border-emerald-500/25 hover:bg-emerald-500/20 transition disabled:opacity-50"
           onclick={launchJeiLive}
           disabled={!$projectPath || loading || projectLaunching}
           title={projectLaunching ? "Launch in progress" : runtimeStatus.message}
@@ -1405,7 +1405,7 @@
       {#if pendingRemoves.size > 0}
         <button
           type="button"
-          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/15 text-[var(--accent-warning)] border border-amber-500/30 hover:bg-amber-500/25 transition"
           onclick={flushRemoves}
         >
           <FileCode size={13} /> Write {pendingRemoves.size} removes
@@ -1414,7 +1414,7 @@
 
       <button
         type="button"
-        class="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg bg-[var(--accent-primary)] text-white hover:brightness-110 shadow-sm transition disabled:opacity-50"
+        class="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg bg-[var(--accent-primary)] text-[var(--on-accent)] hover:brightness-110 shadow-sm transition disabled:opacity-50"
         onclick={() => openNewRecipeEditor("crafting")}
         disabled={!$projectPath || loading}
       >
@@ -1450,15 +1450,15 @@
 
   <!-- Error / Success Notices -->
   {#if error}
-    <div class="px-4 py-2 bg-red-500/10 border-b border-red-500/20 text-red-400 text-xs flex items-center justify-between">
+    <div class="px-4 py-2 bg-red-500/10 border-b border-red-500/20 text-[var(--accent-danger)] text-xs flex items-center justify-between">
       <span>{error}</span>
-      <button type="button" class="text-red-400 hover:text-red-300 font-bold" onclick={() => (error = null)}>×</button>
+      <button type="button" class="text-[var(--accent-danger)] hover:text-[var(--accent-danger)] font-bold" onclick={() => (error = null)}>×</button>
     </div>
   {/if}
   {#if message}
-    <div class="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 text-emerald-300 text-xs flex items-center justify-between">
+    <div class="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 text-[var(--accent-primary)] text-xs flex items-center justify-between">
       <span>{message}</span>
-      <button type="button" class="text-emerald-300 hover:text-emerald-200 font-bold" onclick={() => (message = null)}>×</button>
+      <button type="button" class="text-[var(--accent-primary)] hover:text-[var(--accent-primary)] font-bold" onclick={() => (message = null)}>×</button>
     </div>
   {/if}
 
@@ -1495,7 +1495,7 @@
       <div class="flex gap-2">
         <button
           type="button"
-          class="px-4 py-2 bg-[var(--accent-primary)] text-white font-bold text-xs rounded-lg hover:brightness-110 shadow-sm"
+          class="px-4 py-2 bg-[var(--accent-primary)] text-[var(--on-accent)] font-bold text-xs rounded-lg hover:brightness-110 shadow-sm"
           onclick={() => loadRecipes()}
         >
           Scan now
@@ -1548,7 +1548,7 @@
                   {#each EDITOR_KINDS as k (k.id)}
                     <button
                       type="button"
-                      class="px-2.5 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 {editorKind === k.id ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+                      class="px-2.5 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 {editorKind === k.id ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
                       onclick={() => {
                         editorKind = k.id;
                         paletteMode = k.id === "tags" ? "tags" : "items";
@@ -1568,23 +1568,23 @@
                 <div class="flex gap-2 mb-3">
                   <button
                     type="button"
-                    class="px-3 py-1 text-xs font-bold rounded-md border transition {editShaped ? 'bg-[var(--accent-primary)] text-white border-transparent' : 'border-[var(--border-color)] text-[var(--text-muted)] hover:bg-[var(--bg-hover)]'}"
+                    class="px-3 py-1 text-xs font-bold rounded-md border transition {editShaped ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] border-transparent' : 'border-[var(--border-color)] text-[var(--text-muted)] hover:bg-[var(--bg-hover)]'}"
                     onclick={() => (editShaped = true)}
                   >
                     Shaped (Exact 3×3)
                   </button>
                   <button
                     type="button"
-                    class="px-3 py-1 text-xs font-bold rounded-md border transition {!editShaped ? 'bg-[var(--accent-primary)] text-white border-transparent' : 'border-[var(--border-color)] text-[var(--text-muted)] hover:bg-[var(--bg-hover)]'}"
+                    class="px-3 py-1 text-xs font-bold rounded-md border transition {!editShaped ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] border-transparent' : 'border-[var(--border-color)] text-[var(--text-muted)] hover:bg-[var(--bg-hover)]'}"
                     onclick={() => (editShaped = false)}
                   >
                     Shapeless
                   </button>
                 </div>
 
-                <div class="mc-panel p-4 bg-[#23262d] border-2 border-[#15171c] rounded-xl shadow-xl flex items-center gap-6">
+                <div class="mc-panel p-4 bg-[var(--bg-secondary)] border-2 border-[var(--border-color)] rounded-xl shadow-xl flex items-center gap-6">
                   <div
-                    class="craft-grid grid grid-cols-3 gap-2 p-2 bg-[#17191e] border border-[#2d313b] rounded-lg"
+                    class="craft-grid grid grid-cols-3 gap-2 p-2 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg"
                     role="presentation"
                     ondragenter={allowEditorDrop}
                     ondragover={allowEditorDrop}
@@ -1592,7 +1592,7 @@
                     {#each editGrid as slotId, i (i)}
                       <button
                         type="button"
-                        class="mc-slot w-14 h-14 rounded bg-[#272b34] border border-[#373d49] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                        class="mc-slot w-14 h-14 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
                         class:empty={!slotId}
                         style="--hue: {itemHue(slotId ?? '')}"
                         title={slotId ? `${slotId}\nRight-click to remove` : "Drop item or click to place"}
@@ -1607,19 +1607,19 @@
                         {:else if slotId}
                           <span class="letter font-bold text-xs text-white">{slotId.startsWith("#") ? "#" : prettifyItem(slotId).slice(0, 3)}</span>
                         {:else}
-                          <span class="text-[10px] text-zinc-600 font-mono">{i + 1}</span>
+                          <span class="text-[10px] text-[var(--text-muted)] font-mono">{i + 1}</span>
                         {/if}
                       </button>
                     {/each}
                   </div>
 
-                  <ArrowRight size={28} class="text-zinc-400" />
+                  <ArrowRight size={28} class="text-[var(--text-secondary)]" />
 
                   <div class="flex flex-col items-center gap-1.5">
-                    <span class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Output</span>
+                    <span class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Output</span>
                     <button
                       type="button"
-                      class="mc-slot out w-16 h-16 rounded-lg bg-[#272b34] border-2 border-[var(--accent-primary)] hover:brightness-110 flex items-center justify-center relative cursor-pointer shadow-md"
+                      class="mc-slot out w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] hover:brightness-110 flex items-center justify-center relative cursor-pointer shadow-md"
                       class:empty={!editOutput}
                       style="--hue: {itemHue(editOutput ?? '')}"
                       title={editOutput ? `${editOutput}\nShift+click to change count (${editCount})` : "Drop output item here"}
@@ -1634,24 +1634,24 @@
                       {:else if editOutput}
                         <span class="letter font-bold text-xs text-white">{prettifyItem(editOutput).slice(0, 3)}</span>
                       {:else}
-                        <Plus size={20} class="text-zinc-600" />
+                        <Plus size={20} class="text-[var(--text-muted)]" />
                       {/if}
                       {#if editOutput && editCount > 1}
-                        <em class="absolute bottom-1 right-1.5 text-xs font-black text-amber-300 font-mono not-italic">{editCount}</em>
+                        <em class="absolute bottom-1 right-1.5 text-xs font-black text-[var(--accent-warning)] font-mono not-italic">{editCount}</em>
                       {/if}
                     </button>
-                    <span class="text-[10px] text-zinc-500">Shift+Click for count</span>
+                    <span class="text-[10px] text-[var(--text-muted)]">Shift+Click for count</span>
                   </div>
                 </div>
 
               {:else if isCookingKind(editorKind) || editorKind === "stonecutting"}
                 <!-- Furnace / Cooker / Stonecutter -->
-                <div class="mc-panel p-5 bg-[#23262d] border-2 border-[#15171c] rounded-xl shadow-xl flex items-center gap-6">
+                <div class="mc-panel p-5 bg-[var(--bg-secondary)] border-2 border-[var(--border-color)] rounded-xl shadow-xl flex items-center gap-6">
                   <div class="flex flex-col items-center gap-1.5">
-                    <span class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Input</span>
+                    <span class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Input</span>
                     <button
                       type="button"
-                      class="mc-slot w-16 h-16 rounded-lg bg-[#272b34] border border-[#373d49] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                      class="mc-slot w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
                       class:empty={!editInput}
                       style="--hue: {itemHue(editInput ?? '')}"
                       title={editInput ?? "Drop input item"}
@@ -1666,30 +1666,30 @@
                       {:else if editInput}
                         <span class="letter font-bold text-xs text-white">{editInput.startsWith("#") ? "#" : prettifyItem(editInput).slice(0, 3)}</span>
                       {:else}
-                        <Plus size={20} class="text-zinc-600" />
+                        <Plus size={20} class="text-[var(--text-muted)]" />
                       {/if}
                     </button>
                   </div>
 
                   <div class="flex flex-col items-center gap-2 px-2">
                     {#if isCookingKind(editorKind)}
-                      <Flame size={28} class="text-amber-500 animate-pulse" />
+                      <Flame size={28} class="text-[var(--accent-warning)] animate-pulse" />
                       <div class="flex items-center gap-2 text-xs">
-                        <label class="text-[11px] text-zinc-400">XP <input type="number" step="0.1" min="0" bind:value={editXp} class="w-14 px-1.5 py-0.5 bg-[#17191e] border border-[#373d49] rounded text-white text-center" /></label>
-                        <label class="text-[11px] text-zinc-400">Ticks <input type="number" min="1" bind:value={editCookTime} class="w-14 px-1.5 py-0.5 bg-[#17191e] border border-[#373d49] rounded text-white text-center" /></label>
+                        <label class="text-[11px] text-[var(--text-secondary)]">XP <input type="number" step="0.1" min="0" bind:value={editXp} class="w-14 px-1.5 py-0.5 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded text-[var(--text-primary)] text-center" /></label>
+                        <label class="text-[11px] text-[var(--text-secondary)]">Ticks <input type="number" min="1" bind:value={editCookTime} class="w-14 px-1.5 py-0.5 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded text-[var(--text-primary)] text-center" /></label>
                       </div>
                     {:else}
-                      <Scissors size={28} class="text-zinc-400" />
+                      <Scissors size={28} class="text-[var(--text-secondary)]" />
                     {/if}
                   </div>
 
-                  <ArrowRight size={28} class="text-zinc-400" />
+                  <ArrowRight size={28} class="text-[var(--text-secondary)]" />
 
                   <div class="flex flex-col items-center gap-1.5">
-                    <span class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Output</span>
+                    <span class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Output</span>
                     <button
                       type="button"
-                      class="mc-slot out w-16 h-16 rounded-lg bg-[#272b34] border-2 border-[var(--accent-primary)] hover:brightness-110 flex items-center justify-center relative cursor-pointer shadow-md"
+                      class="mc-slot out w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] hover:brightness-110 flex items-center justify-center relative cursor-pointer shadow-md"
                       class:empty={!editOutput}
                       style="--hue: {itemHue(editOutput ?? '')}"
                       title={editOutput ? `${editOutput}\nShift+click for count` : "Drop output item"}
@@ -1704,10 +1704,10 @@
                       {:else if editOutput}
                         <span class="letter font-bold text-xs text-white">{prettifyItem(editOutput).slice(0, 3)}</span>
                       {:else}
-                        <Plus size={20} class="text-zinc-600" />
+                        <Plus size={20} class="text-[var(--text-muted)]" />
                       {/if}
                       {#if editOutput && editCount > 1}
-                        <em class="absolute bottom-1 right-1.5 text-xs font-black text-amber-300 font-mono not-italic">{editCount}</em>
+                        <em class="absolute bottom-1 right-1.5 text-xs font-black text-[var(--accent-warning)] font-mono not-italic">{editCount}</em>
                       {/if}
                     </button>
                   </div>
@@ -1715,17 +1715,17 @@
 
               {:else if editorKind === "smithing"}
                 <!-- Smithing Table -->
-                <div class="mc-panel p-5 bg-[#23262d] border-2 border-[#15171c] rounded-xl shadow-xl flex items-center gap-4">
+                <div class="mc-panel p-5 bg-[var(--bg-secondary)] border-2 border-[var(--border-color)] rounded-xl shadow-xl flex items-center gap-4">
                   {#each [
                     { key: "template", label: "Template", val: editTemplate },
                     { key: "base", label: "Base Item", val: editBase },
                     { key: "addition", label: "Addition", val: editAddition },
                   ] as slot, i (slot.key)}
                     <div class="flex flex-col items-center gap-1.5">
-                      <span class="text-[10px] font-bold text-zinc-400 uppercase">{slot.label}</span>
+                      <span class="text-[10px] font-bold text-[var(--text-secondary)] uppercase">{slot.label}</span>
                       <button
                         type="button"
-                        class="mc-slot w-14 h-14 rounded bg-[#272b34] border border-[#373d49] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                        class="mc-slot w-14 h-14 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
                         class:empty={!slot.val}
                         style="--hue: {itemHue(slot.val ?? '')}"
                         ondragenter={allowEditorDrop}
@@ -1744,20 +1744,20 @@
                         {:else if slot.val}
                           <span class="letter font-bold text-xs text-white">{prettifyItem(slot.val).slice(0, 3)}</span>
                         {:else}
-                          <Plus size={16} class="text-zinc-600" />
+                          <Plus size={16} class="text-[var(--text-muted)]" />
                         {/if}
                       </button>
                     </div>
-                    {#if i < 2}<span class="text-lg font-bold text-zinc-500 mt-4">+</span>{/if}
+                    {#if i < 2}<span class="text-lg font-bold text-[var(--text-muted)] mt-4">+</span>{/if}
                   {/each}
 
-                  <ArrowRight size={28} class="text-zinc-400 mt-4 mx-2" />
+                  <ArrowRight size={28} class="text-[var(--text-secondary)] mt-4 mx-2" />
 
                   <div class="flex flex-col items-center gap-1.5">
-                    <span class="text-[10px] font-bold text-zinc-400 uppercase">Result</span>
+                    <span class="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Result</span>
                     <button
                       type="button"
-                      class="mc-slot out w-14 h-14 rounded-lg bg-[#272b34] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer shadow-md"
+                      class="mc-slot out w-14 h-14 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer shadow-md"
                       class:empty={!editOutput}
                       style="--hue: {itemHue(editOutput ?? '')}"
                       ondragenter={allowEditorDrop}
@@ -1771,7 +1771,7 @@
                       {:else if editOutput}
                         <span class="letter font-bold text-xs text-white">{prettifyItem(editOutput).slice(0, 3)}</span>
                       {:else}
-                        <Plus size={16} class="text-zinc-600" />
+                        <Plus size={16} class="text-[var(--text-muted)]" />
                       {/if}
                     </button>
                   </div>
@@ -1806,14 +1806,14 @@
                     ondrop={onDropTagAdd}
                   >
                     <span class="text-xs font-medium text-[var(--text-muted)]">
-                      Drop items or tags here to <strong class="text-emerald-400">add</strong>
+                      Drop items or tags here to <strong class="text-[var(--accent-primary)]">add</strong>
                     </span>
                     {#if tagAdd.length > 0}
                       <div class="flex flex-wrap gap-1.5 mt-2">
                         {#each tagAdd as id (id)}
                           <button
                             type="button"
-                            class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1"
+                            class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-[var(--accent-primary)] border border-emerald-500/30 flex items-center gap-1"
                             onclick={() => removePendingAdd(id)}
                           >
                             + {id} <X size={11} />
@@ -1831,7 +1831,7 @@
                       {#each tagMembers as id (id)}
                         <button
                           type="button"
-                          class="text-xs px-2 py-0.5 rounded border transition {tagRemove.includes(id) ? 'bg-red-500/20 text-red-400 border-red-500/30 line-through' : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-red-400'}"
+                          class="text-xs px-2 py-0.5 rounded border transition {tagRemove.includes(id) ? 'bg-red-500/20 text-[var(--accent-danger)] border-red-500/30 line-through' : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--accent-danger)]'}"
                           title={tagRemove.includes(id) ? "Marked for removal" : "Click to mark for removal"}
                           onclick={() => toggleTagRemove(id)}
                         >
@@ -1888,7 +1888,7 @@
                 </button>
                 <button
                   type="button"
-                  class="px-4 py-1.5 text-xs font-bold rounded-lg bg-[var(--accent-primary)] text-white hover:brightness-110 shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+                  class="px-4 py-1.5 text-xs font-bold rounded-lg bg-[var(--accent-primary)] text-[var(--on-accent)] hover:brightness-110 shadow-sm flex items-center gap-1.5 disabled:opacity-50"
                   disabled={!editorCanSave() || editorSaving}
                   onclick={saveCraftRecipe}
                 >
@@ -1914,7 +1914,7 @@
               <div class="grid grid-cols-2 gap-2 w-full pt-2 border-t border-[var(--border-color)]">
                 <button
                   type="button"
-                  class="px-3 py-2 text-xs font-bold rounded-lg bg-[var(--accent-primary)] text-white hover:brightness-110 shadow-sm flex items-center justify-center gap-1.5"
+                  class="px-3 py-2 text-xs font-bold rounded-lg bg-[var(--accent-primary)] text-[var(--on-accent)] hover:brightness-110 shadow-sm flex items-center justify-center gap-1.5"
                   onclick={() => openNewRecipeEditor("crafting")}
                 >
                   <Plus size={13} /> + Crafting Recipe
@@ -1947,7 +1947,7 @@
                 </button>
 
                 <div class="flex items-center gap-2.5 min-w-0">
-                  <span class="mc-slot mini w-9 h-9 rounded-lg bg-[#272b34] border border-[#373d49] flex items-center justify-center flex-shrink-0" style="--hue: {itemHue(selectedItem)}">
+                  <span class="mc-slot mini w-9 h-9 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-color)] flex items-center justify-center flex-shrink-0" style="--hue: {itemHue(selectedItem)}">
                     {#if iconSrc(selectedItem)}
                       <img src={iconSrc(selectedItem)} alt="" class="slot-icon w-7 h-7 object-contain pixelated" onerror={() => onIconError(selectedItem)} />
                     {:else}
@@ -1962,7 +1962,7 @@
 
                 <button
                   type="button"
-                  class="p-1.5 rounded-lg border transition {bookmarks.includes(selectedItem) ? 'border-amber-400 bg-amber-400/10 text-amber-400' : 'border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-muted)] hover:text-amber-400'}"
+                  class="p-1.5 rounded-lg border transition {bookmarks.includes(selectedItem) ? 'border-amber-400 bg-amber-400/10 text-[var(--accent-warning)]' : 'border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-muted)] hover:text-[var(--accent-warning)]'}"
                   title="Bookmark item (B)"
                   onclick={() => toggleBookmark(selectedItem)}
                 >
@@ -1974,7 +1974,7 @@
               <div class="flex bg-[var(--bg-card)] p-0.5 rounded-lg border border-[var(--border-color)]">
                 <button
                   type="button"
-                  class="px-3 py-1 text-xs font-bold rounded-md transition flex items-center gap-1.5 {focusMode === 'recipes' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+                  class="px-3 py-1 text-xs font-bold rounded-md transition flex items-center gap-1.5 {focusMode === 'recipes' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
                   onclick={() => { focusMode = "recipes"; recipeIndex = 0; }}
                 >
                   <span>Recipes</span>
@@ -1985,7 +1985,7 @@
 
                 <button
                   type="button"
-                  class="px-3 py-1 text-xs font-bold rounded-md transition flex items-center gap-1.5 {focusMode === 'uses' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+                  class="px-3 py-1 text-xs font-bold rounded-md transition flex items-center gap-1.5 {focusMode === 'uses' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
                   onclick={() => { focusMode = "uses"; recipeIndex = 0; }}
                 >
                   <span>Uses</span>
@@ -2002,7 +2002,7 @@
                 {@const IconComp = categoryIconComponent(cat)}
                 <button
                   type="button"
-                  class="px-3 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 whitespace-nowrap {categoryFilter === cat ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+                  class="px-3 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 whitespace-nowrap {categoryFilter === cat ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
                   onclick={() => {
                     categoryFilter = cat;
                     recipeIndex = 0;
@@ -2042,7 +2042,7 @@
                         · {CATEGORY_META[currentRecipe.layout.category]?.label ?? runtimeCategory(currentRecipe.category)?.title ?? currentRecipe.layout.category}
                       </span>
                       {#if currentRecipe.layout.shapeless}
-                        <span class="text-[10px] font-bold text-cyan-400 bg-cyan-400/10 px-1.5 py-0.5 rounded">Shapeless</span>
+                        <span class="text-[10px] font-bold text-[var(--accent-secondary)] bg-cyan-400/10 px-1.5 py-0.5 rounded">Shapeless</span>
                       {/if}
                     </div>
 
@@ -2058,14 +2058,14 @@
                   </div>
 
                   <!-- Recipe Frame Layout -->
-                  <div class="mc-panel p-5 bg-[#23262d] border-2 border-[#15171c] rounded-xl shadow-xl flex items-center justify-center gap-6 w-full max-w-md">
+                  <div class="mc-panel p-5 bg-[var(--bg-secondary)] border-2 border-[var(--border-color)] rounded-xl shadow-xl flex items-center justify-center gap-6 w-full max-w-md">
                     {#if currentRecipe.layout.category === "crafting"}
-                      <div class="craft-grid grid grid-cols-3 gap-2 p-2 bg-[#17191e] border border-[#2d313b] rounded-lg">
+                      <div class="craft-grid grid grid-cols-3 gap-2 p-2 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg">
                         {#each currentRecipe.layout.grid as slot, i (i)}
                           {@const resolved = resolveSlot(slot)}
                           <button
                             type="button"
-                            class="mc-slot w-14 h-14 rounded bg-[#272b34] border border-[#373d49] hover:border-[var(--accent-primary)] flex items-center justify-center relative {slot ? 'cursor-pointer' : 'cursor-default'}"
+                            class="mc-slot w-14 h-14 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative {slot ? 'cursor-pointer' : 'cursor-default'}"
                             class:empty={!slot}
                             style={slot ? `--hue: ${itemHue(resolved?.id ?? '')}` : ''}
                             title={slotTitle(slot)}
@@ -2087,11 +2087,11 @@
                         {/each}
                       </div>
 
-                      <ArrowRight size={28} class="text-zinc-400 flex-shrink-0" />
+                      <ArrowRight size={28} class="text-[var(--text-secondary)] flex-shrink-0" />
 
                       <button
                         type="button"
-                        class="mc-slot out w-16 h-16 rounded-lg bg-[#272b34] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer shadow-md flex-shrink-0 hover:brightness-110"
+                        class="mc-slot out w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer shadow-md flex-shrink-0 hover:brightness-110"
                         style="--hue: {itemHue(currentRecipe.layout.output.id)}"
                         title={currentRecipe.layout.output.id}
                         onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
@@ -2103,7 +2103,7 @@
                           <span class="letter font-bold text-xs text-white">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                         {/if}
                         {#if currentRecipe.layout.outputCount > 1}
-                          <em class="absolute bottom-1 right-1.5 text-xs font-black text-amber-300 font-mono not-italic">{currentRecipe.layout.outputCount}</em>
+                          <em class="absolute bottom-1 right-1.5 text-xs font-black text-[var(--accent-warning)] font-mono not-italic">{currentRecipe.layout.outputCount}</em>
                         {/if}
                       </button>
 
@@ -2111,7 +2111,7 @@
                       {@const input = resolveSlot(currentRecipe.layout.grid[4])}
                       <button
                         type="button"
-                        class="mc-slot w-16 h-16 rounded-lg bg-[#272b34] border border-[#373d49] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                        class="mc-slot w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
                         style="--hue: {itemHue(input?.id ?? '')}"
                         title={slotTitle(currentRecipe.layout.grid[4])}
                         onclick={() => navigateSlot(currentRecipe.layout.grid[4], "uses")}
@@ -2124,20 +2124,20 @@
                       </button>
 
                       <div class="flex flex-col items-center gap-1">
-                        <Flame size={26} class="text-amber-500 animate-pulse" />
+                        <Flame size={26} class="text-[var(--accent-warning)] animate-pulse" />
                         {#if currentRecipe.layout.cookTime}
-                          <span class="text-[10px] font-mono text-zinc-400">{(currentRecipe.layout.cookTime / 20).toFixed(1)}s</span>
+                          <span class="text-[10px] font-mono text-[var(--text-secondary)]">{(currentRecipe.layout.cookTime / 20).toFixed(1)}s</span>
                         {/if}
                         {#if currentRecipe.layout.experience}
-                          <span class="text-[10px] font-bold text-emerald-400 font-mono">+{currentRecipe.layout.experience} XP</span>
+                          <span class="text-[10px] font-bold text-[var(--accent-primary)] font-mono">+{currentRecipe.layout.experience} XP</span>
                         {/if}
                       </div>
 
-                      <ArrowRight size={28} class="text-zinc-400" />
+                      <ArrowRight size={28} class="text-[var(--text-secondary)]" />
 
                       <button
                         type="button"
-                        class="mc-slot out w-16 h-16 rounded-lg bg-[#272b34] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer shadow-md"
+                        class="mc-slot out w-16 h-16 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer shadow-md"
                         style="--hue: {itemHue(currentRecipe.layout.output.id)}"
                         onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                       >
@@ -2147,7 +2147,7 @@
                           <span class="letter font-bold text-xs text-white">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                         {/if}
                         {#if currentRecipe.layout.outputCount > 1}
-                          <em class="absolute bottom-1 right-1.5 text-xs font-black text-amber-300 font-mono not-italic">{currentRecipe.layout.outputCount}</em>
+                          <em class="absolute bottom-1 right-1.5 text-xs font-black text-[var(--accent-warning)] font-mono not-italic">{currentRecipe.layout.outputCount}</em>
                         {/if}
                       </button>
 
@@ -2157,7 +2157,7 @@
                         {@const resolved = resolveSlot(slot)}
                         <button
                           type="button"
-                          class="mc-slot w-14 h-14 rounded bg-[#272b34] border border-[#373d49] flex items-center justify-center relative {slot ? 'cursor-pointer' : 'cursor-default'}"
+                          class="mc-slot w-14 h-14 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] flex items-center justify-center relative {slot ? 'cursor-pointer' : 'cursor-default'}"
                           class:empty={!slot}
                           style={slot ? `--hue: ${itemHue(resolved?.id ?? '')}` : ''}
                           title={slotTitle(slot)}
@@ -2172,14 +2172,14 @@
                             {/if}
                           {/if}
                         </button>
-                        {#if i < 2}<span class="text-base font-bold text-zinc-500">+</span>{/if}
+                        {#if i < 2}<span class="text-base font-bold text-[var(--text-muted)]">+</span>{/if}
                       {/each}
 
-                      <ArrowRight size={28} class="text-zinc-400" />
+                      <ArrowRight size={28} class="text-[var(--text-secondary)]" />
 
                       <button
                         type="button"
-                        class="mc-slot out w-14 h-14 rounded-lg bg-[#272b34] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                        class="mc-slot out w-14 h-14 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
                         style="--hue: {itemHue(currentRecipe.layout.output.id)}"
                         onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                       >
@@ -2197,7 +2197,7 @@
                           {@const resolved = resolveSlot(slot)}
                           <button
                             type="button"
-                            class="mc-slot w-12 h-12 rounded bg-[#272b34] border border-[#373d49] flex items-center justify-center relative cursor-pointer"
+                            class="mc-slot w-12 h-12 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] flex items-center justify-center relative cursor-pointer"
                             style="--hue: {itemHue(resolved?.id ?? '')}"
                             title={slotTitle(slot)}
                             onclick={() => navigateSlot(slot, "uses")}
@@ -2211,11 +2211,11 @@
                         {/each}
                       </div>
 
-                      <ArrowRight size={28} class="text-zinc-400" />
+                      <ArrowRight size={28} class="text-[var(--text-secondary)]" />
 
                       <button
                         type="button"
-                        class="mc-slot out w-14 h-14 rounded-lg bg-[#272b34] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
+                        class="mc-slot out w-14 h-14 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
                         style="--hue: {itemHue(currentRecipe.layout.output.id)}"
                         onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                       >
@@ -2266,8 +2266,8 @@
                       title="Copy KubeJS remove script snippet"
                     >
                       {#if snippetCopied}
-                        <Check size={13} class="text-emerald-400" />
-                        <span class="text-emerald-400 font-bold">Copied</span>
+                        <Check size={13} class="text-[var(--accent-primary)]" />
+                        <span class="text-[var(--accent-primary)] font-bold">Copied</span>
                       {:else}
                         <Copy size={13} /> Copy KubeJS
                       {/if}
@@ -2275,7 +2275,7 @@
 
                     <button
                       type="button"
-                      class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 flex items-center gap-1.5"
+                      class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-500/10 border border-red-500/20 text-[var(--accent-danger)] hover:bg-red-500/20 flex items-center gap-1.5"
                       onclick={() => queueRemove(currentRecipe)}
                       title="Queue this recipe for removal in KubeJS"
                     >
@@ -2295,7 +2295,7 @@
         {#if showBookmarks && bookmarkItems.length > 0}
           <div class="px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-card)] flex flex-col gap-1.5 flex-shrink-0">
             <div class="flex items-center justify-between">
-              <span class="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1">
+              <span class="text-[10px] font-bold uppercase tracking-wider text-[var(--accent-warning)] flex items-center gap-1">
                 <Star size={11} /> Bookmarks ({bookmarkItems.length})
               </span>
             </div>
@@ -2303,7 +2303,7 @@
               {#each bookmarkItems as item (item.id)}
                 <button
                   type="button"
-                  class="item-slot w-8 h-8 rounded bg-[#1e222a] border border-[#2d323e] hover:border-amber-400 flex items-center justify-center relative cursor-pointer {selectedItem === item.id ? 'border-amber-400 shadow-sm' : ''}"
+                  class="item-slot w-8 h-8 rounded bg-[var(--bg-secondary)] border border-[var(--border-color)] hover:border-amber-400 flex items-center justify-center relative cursor-pointer {selectedItem === item.id ? 'border-amber-400 shadow-sm' : ''}"
                   style="--hue: {itemHue(item.id)}"
                   title="{item.id} — {item.name}"
                   draggable={editorOpen ? "true" : "false"}
@@ -2314,7 +2314,7 @@
                   {#if iconSrc(item.id)}
                     <img src={iconSrc(item.id)} alt="" class="w-6 h-6 object-contain pixelated" onerror={() => onIconError(item.id)} />
                   {:else}
-                    <span class="text-[9px] font-bold text-zinc-300 uppercase">{item.name.slice(0, 2)}</span>
+                    <span class="text-[9px] font-bold text-[var(--text-primary)] uppercase">{item.name.slice(0, 2)}</span>
                   {/if}
                 </button>
               {/each}
@@ -2328,14 +2328,14 @@
             <div class="flex bg-[var(--bg-card)] p-0.5 rounded-lg border border-[var(--border-color)]">
               <button
                 type="button"
-                class="px-2.5 py-0.5 text-xs font-bold rounded-md transition {paletteMode === 'items' ? 'bg-[var(--accent-primary)] text-white' : 'text-[var(--text-muted)]'}"
+                class="px-2.5 py-0.5 text-xs font-bold rounded-md transition {paletteMode === 'items' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)]' : 'text-[var(--text-muted)]'}"
                 onclick={() => { paletteMode = "items"; itemPage = 0; }}
               >
                 Items ({filteredItems.length})
               </button>
               <button
                 type="button"
-                class="px-2.5 py-0.5 text-xs font-bold rounded-md transition {paletteMode === 'tags' ? 'bg-[var(--accent-primary)] text-white' : 'text-[var(--text-muted)]'}"
+                class="px-2.5 py-0.5 text-xs font-bold rounded-md transition {paletteMode === 'tags' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)]' : 'text-[var(--text-muted)]'}"
                 onclick={() => { paletteMode = "tags"; itemPage = 0; ensureTagsLoaded(); }}
               >
                 Tags ({filteredTags.length})
@@ -2382,14 +2382,14 @@
                 {#each pageTags as tagId (tagId)}
                   <button
                     type="button"
-                    class="text-left px-2.5 py-1.5 rounded-lg border text-xs font-mono truncate transition flex items-center gap-1.5 {editorKind === 'tags' && editTagId === tagId.replace(/^#/, '') ? 'bg-[var(--accent-primary)]/15 border-[var(--accent-primary)] text-white font-bold' : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}"
+                    class="text-left px-2.5 py-1.5 rounded-lg border text-xs font-mono truncate transition flex items-center gap-1.5 {editorKind === 'tags' && editTagId === tagId.replace(/^#/, '') ? 'bg-[var(--accent-primary)]/15 border-[var(--accent-primary)] text-[var(--on-accent)] font-bold' : 'bg-[var(--bg-secondary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}"
                     draggable="true"
                     ondragstart={(e) => onDragStartItem(e, tagId)}
                     onclick={() => {
                       if (editorKind === "tags") selectEditTag(tagId);
                     }}
                   >
-                    <span class="text-cyan-400 font-bold">#</span>
+                    <span class="text-[var(--accent-secondary)] font-bold">#</span>
                     <span class="truncate">{tagId}</span>
                   </button>
                 {/each}
@@ -2400,7 +2400,7 @@
               {#each pageItems as item (item.id)}
                 <button
                   type="button"
-                  class="item-slot w-10 h-10 rounded-lg bg-[#1e222a] border border-[#2d323e] hover:border-[var(--accent-primary)] hover:scale-105 transition flex items-center justify-center relative cursor-pointer {selectedItem === item.id ? 'border-[var(--accent-primary)] shadow-[0_0_8px_rgba(52,211,153,0.3)] bg-[#252b36]' : ''}"
+                  class="item-slot w-10 h-10 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] hover:scale-105 transition flex items-center justify-center relative cursor-pointer {selectedItem === item.id ? 'border-[var(--accent-primary)] shadow-[0_0_8px_rgba(52,211,153,0.3)] bg-[var(--bg-hover)]' : ''}"
                   style="--hue: {itemHue(item.id)}"
                   title="{item.name}\n{item.id}\nLMB: Recipes ({item.recipeCount}) · RMB: Uses ({item.useCount})"
                   draggable={editorOpen ? "true" : "false"}
@@ -2417,13 +2417,13 @@
                   {#if iconSrc(item.id)}
                     <img src={iconSrc(item.id)} alt="" class="w-7 h-7 object-contain pixelated pointer-events-none" onerror={() => onIconError(item.id)} />
                   {:else}
-                    <span class="text-[10px] font-bold text-zinc-300 uppercase pointer-events-none">{item.name.slice(0, 2)}</span>
+                    <span class="text-[10px] font-bold text-[var(--text-primary)] uppercase pointer-events-none">{item.name.slice(0, 2)}</span>
                   {/if}
                   {#if bookmarks.includes(item.id)}
                     <span class="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-amber-400 shadow-sm"></span>
                   {/if}
                   {#if !editorOpen && focusCountForItem(item) > 0}
-                    <span class="absolute bottom-0.5 right-1 text-[9px] font-mono font-bold text-amber-300 pointer-events-none">
+                    <span class="absolute bottom-0.5 right-1 text-[9px] font-mono font-bold text-[var(--accent-warning)] pointer-events-none">
                       {focusCountForItem(item)}
                     </span>
                   {/if}
@@ -2443,7 +2443,7 @@
               {#each [...historyStack].reverse().slice(0, 8) as id (id)}
                 <button
                   type="button"
-                  class="w-8 h-8 rounded bg-[#1e222a] border border-[#2d323e] hover:border-[var(--accent-primary)] flex items-center justify-center cursor-pointer {selectedItem === id ? 'border-[var(--accent-primary)]' : ''}"
+                  class="w-8 h-8 rounded bg-[var(--bg-secondary)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center cursor-pointer {selectedItem === id ? 'border-[var(--accent-primary)]' : ''}"
                   style="--hue: {itemHue(id)}"
                   title={id}
                   onclick={() => selectItem(id, focusMode, false)}
@@ -2451,7 +2451,7 @@
                   {#if iconSrc(id)}
                     <img src={iconSrc(id)} alt="" class="w-6 h-6 object-contain pixelated" onerror={() => onIconError(id)} />
                   {:else}
-                    <span class="text-[9px] font-bold text-zinc-300 uppercase">{prettifyItem(id).slice(0, 2)}</span>
+                    <span class="text-[9px] font-bold text-[var(--text-primary)] uppercase">{prettifyItem(id).slice(0, 2)}</span>
                   {/if}
                 </button>
               {/each}

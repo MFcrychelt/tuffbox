@@ -773,16 +773,16 @@
     <div class="err flex items-start gap-2 px-3 py-2 bg-red-500/10 border-t border-red-500/20 text-red-400 text-xs" role="alert">
       <AlertCircle size={14} class="flex-shrink-0 mt-0.5" />
       <span class="flex-1 leading-normal">{error}</span>
-      <button type="button" class="text-red-400 hover:text-red-300 font-bold px-1" title="Dismiss" aria-label="Dismiss error" onclick={() => (error = "")}>
+      <button type="button" class="text-red-400 hover:text-[var(--accent-danger)] font-bold px-1" title="Dismiss" aria-label="Dismiss error" onclick={() => (error = "")}>
         ×
       </button>
     </div>
   {/if}
   {#if loreWarning}
-    <div class="warn flex items-start gap-2 px-3 py-2 bg-amber-500/10 border-t border-amber-500/20 text-amber-300 text-xs" role="status">
+    <div class="warn flex items-start gap-2 px-3 py-2 bg-amber-500/10 border-t border-amber-500/20 text-[var(--accent-warning)] text-xs" role="status">
       <Info size={14} class="flex-shrink-0 mt-0.5" />
       <span class="flex-1 leading-normal">{loreWarning}</span>
-      <button type="button" class="text-amber-300 hover:text-amber-200 font-bold px-1" title="Dismiss" aria-label="Dismiss warning" onclick={() => (loreWarning = "")}>
+      <button type="button" class="text-[var(--accent-warning)] hover:text-[var(--accent-warning)] font-bold px-1" title="Dismiss" aria-label="Dismiss warning" onclick={() => (loreWarning = "")}>
         ×
       </button>
     </div>
@@ -802,11 +802,11 @@
 
   {#if session?.pendingPlan && !merge}
     <div class="pending-plan-bar flex items-center justify-between gap-2 px-3 py-2 bg-amber-500/10 border-t border-amber-500/20 text-xs">
-      <span class="font-semibold text-amber-300">Pending plan ready for review</span>
+      <span class="font-semibold text-[var(--accent-warning)]">Pending plan ready for review</span>
       <div class="flex items-center gap-1.5">
         <button
           type="button"
-          class="px-2.5 py-1 bg-[var(--accent-primary)] text-white font-semibold rounded hover:brightness-110 disabled:opacity-50"
+          class="px-2.5 py-1 bg-[var(--accent-primary)] text-[var(--on-accent)] font-semibold rounded hover:brightness-110 disabled:opacity-50"
           disabled={busy}
           onclick={() => void reopenPendingReview()}
         >
@@ -814,7 +814,7 @@
         </button>
         <button
           type="button"
-          class="px-2 py-1 bg-red-500/20 text-red-300 border border-red-500/30 font-medium rounded hover:bg-red-500/30 disabled:opacity-50"
+          class="px-2 py-1 bg-red-500/20 text-[var(--accent-danger)] border border-red-500/30 font-medium rounded hover:bg-red-500/30 disabled:opacity-50"
           disabled={busy}
           onclick={() => (discardConfirmOpen = true)}
         >
@@ -836,7 +836,7 @@
     >
       <button
         type="button"
-        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition {pendingIntent === 'generate' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition {pendingIntent === 'generate' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
         role="radio"
         aria-checked={pendingIntent === "generate"}
         tabindex={pendingIntent === "generate" ? 0 : -1}
@@ -846,7 +846,7 @@
       </button>
       <button
         type="button"
-        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition flex items-center justify-center gap-1 {pendingIntent === 'branch' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
+        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition flex items-center justify-center gap-1 {pendingIntent === 'branch' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
         role="radio"
         aria-checked={pendingIntent === "branch"}
         tabindex={pendingIntent === "branch" ? 0 : -1}
@@ -858,7 +858,7 @@
       </button>
       <button
         type="button"
-        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition {pendingIntent === 'extend' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
+        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition {pendingIntent === 'extend' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
         role="radio"
         aria-checked={pendingIntent === "extend"}
         tabindex={pendingIntent === "extend" ? 0 : -1}
@@ -870,7 +870,7 @@
       </button>
       <button
         type="button"
-        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition {pendingIntent === 'lore' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
+        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition {pendingIntent === 'lore' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
         role="radio"
         aria-checked={pendingIntent === "lore"}
         tabindex={pendingIntent === "lore" ? 0 : -1}
@@ -915,21 +915,21 @@
       </div>
     {/if}
 
-    <div class="flex items-center justify-between gap-2">
-      <div class="flex items-center gap-2">
+    <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 min-w-0">
+      <div class="flex min-w-0 items-center gap-2">
         <button
           type="button"
-          class="text-[11px] font-semibold text-[var(--text-muted)] hover:text-[var(--text-primary)] flex items-center gap-1"
+          class="text-[11px] font-semibold text-[var(--text-muted)] hover:text-[var(--text-primary)] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
           onclick={() => (showJson = !showJson)}
           disabled={busy}
         >
           <Code size={12} />
           {showJson ? "Switch to Text" : "Paste JSON"}
         </button>
-        <span class="text-[10px] text-[var(--text-muted)]">Ctrl+Enter to send</span>
+        <span class="text-[10px] text-[var(--text-muted)] whitespace-nowrap">Ctrl+Enter to send</span>
       </div>
 
-      <div class="flex items-center gap-1.5">
+      <div class="ml-auto flex items-center gap-1.5 flex-shrink-0">
         {#if busy}
           <button
             type="button"
@@ -941,7 +941,7 @@
         {:else}
           <button
             type="button"
-            class="px-4 py-1.5 bg-[var(--accent-primary)] text-white text-xs font-bold rounded-lg hover:brightness-110 shadow-sm flex items-center gap-1.5 disabled:opacity-40"
+            class="px-4 py-1.5 bg-[var(--accent-primary)] text-[var(--on-accent)] text-xs font-bold rounded-lg hover:brightness-110 shadow-sm flex items-center gap-1.5 disabled:opacity-40"
             disabled={!canSend}
             onclick={() => send(pendingIntent)}
           >

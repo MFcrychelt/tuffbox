@@ -436,7 +436,7 @@
     <button
       type="button"
       role="tab"
-      class="insp-tab flex-1 py-1.5 px-1.5 text-xs font-semibold rounded-md transition text-center {inspTab === 'general' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+      class="insp-tab flex-1 py-1.5 px-1.5 text-xs font-semibold rounded-md transition text-center {inspTab === 'general' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
       aria-selected={inspTab === "general"}
       onclick={() => (inspTab = "general")}
     >
@@ -445,7 +445,7 @@
     <button
       type="button"
       role="tab"
-      class="insp-tab flex-1 py-1.5 px-1.5 text-xs font-semibold rounded-md transition text-center flex items-center justify-center gap-1 {inspTab === 'tasks' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+      class="insp-tab flex-1 py-1.5 px-1.5 text-xs font-semibold rounded-md transition text-center flex items-center justify-center gap-1 {inspTab === 'tasks' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
       aria-selected={inspTab === "tasks"}
       onclick={() => (inspTab = "tasks")}
     >
@@ -457,7 +457,7 @@
     <button
       type="button"
       role="tab"
-      class="insp-tab flex-1 py-1.5 px-1.5 text-xs font-semibold rounded-md transition text-center flex items-center justify-center gap-1 {inspTab === 'rewards' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+      class="insp-tab flex-1 py-1.5 px-1.5 text-xs font-semibold rounded-md transition text-center flex items-center justify-center gap-1 {inspTab === 'rewards' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
       aria-selected={inspTab === "rewards"}
       onclick={() => (inspTab = "rewards")}
     >
@@ -469,7 +469,7 @@
     <button
       type="button"
       role="tab"
-      class="insp-tab flex-1 py-1.5 px-1.5 text-xs font-semibold rounded-md transition text-center flex items-center justify-center gap-1 {inspTab === 'deps' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+      class="insp-tab flex-1 py-1.5 px-1.5 text-xs font-semibold rounded-md transition text-center flex items-center justify-center gap-1 {inspTab === 'deps' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
       aria-selected={inspTab === "deps"}
       onclick={() => (inspTab = "deps")}
     >
@@ -483,7 +483,7 @@
     <button
       type="button"
       role="tab"
-      class="insp-tab flex-1 py-1.5 px-1.5 text-xs font-semibold rounded-md transition text-center {inspTab === 'more' ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+      class="insp-tab flex-1 py-1.5 px-1.5 text-xs font-semibold rounded-md transition text-center {inspTab === 'more' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
       aria-selected={inspTab === "more"}
       onclick={() => (inspTab = "more")}
     >
@@ -492,7 +492,7 @@
   </div>
 
   {#if myIssues.length > 0}
-    <div class="val-warn px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-300 text-xs flex flex-col gap-1">
+    <div class="val-warn px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 text-[var(--accent-warning)] text-xs flex flex-col gap-1">
       {#each myIssues as issue (issue.message)}
         <div class="flex items-center gap-1.5"><AlertTriangle size={13} class="flex-shrink-0" /> {issue.message}</div>
       {/each}
@@ -647,7 +647,7 @@
             </select>
             <button
               type="button"
-              class="add-btn px-3 py-1.5 bg-[var(--accent-primary)] text-white text-xs font-semibold rounded-md hover:brightness-110 disabled:opacity-50"
+              class="add-btn px-3 py-1.5 bg-[var(--accent-primary)] text-[var(--on-accent)] text-xs font-semibold rounded-md hover:brightness-110 disabled:opacity-50"
               disabled={!depPick && filteredDepOptions.length === 0}
               onclick={applyDepFromFilter}
             >

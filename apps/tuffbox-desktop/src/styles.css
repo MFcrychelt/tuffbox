@@ -226,10 +226,37 @@ html[data-ui-scaled="1"] #app {
     color: #ffffff;
   }
 
+  /* The skins below carry an explicit `button.<class>` selector so they outrank
+     the unclassed `button.secondary` skin in the layer (equal specificity, later
+     in this file wins — without it light themes kept the ore-grey fill and the
+     dark-theme text colour, i.e. ~1.2:1 contrast). Win95 is a light theme too,
+     so it gets the same treatment as TuffBox Light. */
   [data-theme="light"] button.secondary,
-  [data-theme="light"] button.ghost,
   [data-theme="tuffbox-light"] button.secondary,
+  [data-theme="win95"] button.secondary,
+  [data-theme="light"] button.secondary:hover:not(:disabled),
+  [data-theme="tuffbox-light"] button.secondary:hover:not(:disabled),
+  [data-theme="win95"] button.secondary:hover:not(:disabled) {
+    background: var(--bg-elevated);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+  }
+
+  [data-theme="light"] button.secondary:hover:not(:disabled),
+  [data-theme="tuffbox-light"] button.secondary:hover:not(:disabled),
+  [data-theme="win95"] button.secondary:hover:not(:disabled) {
+    filter: brightness(0.96);
+  }
+
+  [data-theme="win95"] button.secondary {
+    border: 2px solid;
+    border-color: #dfdfdf #000 #000 #dfdfdf;
+  }
+
+  [data-theme="light"] button.ghost,
   [data-theme="tuffbox-light"] button.ghost {
+    background: transparent;
+    border-color: transparent;
     color: var(--text-secondary);
   }
 
