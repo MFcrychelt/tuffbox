@@ -3061,12 +3061,14 @@
     opacity: 1;
   }
   .notice.error {
-    color: var(--accent-danger);
+    /* Mixing toward the primary text colour keeps the hue readable on both
+       light and dark panels (accent-on-accent-tint alone is ~3:1). */
+    color: color-mix(in srgb, var(--accent-danger) 62%, var(--text-primary));
     background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
     border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent);
   }
   .notice.success {
-    color: var(--accent-primary);
+    color: color-mix(in srgb, var(--accent-primary) 62%, var(--text-primary));
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
@@ -3142,7 +3144,7 @@
     border: 1px solid var(--accent-primary);
     border-radius: var(--border-radius-md, 8px);
     background: var(--accent-primary);
-    color: #fff;
+    color: var(--on-accent, #fff);
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;

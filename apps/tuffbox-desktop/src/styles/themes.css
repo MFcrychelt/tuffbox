@@ -272,7 +272,10 @@
   --bg-active: #808080;
   --text-primary: #000000;
   --text-secondary: #404040;
-  --text-muted: #808080;
+  /* Win95 shipped #808080 for disabled text only; as a "muted" label colour it
+     reads 2.2:1 on the silver panel. #4a4a4a keeps the same quiet tone at
+     4.9:1 on silver and 8.9:1 on white. */
+  --text-muted: #4a4a4a;
   --accent-primary: #000080;
   --accent-hover: #0000c0;
   --accent-secondary: #008080;
@@ -605,7 +608,9 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.5);
-  --on-accent: #ffffff;
+  /* The Minecraft green accent is bright: white on #3fad32 is 2.9:1, so the
+     on-accent ink stays dark like the light themes (6.2:1 on the same green). */
+  --on-accent: #0b1a08;
   --mc-nick-color: #fff;
   --rail-bg: #212121;
   --rail-border: #1a1a1a;

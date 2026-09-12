@@ -84,7 +84,7 @@
 
 <div class={["load-chart", { potato }]}>
   {#if samples.length === 0}
-    <div class="empty">Run Smoke client to record RAM while the pack boots.</div>
+    <div class="empty">Run a profile to record RAM while the pack boots.</div>
   {:else}
     <svg
       class="plot"
@@ -135,7 +135,7 @@
   }
   .empty {
     flex: 1;
-    min-height: 160px;
+    min-height: 104px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -155,17 +155,17 @@
     fill: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
   .zone.tight {
-    fill: rgba(245, 158, 11, 0.12);
+    fill: color-mix(in srgb, var(--accent-warning) 12%, transparent);
   }
   .zone.hot {
-    fill: rgba(239, 68, 68, 0.14);
+    fill: color-mix(in srgb, var(--accent-danger) 14%, transparent);
   }
   .host-area {
     fill: color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
   .rss-line {
     fill: none;
-    stroke: #3b82f6;
+    stroke: var(--accent-secondary);
     stroke-width: 2;
     vector-effect: non-scaling-stroke;
   }
@@ -207,7 +207,7 @@
     background: var(--accent-primary);
   }
   .swatch.rss {
-    background: #3b82f6;
+    background: var(--accent-secondary);
   }
   .swatch.cpu {
     opacity: 0.45;

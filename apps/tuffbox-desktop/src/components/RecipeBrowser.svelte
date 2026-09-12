@@ -2400,7 +2400,7 @@
               {#each pageItems as item (item.id)}
                 <button
                   type="button"
-                  class="item-slot w-10 h-10 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] hover:scale-105 transition flex items-center justify-center relative cursor-pointer {selectedItem === item.id ? 'border-[var(--accent-primary)] shadow-[0_0_8px_rgba(52,211,153,0.3)] bg-[var(--bg-hover)]' : ''}"
+                  class="item-slot w-10 h-10 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] hover:scale-105 transition flex items-center justify-center relative cursor-pointer {selectedItem === item.id ? 'border-[var(--accent-primary)] shadow-[0_0_8px_color-mix(in_srgb,var(--accent-primary)_30%,transparent)] bg-[var(--bg-hover)]' : ''}"
                   style="--hue: {itemHue(item.id)}"
                   title="{item.name}\n{item.id}\nLMB: Recipes ({item.recipeCount}) · RMB: Uses ({item.useCount})"
                   draggable={editorOpen ? "true" : "false"}

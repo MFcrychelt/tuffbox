@@ -1,10 +1,11 @@
 <script lang="ts">
   import {
-    RefreshCw,
     Shield,
     Camera,
     XCircle,
     FolderOpen,
+    Rocket,
+    Save,
   } from "@lucide/svelte";
 
   type Profile = { id: string; name: string; side: string; memoryMb?: number | null; jvmArgs: string[] };
@@ -14,7 +15,6 @@
     projectPath = "",
     profiles = $bindable<Profile[]>([]),
     selectedProfile = $bindable("client"),
-    loading = false,
     running = false,
     matrixRunning = false,
     validationLoading = false,
@@ -35,8 +35,6 @@
       const v = mb ?? 4096;
       return v >= 1024 ? `${(v / 1024).toFixed(v % 1024 ? 1 : 0)} GB` : `${v} MB`;
     },
-    onrefresh,
-    onvalidate,
     onquickplay,
     onbrowseserver,
     ondefaultserver,
@@ -45,7 +43,6 @@
     projectPath?: string;
     profiles?: Profile[];
     selectedProfile?: string;
-    loading?: boolean;
     running?: boolean;
     matrixRunning?: boolean;
     validationLoading?: boolean;
@@ -63,8 +60,6 @@
     startupSeconds?: number | null;
     livePhase?: string;
     formatRam?: (mb?: number | null) => string;
-    onrefresh?: () => void;
-    onvalidate?: () => void;
     onquickplay?: () => void;
     onbrowseserver?: () => void;
     ondefaultserver?: () => void;
@@ -76,32 +71,31 @@
 
 <div class="grid gap-4">
   <div class="opt-card">
-    <span class="panel-section-title">Diagnostics & validation</span>
-    <div class="flex flex-wrap items-center gap-3 text-[color:var(--text-muted)] text-[12px]">
-      <button class="ghost" onclick={onrefresh} disabled={!projectPath || loading}>
-        <RefreshCw size={15} class={loading ? "spin" : ""} />
-        Refresh
-      </button>
-      <button class="ghost" onclick={onvalidate} disabled={!projectPath || validationLoading}>
-        <Shield size={15} />
-        {validationLoading ? "Checking…" : "Validate pack"}
-      </button>
+    <div class="flex flex-wrap items-center gap-2.5">
+      <span class="panel-section-title">Diagnostics & validation</span>
       {#if validationBadge}
-        <span class="text-[11px] font-bold px-2 py-1 rounded-full border {
+        <span class="text-[11px] font-bold px-2 py-0.5 rounded-full border {
           validationBadge.ok
-            ? "text-emerald-400 border-emerald-500/35 bg-emerald-500/10"
-            : "text-[#fca5a5] border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.08)]"
+            ? "text-[color-mix(in_srgb,var(--accent-primary)_62%,var(--text-primary))] border-[color-mix(in_srgb,var(--accent-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)]"
+            : "text-[color-mix(in_srgb,var(--accent-danger)_62%,var(--text-primary))] border-[color-mix(in_srgb,var(--accent-danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-danger)_8%,transparent)]"
         }">
           {validationBadge.label}
         </span>
       {/if}
+      <span class="ml-auto text-[11px] text-[color:var(--text-muted)]">
+        {validationLoading
+          ? "Checking the pack…"
+          : validationReport
+            ? "Re-check anytime with Validate in the header"
+            : "Not checked yet — Validate runs from the header"}
+      </span>
     </div>
-    <div class="flex flex-wrap items-center gap-4 mt-3 pt-3 border-t border-[color:var(--border-color)]">
+    <div class="flex flex-wrap items-center gap-4">
       <label class="inline-flex items-center gap-1.5 cursor-pointer text-[color:var(--text-secondary)] text-[12px]" title="Allow launch even when validation has errors">
-        <input type="checkbox" class="w-auto accent-emerald-500" bind:checked={forceRun} /> Force run
+        <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={forceRun} /> Force run
       </label>
-      <label class="inline-flex items-center gap-1.5 cursor-pointer text-[color:var(--text-secondary)] text-[12px]" title="Create a snapshot before smoke / dry run">
-        <input type="checkbox" class="w-auto accent-emerald-500" bind:checked={autoSnapshot} />
+      <label class="inline-flex items-center gap-1.5 cursor-pointer text-[color:var(--text-secondary)] text-[12px]" title="Create a snapshot before the run">
+        <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={autoSnapshot} />
         <Camera size={13} /> Auto-snapshot
       </label>
       <label class="inline-flex items-center gap-1.5 cursor-pointer text-[color:var(--text-secondary)] text-[12px]">
@@ -115,7 +109,7 @@
         </span>
       {/if}
       {#if startupSeconds != null && livePhase === "pass"}
-        <span class="text-emerald-400 font-bold">Startup {startupSeconds}s</span>
+        <span class="text-[var(--accent-primary)] font-bold">Startup {startupSeconds}s</span>
       {/if}
     </div>
   </div>
@@ -123,7 +117,7 @@
   <div class="opt-card">
     <span class="panel-section-title">Quick play</span>
     <div class="flex flex-wrap items-end gap-3">
-      <label class="field flex-1 min-w-[200px]">
+      <label class="field min-w-[200px] max-w-[320px] flex-1">
         <span class="field-label">World</span>
         <select class="min-w-[200px]" bind:value={quickPlayWorld}>
           {#if worlds.length === 0}
@@ -135,7 +129,8 @@
           {/if}
         </select>
       </label>
-      <button class="ghost" onclick={onquickplay} disabled={running || matrixRunning || !quickPlayWorld}>
+      <button class="secondary" onclick={onquickplay} disabled={running || matrixRunning || !quickPlayWorld}>
+        <Rocket size={15} />
         Launch Quick Play
       </button>
     </div>
@@ -171,7 +166,10 @@
           <span class="switch-desc">Lets players join without Mojang auth</span>
         </span>
       </label>
-      <button class="ghost" onclick={onwriteserverprops}>Write server.properties</button>
+      <button class="secondary" onclick={onwriteserverprops}>
+        <Save size={15} />
+        Write server.properties
+      </button>
     </div>
   </div>
 
@@ -179,31 +177,31 @@
     <div class="bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] px-3 py-3">
       <div class="flex items-center justify-between mb-2.5 gap-2">
         <h3 class="flex items-center gap-2 text-[14px] text-[var(--text-primary)] m-0"><Shield size={16} /> Validation</h3>
-        <span class="flex items-center gap-1.5 text-[#fca5a5] font-bold text-[12px]"><XCircle size={14} /> Issues — use Force run to launch</span>
+        <span class="flex items-center gap-1.5 text-[var(--accent-danger)] font-bold text-[12px]"><XCircle size={14} /> Issues — use Force run to launch</span>
       </div>
       <div class="grid grid-cols-3 gap-2 mb-2">
         <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
           validationReport.graphErrors > 0
-            ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
+            ? "border-[color-mix(in_srgb,var(--accent-danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-danger)_6%,transparent)]"
             : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
         }">
-          <strong class="text-[18px] { validationReport.graphErrors > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.graphErrors }</strong>
+          <strong class="text-[18px] { validationReport.graphErrors > 0 ? "text-[var(--accent-danger)]" : "text-[var(--text-primary)]" }">{ validationReport.graphErrors }</strong>
           <span class="text-[11px] text-[var(--text-muted)]">graph</span>
         </div>
         <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
           (validationReport.jsonErrors?.length ?? 0) > 0
-            ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
+            ? "border-[color-mix(in_srgb,var(--accent-danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-danger)_6%,transparent)]"
             : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
         }">
-          <strong class="text-[18px] { (validationReport.jsonErrors?.length ?? 0) > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.jsonErrors?.length ?? 0 }</strong>
+          <strong class="text-[18px] { (validationReport.jsonErrors?.length ?? 0) > 0 ? "text-[var(--accent-danger)]" : "text-[var(--text-primary)]" }">{ validationReport.jsonErrors?.length ?? 0 }</strong>
           <span class="text-[11px] text-[var(--text-muted)]">JSON</span>
         </div>
         <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
           (validationReport.circularDeps?.length ?? 0) > 0
-            ? "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)]"
+            ? "border-[color-mix(in_srgb,var(--accent-danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-danger)_6%,transparent)]"
             : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
         }">
-          <strong class="text-[18px] { (validationReport.circularDeps?.length ?? 0) > 0 ? "text-[#fca5a5]" : "text-[var(--text-primary)]" }">{ validationReport.circularDeps?.length ?? 0 }</strong>
+          <strong class="text-[18px] { (validationReport.circularDeps?.length ?? 0) > 0 ? "text-[var(--accent-danger)]" : "text-[var(--text-primary)]" }">{ validationReport.circularDeps?.length ?? 0 }</strong>
           <span class="text-[11px] text-[var(--text-muted)]">cycles</span>
         </div>
       </div>
@@ -316,16 +314,16 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: #9ca3af;
+    background: var(--text-muted);
     transition: transform var(--motion-fast, 160ms) ease, background var(--motion-fast, 160ms) ease;
   }
   .switch input:checked + .switch-track {
-    background: rgba(16, 185, 129, 0.35);
-    border-color: rgba(16, 185, 129, 0.5);
+    background: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
   }
   .switch input:checked + .switch-track::after {
     transform: translateX(16px);
-    background: #a7f3d0;
+    background: var(--accent-primary);
   }
   .switch-body {
     display: flex;
@@ -335,7 +333,7 @@
   .switch-label {
     font-size: 12px;
     font-weight: 600;
-    color: #d1d5db;
+    color: var(--text-primary);
     font-family: ui-monospace, monospace;
   }
   .switch-desc {
