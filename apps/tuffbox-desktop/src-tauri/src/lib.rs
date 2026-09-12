@@ -16538,6 +16538,14 @@ fn drop_stage_root() -> PathBuf {
 /// paths, traversal and drive letters; normalizes backslashes.
 fn sanitize_drop_rel(rel: &str) -> Result<String, String> {
     let norm = rel.replace('\\', "/");
+    // Reject absolute paths and drive letters before stripping leading slashes.
+    if norm.starts_with('/') || norm.starts_with("//") {
+        return Err(format!("absolute path not allowed: {rel}"));
+    }
+    let bytes = norm.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' {
+        return Err(format!("absolute path not allowed: {rel}"));
+    }
     let trimmed = norm.trim_start_matches('/');
     if trimmed.is_empty() {
         return Err("empty dropped file name".into());
@@ -16773,6 +16781,11 @@ fn drop_classify_name(name: &str, wrap: &str, sum: &mut DropSummary) {
         .strip_prefix(wrap)
         .unwrap_or(name)
         .trim_start_matches('/');
+    // Modrinth packs put content inside overrides/; strip it to expose
+    // the actual content directories (mods/, resourcepacks/, etc.).
+    let rel = rel
+        .strip_prefix("overrides/")
+        .unwrap_or(rel);
     if rel.is_empty() {
         return;
     }
@@ -17282,7 +17295,12 @@ fn extract_content_zip(zip_path: &Path, dest_root: &Path) -> Result<(), String> 
         let rel = name
             .strip_prefix(wrap.as_str())
             .unwrap_or(name.as_str())
-            .trim_start_matches('/')
+            .trim_start_matches('/');
+        // Modrinth packs put content inside overrides/; strip it to expose
+        // the actual content directories (mods/, resourcepacks/, etc.).
+        let rel = rel
+            .strip_prefix("overrides/")
+            .unwrap_or(rel)
             .to_string();
         if rel.is_empty() {
             continue;
