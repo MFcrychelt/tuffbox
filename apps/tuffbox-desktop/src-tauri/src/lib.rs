@@ -17300,8 +17300,23 @@ fn extract_content_zip(zip_path: &Path, dest_root: &Path) -> Result<(), String> 
         // the actual content directories (mods/, resourcepacks/, etc.).
         let rel = rel
             .strip_prefix("overrides/")
-            .unwrap_or(rel)
-            .to_string();
+            .unwrap_or(rel);
+        // When no global wrapper was detected, try stripping the first
+        // segment if it's not a content dir (handles mixed wrapped/unwrapped
+        // entries like "MyPack/mods/a.jar" alongside loose "loose.jar").
+        let rel = if wrap.is_empty() {
+            let segs: Vec<&str> = rel.split('/').collect();
+            if segs.len() > 1
+                && !DROP_CONTENT_DIRS.contains(&segs[0].to_ascii_lowercase().as_str())
+                && segs[0].to_ascii_lowercase() != "overrides"
+            {
+                segs[1..].join("/")
+            } else {
+                rel.to_string()
+            }
+        } else {
+            rel.to_string()
+        };
         if rel.is_empty() {
             continue;
         }
