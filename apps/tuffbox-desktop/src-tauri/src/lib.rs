@@ -16995,10 +16995,10 @@ fn list_foreign_archive_names(path: &Path) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
     for entry in archive {
         let entry = entry.map_err(|e| format!("scan rar failed: {e}"))?;
-        if entry.is_dir() {
+        if entry.is_directory() {
             continue;
         }
-        names.push(entry.filename().as_str().replace('\\', "/"));
+        names.push(entry.filename.to_string_lossy().replace('\\', "/"));
     }
     Ok(names)
 }
@@ -17080,8 +17080,7 @@ fn extract_foreign_archive(src: &Path, dest: &Path) -> Result<(), String> {
             .open_for_processing()
             .map_err(|e| format!("cannot open rar archive: {e}"))?;
         while let Some(header) = archive.read_header().map_err(|e| format!("rar read: {e}"))? {
-            let header = header.map_err(|e| format!("rar header: {e}"))?;
-            archive = if header.entry().is_dir() {
+            archive = if header.entry().is_directory() {
                 header.skip().map_err(|e| format!("rar skip: {e}"))?
             } else {
                 header
