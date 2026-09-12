@@ -1216,7 +1216,9 @@
     font-weight: 800;
   }
   .toggle-btn.active {
-    color: var(--accent-primary);
+    /* Accent text on an accent tint measured 2.95:1 in the light themes; the
+       mix keeps the hue but restores contrast. */
+    color: color-mix(in srgb, var(--accent-primary) 62%, var(--text-primary));
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   }
   .search {
@@ -1354,14 +1356,14 @@
   }
   .method-badge.ai { color: var(--accent-secondary); border-color: color-mix(in srgb, var(--accent-secondary) 40%, transparent); }
   .method-badge.heuristic { color: var(--accent-secondary); border-color: color-mix(in srgb, var(--accent-secondary) 35%, transparent); }
-  .method-badge.kb { color: #0e7490; border-color: color-mix(in srgb, #0e7490 35%, transparent); }
-  .method-badge.swarm { color: #be185d; border-color: color-mix(in srgb, #be185d 35%, transparent); }
+  .method-badge.kb { color: color-mix(in srgb, var(--accent-secondary) 62%, var(--text-primary)); border-color: color-mix(in srgb, var(--accent-secondary) 35%, transparent); }
+  .method-badge.swarm { color: color-mix(in srgb, var(--accent-danger) 62%, var(--text-primary)); border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); }
   .method-badge.manual { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
   .method-badge.unknown { color: var(--text-muted); border-color: var(--border-color); }
   .plan-source-badge { color: var(--text-secondary); }
   .change-preview { min-width: 0; padding: 16px; overflow-y: auto; max-height: 80vh; }
   .change-card { margin-bottom: 28px; padding-bottom: 28px; border-bottom: 1px solid var(--border-color); }
-  .change-card.jar-drift { border-color: rgba(245,158,11,.35); }
+  .change-card.jar-drift { border-color: color-mix(in srgb, var(--accent-warning) 40%, transparent); }
   /* Manifest diffs: quiet, secondary — they're bookkeeping, not real file edits. */
   .change-card.manifest { opacity: 0.62; }
   .change-card.manifest:hover { opacity: 1; }

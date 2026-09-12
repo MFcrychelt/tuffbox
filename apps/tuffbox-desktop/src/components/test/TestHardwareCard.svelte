@@ -25,7 +25,7 @@
   );
   const line = $derived(
     !last
-      ? "Run Smoke client to record RAM while the pack boots."
+      ? "Run a profile to record RAM while the pack boots."
       : !hasJvm
         ? waitingJvmLine(last.hostUsedMb, last.hostTotalMb)
         : advice && peaks
@@ -58,9 +58,9 @@
     border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
   .hw-card.tight {
-    border-color: rgba(245, 158, 11, 0.45);
+    border-color: color-mix(in srgb, var(--accent-warning) 45%, transparent);
   }
   .hw-card.overloaded {
-    border-color: rgba(239, 68, 68, 0.45);
+    border-color: color-mix(in srgb, var(--accent-danger) 45%, transparent);
   }
 </style>

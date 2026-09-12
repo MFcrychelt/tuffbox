@@ -1369,7 +1369,10 @@
     opacity: 0.55;
   }
   .list-pane { overflow: auto; min-height: 0; max-height: none; padding: 10px; display: flex; flex-direction: column; gap: 16px; scrollbar-gutter: stable; }
-  .row { width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); display: grid; gap: 6px; transform: none; }
+  /* The grid needs an explicit single column: an auto-sized column plus the
+     global `button { justify-content: center }` shrank the row content to its
+     max-content width and centered it inside the full-width button. */
+  .row { width: 100%; text-align: left; justify-content: start; grid-template-columns: minmax(0, 1fr); background: transparent; border: 1px solid transparent; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); display: grid; gap: 6px; transform: none; }
   .row:hover, .row.selected { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent); color: var(--text-primary); }
   .timeline-group { display: grid; gap: 6px; }
   .timeline-header { display: flex; align-items: center; gap: 8px; padding: 6px 6px 2px; position: sticky; top: 0; z-index: 2; background: var(--bg-secondary); }

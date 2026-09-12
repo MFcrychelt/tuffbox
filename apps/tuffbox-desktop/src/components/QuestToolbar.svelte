@@ -68,7 +68,7 @@
     {#each modes as item}
       <button
         type="button"
-        class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-all {mode === item ? 'bg-[var(--accent-primary)] text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
+        class="rounded-lg px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-all {mode === item ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'}"
         onclick={() => onModeChange(item)}
       >
         {item}
@@ -105,7 +105,7 @@
       {/if}
     </button>
 
-    <span class="hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold sm:inline-flex {hasErrors ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : dirty ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'}">
+    <span class="hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold sm:inline-flex {hasErrors ? 'border-[var(--accent-danger)]/40 bg-[var(--accent-danger)]/10 text-[var(--accent-danger)]' : dirty ? 'border-[var(--accent-warning)]/40 bg-[var(--accent-warning)]/10 text-[var(--accent-warning)]' : 'border-[var(--accent-primary)]/40 bg-[var(--accent-primary)]/10 text-[var(--accent-primary)]'}">
       {#if hasErrors}
         <AlertTriangle size={12} /> Needs review
       {:else if dirty}
@@ -127,7 +127,7 @@
 
     <button
       type="button"
-      class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all {aiOpen ? 'border-violet-400 bg-violet-600 text-white shadow-md shadow-violet-500/25' : 'border-violet-500/30 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 hover:text-white'}"
+      class="inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all {aiOpen ? 'border-violet-400 bg-violet-600 text-white shadow-md shadow-violet-500/25' : 'border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--accent-secondary)] hover:bg-[var(--bg-hover)]'}"
       onclick={onAi}
       title={aiOpen ? "Close Quest AI" : "Open Quest AI"}
     >
@@ -137,7 +137,7 @@
 
     <button
       type="button"
-      class="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-semibold text-white shadow-md shadow-[var(--accent-primary)]/20 hover:brightness-110 active:scale-[0.98] transition disabled:opacity-50"
+      class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-semibold text-[var(--on-accent)] shadow-md shadow-[var(--accent-primary)]/20 hover:brightness-110 active:scale-[0.98] transition disabled:opacity-50"
       onclick={onSave}
       disabled={saving}
     >

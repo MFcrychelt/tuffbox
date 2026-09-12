@@ -17,7 +17,9 @@
   --bg-active: #c5d0bf;
   --text-primary: #152019;
   --text-secondary: #3a4a40;
-  --text-muted: #5f7166;
+  /* Panels sit on a translucent white card, so muted labels land on #e9eee8
+     rather than the shell #f3f5f1: #5f7166 measured 4.4:1 there. */
+  --text-muted: #586a5e;
   --accent-primary: #0a9a44;
   --accent-hover: #088038;
   --accent-secondary: #5c33c4;
@@ -271,8 +273,13 @@
   --bg-hover: #d4d4d4;
   --bg-active: #808080;
   --text-primary: #000000;
-  --text-secondary: #404040;
-  --text-muted: #808080;
+  /* Header/secondary labels sit on the raw #a5a5a5 shell, where #404040 read
+     4.1:1; #333333 clears AA on both the shell and the silver panels. */
+  --text-secondary: #333333;
+  /* Win95 shipped #808080 for disabled text only; as a "muted" label colour it
+     reads 2.2:1 on the silver panel. The panels are #c0c0c0 at 50% over the
+     #a5a5a5 shell, i.e. ~#b2b2b2: #4a4a4a measured 4.2:1 there. */
+  --text-muted: #383838;
   --accent-primary: #000080;
   --accent-hover: #0000c0;
   --accent-secondary: #008080;
@@ -595,7 +602,8 @@
   --bg-active: #555555;
   --text-primary: #ffffff;
   --text-secondary: #c8c8c8;
-  --text-muted: #9a9a9a;
+  /* On the #404040 elevated panel the old #9a9a9a measured 3.7:1. */
+  --text-muted: #b0b0b0;
   --accent-primary: #3fad32;
   --accent-hover: #4cbe3e;
   --accent-secondary: #6bc45e;
@@ -605,7 +613,9 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.5);
-  --on-accent: #ffffff;
+  /* The Minecraft green accent is bright: white on #3fad32 is 2.9:1, so the
+     on-accent ink stays dark like the light themes (6.2:1 on the same green). */
+  --on-accent: #0b1a08;
   --mc-nick-color: #fff;
   --rail-bg: #212121;
   --rail-border: #1a1a1a;

@@ -595,6 +595,37 @@
     }
   }
 
+  /** Clearance kept between a freshly added quest and every other quest, in
+   *  FTBQ units (1 unit == BASE px). 2.5 units is wider than the node label
+   *  (capped at 2 units), so two quests placed on the same row can never have
+   *  their titles overlap. */
+  const PLACE_CLEARANCE = 2.5;
+
+  /** Nearest free cell around (x, y) on the half-unit quest grid. Without this
+   *  every "+ Add Quest" dropped the quest on the viewport centre, so repeated
+   *  adds stacked nodes (and their labels) on top of each other. */
+  function findFreeSlot(x: number, y: number) {
+    const free = (cx: number, cy: number) =>
+      quests.every(
+        (q) => Math.abs(q.x - cx) >= PLACE_CLEARANCE || Math.abs(q.y - cy) >= PLACE_CLEARANCE,
+      );
+    // Half-unit lattice == one grid step; ring 0 is the requested point itself,
+    // so the quest stays as close to the viewport centre as space allows.
+    const offsets: [number, number][] = [[0, 0]];
+    for (let ring = 0.5; ring <= 12; ring += 0.5) {
+      for (let i = -ring; i <= ring; i += 0.5) {
+        if (Math.abs(i) !== ring) offsets.push([i, -ring], [i, ring]);
+        offsets.push([-ring, i], [ring, i]);
+      }
+    }
+    for (const [dx, dy] of offsets) {
+      const cx = snap(x + dx);
+      const cy = snap(y + dy);
+      if (free(cx, cy)) return { x: cx, y: cy };
+    }
+    return { x, y };
+  }
+
   function addAtCenter() {
     const container = flowContainer();
     if (container) {
@@ -603,13 +634,15 @@
       const cy = rect.top + rect.height / 2;
       const { x: panX, y: panY, zoom } = getViewport();
       const world = getWorldCoordinates({ clientX: cx, clientY: cy }, container, panX, panY, zoom);
-      onAddAt(snap(world.x / BASE), snap(world.y / BASE));
+      const slot = findFreeSlot(snap(world.x / BASE), snap(world.y / BASE));
+      onAddAt(slot.x, slot.y);
     } else {
       const pos = screenToFlowPosition({
         x: window.innerWidth / 2,
         y: window.innerHeight / 2,
       });
-      onAddAt(snap(pos.x / BASE), snap(pos.y / BASE));
+      const slot = findFreeSlot(snap(pos.x / BASE), snap(pos.y / BASE));
+      onAddAt(slot.x, slot.y);
     }
   }
 
@@ -817,7 +850,7 @@
         {#if showEmptyAddCta}
           <button
             type="button"
-            class="empty-add pointer-events-auto px-4 py-2 bg-[var(--accent-primary)] text-white font-bold text-xs rounded-lg hover:brightness-110 shadow-md transition"
+            class="empty-add pointer-events-auto px-4 py-2 bg-[var(--accent-primary)] text-[var(--on-accent)] font-bold text-xs rounded-lg hover:brightness-110 shadow-md transition"
             onclick={(e) => { e.stopPropagation(); addAtCenter(); }}
           >
             + Add First Quest
