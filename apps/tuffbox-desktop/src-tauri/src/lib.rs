@@ -8278,6 +8278,15 @@ fn apply_launcher_edit_config(
         .parent()
         .ok_or_else(|| "manifest has no parent".to_string())?;
     let target = safe_project_file(project_dir, relative)?;
+    // Defense in depth: validation already rejects non-config paths, but the
+    // plan comes from an AI model — a `replace_file` text patch must never
+    // overwrite a jar/binary/script inside the project, even if a crafted or
+    // older plan slips past validation.
+    if !is_editable_config_path(&target) {
+        return Err(format!(
+            "edit_config refused: '{relative}' is not a config file (allowed: json/json5/toml/properties/cfg/conf/txt/js/zs/yaml/yml/md)"
+        ));
+    }
     let current = if target.is_file() {
         std::fs::read_to_string(&target).map_err(|e| e.to_string())?
     } else {
