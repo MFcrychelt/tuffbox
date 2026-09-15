@@ -3523,6 +3523,24 @@ async fn detect_wrong_loader_mods(path: String) -> Result<Vec<serde_json::Value>
     .map_err(|e| e.to_string())?
 }
 
+/// A `mods/` file name received over IPC must be a BARE name — never a path.
+/// `mods_dir.join("../manifest.json")` would otherwise rename/delete files
+/// OUTSIDE the mods directory. Defense in depth: the UI passes scanned
+/// names, but one crafted or future caller value must not escape the folder.
+fn mods_dir_file(mods_dir: &Path, file_name: &str) -> Result<PathBuf, String> {
+    let name = file_name.trim();
+    let p = Path::new(name);
+    if name.is_empty()
+        || p.is_absolute()
+        || p.components().count() != 1
+        || name == "."
+        || name == ".."
+    {
+        return Err(format!("invalid mods file name: '{file_name}'"));
+    }
+    Ok(mods_dir.join(name))
+}
+
 /// Renames a .jar file in mods/ to .jar.disabled so Minecraft won't load it.
 #[tauri::command(rename_all = "camelCase")]
 async fn disable_wrong_loader_jar(path: String, file_name: String) -> Result<String, String> {
@@ -3531,10 +3549,9 @@ async fn disable_wrong_loader_jar(path: String, file_name: String) -> Result<Str
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
-        let src = project_dir.join("mods").join(&file_name);
-        let dst = project_dir
-            .join("mods")
-            .join(format!("{}.disabled", file_name));
+        let mods_dir = project_dir.join("mods");
+        let src = mods_dir_file(&mods_dir, &file_name)?;
+        let dst = mods_dir_file(&mods_dir, &format!("{file_name}.disabled"))?;
         if !src.is_file() {
             return Err(format!("{} not found in mods/", file_name));
         }
@@ -3553,7 +3570,7 @@ async fn remove_loose_jar(path: String, file_name: String) -> Result<String, Str
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
-        let target = project_dir.join("mods").join(&file_name);
+        let target = mods_dir_file(&project_dir.join("mods"), &file_name)?;
         if !target.is_file() {
             return Err(format!("{} not found in mods/", file_name));
         }
@@ -3722,7 +3739,7 @@ async fn keep_one_duplicate_mod_jar(
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
         let mods_dir = project_dir.join("mods");
-        let keep_path = mods_dir.join(&keep_file_name);
+        let keep_path = mods_dir_file(&mods_dir, &keep_file_name)?;
         if !keep_path.is_file() {
             return Err(format!("{keep_file_name} not found in mods/"));
         }
