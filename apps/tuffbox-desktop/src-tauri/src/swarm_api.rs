@@ -796,7 +796,18 @@ pub fn confirm_crash_resolution_after_launch(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn confirm_crash_resolution_from_diagnose(
+pub async fn confirm_crash_resolution_from_diagnose(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Option<CrashResolutionRecord>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; disk
+    // I/O here stalled IPC delivery for the whole Diagnose flow.
+    tokio::task::spawn_blocking(move || confirm_crash_resolution_from_diagnose_impl(app, path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn confirm_crash_resolution_from_diagnose_impl(
     app: tauri::AppHandle,
     path: String,
 ) -> Result<Option<CrashResolutionRecord>, String> {
@@ -1485,14 +1496,30 @@ pub fn change_actions_to_launcher(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn get_pending_action_plan(path: String) -> Result<Option<ActionPlan>, String> {
+pub async fn get_pending_action_plan(path: String) -> Result<Option<ActionPlan>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; disk
+    // I/O here stalled IPC delivery for the whole Diagnose flow.
+    tokio::task::spawn_blocking(move || get_pending_action_plan_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_pending_action_plan_impl(path: String) -> Result<Option<ActionPlan>, String> {
     integrations::require_swarm_enabled()?;
     let project_dir = manifest_parent(&path)?;
     load_pending_action_plan(&project_dir)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn clear_pending_network_plan(path: String) -> Result<(), String> {
+pub async fn clear_pending_network_plan(path: String) -> Result<(), String> {
+    // Blocking-pool conversion: sync commands run on the main thread; disk
+    // I/O here stalled IPC delivery for the whole Diagnose flow.
+    tokio::task::spawn_blocking(move || clear_pending_network_plan_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn clear_pending_network_plan_impl(path: String) -> Result<(), String> {
     integrations::require_swarm_enabled()?;
     let project_dir = manifest_parent(&path)?;
     clear_pending_action_plan(&project_dir)

@@ -353,6 +353,43 @@ fn java_bin_fingerprint(path: &Path) -> Option<(u64, u64)> {
     Some((meta.len(), mtime))
 }
 
+/// How long `java -version` may run before we give up on it.
+///
+/// A healthy JVM answers in well under a second, but a broken wrapper, an
+/// antivirus scan or a JVM that deadlocks during startup would hang the
+/// probe forever — and with it the whole crash-diagnosis preparation
+/// (`check_java_at_path` runs inside `prepare_ai_crash_context`), which
+/// surfaced as Diagnose stuck on "Analyzing…" indefinitely. 15s is ~20× the
+/// observed p99 on Windows while still bounding a sick binary quickly.
+const JAVA_VERSION_PROBE_TIMEOUT_SECS: u64 = 15;
+
+/// `Command::output()` with a hard deadline: spawns, polls `try_wait`, and
+/// kills the child when it exceeds [`JAVA_VERSION_PROBE_TIMEOUT_SECS`].
+fn run_with_probe_timeout(mut c: Command) -> io::Result<std::process::Output> {
+    c.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = c.spawn()?;
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(JAVA_VERSION_PROBE_TIMEOUT_SECS);
+    loop {
+        match child.try_wait()? {
+            Some(_) => {
+                // try_wait does not drain the pipes; wait_with_output reads
+                // them to EOF now that the child has exited.
+                return child.wait_with_output();
+            }
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("java -version did not answer within {JAVA_VERSION_PROBE_TIMEOUT_SECS}s"),
+                ));
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(25)),
+        }
+    }
+}
+
 pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
     let bin = path.to_path_buf();
     let java_bin = if bin
@@ -390,7 +427,8 @@ pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
             use std::os::windows::process::CommandExt;
             c.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        c.output()?
+        // Bounded probe — a hung JVM must not pin diagnosis prep forever.
+        run_with_probe_timeout(c)?
     };
     let stderr = String::from_utf8_lossy(&output.stderr);
     let first_line = stderr.lines().next().unwrap_or("").to_string();

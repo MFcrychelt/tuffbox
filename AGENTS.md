@@ -89,6 +89,14 @@ ECC и engram комплементарны: engram — для явных арх�
 
 Шрифты приложения: **Inter Variable** (UI) и **JetBrains Mono Variable** (код/логи/пути) — self-hosted через `@fontsource-variable/*`, объявления в `src/styles/fonts.css` (только latin/cyrillic сабсеты ради бюджета стартового CSS). Не хардкодь monospace-стеки — используй `var(--font-mono, …)`.
 
+## Desktop — Tauri-команды с тяжёлым I/O: только async + spawn_blocking
+
+В `apps/tuffbox-desktop/src-tauri` **синхронные** `#[tauri::command]` выполняются на **главном потоке** приложения. Пока sync-команда ходит по диску, событийный цикл стоит: доставка ВСЕХ IPC-ответов зависает, и UI бесконечно крутит спиннеры (так Diagnose «вечно анализировал», хотя async-команды рядом уже имели таймауты/watchdog).
+
+Правило: команда, которая читает/пишет файлы, сканирует jar, хеширует, строит граф или запускает процесс, — обязана быть `async fn` с телом `tokio::task::spawn_blocking(move || имя_impl(args)).await.map_err(|e| e.to_string())?`. См. `get_health_report` / `get_crash_diagnosis` в `lib.rs` (2026-09: конвертировано 23 команды Diagnose/AI-потока). Синхронными остаются только команды, читающие settings/кэш в памяти.
+
+Связанное: любые запуски внешних процессов (`java -version`, `ollama --version` …) обязаны иметь дедлайн (см. `run_with_probe_timeout` в `crates/tuffbox-core/src/jre.rs`) — зависший бинарь иначе намертво блокирует prep-каскад диагностики.
+
 ## Svelte — только синтаксис Svelte 5
 
 В `.svelte` / `.svelte.ts` / `.svelte.js` пиши **только Svelte 5**. Не используй синтаксис Svelte 4.

@@ -42,6 +42,11 @@
     type DiagnoseFocus,
   } from "../lib/store";
   import { shareCrashLogWithFeedback } from "../lib/mclogs";
+  import {
+    DIAGNOSE_BUSY_CAP_MS,
+    shouldAutoScheduleAi,
+    shouldTripWatchdog,
+  } from "../lib/diagnoseAutoSchedule";
   import EmptyState from "./EmptyState.svelte";
   import AiConnectionModal from "./AiConnectionModal.svelte";
   import DiagnoseTriagePanels from "./diagnostics/DiagnoseTriagePanels.svelte";
@@ -262,13 +267,18 @@
   // Diagnose can appear to hang forever when an IPC never settles (stuck
   // Ollama/endpoint, p2p swarm lookup). Watchdog: after a hard cap, clear the
   // busy flags so the Health view stops spinning and tells the user what was stuck.
-  const DIAGNOSE_BUSY_CAP_S = 180;
-  const DIAGNOSE_BUSY_CAP_MS = DIAGNOSE_BUSY_CAP_S * 1000;
   let diagnoseWatch: ReturnType<typeof setInterval> | undefined;
   let diagnoseBusySince = 0;
+  // Set when the watchdog force-stops a stuck run. Blocks the AI tab's
+  // AUTOMATIC re-scheduling until the user explicitly retries (Re-analyze /
+  // Retry AI / Refresh / source switch). Without it, the watchdog clearing
+  // the busy flags + the AI-tab auto-effect re-arming formed an infinite
+  // "Analyzing…" loop: every reset spawned another backend cascade that
+  // piled onto the still-running one.
+  let diagnoseWatchdogTripped = $state(false);
 
   function syncDiagnoseWatchdog() {
-    const busy = loading || analysisBusy || crashLoading || aiLoading;
+    const busy = loading || analysisBusy || crashLoading || aiLoading || healthLoading;
     if (!busy) {
       if (diagnoseWatch) {
         clearInterval(diagnoseWatch);
@@ -280,7 +290,14 @@
     if (!diagnoseBusySince) diagnoseBusySince = Date.now();
     if (diagnoseWatch) return;
     diagnoseWatch = setInterval(() => {
-      if (Date.now() - diagnoseBusySince <= DIAGNOSE_BUSY_CAP_MS) return;
+      if (
+        !shouldTripWatchdog({
+          busySinceMs: diagnoseBusySince,
+          nowMs: Date.now(),
+          capMs: DIAGNOSE_BUSY_CAP_MS,
+        })
+      )
+        return;
       const stage =
         cascadeLiveStage ||
         (aiLoading
@@ -289,12 +306,18 @@
             ? "crash rules"
             : loading
               ? "reading logs"
-              : "pack scan");
+              : healthLoading
+                ? "health report"
+                : "pack scan");
       analysisBusy = false;
       crashLoading = false;
       aiLoading = false;
       loading = false;
+      healthLoading = false;
       cascadeLiveStage = null;
+      // Break the auto-restart loop: block the AI tab's automatic
+      // re-scheduling until the user explicitly retries.
+      diagnoseWatchdogTripped = true;
       // The backend cascade may still be running (no client-side cancel).
       // Forget the source stamp so a refresh re-runs analysis instead of
       // trusting state from a run whose results will land out of order.
@@ -312,6 +335,8 @@
     void analysisBusy;
     void crashLoading;
     void aiLoading;
+    void healthLoading;
+    void diagnoseWatchdogTripped;
     syncDiagnoseWatchdog();
     return () => {
       if (diagnoseWatch) {
@@ -353,6 +378,8 @@
 
   async function load(force = false) {
     if (!$projectPath) return;
+    // Explicit reload: re-arm automatic AI scheduling after a watchdog stop.
+    if (force) diagnoseWatchdogTripped = false;
     const requestedPath = $projectPath;
     if (activeLoadPath === requestedPath) return;
     if (!force && lastLoadedPath === requestedPath && diagnosis) return;
@@ -943,6 +970,8 @@
    * cascade on every tab visit made the tab appear stuck in "Analyzing…". */
   async function runUnifiedAnalysis(opts: { force?: boolean; includeAi?: boolean } = {}) {
     if (!$projectPath || analysisBusy) return;
+    // Manual Re-analyze: re-arm automatic AI scheduling after a watchdog stop.
+    if (opts.force) diagnoseWatchdogTripped = false;
     const source = activeReportId();
     const includeAi = opts.includeAi ?? true;
     if (!opts.force && !includeAi && lastRulesSource === source) return;
@@ -1191,6 +1220,8 @@
 
   async function runAiExplain(opts: { quiet?: boolean; runId?: number } = {}) {
     if (!$projectPath) return;
+    // Manual AI run (Retry AI / Explain): re-arm automatic scheduling.
+    if (!opts.quiet) diagnoseWatchdogTripped = false;
     const run = opts.runId ?? ++analysisGeneration;
     aiLoading = true;
     cascadeLiveStage = "l1_searching";
@@ -2696,7 +2727,18 @@
   // the user explicitly presses AI explain.
   $effect(() => {
     const path = $projectPath;
-    if (mainTab === "ai" && path && diagnosis && !sessionOk && !aiAnalysis && !aiSoftError && !analysisBusy) {
+    if (
+      shouldAutoScheduleAi({
+        mainTabAi: mainTab === "ai",
+        hasProject: !!path,
+        hasDiagnosis: !!diagnosis,
+        sessionOk,
+        hasAiAnalysis: !!aiAnalysis,
+        hasAiSoftError: !!aiSoftError,
+        analysisBusy,
+        watchdogTripped: diagnoseWatchdogTripped,
+      })
+    ) {
       scheduleUnifiedAnalysis(true);
     }
   });

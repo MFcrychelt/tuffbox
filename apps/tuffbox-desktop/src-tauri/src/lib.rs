@@ -2452,7 +2452,18 @@ fn apply_group_test_layout(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn start_mod_group_test(
+async fn start_mod_group_test(
+    path: String,
+    suspected: Option<Vec<String>>,
+) -> Result<tuffbox_core::mod_group_test::GroupTestSession, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; this
+    // one snapshots/rolls back files and must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || start_mod_group_test_impl(path, suspected))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn start_mod_group_test_impl(
     path: String,
     suspected: Option<Vec<String>>,
 ) -> Result<tuffbox_core::mod_group_test::GroupTestSession, String> {
@@ -2485,7 +2496,15 @@ fn start_mod_group_test(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn get_mod_group_test(path: String) -> Result<Option<tuffbox_core::mod_group_test::GroupTestSession>, String> {
+async fn get_mod_group_test(path: String) -> Result<Option<tuffbox_core::mod_group_test::GroupTestSession>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; this
+    // one snapshots/rolls back files and must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || get_mod_group_test_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_mod_group_test_impl(path: String) -> Result<Option<tuffbox_core::mod_group_test::GroupTestSession>, String> {
     let project_dir = PathBuf::from(&path)
         .parent()
         .map(|p| p.to_path_buf())
@@ -2494,7 +2513,18 @@ fn get_mod_group_test(path: String) -> Result<Option<tuffbox_core::mod_group_tes
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn report_mod_group_test_outcome(
+async fn report_mod_group_test_outcome(
+    path: String,
+    outcome: String,
+) -> Result<tuffbox_core::mod_group_test::GroupTestSession, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; this
+    // one snapshots/rolls back files and must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || report_mod_group_test_outcome_impl(path, outcome))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn report_mod_group_test_outcome_impl(
     path: String,
     outcome: String,
 ) -> Result<tuffbox_core::mod_group_test::GroupTestSession, String> {
@@ -2533,7 +2563,15 @@ fn report_mod_group_test_outcome(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn cancel_mod_group_test(path: String) -> Result<(), String> {
+async fn cancel_mod_group_test(path: String) -> Result<(), String> {
+    // Blocking-pool conversion: sync commands run on the main thread; this
+    // one snapshots/rolls back files and must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || cancel_mod_group_test_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn cancel_mod_group_test_impl(path: String) -> Result<(), String> {
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_path
         .parent()
@@ -6147,7 +6185,15 @@ fn read_config_key(content: &str, key: &str) -> Option<String> {
 /// adding "tin_ingot") and returns resolution suggestions with
 /// generated KubeJS/CraftTweaker scripts.
 #[tauri::command(rename_all = "camelCase")]
-fn detect_duplicate_items(path: String) -> Result<Vec<serde_json::Value>, String> {
+async fn detect_duplicate_items(path: String) -> Result<Vec<serde_json::Value>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || detect_duplicate_items_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn detect_duplicate_items_impl(path: String) -> Result<Vec<serde_json::Value>, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
@@ -6210,7 +6256,15 @@ fn detect_duplicate_items(path: String) -> Result<Vec<serde_json::Value>, String
 /// Generates an Almost Unified config (unify.json) tailored for the
 /// project's installed mods, and optionally writes it to disk.
 #[tauri::command(rename_all = "camelCase")]
-fn generate_unify_config(path: String, save: Option<bool>) -> Result<serde_json::Value, String> {
+async fn generate_unify_config(path: String, save: Option<bool>) -> Result<serde_json::Value, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || generate_unify_config_impl(path, save))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn generate_unify_config_impl(path: String, save: Option<bool>) -> Result<serde_json::Value, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let mod_slugs: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
     let config = tuffbox_core::unified::unify_config::UnifyConfig::for_project(&mod_slugs);
@@ -6350,7 +6404,15 @@ fn run_crash_assistant(path: String) -> Result<serde_json::Value, String> {
 /// Searches all mod JARs to find which one contains a given Java class.
 /// This mirrors Crash Assistant's Package/Class Finder GUI tool.
 #[tauri::command(rename_all = "camelCase")]
-fn find_class_in_mods(path: String, class_name: String) -> Result<Vec<serde_json::Value>, String> {
+async fn find_class_in_mods(path: String, class_name: String) -> Result<Vec<serde_json::Value>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || find_class_in_mods_impl(path, class_name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn find_class_in_mods_impl(path: String, class_name: String) -> Result<Vec<serde_json::Value>, String> {
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
     let mods_key = format!(
@@ -6374,7 +6436,18 @@ fn find_class_in_mods(path: String, class_name: String) -> Result<Vec<serde_json
 /// Searches all mod JARs to find which mods depend on a given class
 /// (Jdeps analysis tool from Crash Assistant).
 #[tauri::command(rename_all = "camelCase")]
-fn find_dependents_on_class(
+async fn find_dependents_on_class(
+    path: String,
+    class_name: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || find_dependents_on_class_impl(path, class_name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn find_dependents_on_class_impl(
     path: String,
     class_name: String,
 ) -> Result<Vec<serde_json::Value>, String> {
@@ -8207,7 +8280,18 @@ fn apply_launcher_edit_config(
 
 /// Record Helped/Wrong feedback into the project crash knowledge base.
 #[tauri::command(rename_all = "camelCase")]
-fn record_crash_ai_feedback(
+async fn record_crash_ai_feedback(
+    path: String,
+    feedback: CrashAiFeedbackPayload,
+) -> Result<String, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || record_crash_ai_feedback_impl(path, feedback))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn record_crash_ai_feedback_impl(
     path: String,
     feedback: CrashAiFeedbackPayload,
 ) -> Result<String, String> {
@@ -8250,7 +8334,18 @@ fn record_crash_ai_feedback(
 
 /// Author a private KB case from the current crash + your resolution.
 #[tauri::command(rename_all = "camelCase")]
-fn save_authored_crash_case(
+async fn save_authored_crash_case(
+    path: String,
+    input: tuffbox_core::crash_kb::AuthorCaseInput,
+) -> Result<tuffbox_core::crash_kb::AuthorCaseSaveResult, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; KB
+    // reads/writes must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || save_authored_crash_case_impl(path, input))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn save_authored_crash_case_impl(
     path: String,
     input: tuffbox_core::crash_kb::AuthorCaseInput,
 ) -> Result<tuffbox_core::crash_kb::AuthorCaseSaveResult, String> {
@@ -8260,7 +8355,18 @@ fn save_authored_crash_case(
 
 /// Prefill author form: fingerprint + optional draft from AI analysis / report.
 #[tauri::command(rename_all = "camelCase")]
-fn draft_authored_crash_case(
+async fn draft_authored_crash_case(
+    path: String,
+    report_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; KB
+    // reads/writes must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || draft_authored_crash_case_impl(path, report_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn draft_authored_crash_case_impl(
     path: String,
     report_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
@@ -8301,13 +8407,29 @@ fn draft_authored_crash_case(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn list_authored_crash_cases(path: String) -> Result<Vec<tuffbox_core::crash_kb::CrashCase>, String> {
+async fn list_authored_crash_cases(path: String) -> Result<Vec<tuffbox_core::crash_kb::CrashCase>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; KB
+    // reads/writes must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || list_authored_crash_cases_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn list_authored_crash_cases_impl(path: String) -> Result<Vec<tuffbox_core::crash_kb::CrashCase>, String> {
     let project_dir = manifest_parent(&path)?;
     Ok(tuffbox_core::crash_kb::list_authored_cases(&project_dir))
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn get_authored_case_export(path: String, case_id: String) -> Result<String, String> {
+async fn get_authored_case_export(path: String, case_id: String) -> Result<String, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; KB
+    // reads/writes must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || get_authored_case_export_impl(path, case_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_authored_case_export_impl(path: String, case_id: String) -> Result<String, String> {
     let project_dir = manifest_parent(&path)?;
     let case = tuffbox_core::crash_kb::list_authored_cases(&project_dir)
         .into_iter()
@@ -11353,7 +11475,18 @@ async fn get_pack_health(path: String) -> Result<PackHealthReport, String> {
 /// counts so the Health screen can render one verdict instead of stitching
 /// together several unrelated endpoints (spec: «Один агрегат HealthReport»).
 #[tauri::command(rename_all = "camelCase")]
-fn get_health_report(path: String) -> Result<serde_json::Value, String> {
+async fn get_health_report(path: String) -> Result<serde_json::Value, String> {
+    // Sync Tauri commands run on the MAIN thread; this one walked the graph
+    // and sha1-hashed every non-local jar, freezing the event loop and
+    // stalling delivery of every other IPC response (Diagnose spinners
+    // never settled). Heavy work belongs on the blocking pool (same
+    // treatment as get_crash_diagnosis / run_crash_assistant_full).
+    tokio::task::spawn_blocking(move || get_health_report_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_health_report_impl(path: String) -> Result<serde_json::Value, String> {
     let manifest_path = resolve_manifest_path(&path).map_err(|e| e.to_string())?;
     let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     let graph = DependencyGraph::from_manifest(&manifest);
@@ -11475,7 +11608,15 @@ fn get_health_report(path: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn get_resolve_change_plan(path: String) -> Result<Option<tuffbox_core::ChangePlan>, String> {
+async fn get_resolve_change_plan(path: String) -> Result<Option<tuffbox_core::ChangePlan>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || get_resolve_change_plan_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_resolve_change_plan_impl(path: String) -> Result<Option<tuffbox_core::ChangePlan>, String> {
     let manifest = manifest_for_graph(&path)?;
     let graph = DependencyGraph::from_manifest(&manifest);
     let diagnostics = Resolver::analyze_project(&manifest, &graph);
@@ -11935,7 +12076,19 @@ fn get_crash_diagnosis_uncached(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn import_external_crash(
+async fn import_external_crash(
+    path: String,
+    file_name: String,
+    content: String,
+) -> Result<String, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || import_external_crash_impl(path, file_name, content))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn import_external_crash_impl(
     path: String,
     file_name: String,
     content: String,
@@ -12072,7 +12225,18 @@ fn run_crash_assistant_analysis(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn create_crash_fix_plan(
+async fn create_crash_fix_plan(
+    path: String,
+    report_id: Option<String>,
+) -> Result<tuffbox_core::ChangePlan, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || create_crash_fix_plan_impl(path, report_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn create_crash_fix_plan_impl(
     path: String,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::ChangePlan, String> {
@@ -13280,7 +13444,18 @@ async fn scan_project_changes(path: String) -> Result<pack_events::ScanProjectCh
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn list_recent_pack_events(
+async fn list_recent_pack_events(
+    path: String,
+    limit: Option<usize>,
+) -> Result<Vec<pack_events::PackEvent>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || list_recent_pack_events_impl(path, limit))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn list_recent_pack_events_impl(
     path: String,
     limit: Option<usize>,
 ) -> Result<Vec<pack_events::PackEvent>, String> {
@@ -18398,7 +18573,18 @@ fn pick_shareable_crash_log(logs_dir: &Path, crashes_dir: &Path) -> Option<PathB
 /// project and return the suspected mods together with the exact line numbers
 /// where they were referenced, so the UI can highlight those lines.
 #[tauri::command(rename_all = "camelCase")]
-fn analyze_log_text(
+async fn analyze_log_text(
+    path: String,
+    text: String,
+) -> Result<serde_json::Value, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; the
+    // suspect scan over the pasted log must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || analyze_log_text_impl(path, text))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn analyze_log_text_impl(
     path: String,
     text: String,
 ) -> Result<serde_json::Value, String> {
