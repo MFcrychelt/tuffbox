@@ -76,3 +76,33 @@ export function shouldTripWatchdog(input: WatchdogTickInput): boolean {
   const cap = input.capMs ?? DIAGNOSE_BUSY_CAP_MS;
   return input.nowMs - input.busySinceMs >= cap;
 }
+
+/**
+ * Ownership tracker for the Diagnose `analysisBusy` flag.
+ *
+ * Regression (2026-09): a manual "Retry AI" click while a unified analysis
+ * run was in flight bumped `analysisGeneration`, so the in-flight run's
+ * `finally { if (isCurrentAnalysis(run)) analysisBusy = false; }` no longer
+ * matched — and since manual AI runs set `aiLoading` but never
+ * `analysisBusy`, NOBODY cleared the flag. The UI stayed on "Analyzing…"
+ * until the watchdog tripped (previously: forever).
+ *
+ * The busy flag is owned by the LATEST unified run, independent of the
+ * AI-generation counter: `shouldSettle(token)` is true exactly when `token`
+ * is the most recent run that called `begin()`, so an older run finishing
+ * after a generation bump still settles the flag, while a genuinely newer
+ * unified run keeps it until it settles itself.
+ */
+export class UnifiedBusyTracker {
+  #latest = 0;
+
+  /** Start a unified run; returns its settle token. */
+  begin(): number {
+    return ++this.#latest;
+  }
+
+  /** True when `token` is the latest unified run and may clear the flag. */
+  shouldSettle(token: number): boolean {
+    return token === this.#latest;
+  }
+}

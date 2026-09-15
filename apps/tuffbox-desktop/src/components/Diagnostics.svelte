@@ -44,6 +44,7 @@
   import { shareCrashLogWithFeedback } from "../lib/mclogs";
   import {
     DIAGNOSE_BUSY_CAP_MS,
+    UnifiedBusyTracker,
     shouldAutoScheduleAi,
     shouldTripWatchdog,
   } from "../lib/diagnoseAutoSchedule";
@@ -196,6 +197,9 @@
   // cancelled (Ollama/network), so late results from an older refresh must
   // never overwrite the currently selected report.
   let analysisGeneration = 0;
+  // Ownership of `analysisBusy` — see UnifiedBusyTracker. The generation
+  // counter is bumped by MANUAL AI runs too, which used to strand the flag.
+  const unifiedBusy = new UnifiedBusyTracker();
   let analysisKickoff: ReturnType<typeof setTimeout> | undefined;
   let diagnoseTimings = $state<Record<string, { elapsedMs: number; cacheHit: boolean }>>({});
   const isCurrentAnalysis = (generation: number) => generation === analysisGeneration;
@@ -342,6 +346,11 @@
       if (diagnoseWatch) {
         clearInterval(diagnoseWatch);
         diagnoseWatch = undefined;
+      }
+      // Never let a coalesced analysis kickoff fire after destroy.
+      if (analysisKickoff) {
+        clearTimeout(analysisKickoff);
+        analysisKickoff = undefined;
       }
     };
   });
@@ -978,6 +987,11 @@
     if (!opts.force && includeAi && lastAiSource === source && (aiAnalysis || aiSoftError)) return;
     lastRulesSource = source;
     const run = ++analysisGeneration;
+    // Claim busy-flag ownership BEFORE any await: a manual "Retry AI" during
+    // this run bumps analysisGeneration, and the old
+    // `if (isCurrentAnalysis(run))` settle condition would then never match,
+    // leaving analysisBusy stuck on until the watchdog tripped.
+    const settle = unifiedBusy.begin();
     analysisBusy = true;
     aiSoftError = null;
     try {
@@ -997,7 +1011,10 @@
       enrichCrashFindingsWithAi();
       lastAiSource = source;
     } finally {
-      if (isCurrentAnalysis(run)) analysisBusy = false;
+      // Settle by unified-run ownership (not AI generation): the latest
+      // unified run owns the flag even if a manual AI run bumped the
+      // generation counter mid-flight.
+      if (unifiedBusy.shouldSettle(settle)) analysisBusy = false;
     }
   }
 

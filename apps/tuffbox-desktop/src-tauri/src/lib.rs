@@ -8826,7 +8826,15 @@ async fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> 
             .and_then(|v| v.as_str())
         {
             let settings = integrations::get_integration_status().settings;
-            if let Ok(ai_json) = integrations::call_ai(&settings.ai, prompt).await {
+            // Best-effort step: cap it so a stalled endpoint cannot pin the
+            // whole recommendations command (per-attempt retries alone can
+            // stretch the underlying call to ~10 minutes).
+            let ai_call = tokio::time::timeout(
+                std::time::Duration::from_secs(90),
+                integrations::call_ai(&settings.ai, prompt),
+            )
+            .await;
+            if let Ok(Ok(ai_json)) = ai_call {
                 let keys = tokio::task::spawn_blocking({
                     let path = path.clone();
                     move || {

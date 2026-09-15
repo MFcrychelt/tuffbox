@@ -1022,11 +1022,29 @@ pub async fn test_integration(provider: String) -> Result<String, String> {
         }
         "ai" => {
             let settings = read_settings();
-            call_ai(&settings.ai, "Respond with exactly: {\"status\":\"ok\"}").await?;
-            Ok(format!(
-                "{} model {} responded",
-                settings.ai.provider, settings.ai.model
-            ))
+            // A connection probe must stay snappy: the underlying client
+            // retries with long per-attempt timeouts (worst case ~10 minutes
+            // on a black-holing endpoint), which made "Test connection" and
+            // the Quest-AI preflight appear to hang forever.
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                call_ai(&settings.ai, "Respond with exactly: {\"status\":\"ok\"}"),
+            )
+            .await
+            {
+                Ok(result) => {
+                    result?;
+                    Ok(format!(
+                        "{} model {} responded",
+                        settings.ai.provider, settings.ai.model
+                    ))
+                }
+                Err(_) => Err(format!(
+                    "AI test timed out after 30s — {} endpoint {} did not answer. \
+                     Check Settings → AI (provider, endpoint, model).",
+                    settings.ai.provider, settings.ai.endpoint
+                )),
+            }
         }
         _ => Err(format!("unknown integration provider: {provider}")),
     }
@@ -2810,6 +2828,15 @@ const AI_HTTP_MAX_RETRIES: u32 = 3;
 const AI_STREAM_MAX_BYTES: usize = 1024 * 1024;
 /// Connect deadline for AI HTTP (stream + non-stream).
 const AI_CONNECT_TIMEOUT_SECS: u64 = 30;
+/// TOTAL deadline for one non-streaming AI call (funnel-level). Per-attempt
+/// HTTP timeouts (180s) x retry backoff can otherwise stack to ~10 minutes
+/// on a black-holing endpoint, and every AI feature built on call_ai_once /
+/// call_ai_messages_with_usage (quest plans, pack curation, recommendations)
+/// inherits that hang. 300s keeps room for slow local models producing large
+/// JSON while turning "forever" into a bounded, clear error. The streaming
+/// path intentionally keeps its per-chunk idle timeout instead (progress is
+/// visible to the user while tokens flow).
+const AI_CALL_TOTAL_TIMEOUT_SECS: u64 = 300;
 /// Per-chunk idle timeout for streaming responses. Must NOT use a total
 /// `.timeout()` — that kills healthy long Ollama generations mid-body and
 /// surfaces as "error decoding response body".
@@ -2954,6 +2981,26 @@ fn finalize_ai_content(
 
 /// Like `call_ai_messages_with_schema`, also returning provider token usage when available.
 pub async fn call_ai_messages_with_usage(
+    settings: &AiSettings,
+    system: &str,
+    messages: &[Value],
+    json_mode: bool,
+    json_schema: Option<Value>,
+) -> Result<(Value, Option<tuffbox_core::AiTokenUsage>), String> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(AI_CALL_TOTAL_TIMEOUT_SECS),
+        call_ai_messages_with_usage_inner(settings, system, messages, json_mode, json_schema),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "AI call did not finish within {AI_CALL_TOTAL_TIMEOUT_SECS}s — the provider/endpoint \
+             is too slow or stalled. Check Settings → AI and retry."
+        )
+    })?
+}
+
+async fn call_ai_messages_with_usage_inner(
     settings: &AiSettings,
     system: &str,
     messages: &[Value],
@@ -3370,6 +3417,20 @@ async fn call_ai_crash_explain_single(
 }
 
 async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, String> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(AI_CALL_TOTAL_TIMEOUT_SECS),
+        call_ai_once_inner(settings, prompt),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "AI call did not finish within {AI_CALL_TOTAL_TIMEOUT_SECS}s — the provider/endpoint \
+             is too slow or stalled. Check Settings → AI and retry."
+        )
+    })?
+}
+
+async fn call_ai_once_inner(settings: &AiSettings, prompt: &str) -> Result<Value, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(180))
         .build()

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DIAGNOSE_BUSY_CAP_MS,
+  UnifiedBusyTracker,
   shouldAutoScheduleAi,
   shouldTripWatchdog,
   type AutoScheduleInput,
@@ -75,5 +76,32 @@ describe("shouldTripWatchdog", () => {
   it("honours a custom cap", () => {
     expect(shouldTripWatchdog({ busySinceMs: 100, nowMs: 350, capMs: 250 })).toBe(true);
     expect(shouldTripWatchdog({ busySinceMs: 100, nowMs: 349, capMs: 250 })).toBe(false);
+  });
+});
+
+describe("UnifiedBusyTracker (analysisBusy ownership)", () => {
+  it("REGRESSION: the run settles the flag even after a manual AI retry bumped the generation", () => {
+    const t = new UnifiedBusyTracker();
+    const run = t.begin();
+    // Manual "Retry AI" during the unified run: bumps analysisGeneration but
+    // never touches the unified-run counter. The old
+    // `if (isCurrentAnalysis(run))` check failed here and analysisBusy
+    // stayed stuck on until the watchdog tripped.
+    expect(t.shouldSettle(run)).toBe(true);
+  });
+
+  it("an older unified run must NOT settle while a newer unified run is in flight", () => {
+    const t = new UnifiedBusyTracker();
+    const first = t.begin();
+    const second = t.begin();
+    expect(t.shouldSettle(first)).toBe(false);
+    expect(t.shouldSettle(second)).toBe(true);
+  });
+
+  it("a stale token from a finished run never settles after a newer one began", () => {
+    const t = new UnifiedBusyTracker();
+    const first = t.begin();
+    t.begin(); // second run starts before the first settles
+    expect(t.shouldSettle(first)).toBe(false);
   });
 });
