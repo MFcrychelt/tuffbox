@@ -739,6 +739,12 @@ import { trapFocus } from "../lib/focusTrap";
     return n;
   }
 
+  /** Empty-state action: clear the query too, not just the side filters. */
+  function resetSearchAndFilters() {
+    searchQuery = "";
+    resetCatalogFilters();
+  }
+
   function resetCatalogFilters() {
     filterGameVersion = "";
     filterCategory = "";
@@ -760,6 +766,16 @@ import { trapFocus } from "../lib/focusTrap";
     if (filter.startsWith("list:")) return filter.slice(5);
     return "Saved";
   }
+
+  /** Add-browser header title: proper nouns, never the raw `list:` prefix. */
+  const addBrowserTitle = $derived.by(() => {
+    if (contentFilter === "mod") return "mods";
+    if (contentFilter === "resourcepack") return "resource packs";
+    if (contentFilter === "datapack") return "datapacks";
+    if (contentFilter === "shader") return "shaders";
+    if (contentFilter === "favorites") return "favorites";
+    return savedViewLabel(contentFilter);
+  });
 
   function modIconLookupKey(mod: ModRow): string | null {
     if (mod.source === "curseforge") return null;
@@ -3804,11 +3820,15 @@ import { trapFocus } from "../lib/focusTrap";
       <div class="add-mods-browse" class:behind-catalog={!!catalogViewResult} aria-hidden={!!catalogViewResult}>
       <div class="modal-header">
         <div>
-          <h2>Add {catalogProvider === "both" ? "" : (catalogProvider === "curseforge" ? "CurseForge " : "Modrinth ")}{contentFilter}</h2>
-          <p>
-            {contentFilter === "mod"
-              ? "Search is filtered by the current Minecraft version and loader."
-              : "Search is filtered by the current Minecraft version."}
+          <h2>Add {addBrowserTitle}</h2>
+          <p class="add-context">
+            {#if filterGameVersion || filterLoader}
+              Filtered by
+              {#if filterGameVersion}<span class="ctx-chip">{filterGameVersion}</span>{/if}
+              {#if filterLoader}<span class="ctx-chip">{filterLoader}</span>{/if}
+            {:else}
+              No version or loader filters — searching everything
+            {/if}
           </p>
         </div>
         <button class="icon-btn" onclick={() => (addOpen = false)}><X size={18} /></button>
@@ -3870,6 +3890,8 @@ import { trapFocus } from "../lib/focusTrap";
           />
           {#if searchLoading}
             <span class="search-spinner"><Loader2 size={16} class="spin" /></span>
+          {:else if searchQuery.trim()}
+            <kbd class="search-kbd" title="Press Enter to search">Enter</kbd>
           {/if}
         </div>
         <div class="topbar-controls">
@@ -4226,7 +4248,22 @@ import { trapFocus } from "../lib/focusTrap";
         </aside>
 
         <section class="browser-results" bind:this={browserResultsEl}>
-          {#if viewMode !== "infinite"}
+          {#snippet skeletonGrid()}
+            <div class="results grid card-size-m" aria-busy="true" aria-label="Loading projects">
+              {#each Array(8) as _, i (i)}
+                <div class="result-card tb-card skeleton-card" aria-hidden="true">
+                  <div class="sk sk-icon"></div>
+                  <div class="sk sk-main">
+                    <div class="sk sk-title"></div>
+                    <div class="sk sk-line"></div>
+                  </div>
+                  <div class="sk sk-actions"></div>
+                  <div class="sk sk-footer"></div>
+                </div>
+              {/each}
+            </div>
+          {/snippet}
+          {#if viewMode !== "infinite" && !isSavedViewFilter(contentFilter)}
           <div class="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
@@ -4272,10 +4309,10 @@ import { trapFocus } from "../lib/focusTrap";
           </div>
 
           {#if searchLoading && searchResults.length === 0 && !isSavedViewFilter(contentFilter)}
-            <div class="loading compact">Loading {catalogProvider === "both" ? "Modrinth & CurseForge" : (catalogProvider === "curseforge" ? "CurseForge" : "Modrinth")} projects...</div>
+            {@render skeletonGrid()}
           {:else if isSavedViewFilter(contentFilter)}
             {#if savedModsLoading}
-              <div class="loading compact">Loading saved projects...</div>
+              {@render skeletonGrid()}
             {:else if savedMods.length === 0}
               {#if contentFilter === "favorites"}
                 <EmptyState icon={Bookmark} compact={true} title="No favorites yet" description="Heart projects in Add (Modrinth or CurseForge) to see them here." />
@@ -4376,7 +4413,14 @@ import { trapFocus } from "../lib/focusTrap";
               </div>
             {/if}
           {:else if displayedResults.length === 0}
-            <EmptyState icon={Search} compact={true} title="No results" description="Adjust filters or search text." />
+            <EmptyState
+              icon={Search}
+              compact={true}
+              title="No results"
+              description="Adjust filters or search text."
+              actionLabel="Reset filters"
+              onaction={resetSearchAndFilters}
+            />
           {:else}
             <div class="results {viewMode === 'list' ? 'list' : 'grid'} card-size-{cardSize.toLowerCase()} tb-stagger">
           {#each displayedResults as result, i (result.id)}
@@ -6976,7 +7020,76 @@ import { trapFocus } from "../lib/focusTrap";
     pointer-events: none;
   }
 
-  .modal.add-mods-modal .loading-more {
+    .add-context {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 2px 0 0;
+  }
+
+  .ctx-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    text-transform: capitalize;
+  }
+
+  .modal.add-mods-modal .search .search-kbd {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .modal.add-mods-modal .search:has(.search-kbd) input {
+    padding-right: 64px;
+  }
+
+  .skeleton-card {
+    cursor: default;
+  }
+
+  .sk {
+    border-radius: var(--border-radius-sm);
+    background: color-mix(in srgb, var(--text-muted) 15%, transparent);
+    animation: tb-skeleton-pulse 1.5s ease-in-out infinite;
+  }
+
+  .sk-icon { grid-area: icon; width: 44px; height: 44px; }
+  .sk-main { grid-area: main; display: flex; flex-direction: column; gap: 7px; padding-top: 3px; }
+  .sk-title { height: 13px; width: 62%; }
+  .sk-line { height: 11px; width: 88%; }
+  .sk-actions { grid-area: actions; height: 30px; width: 116px; }
+  .sk-footer { grid-area: footer; height: 12px; width: 46%; }
+
+  @keyframes tb-skeleton-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sk { animation: none; }
+  }
+
+.modal.add-mods-modal .loading-more {
     display: flex;
     align-items: center;
     justify-content: center;
