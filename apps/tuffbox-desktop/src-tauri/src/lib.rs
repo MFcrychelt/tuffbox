@@ -7462,7 +7462,7 @@ async fn analyze_crash_with_ai_inner(
         .await
         .unwrap_or_default();
         if !global_hits.is_empty() {
-            let mut merged = tuffbox_core::crash_remote::hits_to_similar_cases(&global_hits);
+            let mut merged = tuffbox_core::crash_remote::hits_to_similar_cases(&global_hits, &fingerprint);
             merged.extend(ai_ctx.similar_cases.drain(..));
             let mut seen = std::collections::HashSet::new();
             merged.retain(|h| seen.insert(h.id.clone()));
@@ -7491,7 +7491,7 @@ async fn analyze_crash_with_ai_inner(
                 l1_lookup_started,
                 false,
             );
-            let mut remote = tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
+            let mut remote = tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits, &fingerprint);
             remote.extend(ai_ctx.similar_cases.drain(..));
             let mut seen = std::collections::HashSet::new();
             remote.retain(|h| seen.insert(h.id.clone()));
@@ -7931,7 +7931,12 @@ fn strong_plan_from_similar(
                 .partial_cmp(&b.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })?;
-    if hit.score < tuffbox_core::swarm::STRONG_MATCH_THRESHOLD {
+    // Strong KB fallback requires an ANCHOR (fingerprint-key / blamed-mod /
+    // mod-file agreement), not just a score over the threshold: the score is
+    // additive over generic signals (exception wording, common frames,
+    // capped popularity), which used to let an unrelated popular case about
+    // a generic NullPointerException become the "strong match" plan.
+    if !hit.anchored || hit.score < tuffbox_core::swarm::STRONG_MATCH_THRESHOLD {
         return None;
     }
     let mut plan = tuffbox_core::action_plan::plan_from_kb_hit(

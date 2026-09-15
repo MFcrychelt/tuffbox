@@ -2670,11 +2670,12 @@ pub fn maybe_persist_pending_from_plan(
     if !integrations::swarm_enabled() || !network_used {
         return None;
     }
-    let score = if !plan.matched_case_ids.is_empty() {
-        plan.confidence.max(STRONG_MATCH_THRESHOLD)
-    } else {
-        plan.confidence
-    };
+    // No artificial score inflation: the old `.max(STRONG_MATCH_THRESHOLD)`
+    // promoted ANY plan that merely echoed a matchedCaseId to "strong",
+    // persisting weak matches as pending auto-fix plans. A pending plan is
+    // written only when the plan's own confidence genuinely clears the
+    // threshold.
+    let score = plan.confidence;
     maybe_write_pending_from_score(project_dir, plan, score)
         .ok()
         .flatten()
