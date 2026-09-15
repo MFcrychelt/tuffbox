@@ -362,7 +362,7 @@
   .rt-edit label {
     display: grid;
     gap: 3px;
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     color: var(--ftbq-text-muted);
   }
@@ -432,7 +432,7 @@
   }
   .extra textarea {
     width: 100%;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     margin: 6px 0;
   }
   @media (max-width: 900px) {

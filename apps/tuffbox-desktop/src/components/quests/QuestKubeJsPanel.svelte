@@ -555,7 +555,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--ftbq-accent-teal);
@@ -568,7 +568,7 @@
     text-transform: none;
     letter-spacing: 0;
     font-weight: 500;
-    font-size: 10px;
+    font-size: 11px;
     padding: 2px 6px;
     border-radius: 2px;
     background: rgba(61, 184, 168, 0.12);
@@ -615,7 +615,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 9px;
+    font-size: 11px;
     text-transform: uppercase;
     padding: 1px 5px;
     border-radius: 2px;
@@ -674,7 +674,7 @@
   .templates label {
     display: grid;
     gap: 3px;
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     color: var(--ftbq-text-muted);
   }
@@ -695,12 +695,12 @@
   }
   .hint {
     margin: 0;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--ftbq-text-muted);
     text-transform: none;
   }
   .hint code {
-    font-size: 10px;
+    font-size: 11px;
   }
   .empty {
     margin: 8px 0;

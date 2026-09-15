@@ -2441,7 +2441,7 @@
   textarea {
     resize: vertical;
     min-height: 72px;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
     line-height: 1.45;
     background: var(--bg-elevated);
@@ -2721,7 +2721,7 @@
     line-height: 1.4;
     white-space: nowrap;
     vertical-align: baseline;
-    font-family: ui-monospace,monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 11px;
     padding: 2px 6px;
     border-radius: 4px;
@@ -2732,7 +2732,7 @@
     text-align: center;
   }
   .shortcut-row span { flex: 1; color: var(--text-secondary); font-size: 12px; }
-  .shortcut-row small { color: var(--text-muted); font-size: 10px; }
+  .shortcut-row small { color: var(--text-muted); font-size: 11px; }
 
   .update-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); border: 1px solid var(--border-color); margin: 10px 0; font-size: 12px; }
   .update-info.error { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); }
@@ -2816,7 +2816,7 @@
   .p2p-listen-addrs { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
   .p2p-addr-row { align-items: flex-start; }
   .p2p-addr {
-    font-size: 10px;
+    font-size: 11px;
     word-break: break-all;
     flex: 1;
     min-width: 0;

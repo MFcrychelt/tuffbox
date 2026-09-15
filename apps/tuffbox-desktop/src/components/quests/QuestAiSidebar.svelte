@@ -655,7 +655,7 @@
       <Sparkles size={16} class="text-[var(--accent-primary)]" />
       <strong class="text-xs font-bold text-[var(--text-primary)]">Quest AI</strong>
       {#if sessionUsageLabel}
-        <span class="usage-pill text-[10px] text-[var(--text-muted)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded border border-[var(--border-color)]" title="Session token usage">
+        <span class="usage-pill text-[11px] text-[var(--text-muted)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded border border-[var(--border-color)]" title="Session token usage">
           {sessionUsageLabel}
         </span>
       {/if}
@@ -669,10 +669,10 @@
     <div class="anchor-banner flex items-center gap-2 px-3 py-2 bg-[var(--accent-primary)]/10 border-b border-[var(--accent-primary)]/20 text-xs flex-shrink-0" title="Branch will root at this quest">
       <GitBranch size={13} class="text-[var(--accent-primary)] flex-shrink-0" />
       <div class="flex-1 min-w-0">
-        <span class="text-[10px] uppercase font-semibold text-[var(--accent-primary)] block">Branch root</span>
+        <span class="text-[11px] uppercase font-semibold text-[var(--accent-primary)] block">Branch root</span>
         <span class="font-bold truncate block text-[var(--text-primary)]">{anchorQuest.title || "Untitled quest"}</span>
       </div>
-      <code class="text-[10px] font-mono bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-[var(--text-muted)] border border-[var(--border-color)]">
+      <code class="text-[11px] font-mono bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-[var(--text-muted)] border border-[var(--border-color)]">
         {anchorQuest.id.slice(0, 8)}
       </code>
     </div>
@@ -747,7 +747,7 @@
             </details>
           {/if}
           {#if formatUsage(m.usage)}
-            <div class="text-[10px] text-[var(--text-muted)] mt-1.5 text-right font-mono">{formatUsage(m.usage)}</div>
+            <div class="text-[11px] text-[var(--text-muted)] mt-1.5 text-right font-mono">{formatUsage(m.usage)}</div>
           {/if}
         </div>
       {/each}
@@ -763,7 +763,7 @@
     {#if streamDraft}
       <details class="stream-wrap px-3 py-1 bg-[var(--bg-secondary)] border-t border-[var(--border-color)]" open={busy && !merge}>
         <summary class="text-[11px] text-[var(--text-muted)] cursor-pointer font-medium">Live draft ({streamDraft.length} chars)</summary>
-        <pre class="text-[10px] max-h-24 overflow-y-auto bg-[var(--bg-primary)] p-2 rounded mt-1 font-mono text-[var(--text-secondary)] whitespace-pre-wrap border border-[var(--border-color)]">{streamDraft}</pre>
+        <pre class="text-[11px] max-h-24 overflow-y-auto bg-[var(--bg-primary)] p-2 rounded mt-1 font-mono text-[var(--text-secondary)] whitespace-pre-wrap border border-[var(--border-color)]">{streamDraft}</pre>
       </details>
     {/if}
   {/if}
@@ -926,7 +926,7 @@
           <Code size={12} />
           {showJson ? "Switch to Text" : "Paste JSON"}
         </button>
-        <span class="text-[10px] text-[var(--text-muted)] whitespace-nowrap">Ctrl+Enter to send</span>
+        <span class="text-[11px] text-[var(--text-muted)] whitespace-nowrap">Ctrl+Enter to send</span>
       </div>
 
       <div class="ml-auto flex items-center gap-1.5 flex-shrink-0">

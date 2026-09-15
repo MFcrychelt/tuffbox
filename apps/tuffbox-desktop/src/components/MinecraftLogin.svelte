@@ -819,12 +819,12 @@
   .account-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .mc-nick {
     font-family: var(--font-minecraft);
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.4px;
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
-  .account-type { font-size: 10px; font-weight: 800; text-transform: uppercase; }
+  .account-type { font-size: 11px; font-weight: 800; text-transform: uppercase; }
   .account-type.mojang { color: var(--badge-ms-fg, #93c5fd); }
   .account-type.offline { color: var(--badge-offline-fg, #fde68a); }
   .account-type.ygg { color: var(--badge-ygg-fg, #e9d5ff); }
@@ -889,7 +889,7 @@
     border-radius: var(--border-radius-md); padding: 14px 20px;
   }
   .code {
-    font-family: ui-monospace, monospace; font-size: 28px; font-weight: 900;
+    font-family: var(--font-mono, ui-monospace, monospace); font-size: 28px; font-weight: 900;
     letter-spacing: 4px; color: var(--accent-primary);
   }
   .copy-btn {

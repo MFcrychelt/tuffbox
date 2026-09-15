@@ -145,7 +145,7 @@
   .plan-review-body p { margin: 4px 0; font-size: 12px; color: var(--text-secondary); }
   .plan-review-body code { font-size: 11px; color: var(--accent-primary); }
   .risk-pill {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     padding: 2px 6px;
@@ -173,7 +173,7 @@
   .diff-before, .diff-after {
     margin: 0;
     padding: 8px;
-    font-size: 10px;
+    font-size: 11px;
     max-height: 180px;
     overflow: auto;
     border-radius: var(--border-radius-sm);

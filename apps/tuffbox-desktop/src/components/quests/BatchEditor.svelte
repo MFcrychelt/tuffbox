@@ -681,7 +681,7 @@
     outline: none;
   }
   .gen-field textarea {
-    font-family: monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     resize: vertical;
   }
   .gen-run {
@@ -710,7 +710,7 @@
     color: var(--text-primary, var(--ftbq-text));
   }
   .batch-count {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted, var(--ftbq-text-muted));
     padding: 2px 6px;
     border: 1px solid var(--ftbq-frame);
@@ -795,7 +795,7 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted, var(--ftbq-text-muted));
     text-transform: uppercase;
     letter-spacing: 0.03em;
@@ -819,7 +819,7 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .mass-status {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--ftbq-accent-green);
     align-self: center;
   }
@@ -871,13 +871,13 @@
     white-space: nowrap;
   }
   .quest-id {
-    font-family: monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--text-muted, var(--ftbq-text-muted));
-    font-size: 10px;
+    font-size: 11px;
   }
   .save-badge {
     margin-left: auto;
-    font-size: 10px;
+    font-size: 11px;
     padding: 1px 6px;
     border-radius: 4px;
     font-weight: 600;
@@ -929,7 +929,7 @@
     gap: 2px;
   }
   .field-label {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted, var(--ftbq-text-muted));
     text-transform: uppercase;
@@ -954,7 +954,7 @@
   .field textarea {
     resize: vertical;
     min-height: 60px;
-    font-family: monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 11px;
   }
   .field-preview {

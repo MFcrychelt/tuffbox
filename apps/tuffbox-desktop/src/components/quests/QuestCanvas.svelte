@@ -814,14 +814,14 @@
           </button>
           {#if alignMenuOpen}
             <div class="layout-menu absolute top-full right-0 mt-1.5 w-44 p-1.5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg shadow-lg z-50 flex flex-col gap-1" role="menu">
-              <span class="text-[10px] uppercase font-bold text-[var(--text-muted)] px-2 py-0.5">Align Nodes</span>
+              <span class="text-[11px] uppercase font-bold text-[var(--text-muted)] px-2 py-0.5">Align Nodes</span>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("left")}>Align Left</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("right")}>Align Right</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("top")}>Align Top</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("bottom")}>Align Bottom</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("centerX")}>Center Horizontally</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("centerY")}>Center Vertically</button>
-              <span class="text-[10px] uppercase font-bold text-[var(--text-muted)] px-2 py-0.5 border-t border-[var(--border-color)] mt-1">Distribute</span>
+              <span class="text-[11px] uppercase font-bold text-[var(--text-muted)] px-2 py-0.5 border-t border-[var(--border-color)] mt-1">Distribute</span>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doDistribute("horizontally")}>Evenly Horizontal</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doDistribute("vertically")}>Evenly Vertical</button>
             </div>

@@ -62,7 +62,7 @@
         <button type="button" class="flex w-full items-start gap-3 text-left" onclick={() => onToggle(group.code)} aria-expanded={expanded.has(group.code)}>
           {#if expanded.has(group.code)}<ChevronDown size={17} class="mt-0.5 shrink-0" />{:else}<ChevronRight size={17} class="mt-0.5 shrink-0" />{/if}
           <span class="min-w-0 flex-1"><strong class="block text-sm">{humanCode(group.code, group.message)}</strong><span class="mt-1 block text-xs text-amber-200/75">{group.count > 1 ? `${group.count} affected entries` : group.targets[0] ?? 'Review this item before export.'}</span></span>
-          <span class="shrink-0 rounded-full border border-amber-400/30 px-2 py-0.5 text-[10px] uppercase tracking-wide">{group.count}</span>
+          <span class="shrink-0 rounded-full border border-amber-400/30 px-2 py-0.5 text-[11px] uppercase tracking-wide">{group.count}</span>
         </button>
         {#if expanded.has(group.code)}
           <div class="mt-3 border-t border-amber-400/20 pt-3">

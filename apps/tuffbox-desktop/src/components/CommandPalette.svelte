@@ -245,7 +245,7 @@
     outline: none;
   }
   .cmd-esc {
-    font-size: 10px;
+    font-size: 11px;
     padding: 2px 6px;
     border-radius: 4px;
     border: 1px solid var(--border-color);
@@ -260,7 +260,7 @@
     margin-bottom: 8px;
   }
   .cmd-group-label {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -295,7 +295,7 @@
     color: var(--text-muted);
   }
   .cmd-item-right kbd {
-    font-size: 10px;
+    font-size: 11px;
     padding: 1px 5px;
     border-radius: 4px;
     border: 1px solid var(--border-color);
@@ -315,7 +315,7 @@
     color: var(--text-muted);
   }
   .cmd-footer kbd {
-    font-size: 10px;
+    font-size: 11px;
     padding: 1px 4px;
     border-radius: 3px;
     border: 1px solid var(--border-color);

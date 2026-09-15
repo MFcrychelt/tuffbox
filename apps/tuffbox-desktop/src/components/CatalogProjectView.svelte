@@ -621,7 +621,7 @@
   .hero-icon img { width: 100%; height: 100%; object-fit: cover; }
   .eyebrow { display: flex; gap: 8px; margin-bottom: 4px; }
   .provider, .type {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -871,7 +871,7 @@
   .versions small { color: var(--text-muted); font-size: 11px; }
   .badge {
     align-self: center;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
     color: var(--accent-warning);

@@ -903,7 +903,7 @@
     }
 
     .stage-text small {
-      font-size: 10px;
+      font-size: 11px;
     }
   }
 </style>

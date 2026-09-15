@@ -405,7 +405,7 @@
     gap: 6px;
   }
   .sc-risk {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     padding: 1px 6px;
@@ -462,7 +462,7 @@
     resize: vertical;
   }
   .sc-code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 11px;
   }
   .sc-actions {

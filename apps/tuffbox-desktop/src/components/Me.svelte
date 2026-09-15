@@ -823,7 +823,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
     color: var(--accent-primary);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     align-items: center;
     justify-content: center;
@@ -915,7 +915,7 @@
   }
 
   .cape-tile-src {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.4px;
@@ -926,7 +926,7 @@
     position: absolute;
     top: 6px;
     right: 6px;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
     padding: 1px 5px;
@@ -1168,7 +1168,7 @@
   }
 
   .type-badge {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
     padding: 2px 8px;

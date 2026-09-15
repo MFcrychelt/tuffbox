@@ -346,7 +346,7 @@
     width: 100%;
     text-align: left;
     font-size: 11px;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     padding: 4px 0;
     border: none;
     background: transparent;
@@ -441,7 +441,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px;
+    font-size: 11px;
     padding: 1px 6px;
     border-radius: 999px;
     background: var(--bg-elevated, rgba(255, 255, 255, 0.06));

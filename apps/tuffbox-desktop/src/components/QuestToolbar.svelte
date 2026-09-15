@@ -143,7 +143,7 @@
     >
       <Save size={14} />
       {saving ? "Saving…" : "Save all"}
-      <kbd class="hidden text-[10px] text-white/70 sm:inline ml-1 font-mono">Ctrl S</kbd>
+      <kbd class="hidden text-[11px] text-white/70 sm:inline ml-1 font-mono">Ctrl S</kbd>
     </button>
 
     <button

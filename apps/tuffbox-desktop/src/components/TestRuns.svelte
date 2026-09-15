@@ -1210,22 +1210,22 @@
                     <h3 class="text-[var(--text-secondary)] text-[12px] m-0 uppercase tracking-[0.04em]">Launch stats</h3>
                     <div class="grid grid-cols-3 gap-2 mb-1">
                       <div class="stat-tile">
-                        <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Launches</span>
+                        <span class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">Launches</span>
                         <strong class="text-[15px] text-[var(--text-primary)] tabular-nums">{ launchStats.totalLaunches }</strong>
                       </div>
                       <div class="stat-tile" class:bad={launchStats.totalCrashes > 0} title={launchStats.totalCrashes > 0 ? "Crashes recorded for this pack — see Diagnose" : "No crashes recorded"}>
-                        <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Crashes</span>
+                        <span class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">Crashes</span>
                         <strong class="text-[15px] text-[var(--text-primary)] tabular-nums">{ launchStats.totalCrashes }</strong>
                       </div>
                       <div class="stat-tile" class:warn={passRate < 80 && runs.length > 0} title={passRate < 80 && runs.length > 0 ? "Fewer than 8 in 10 runs reach a healthy state" : "Share of runs that reached a healthy state"}>
-                        <span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Pass rate</span>
+                        <span class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">Pass rate</span>
                         <strong class="text-[15px] text-[var(--text-primary)] tabular-nums">{ passRate }%</strong>
                       </div>
                     </div>
                     {#if avgRunSeconds != null}
                       <div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Avg run duration</span><span class="text-[var(--text-secondary)] tabular-nums">{ avgRunSeconds }s</span></div>
                     {/if}
-                    {#if launchStats.lastLaunch}<div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Last launch</span><span class="text-[10px] text-[var(--text-muted)]">{launchStats.lastLaunch}</span></div>{/if}
+                    {#if launchStats.lastLaunch}<div class="flex justify-between items-center text-[12px]"><span class="text-[var(--text-muted)]">Last launch</span><span class="text-[11px] text-[var(--text-muted)]">{launchStats.lastLaunch}</span></div>{/if}
                   </div>
                 {/if}
 
@@ -1546,13 +1546,13 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     padding: 2px 7px;
     border-radius: 999px;
     background: color-mix(in srgb, var(--text-primary) 12%, transparent);
     color: var(--text-secondary);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
 
   /* Segmented tabs (right panel header). */

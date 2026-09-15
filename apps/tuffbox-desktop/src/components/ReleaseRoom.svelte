@@ -638,13 +638,13 @@
   .github-preview h4 { color: var(--accent-secondary); margin: 0 0 8px; font-size: 14px; }
   .github-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
   .gh-meta { color: var(--text-muted); font-size: 11px; }
-  .gh-body-preview { margin: 0; padding: 12px; border-radius: var(--border-radius-sm); background: #0d0d10; color: #d4d4d8; font-size: 11px; line-height: 1.5; max-height: 300px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
+  .gh-body-preview { margin: 0; padding: 12px; border-radius: var(--border-radius-sm); background: #0d0d10; color: #d4d4d8; font-size: 11px; line-height: 1.5; max-height: 300px; overflow: auto; white-space: pre-wrap; font-family: var(--font-mono, ui-monospace, monospace); }
 
   .issue span { color: var(--text-muted); }
-  code { color: var(--text-secondary); font-family: ui-monospace, monospace; }
+  code { color: var(--text-secondary); font-family: var(--font-mono, ui-monospace, monospace); }
   .changelog-panel { overflow: hidden; display: flex; flex-direction: column; min-height: 680px; }
     .changelog-header { justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 0; }
-    textarea { flex: 1; resize: none; min-height: 600px; border: 0; outline: none; background: rgba(0, 0, 0, 0.35); color: #e5e7eb; padding: 18px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height: 1.6; }
+    textarea { flex: 1; resize: none; min-height: 600px; border: 0; outline: none; background: rgba(0, 0, 0, 0.35); color: #e5e7eb; padding: 18px; font-family: var(--font-mono, ui-monospace, monospace); line-height: 1.6; }
   /* (removed dead .empty rule — no element uses it) */
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }

@@ -952,7 +952,7 @@
               <ul class="m-0 p-0 list-none grid gap-1">
                 {#each detail.changedFiles ?? [] as f}
                   <li class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-[var(--border-radius-sm)] bg-[var(--bg-tertiary)] border border-transparent hover:border-[var(--border-color)] min-w-0">
-                    <span class="shrink-0 text-[10.5px] font-extrabold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-muted)]">{ f.category }</span>
+                    <span class="shrink-0 text-[11px] font-extrabold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-muted)]">{ f.category }</span>
                     <span class="text-[var(--text-secondary)] font-mono text-[12.5px] flex-1 min-w-0 tb-truncate">{ f.path }</span>
                   </li>
                 {/each}
@@ -1386,7 +1386,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     color: var(--text-muted);
     background: var(--bg-elevated);
@@ -1398,12 +1398,12 @@
     display: inline-block;
     line-height: 1.4;
     vertical-align: baseline;
-    font-size: 10px;
+    font-size: 11px;
     padding: 2px 6px;
     border-radius: 4px;
     background: var(--bg-elevated);
     color: var(--text-muted);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     max-width: 140px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1412,7 +1412,7 @@
   .preview { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .row-meta { font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
   .tags { display: flex; gap: 4px; flex-wrap: wrap; }
-  .kind-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; letter-spacing: 0.04em; }
+  .kind-badge { font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; letter-spacing: 0.04em; }
   .kind-badge.auto { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
   .kind-badge.manual { color: var(--text-secondary); background: var(--bg-elevated); }
   .kind-badge.crash { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 14%, transparent); }
@@ -1478,7 +1478,7 @@
   }
 
   .kind-tag {
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1527,7 +1527,7 @@
   }
   .tag.crash-fix { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
 
-  .diff-label { color: var(--text-muted); font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 6px; border-radius: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
+  .diff-label { color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 6px; border-radius: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
   .diff-label.added { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
   .diff-label.removed { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
   .diff-label.modified { color: #93c5fd; border-color: rgba(147, 197, 253, 0.35); }
@@ -1558,12 +1558,12 @@
   .diff-stat.changed { border-color: rgba(245,158,11,.30); }
   .diff-stat.added { border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
   .diff-stat.removed { border-color: rgba(239,68,68,.30); }
-  .manifest-diff-text { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg-elevated); color: var(--text-secondary); font-family: ui-monospace,monospace; font-size: 11px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; }
+  .manifest-diff-text { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg-elevated); color: var(--text-secondary); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; }
   .inline-diff { min-width: 0; }
   .inline-diff-header { display: flex; justify-content: space-between; gap: 12px; padding: 0 0 10px; color: var(--text-secondary); }
   .inline-diff-header span { color: var(--text-muted); font-size: 12px; }
   pre { overflow: auto; max-height: 420px; background: var(--bg-elevated); border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin: 0; }
-  pre span { display: block; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  pre span { display: block; white-space: pre-wrap; font-family: var(--font-mono, ui-monospace, monospace); }
   pre span.added { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   pre span.removed { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); }
   pre span.context { color: var(--text-muted); }

@@ -157,7 +157,7 @@
     white-space: nowrap;
   }
   .raw-note {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted, var(--ftbq-text-muted));
     line-height: 1.35;
   }
@@ -193,7 +193,7 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .find-count {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted, var(--ftbq-text-muted));
     min-width: 2.5em;
     text-align: right;
@@ -205,7 +205,7 @@
     margin: 0;
     font-size: 11px;
     line-height: 1.5;
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     background: color-mix(in srgb, var(--ftbq-bg) 70%, transparent);
     color: var(--text-secondary, var(--ftbq-text));
     white-space: pre;
@@ -228,5 +228,5 @@
   }
   .btn:disabled { opacity: 0.45; cursor: default; }
   .btn.ghost { background: transparent; }
-  .btn.small { padding: 3px 7px; font-size: 10px; }
+  .btn.small { padding: 3px 7px; font-size: 11px; }
 </style>

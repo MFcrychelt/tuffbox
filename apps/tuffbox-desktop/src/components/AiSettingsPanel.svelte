@@ -1224,7 +1224,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
   .presets { display: flex; flex-wrap: wrap; gap: 6px; }
   .preset {

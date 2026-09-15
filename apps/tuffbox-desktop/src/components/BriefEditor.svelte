@@ -1657,7 +1657,7 @@
     height: 100%;
   }
   .cm-wrap :global(.cm-scroller) {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 13.5px;
     line-height: 1.6;
   }

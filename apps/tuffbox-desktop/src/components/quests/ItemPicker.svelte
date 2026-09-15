@@ -284,7 +284,7 @@
     color: var(--ftbq-title-gold);
   }
   .id {
-    font-size: 9px;
+    font-size: 11px;
     word-break: break-all;
     text-align: center;
     line-height: 1.2;

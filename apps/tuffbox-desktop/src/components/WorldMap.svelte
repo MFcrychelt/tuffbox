@@ -2844,7 +2844,7 @@
   .view-only-badge {
     display: inline-flex;
     align-items: center;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -2933,7 +2933,7 @@
   }
   .height-range .hr-label {
     font-weight: 700;
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.06em;
     color: var(--text-muted);
   }
@@ -2947,7 +2947,7 @@
   }
   .height-range code {
     font-size: 11px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--mca-ink-strong);
     min-width: 28px;
     text-align: center;
@@ -3000,7 +3000,7 @@
   }
   .region-rail-title {
     padding: 9px 10px 8px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -3023,7 +3023,7 @@
     background: transparent;
     color: var(--text-secondary);
     font-size: 11px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     cursor: pointer;
     text-align: left;
   }
@@ -3186,7 +3186,7 @@
     background: color-mix(in srgb, var(--bg-secondary) 80%, #000 20%);
     border-top: 1px solid var(--border-color);
     font-size: 11px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--text-muted);
     flex-shrink: 0;
     letter-spacing: 0.01em;
@@ -3203,7 +3203,7 @@
   }
   .mca-status .st-k {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     text-transform: lowercase;
     opacity: 0.85;
   }
@@ -3291,7 +3291,7 @@
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-primary);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
   .clip-banner-actions {
     display: flex;
@@ -3409,7 +3409,7 @@
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-primary);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 13px;
   }
   .goto-actions {
@@ -3476,7 +3476,7 @@
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-primary);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
   .from-world-steps {
     display: flex;
@@ -3612,7 +3612,7 @@
     border-radius: 4px;
     background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
     color: var(--accent-primary);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;

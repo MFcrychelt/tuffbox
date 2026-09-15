@@ -76,7 +76,7 @@
   .snapshot-item p { margin: 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
   .snapshot-item-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); font-size: 11.5px; }
   .snapshot-date, .snapshot-files { display: inline-flex; align-items: center; gap: 4px; }
-  .kind-tag { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: 999px; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+  .kind-tag { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: 999px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
   .kind-tag.auto { color: #93c5fd; border-color: rgba(147,197,253,.4); }
   .kind-tag.manual { color: #34d399; border-color: rgba(52,211,153,.4); }
   .kind-tag.crash { color: #fbbf24; border-color: rgba(251,191,36,.4); }

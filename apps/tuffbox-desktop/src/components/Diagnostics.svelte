@@ -2062,10 +2062,10 @@
   }
 
   function hypothesisForGroup(title: string) {
-    if (title === "Entrypoint") return "Likely a mod initialization failure. Check the provided-by mod first, then its required libraries and loader-compatible version.";
-    if (title === "Loader mismatch") return "Likely a wrong loader/API bridge or incompatible dependency version. Check Fabric/Forge/NeoForge API ports and update matching libraries.";
-    if (title === "Render/OpenGL") return "Likely render pipeline conflict. Disable shaders and test render mods such as Sodium/Iris/Voxy/ETF/MCEF/Litematica in groups.";
-    if (title === "Performance") return "Likely overload, not a crash root cause. Lower view distance, profile heavy entities/worldgen and rerun the test.";
+    if (title === "Entrypoint") return "Likely a mod init failure. Check the provided-by mod, then its libraries and loader version.";
+    if (title === "Loader mismatch") return "Likely a loader/API mismatch. Check the loader port and update its matching libraries.";
+    if (title === "Render/OpenGL") return "Likely a render conflict. Disable shaders and test render mods (Sodium, Iris, Voxy…) in groups.";
+    if (title === "Performance") return "Likely overload, not a crash cause. Lower view distance, profile heavy entities, rerun.";
     return "Review this signal group and compare it with recent snapshots.";
   }
 
@@ -3415,7 +3415,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
     color: var(--accent-primary);
-    font-size: 10px;
+    font-size: 11px;
   }
   .dx-resolve-bridge {
     margin-top: 12px;
@@ -3616,7 +3616,7 @@
     font: inherit;
   }
   .recent-op {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.3px;
@@ -3629,7 +3629,7 @@
     border-color: var(--border-color);
   }
   .recent-actor {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     color: var(--text-muted);
@@ -3642,7 +3642,7 @@
   }
   .recent-row small {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
   }
   .tools-group {
     display: flex;
@@ -3652,7 +3652,7 @@
   }
   .tools-label {
     min-width: 64px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -3760,7 +3760,7 @@
     border-radius: var(--border-radius-md);
     background: #09090b;
     color: #d4d4d8;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
     line-height: 1.55;
     white-space: pre-wrap;
@@ -3835,5 +3835,5 @@
     background: var(--bg-primary);
     color: inherit;
   }
-  .author-form textarea.mono { font-family: ui-monospace, monospace; font-size: 11px; }
+  .author-form textarea.mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; }
 </style>

@@ -1379,7 +1379,7 @@
   .check-status {
     font-weight: 700;
     text-transform: uppercase;
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.04em;
   }
   .auth-line,

@@ -870,7 +870,7 @@
   }
 
   .pill {
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     font-weight: 700;
     padding: 2px 6px;

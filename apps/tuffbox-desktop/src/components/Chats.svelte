@@ -2118,7 +2118,7 @@
     height: 16px;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     color: var(--accent-primary);
   }
@@ -2135,7 +2135,7 @@
   }
   .pending-dot {
     margin-left: auto;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     color: var(--ftbq-accent-teal, #3db8a8);
     border: 1px solid var(--ftbq-accent-teal, #3db8a8);
@@ -2212,7 +2212,7 @@
   }
   .kind-badge {
     flex-shrink: 0;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -2273,7 +2273,7 @@
     margin-top: 2px;
   }
   .session-time {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-secondary, #9aa3b5);
   }
   .session-preview {
@@ -2778,7 +2778,7 @@
   }
   .alt-source {
     margin-left: auto;
-    font-size: 10px;
+    font-size: 11px;
     white-space: nowrap;
   }
   .small {
@@ -2879,7 +2879,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px;
+    font-size: 11px;
     padding: 1px 5px;
     border-radius: 4px;
     background: color-mix(in srgb, var(--accent-secondary) 25%, transparent);
@@ -2937,7 +2937,7 @@
     margin-top: 4px;
   }
   .preview-meta .pill {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     padding: 1px 6px;
     border-radius: 999px;
@@ -2945,8 +2945,8 @@
   .preview-meta .pill.ok { background: color-mix(in srgb, var(--accent-primary) 22%, transparent); color: var(--accent-primary); }
   .preview-meta .pill.skip { background: rgba(154, 163, 181, 0.2); color: var(--text-muted, #9aa3b5); }
   .preview-meta .pill.fail { background: color-mix(in srgb, var(--accent-danger) 20%, transparent); color: var(--accent-danger); }
-  .preview-meta .hash { font-size: 10px; color: var(--text-muted, #9aa3b5); }
-  .preview-meta .dest { font-size: 10px; color: var(--text-muted, #9aa3b5); }
+  .preview-meta .hash { font-size: 11px; color: var(--text-muted, #9aa3b5); }
+  .preview-meta .dest { font-size: 11px; color: var(--text-muted, #9aa3b5); }
   .draft-confirm-actions {
     display: flex;
     justify-content: flex-end;

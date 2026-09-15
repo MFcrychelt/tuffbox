@@ -3172,7 +3172,7 @@ import { trapFocus } from "../lib/focusTrap";
       <label
         class="ideas-toggle often-together"
         class:on={ideasEnabled}
-        title="Often together — after installing from Add mods, offer popular companion mods from community stats"
+        title="Often together — suggest popular companion mods after installing"
       >
         <input
           type="checkbox"
@@ -3278,7 +3278,7 @@ import { trapFocus } from "../lib/focusTrap";
             role="menuitem"
             onclick={() => { actionsMenuOpen = false; optimizePackOpen = true; }}
             disabled={!$projectPath || contentFilter !== "mod"}
-            title="Install a curated Fabric opt pack or missing performance mods + safe configs"
+            title="Install a curated performance pack with safe configs"
           >
             <Zap size={14} />
             Optimize
@@ -4040,7 +4040,7 @@ import { trapFocus } from "../lib/focusTrap";
                     {#if !filterCategory}<Check size={13} />{/if}
                   </button>
                   {#each categoryGroups as group (group.header)}
-                    <div class="px-2.5 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{group.header}</div>
+                    <div class="px-2.5 pt-2.5 pb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{group.header}</div>
                     {#each group.names as category (category)}
                       <button
                         type="button"
@@ -4265,7 +4265,7 @@ import { trapFocus } from "../lib/focusTrap";
                 class="inline-flex items-center gap-2 px-3.5 py-2 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 bg-[var(--accent-primary)] border-[color-mix(in_srgb,var(--accent-primary)_60%,#000)] text-[var(--on-accent,#fff)] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed"
                 onclick={bulkInstallSelected}
                 disabled={selectedResults.length === 0 || mutating}
-                title="Install selected projects with required dependencies (one provider at a time)"
+                title="Install selected projects with dependencies (one provider at a time)"
               >Install selected + dependencies</button>
             </div>
           </div>
@@ -5283,7 +5283,7 @@ import { trapFocus } from "../lib/focusTrap";
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -5344,7 +5344,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .stat-pill span {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -5951,7 +5951,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .ideas-meta strong { font-size: 13px; color: var(--text-primary); }
   .ideas-meta code { font-size: 11px; color: var(--text-muted); }
-  .ideas-meta small { font-size: 10px; color: var(--text-muted); }
+  .ideas-meta small { font-size: 11px; color: var(--text-muted); }
   .ideas-row .muted {
     margin-left: auto;
     color: var(--text-muted);
@@ -6066,7 +6066,7 @@ import { trapFocus } from "../lib/focusTrap";
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -6147,7 +6147,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .disabled-badge {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
     padding: 2px 6px;
@@ -6645,7 +6645,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .version,
   code {
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 13px;
   }
 
@@ -7044,7 +7044,7 @@ import { trapFocus } from "../lib/focusTrap";
     height: 18px;
     padding: 0 5px;
     border-radius: 4px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.02em;
     flex-shrink: 0;
@@ -7694,11 +7694,11 @@ import { trapFocus } from "../lib/focusTrap";
   .install-plan-panel .dep-entry.required { border-left: 3px solid var(--accent-primary); }
   .install-plan-panel .dep-entry.optional { border-left: 3px solid rgba(161,161,170,.4); }
   .install-plan-panel .dep-entry.already-installed { opacity: 0.72; }
-  .install-plan-panel .dep-target { font-family: ui-monospace,monospace; font-size: 12px; }
+  .install-plan-panel .dep-target { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
   .install-plan-panel .dep-entry small { color: var(--text-muted); font-size: 11px; }
   .dep-installed-pill {
     margin-left: auto;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.02em;
     text-transform: uppercase;
@@ -7731,7 +7731,7 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-item strong { color: var(--text-primary); font-size: 13px; }
   .plan-item span { color: var(--text-muted); font-size: 13px; text-align: right; }
   .plan-item .side-tag { text-transform: uppercase; font-weight: 700; }
-  .plan-item .mono { font-family: ui-monospace,monospace; font-size: 11px; }
+  .plan-item .mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; }
   .plan-deps-section, .plan-conflicts { padding: 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); }
   .plan-deps-section > strong { color: var(--accent-primary); font-size: 13px; display: block; margin-bottom: 8px; }
   .plan-conflicts > strong { color: #fca5a5; font-size: 13px; display: block; margin-bottom: 8px; }
@@ -7760,7 +7760,7 @@ import { trapFocus } from "../lib/focusTrap";
   .update-confirm-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
   .update-confirm-vers { color: var(--text-muted); font-size: 12px; }
   .update-confirm-vers strong { color: var(--accent-primary); }
-  .update-confirm-chip { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 2px 6px; border-radius: 999px; }
+  .update-confirm-chip { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 2px 6px; border-radius: 999px; }
   .update-confirm-chip.rename { background: color-mix(in srgb, var(--accent-secondary) 18%, transparent); color: var(--accent-secondary); }
   .update-confirm-chip.loader { background: rgba(251,191,36,.14); color: #fbbf24; }
   .update-confirm-chip.mc { background: rgba(251,191,36,.14); color: #fbbf24; }
@@ -7818,8 +7818,8 @@ import { trapFocus } from "../lib/focusTrap";
   .recs-main strong { color: var(--text-primary); font-size: 13px; }
   .recs-main span { color: var(--text-muted); font-size: 11px; }
   .recs-meta { opacity: 0.8; }
-  .recs-source { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
-  .recs-prio { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
+  .recs-source { font-size: 11px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
+  .recs-prio { font-size: 11px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
   .recs-prio.critical { background: rgba(239,68,68,.15); color: #fca5a5; }
   .recs-prio.high { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-primary); }
   .recs-prio.medium { background: rgba(96,165,250,.12); color: #93c5fd; }

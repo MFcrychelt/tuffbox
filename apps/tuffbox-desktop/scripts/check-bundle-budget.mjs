@@ -47,7 +47,14 @@ const BUDGETS_GZIP_BYTES = {
   // migrations add per-screen utility sets.
   // 2026-09 bump (44 -> 46): BriefEditor/ProjectSettings/Mods UI polish pass
   // adds category chips, sync pill, rich MdToolbar, and panel hints.
-  ".css": 46 * 1024,
+  // 2026-09 second bump (46 -> 48): the typography pass (Inter Variable +
+  // JetBrains Mono Variable @font-face in src/styles/fonts.css, latin +
+  // cyrillic subsets only; woff2 files load on demand via unicode-range and
+  // are not part of this budget) added @font-face declarations, offset by
+  // replacing 52 hardcoded monospace stacks with the --font-mono token.
+  // Current startup CSS is ~45.4 KB; 48 KB restores headroom while still
+  // catching bloat.
+  ".css": 48 * 1024,
 };
 
 if (!existsSync(indexHtmlPath)) {

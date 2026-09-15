@@ -284,7 +284,7 @@
     min-width: 140px;
   }
   .next-label {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;

@@ -405,17 +405,17 @@
   .ore-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
   .ore-detail { display: grid; gap: 2px; flex: 1; min-width: 0; }
   .ore-detail strong { color: var(--text-primary); font-size: 12px; text-transform: capitalize; }
-  .ore-detail span { color: var(--text-muted); font-size: 10px; }
+  .ore-detail span { color: var(--text-muted); font-size: 11px; }
   .ore-tags { display: flex; gap: 4px; flex-shrink: 0; }
-  .ore-conf-tag { font-size: 9px; text-transform: uppercase; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); font-weight: 700; }
+  .ore-conf-tag { font-size: 11px; text-transform: uppercase; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); font-weight: 700; }
   .ore-conf-tag.high { color: var(--accent-primary); }
   .ore-conf-tag.medium { color: #fbbf24; }
   .ore-conf-tag.low { color: var(--text-muted); }
-  .ore-disabled { font-size: 9px; padding: 2px 5px; border-radius: 4px; background: rgba(239,68,68,.15); color: #fca5a5; }
-  .ore-unknown { font-size: 9px; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); }
-  .ore-mod-tag { font-size: 9px; padding: 2px 5px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
+  .ore-disabled { font-size: 11px; padding: 2px 5px; border-radius: 4px; background: rgba(239,68,68,.15); color: #fca5a5; }
+  .ore-unknown { font-size: 11px; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); }
+  .ore-mod-tag { font-size: 11px; padding: 2px 5px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
   .ore-details { margin-left: 22px; margin-bottom: 6px; padding: 6px 10px; border-radius: 6px; background: var(--bg-tertiary); }
-  .ore-details code { font-size: 10px; color: var(--text-muted); word-break: break-all; }
+  .ore-details code { font-size: 11px; color: var(--text-muted); word-break: break-all; }
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 920px) { .layout { grid-template-columns: 1fr; } }

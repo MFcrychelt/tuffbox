@@ -666,7 +666,7 @@
   }
 
   .cape-src {
-    font-size: 9px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);

@@ -516,7 +516,7 @@
     left: 8px;
     z-index: 1;
     padding: 2px 5px;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;

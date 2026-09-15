@@ -352,7 +352,7 @@
     left: 6px;
     background: rgba(0, 0, 0, 0.72);
     color: #e5e7eb;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     padding: 2px 6px;
     border-radius: 4px;

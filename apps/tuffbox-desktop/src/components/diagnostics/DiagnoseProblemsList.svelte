@@ -233,7 +233,7 @@
     text-overflow: ellipsis;
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.02em;
     background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
@@ -243,7 +243,7 @@
   .sev-chip, .cat-chip, .src-chip {
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.02em;
   }

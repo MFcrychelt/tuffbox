@@ -485,7 +485,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .world-meta { font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .world-meta { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
   .worlds-main {
     flex: 1;

@@ -1035,7 +1035,7 @@
   }
   .search-hit { width: 100%; display: grid; gap: 2px; text-align: left; padding: 5px 6px; margin-bottom: 2px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); transform: none; }
   .search-hit:hover { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
-  .hit-path { font-size: 11px; color: var(--accent-primary); font-family: ui-monospace, monospace; }
+  .hit-path { font-size: 11px; color: var(--accent-primary); font-family: var(--font-mono, ui-monospace, monospace); }
   .hit-text { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .search-truncated { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
 
@@ -1136,12 +1136,12 @@
   .lint-item.error { background: color-mix(in srgb, var(--accent-danger) 8%, transparent); color: var(--accent-danger); }
   .lint-item.warning { background: color-mix(in srgb, var(--accent-warning) 8%, transparent); color: var(--accent-warning); }
   .lint-item:hover { border-color: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
-  .lint-sev { font-weight: 800; text-transform: uppercase; font-size: 9px; padding: 1px 4px; border-radius: 3px; }
+  .lint-sev { font-weight: 800; text-transform: uppercase; font-size: 11px; padding: 1px 4px; border-radius: 3px; }
   .lint-item.error .lint-sev { background: color-mix(in srgb, var(--accent-danger) 20%, transparent); }
   .lint-item.warning .lint-sev { background: color-mix(in srgb, var(--accent-warning) 20%, transparent); }
-  .lint-item code { font-size: 10px; color: var(--accent-primary); }
+  .lint-item code { font-size: 11px; color: var(--accent-primary); }
   .lint-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lint-item small { color: var(--text-muted); font-size: 10px; }
+  .lint-item small { color: var(--text-muted); font-size: 11px; }
   @media (max-width: 1050px) {
     .layout { grid-template-columns: 1fr; }
     .layout.with-ai { grid-template-columns: 1fr; }

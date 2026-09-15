@@ -4007,7 +4007,7 @@
   }
   .legend-block { display: flex; flex-direction: column; gap: 4px; }
   .legend-title {
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-muted);
@@ -4040,7 +4040,7 @@
   .legend-chip {
     display: inline-flex; align-items: center;
     padding: 2px 8px; margin: 0 4px 4px 0;
-    font-size: 10px; font-weight: 700;
+    font-size: 11px; font-weight: 700;
     border-radius: 999px;
     border: 1px solid var(--chip, var(--border-color));
     color: var(--text-secondary);
@@ -4165,7 +4165,7 @@
 
   .svg-node .ghost-download {
     fill: #a1a1aa;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     pointer-events: none;
     cursor: pointer;
@@ -4643,7 +4643,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-warning) 16%, transparent);
     color: var(--accent-warning);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -4820,7 +4820,7 @@
   }
 
   code {
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--text-secondary);
     word-break: break-all;
   }
@@ -5160,7 +5160,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     margin-left: 8px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.02em;
     text-transform: uppercase;

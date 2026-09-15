@@ -264,7 +264,7 @@
     width: 100%;
     min-height: 30px;
     padding: 5px 10px 5px 30px;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
     color: var(--text-secondary);
     white-space: nowrap;
@@ -334,7 +334,7 @@
     font-size: 12px;
     font-weight: 600;
     color: var(--text-primary);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
   .switch-desc {
     font-size: 11px;

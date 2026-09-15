@@ -624,7 +624,7 @@
   .path-chip {
     display: block;
     word-break: break-all;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
     color: var(--text-secondary);
   }
@@ -749,7 +749,7 @@
   }
   code {
     color: var(--text-secondary);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
     word-break: break-all;
   }

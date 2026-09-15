@@ -1298,7 +1298,7 @@
     gap: 6px;
   }
   .jvm-textarea {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12.5px;
     line-height: 1.6;
     white-space: pre;
@@ -1429,7 +1429,7 @@
     color: var(--text-primary);
   }
   .schema-row code {
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 13px;
     font-weight: 700;
     color: var(--accent-primary);

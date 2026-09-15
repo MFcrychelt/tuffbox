@@ -312,7 +312,7 @@
     max-height: min(62vh, 720px);
     overflow: auto;
     background: #0a0a0c;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
     line-height: 1.55;
   }

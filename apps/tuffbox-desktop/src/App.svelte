@@ -223,7 +223,7 @@
       localStorage.setItem("tuffbox-reduced-motion", "1");
       document.documentElement.classList.add("potato-pc");
       toasts.info(
-        "Detected lower-end hardware — enabled reduced-motion mode to keep things smooth. Turn it off anytime in Settings → Appearance.",
+        "Low-end hardware detected — reduced motion is on. Change it in Settings → Appearance.",
         8000,
       );
     }

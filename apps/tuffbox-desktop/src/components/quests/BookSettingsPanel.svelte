@@ -236,7 +236,7 @@
   }
   .book-extra .extra-val {
     flex: 1;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--ftbq-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;

@@ -324,7 +324,7 @@
     border: none;
     background: transparent;
     color: var(--ftbq-text-muted);
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.04em;
     cursor: pointer;
     font-weight: 600;
@@ -334,7 +334,7 @@
   }
   .group-count {
     margin-left: auto;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 700;
     padding: 1px 6px;
     border-radius: 999px;
@@ -480,7 +480,7 @@
   }
   .dot {
     color: var(--ftbq-quest-started);
-    font-size: 10px;
+    font-size: 11px;
   }
   .save-ch {
     width: calc(100% - 16px);

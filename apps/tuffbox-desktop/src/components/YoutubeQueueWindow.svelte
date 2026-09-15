@@ -844,7 +844,7 @@
     border-radius: var(--border-radius-sm);
     background: var(--accent-primary);
     color: var(--on-accent, #000);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.03em;
     text-transform: uppercase;

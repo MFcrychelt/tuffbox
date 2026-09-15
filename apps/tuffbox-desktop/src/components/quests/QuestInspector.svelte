@@ -414,7 +414,7 @@
             {/if}
           </button>
           {#if quest.optional}
-            <span class="text-[10px] font-semibold text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">Optional</span>
+            <span class="text-[11px] font-semibold text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">Optional</span>
           {/if}
         </div>
       </div>
@@ -869,7 +869,7 @@
     align-items: center;
     gap: 4px;
     font-size: 11px;
-    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--text-muted);
     padding: 2px 6px;
     border: 1px solid var(--border-color);
@@ -886,7 +886,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     padding: 1px 5px;
     border-radius: 999px;

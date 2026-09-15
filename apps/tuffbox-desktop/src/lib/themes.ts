@@ -36,7 +36,7 @@ export const THEMES: ThemeMeta[] = [
   { id: "carbon", label: "Carbon", shades: ["#15181e", "#272a35", "#3e85d0"] },
   { id: "inferno", label: "Inferno", shades: ["#120a0a", "#261616", "#ff5722"] },
   { id: "aether", label: "Aether", shades: ["#1e0d3c", "#31155f", "#c084fc"], badge: "Sharp" },
-  { id: "frost", label: "Frost", shades: ["#0c4c7a", "#0388d2", "#06b6d4"], badge: "Sharp" },
+  { id: "frost", label: "Frost", shades: ["#072a44", "#104a74", "#22d3ee"], badge: "Sharp" },
   { id: "pixelato", label: "Pixelato", shades: ["#101010", "#303030", "#4caf50"], badge: "Sharp" },
   { id: "win95", label: "Win95", shades: ["#a5a5a5", "#c0c0c0", "#000080"], badge: "Sharp" },
   { id: "solar", label: "Solar", shades: ["#140e02", "#ffc500", "#ff9500"], badge: "Minimal" },

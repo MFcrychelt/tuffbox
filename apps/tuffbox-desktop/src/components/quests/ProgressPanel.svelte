@@ -204,7 +204,7 @@
     border-radius: 3px;
   }
   .prog-path {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--ftbq-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;

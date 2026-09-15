@@ -537,7 +537,7 @@
     flex-shrink: 0;
   }
   .pill {
-    font-size: 10px;
+    font-size: 11px;
     padding: 2px 7px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
@@ -629,7 +629,7 @@
     gap: 4px;
   }
   .research li { display: flex; flex-direction: column; gap: 2px; }
-  .research .step { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.8; }
+  .research .step { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.8; }
   .research a {
     color: var(--accent-primary);
     text-decoration: none;
