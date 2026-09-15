@@ -8052,34 +8052,64 @@ async fn ai_plan_with_fallback(
     match ai_call {
         Ok(detailed) => {
             let raw = serde_json::to_string(&detailed.value).unwrap_or_default();
-            let mut plan = tuffbox_core::action_plan::parse_action_plan(&raw)?;
-            tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
-            Ok((plan, compact, None, detailed.speculative))
-        }
-        Err(ai_err) => {
-            if let Some(mut plan) = strong_plan_from_similar(ctx) {
-                tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
-                return Ok((
-                    plan,
+            match tuffbox_core::action_plan::parse_action_plan(&raw) {
+                Ok(mut plan) => {
+                    tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
+                    Ok((plan, compact, None, detailed.speculative))
+                }
+                // The model ANSWERED, but not with a usable plan: JSON
+                // truncated by a token limit, prose around the object, wrong
+                // shape — very common with small local models. The fallback
+                // chain below exists exactly for "no usable AI plan", yet it
+                // used to run only on transport errors, so a garbage answer
+                // surfaced as a hard error instead of the KB/heuristic plan.
+                Err(parse_err) => fallback_plan_without_ai(
+                    ctx,
                     compact,
-                    Some(format!("AI unavailable ({ai_err}); used strong KB match")),
-                    speculative::SpeculativeMeta::default(),
-                ));
+                    format!("AI answer was not a usable plan ({parse_err})"),
+                ),
             }
-            if let Some(mut plan) = heuristic_plan_from_context(ctx) {
-                tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
-                return Ok((
-                    plan,
-                    compact,
-                    Some(format!("AI unavailable ({ai_err}); used local crash heuristics")),
-                    speculative::SpeculativeMeta::default(),
-                ));
-            }
-            Err(format!(
-                "AI unavailable: {ai_err}. Configure Ollama or an OpenAI-compatible endpoint in Settings → AI, or enable Crash KB / TuffSwarm."
-            ))
         }
+        Err(ai_err) => fallback_plan_without_ai(ctx, compact, format!("AI unavailable ({ai_err})")),
     }
+}
+
+/// Strong-KB → local-heuristics fallback used when the AI path yields no
+/// usable plan — transport failure OR an answer that failed to parse.
+fn fallback_plan_without_ai(
+    ctx: &tuffbox_core::ai_explanation::CrashAiContext,
+    compact: bool,
+    reason: String,
+) -> Result<
+    (
+        tuffbox_core::action_plan::ActionPlan,
+        bool, /*compact*/
+        Option<String>,
+        speculative::SpeculativeMeta,
+    ),
+    String,
+> {
+    if let Some(mut plan) = strong_plan_from_similar(ctx) {
+        tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
+        return Ok((
+            plan,
+            compact,
+            Some(format!("{reason}; used strong KB match")),
+            speculative::SpeculativeMeta::default(),
+        ));
+    }
+    if let Some(mut plan) = heuristic_plan_from_context(ctx) {
+        tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
+        return Ok((
+            plan,
+            compact,
+            Some(format!("{reason}; used local crash heuristics")),
+            speculative::SpeculativeMeta::default(),
+        ));
+    }
+    Err(format!(
+        "{reason}. Configure Ollama or an OpenAI-compatible endpoint in Settings → AI, or enable Crash KB / TuffSwarm."
+    ))
 }
 
 /// Apply a validated ActionPlan (after user confirm). Runs snapshot once, then each op.
@@ -8607,6 +8637,16 @@ fn push_rec(
 
 /// Drop suggestions that have no Modrinth file for this pack's MC + loader.
 /// Also rewrites the slug to the first alias that actually resolves.
+/// A compat-check error is DEFINITIVE (the rec should be dropped) only when
+/// the API actually answered — 404 means the project does not exist on
+/// Modrinth (hallucinated slug / renamed project). Everything else — DNS
+/// failure, timeout, rate limit, 5xx, open circuit breaker — is inconclusive
+/// and must NOT drop the recommendation. `get_json_with_context` embeds the
+/// HTTP status in the error text, which is the only signal at this layer.
+fn compat_check_definitive(err_msg: &str) -> bool {
+    err_msg.contains("status 404")
+}
+
 fn filter_compatible_recommendations(
     manifest: &ProjectManifest,
     recs: Vec<serde_json::Value>,
@@ -8620,6 +8660,13 @@ fn filter_compatible_recommendations(
     };
 
     let mut out = Vec::new();
+    // Compat-check bookkeeping: an answer from the API (even "no versions
+    // for this loader/MC") is a DEFINITIVE verdict; a transport error is
+    // INCONCLUSIVE. The old code treated both as "drop the recommendation",
+    // so a Modrinth outage / rate limit silently wiped the whole list —
+    // including locally computed heuristics.
+    let mut definitive_checks = 0usize;
+    let mut inconclusive_checks = 0usize;
     for mut rec in recs {
         let Some(slug) = rec.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
             continue;
@@ -8632,20 +8679,43 @@ fn filter_compatible_recommendations(
         }
 
         let mut matched: Option<(String, String)> = None;
+        let mut check_failed = false;
         for candidate in &try_slugs {
             match provider.get_versions(candidate, &query) {
                 Ok(versions) if !versions.is_empty() => {
+                    definitive_checks += 1;
                     matched = Some((candidate.clone(), versions[0].version_number.clone()));
                     break;
                 }
-                _ => continue,
+                Ok(_) => {
+                    // The API answered: no build for this loader/MC version.
+                    definitive_checks += 1;
+                }
+                Err(e) => {
+                    if compat_check_definitive(&e.to_string()) {
+                        definitive_checks += 1;
+                    } else {
+                        check_failed = true;
+                    }
+                }
             }
         }
 
         let Some((resolved_slug, version_number)) = matched else {
+            if check_failed {
+                // Keep the recommendation, marked unverified: dropping it
+                // here is how a Modrinth outage used to empty the panel.
+                inconclusive_checks += 1;
+                if let Some(obj) = rec.as_object_mut() {
+                    obj.insert("compatibility".into(), serde_json::json!("unverified"));
+                }
+                out.push(rec);
+            }
+            // else: definitive negative → drop the recommendation.
             continue;
         };
         if let Some(obj) = rec.as_object_mut() {
+            obj.insert("compatibility".into(), serde_json::json!("verified"));
             if resolved_slug != slug {
                 if let Ok(project) = provider.get_project(&resolved_slug) {
                     obj.insert("name".into(), serde_json::json!(project.name));
@@ -8664,6 +8734,19 @@ fn filter_compatible_recommendations(
             );
         }
         out.push(rec);
+    }
+    // Total outage: not a single query got a real answer, so "filtering"
+    // proved nothing. Everything was already kept above and marked
+    // `unverified`; annotate the list so the UI can say so.
+    if definitive_checks == 0 && inconclusive_checks > 0 {
+        for rec in &mut out {
+            if let Some(obj) = rec.as_object_mut() {
+                obj.insert(
+                    "compatibilityNote".into(),
+                    serde_json::json!("Modrinth could not be reached — compatibility unverified"),
+                );
+            }
+        }
     }
     out
 }
@@ -8927,6 +9010,39 @@ async fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> 
 
     recommendations.truncate(12);
     Ok(recommendations)
+}
+
+#[cfg(test)]
+mod compat_check_tests {
+    use super::compat_check_definitive;
+
+    #[test]
+    fn not_found_is_definitive() {
+        assert!(compat_check_definitive(
+            "JSON decode error for https://api.modrinth.com/v2/project/nope/version?loaders=[\"forge\"] (status 404): invalid type: map, expected a sequence"
+        ));
+    }
+
+    #[test]
+    fn network_failures_are_inconclusive() {
+        assert!(!compat_check_definitive("HTTP request failed: error sending request for url (https://api.modrinth.com/): operation timed out"));
+        assert!(!compat_check_definitive(
+            "network request failed: Connection refused (os error 111)"
+        ));
+        // Rate limits and server errors must never drop a recommendation.
+        assert!(!compat_check_definitive(
+            "JSON decode error for https://api.modrinth.com/v2/project/jei/version (status 429): invalid type: map, expected a sequence"
+        ));
+        assert!(!compat_check_definitive(
+            "JSON decode error for https://api.modrinth.com/v2/project/jei/version (status 503): invalid type: map, expected a sequence"
+        ));
+    }
+
+    #[test]
+    fn empty_and_unknown_errors_are_inconclusive() {
+        assert!(!compat_check_definitive(""));
+        assert!(!compat_check_definitive("circuit breaker open for api.modrinth.com"));
+    }
 }
 
 #[cfg(test)]

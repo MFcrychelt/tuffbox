@@ -3326,6 +3326,7 @@ import { trapFocus } from "../lib/focusTrap";
             <div class="recs-main">
               <span class="recs-prio {rec.priority}">{rec.priority}</span>
               {#if rec.source}<span class="recs-source">{rec.source}</span>{/if}
+              {#if rec.compatibility === "unverified"}<span class="recs-source unverified" title="Modrinth could not be reached — compatibility not verified">unverified</span>{/if}
               <strong>{rec.name}</strong>
               <span>{rec.description}</span>
               {#if rec.loader || rec.minecraftVersion || rec.compatibleVersion}
@@ -7819,6 +7820,7 @@ import { trapFocus } from "../lib/focusTrap";
   .recs-main span { color: var(--text-muted); font-size: 11px; }
   .recs-meta { opacity: 0.8; }
   .recs-source { font-size: 11px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
+  .recs-source.unverified { background: color-mix(in srgb, var(--accent-warning) 14%, transparent); color: var(--accent-warning); }
   .recs-prio { font-size: 11px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
   .recs-prio.critical { background: rgba(239,68,68,.15); color: #fca5a5; }
   .recs-prio.high { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-primary); }
