@@ -288,7 +288,7 @@
     flex-wrap: wrap;
   }
   .lbl {
-    font-size: 11px;
+    font-size: 12px;
     text-transform: none;
     letter-spacing: 0;
     color: var(--ftbq-text-muted);
@@ -337,7 +337,7 @@
   .field {
     display: grid;
     gap: 3px;
-    font-size: 11px;
+    font-size: 12px;
     text-transform: none;
     color: var(--ftbq-text-muted);
   }
@@ -367,7 +367,7 @@
     color: var(--ftbq-text-muted);
     cursor: pointer;
     padding: 6px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .mini.add {
     justify-self: start;
@@ -381,7 +381,7 @@
     gap: 6px;
   }
   .extra {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .extra summary {

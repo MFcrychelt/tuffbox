@@ -208,7 +208,7 @@
   }
   .drawer-hint {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .book-flags {
@@ -236,7 +236,7 @@
   }
   .book-extra .extra-val {
     flex: 1;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;

@@ -1069,7 +1069,7 @@
   }
 
   .card-hint-tag {
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
     padding: 2px 8px;

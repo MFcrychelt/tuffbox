@@ -506,7 +506,7 @@
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
-  .account-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .account-meta { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
   .type-pill {
     font-size: 11px; font-weight: 800; text-transform: uppercase;
@@ -524,7 +524,7 @@
     color: var(--badge-ygg-fg, #e9d5ff);
     background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.15));
   }
-  .skin-src { font-size: 11px; color: var(--text-muted); }
+  .skin-src { font-size: 12px; color: var(--text-muted); }
 
   .active-badge {
     display: inline-block;

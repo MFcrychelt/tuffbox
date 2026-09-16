@@ -1911,7 +1911,7 @@
   }
   .tb-account-name { font-size: 12px; font-weight: 700; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tb-account-badge {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -2038,7 +2038,7 @@
     border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
   }
   .group-count {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
   }
@@ -2236,7 +2236,7 @@
       border-color var(--motion-fast) var(--ease-out);
   }
   .inst-version {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-muted);
     max-width: 100%;
@@ -2423,7 +2423,7 @@
     min-width: 0;
   }
   .side-meta-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -2561,7 +2561,7 @@
   }
   .group-new-label {
     display: block;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
     margin-bottom: 4px;
@@ -2674,7 +2674,7 @@
   .side-content-hint {
     flex: 1 1 auto;
     text-align: left;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;

@@ -3495,7 +3495,7 @@
   }
   .dx-advanced .tools-label {
     width: 100%;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -3638,7 +3638,7 @@
   }
   .recent-meta {
     flex: 1;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .recent-head {
@@ -3688,7 +3688,7 @@
     border-color: var(--border-color);
   }
   .recent-actor {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     color: var(--text-muted);
@@ -3701,7 +3701,7 @@
   }
   .recent-row small {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
   .tools-group {
     display: flex;
@@ -3711,7 +3711,7 @@
   }
   .tools-label {
     min-width: 64px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;

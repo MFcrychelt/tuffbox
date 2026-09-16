@@ -666,7 +666,7 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
   }
   .gen-field input,
@@ -700,7 +700,7 @@
   }
   .gen-status {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
   }
   .batch-title {
@@ -710,7 +710,7 @@
     color: var(--text-primary, var(--ftbq-text));
   }
   .batch-count {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     padding: 2px 6px;
     border: 1px solid var(--ftbq-frame);
@@ -748,7 +748,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     cursor: pointer;
   }
@@ -795,7 +795,7 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     text-transform: uppercase;
     letter-spacing: 0.03em;
@@ -873,7 +873,7 @@
   .quest-id {
     font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--text-muted, var(--ftbq-text-muted));
-    font-size: 11px;
+    font-size: 12px;
   }
   .save-badge {
     margin-left: auto;
@@ -929,7 +929,7 @@
     gap: 2px;
   }
   .field-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted, var(--ftbq-text-muted));
     text-transform: uppercase;
@@ -988,7 +988,7 @@
     flex-shrink: 0;
   }
   .page-info {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
   }
 

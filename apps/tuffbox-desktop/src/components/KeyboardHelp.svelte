@@ -114,7 +114,7 @@
   }
 
   .kh-plus {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     margin: 0 1px;
   }

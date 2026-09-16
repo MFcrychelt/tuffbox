@@ -1116,7 +1116,7 @@
     gap: 8px;
   }
   .block-head strong { font-size: 13px; color: var(--text-primary); }
-  .block-head small { font-size: 11px; color: var(--text-muted); }
+  .block-head small { font-size: 12px; color: var(--text-muted); }
   .model-table {
     display: flex;
     flex-direction: column;
@@ -1158,7 +1158,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .fit {
@@ -1185,7 +1185,7 @@
   .progress.paused .bar {
     background: linear-gradient(145deg, #94a3b8, #64748b);
   }
-  .progress small { font-size: 11px; color: var(--text-muted); }
+  .progress small { font-size: 12px; color: var(--text-muted); }
   .suggestions {
     display: flex;
     flex-direction: column;
@@ -1209,13 +1209,13 @@
     background: rgba(251, 191, 36, 0.08);
   }
   .sug-name { font-size: 12px; font-weight: 700; color: var(--text-primary); }
-  .sug-meta { font-size: 11px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .sug-meta { font-size: 12px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .sug-note { font-size: 11px; color: var(--text-secondary); }
   .storage {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     padding: 6px 2px;
   }

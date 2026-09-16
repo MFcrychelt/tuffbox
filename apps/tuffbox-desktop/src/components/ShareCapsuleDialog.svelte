@@ -405,7 +405,7 @@
     gap: 6px;
   }
   .sc-risk {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     padding: 1px 6px;
@@ -426,7 +426,7 @@
   .sc-reason {
     display: block;
     margin-top: 4px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .sc-validation {

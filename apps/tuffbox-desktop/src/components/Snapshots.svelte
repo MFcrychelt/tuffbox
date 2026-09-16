@@ -952,7 +952,7 @@
               <ul class="m-0 p-0 list-none grid gap-1">
                 {#each detail.changedFiles ?? [] as f}
                   <li class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-[var(--border-radius-sm)] bg-[var(--bg-tertiary)] border border-transparent hover:border-[var(--border-color)] min-w-0">
-                    <span class="shrink-0 text-[11px] font-extrabold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-muted)]">{ f.category }</span>
+                    <span class="shrink-0 text-[12px] font-extrabold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--text-muted)]">{ f.category }</span>
                     <span class="text-[var(--text-secondary)] font-mono text-[12.5px] flex-1 min-w-0 tb-truncate">{ f.path }</span>
                   </li>
                 {/each}
@@ -1045,7 +1045,7 @@
         <div class="grid gap-3.5 px-3.5 pb-3.5">
           <div class="flex items-center gap-2.5 flex-wrap">
             <div class="grid gap-1 flex-1 min-w-[200px]">
-              <label for="snap-from" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">From</label>
+              <label for="snap-from" class="text-[12px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">From</label>
               <select id="snap-from" class="w-full min-w-0" bind:value={fromId}>
                 {#each snapshots as s}<option value={s.id}>{ snapshotSelectLabel(s) }</option>{/each}
               </select>
@@ -1054,7 +1054,7 @@
               <ArrowRightLeft size={16} />
             </button>
             <div class="grid gap-1 flex-1 min-w-[200px]">
-              <label for="snap-to" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">To</label>
+              <label for="snap-to" class="text-[12px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">To</label>
               <select id="snap-to" class="w-full min-w-0" bind:value={toId}>
                 {#each snapshots as s}<option value={s.id}>{ snapshotSelectLabel(s) }</option>{/each}
               </select>
@@ -1074,7 +1074,7 @@
             <h3 class="m-0 text-[14px] text-[var(--text-secondary)] font-bold">Compare packs</h3>
             <div class="grid gap-2" style="grid-template-columns: repeat(2, minmax(180px, 1fr));">
               <div class="grid gap-1">
-                <label for="pd-from-kind" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">From source</label>
+                <label for="pd-from-kind" class="text-[12px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">From source</label>
                 <select id="pd-from-kind" bind:value={fromKind}>
                   <option value="snapshot">Snapshot</option>
                   <option value="backup">Zip backup</option>
@@ -1082,7 +1082,7 @@
                 </select>
               </div>
               <div class="grid gap-1">
-                <label for="pd-to-kind" class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">To source</label>
+                <label for="pd-to-kind" class="text-[12px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">To source</label>
                 <select id="pd-to-kind" bind:value={toKind}>
                   <option value="snapshot">Snapshot</option>
                   <option value="backup">Zip backup</option>
@@ -1094,7 +1094,7 @@
               {/if}
               {#if fromKind === "backup" || toKind === "backup"}
                 <label class="grid gap-1">
-                  <span class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">Backup ids</span>
+                  <span class="text-[12px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">Backup ids</span>
                   <span class="flex gap-2">
                     <input class="flex-1 min-w-0" bind:value={backupFromId} placeholder="From backup id" />
                     <input class="flex-1 min-w-0" bind:value={backupToId} placeholder="To backup id" />
@@ -1103,7 +1103,7 @@
               {/if}
               {#if fromKind === "manifest" || toKind === "manifest"}
                 <label class="grid gap-1 col-span-2">
-                  <span class="text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">Other instance manifest path</span>
+                  <span class="text-[12px] uppercase tracking-wider text-[var(--text-muted)] font-extrabold">Other instance manifest path</span>
                   <input bind:value={otherManifestPath} placeholder="U:/…/project.tuffbox.json" />
                 </label>
               {/if}
@@ -1386,7 +1386,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--text-muted);
     background: var(--bg-elevated);
@@ -1398,7 +1398,7 @@
     display: inline-block;
     line-height: 1.4;
     vertical-align: baseline;
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 6px;
     border-radius: 4px;
     background: var(--bg-elevated);
@@ -1410,7 +1410,7 @@
     white-space: nowrap;
   }
   .preview { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .row-meta { font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
+  .row-meta { font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
   .tags { display: flex; gap: 4px; flex-wrap: wrap; }
   .kind-badge { font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; letter-spacing: 0.04em; }
   .kind-badge.auto { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
@@ -1421,7 +1421,7 @@
   .summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; flex-shrink: 0; }
   .summary-stat { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 12px 14px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .summary-stat strong { font-size: 20px; color: var(--text-primary); line-height: 1; }
-  .summary-stat span { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .summary-stat span { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
   .summary-stat.size { flex-direction: row; align-items: center; gap: 8px; }
   .summary-stat.size strong { font-size: 15px; }
   @media (max-width: 760px) { .summary { grid-template-columns: repeat(3, 1fr); } }
@@ -1478,7 +1478,7 @@
   }
 
   .kind-tag {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1527,7 +1527,7 @@
   }
   .tag.crash-fix { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
 
-  .diff-label { color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 6px; border-radius: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
+  .diff-label { color: var(--text-muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 6px; border-radius: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
   .diff-label.added { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
   .diff-label.removed { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
   .diff-label.modified { color: #93c5fd; border-color: rgba(147, 197, 253, 0.35); }
@@ -1573,7 +1573,7 @@
   .backup-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .backup-info { display: grid; gap: 3px; flex: 1; }
   .backup-info strong { color: var(--text-primary); font-size: 13px; }
-  .backup-info span { color: var(--text-muted); font-size: 11px; }
+  .backup-info span { color: var(--text-muted); font-size: 12px; }
   .rollback { padding: 6px 10px; font-size: 12px; font-weight: 600; }
   .danger { color: var(--accent-danger); }
   .loading { color: var(--text-muted); padding: 80px; text-align: center; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }

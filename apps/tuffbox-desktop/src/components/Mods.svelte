@@ -4063,7 +4063,7 @@ import { trapFocus } from "../lib/focusTrap";
                     {#if !filterCategory}<Check size={13} />{/if}
                   </button>
                   {#each categoryGroups as group (group.header)}
-                    <div class="px-2.5 pt-2.5 pb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{group.header}</div>
+                    <div class="px-2.5 pt-2.5 pb-1 text-[12px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{group.header}</div>
                     {#each group.names as category (category)}
                       <button
                         type="button"
@@ -4234,7 +4234,7 @@ import { trapFocus } from "../lib/focusTrap";
 
           <!-- Sidebar footer: reset -->
           <div class="shrink-0 border-t border-[var(--border-color)] px-3 py-2.5 flex items-center justify-between">
-            <span class="text-[11px] text-[var(--text-muted)]">
+            <span class="text-[12px] text-[var(--text-muted)]">
               {activeFilterCount() > 0 ? `${activeFilterCount()} active filter${activeFilterCount() === 1 ? "" : "s"}` : "No extra filters"}
             </span>
             <button
@@ -5328,7 +5328,7 @@ import { trapFocus } from "../lib/focusTrap";
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -5389,7 +5389,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .stat-pill span {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -5995,8 +5995,8 @@ import { trapFocus } from "../lib/focusTrap";
     min-width: 0;
   }
   .ideas-meta strong { font-size: 13px; color: var(--text-primary); }
-  .ideas-meta code { font-size: 11px; color: var(--text-muted); }
-  .ideas-meta small { font-size: 11px; color: var(--text-muted); }
+  .ideas-meta code { font-size: 12px; color: var(--text-muted); }
+  .ideas-meta small { font-size: 12px; color: var(--text-muted); }
   .ideas-row .muted {
     margin-left: auto;
     color: var(--text-muted);
@@ -6078,7 +6078,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .tabs .tab-count {
     margin-left: 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     background: var(--bg-elevated);
     padding: 1px 6px;
@@ -6572,7 +6572,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .download-status {
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
@@ -6587,7 +6587,7 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     justify-content: space-between;
     margin-top: 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -7050,7 +7050,7 @@ import { trapFocus } from "../lib/focusTrap";
     align-items: center;
     padding: 1px 7px;
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
@@ -7653,7 +7653,7 @@ import { trapFocus } from "../lib/focusTrap";
     background: var(--bg-elevated);
     border: 1px solid var(--border-color);
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
   }
 
@@ -7714,7 +7714,7 @@ import { trapFocus } from "../lib/focusTrap";
     border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     padding: 6px; display: flex; flex-direction: column; gap: 2px;
   }
-  .save-dropdown-header { padding: 6px 10px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .save-dropdown-header { padding: 6px 10px; font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .save-dropdown-item {
     display: flex; align-items: center; gap: 8px; width: 100%;
     padding: 8px 10px; border-radius: 6px; background: transparent; border: none;
@@ -7733,7 +7733,7 @@ import { trapFocus } from "../lib/focusTrap";
     align-items: center;
     gap: 10px;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     padding-top: 4px;
     border-top: 1px solid var(--border-color);
   }
@@ -7747,7 +7747,7 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 6px;
     margin: 8px 0;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .install-preview > span {
@@ -7809,7 +7809,7 @@ import { trapFocus } from "../lib/focusTrap";
   .install-plan-panel .dep-entry.optional { border-left: 3px solid rgba(161,161,170,.4); }
   .install-plan-panel .dep-entry.already-installed { opacity: 0.72; }
   .install-plan-panel .dep-target { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
-  .install-plan-panel .dep-entry small { color: var(--text-muted); font-size: 11px; }
+  .install-plan-panel .dep-entry small { color: var(--text-muted); font-size: 12px; }
   .dep-installed-pill {
     margin-left: auto;
     font-size: 11px;
@@ -7824,7 +7824,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .dep-installed-count {
     margin-left: 6px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-muted);
     text-transform: none;
@@ -7852,7 +7852,7 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-dep-list { display: grid; gap: 4px; }
   .plan-dep-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg-secondary); }
   .plan-dep-row code { font-size: 12px; }
-  .plan-dep-row span { color: var(--text-muted); font-size: 11px; }
+  .plan-dep-row span { color: var(--text-muted); font-size: 12px; }
   .plan-dep-row.already-installed { opacity: 0.72; }
   .plan-dep-row.conflict { border-left: 3px solid rgba(239,68,68,.6); }
   .plan-no-deps { color: var(--text-muted); font-size: 12px; padding: 8px; }
@@ -7863,7 +7863,7 @@ import { trapFocus } from "../lib/focusTrap";
   .dep-review-list { max-height: 220px; overflow: auto; }
   .dep-review .plan-dep-row.selectable { cursor: pointer; align-items: center; }
   .dep-review .plan-dep-row.selectable code { margin-left: calc((var(--depth, 1) - 1) * 14px); }
-  .dep-review-hint { margin: 8px 0 0; font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+  .dep-review-hint { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); line-height: 1.4; }
   .plan-modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border-color); margin-top: 8px; }
 
   .update-confirm-modal { max-width: 600px; }
@@ -7930,7 +7930,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .recs-main { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
   .recs-main strong { color: var(--text-primary); font-size: 13px; }
-  .recs-main span { color: var(--text-muted); font-size: 11px; }
+  .recs-main span { color: var(--text-muted); font-size: 12px; }
   .recs-meta { opacity: 0.8; }
   .recs-source { font-size: 11px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
   .recs-source.unverified { background: color-mix(in srgb, var(--accent-warning) 14%, transparent); color: var(--accent-warning); }

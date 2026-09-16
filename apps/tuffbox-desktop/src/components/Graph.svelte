@@ -3608,7 +3608,7 @@
   .change-plan-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .change-plan-summary { font-size: 14px; font-weight: 700; color: var(--text-primary); }
   .change-plan-risk {
-    font-size: 11px; color: var(--text-muted);
+    font-size: 12px; color: var(--text-muted);
     padding: 2px 8px; border-radius: 999px;
     background: var(--bg-tertiary); border: 1px solid var(--border-color);
   }
@@ -3798,7 +3798,7 @@
   }
 
   .zoom-readout {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     padding: 0 6px;
     min-width: 38px;
@@ -4007,7 +4007,7 @@
   }
   .legend-block { display: flex; flex-direction: column; gap: 4px; }
   .legend-title {
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-muted);
@@ -4293,7 +4293,7 @@
 
   .list-toggle-meta {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .node-column,
@@ -4354,7 +4354,7 @@
   }
   .column-hint {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     margin: 0 0 8px;
     font-style: italic;
   }
@@ -4662,7 +4662,7 @@
   }
   .conflict-pair .vs {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
   }
@@ -4677,7 +4677,7 @@
     flex-wrap: wrap;
     gap: 10px;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
   .conflict-actions {
     display: flex;
@@ -4788,7 +4788,7 @@
   .eyebrow {
     color: var(--text-muted);
     text-transform: uppercase;
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.08em;
   }
 
@@ -4814,7 +4814,7 @@
   .kv span {
     display: block;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     margin-bottom: 6px;
   }
@@ -5003,7 +5003,7 @@
   }
 
   .dep-slug {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -5150,7 +5150,7 @@
   .dep-entry.optional { background: rgba(245,158,11,0.08); border-left-color: rgba(245,158,11,0.6); }
   .dep-entry.already-installed { opacity: 0.72; }
   .dep-target { font-weight: 600; }
-  .dep-entry small { flex-basis: 100%; display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+  .dep-entry small { flex-basis: 100%; display: block; color: var(--text-muted); font-size: 12px; margin-top: 2px; }
   .dep-installed-pill {
     display: inline-block;
     line-height: 1.4;
@@ -5171,7 +5171,7 @@
   }
   .dep-installed-count {
     margin-left: 6px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-muted);
     text-transform: none;

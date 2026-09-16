@@ -485,7 +485,7 @@
     letter-spacing: 0.02em;
   }
   .sub {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   :global(.hero-ico) {
@@ -502,7 +502,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    font-size: 12px;
     padding: 4px 8px;
     border-radius: 2px;
     border: 1px solid var(--ftbq-border, var(--ftbq-frame));
@@ -570,7 +570,7 @@
     text-transform: none;
     letter-spacing: 0;
     font-weight: 500;
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 6px;
     border-radius: 2px;
     background: rgba(61, 184, 168, 0.12);
@@ -630,7 +630,7 @@
   }
   .meta {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .row {
@@ -676,7 +676,7 @@
   .templates label {
     display: grid;
     gap: 3px;
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     color: var(--ftbq-text-muted);
   }
@@ -697,7 +697,7 @@
   }
   .hint {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     text-transform: none;
   }

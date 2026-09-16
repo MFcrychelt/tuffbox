@@ -48,7 +48,7 @@
       <div class="flex items-center gap-2"><AlertTriangle size={17} class="text-amber-300" /><h2 id="preflight-heading" class="m-0 text-sm font-semibold text-neutral-100">Pre-export checks</h2></div>
       <span class="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-200">{warnings.reduce((n, g) => n + g.count, 0)} warnings</span>
       {#if errors.length}<span class="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs text-red-200">{errors.reduce((n, g) => n + g.count, 0)} errors</span>{/if}
-      <div class="ml-auto flex gap-2 text-xs text-neutral-400"><button type="button" class="hover:text-neutral-100" onclick={onExpandAll}>Expand all</button><span>·</span><button type="button" class="hover:text-neutral-100" onclick={onCollapseAll}>Collapse all</button></div>
+      <div class="ml-auto flex gap-2 text-xs text-[var(--text-secondary)]"><button type="button" class="hover:text-neutral-100" onclick={onExpandAll}>Expand all</button><span>·</span><button type="button" class="hover:text-neutral-100" onclick={onCollapseAll}>Collapse all</button></div>
     </div>
 
     {#each errors as group (group.code)}

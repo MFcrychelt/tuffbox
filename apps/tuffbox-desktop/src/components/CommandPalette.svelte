@@ -245,7 +245,7 @@
     outline: none;
   }
   .cmd-esc {
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 6px;
     border-radius: 4px;
     border: 1px solid var(--border-color);
@@ -260,7 +260,7 @@
     margin-bottom: 8px;
   }
   .cmd-group-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -311,7 +311,7 @@
     gap: 16px;
     padding: 8px 14px;
     border-top: 1px solid var(--border-color);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .cmd-footer kbd {

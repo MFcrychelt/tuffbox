@@ -190,7 +190,7 @@
   .dx-problems-empty strong { color: var(--text-secondary); }
   .dx-sec-label {
     margin: 0 0 8px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -254,7 +254,7 @@
   .summary { margin: 6px 0 0; font-size: 13px; line-height: 1.45; color: var(--text-secondary); }
   .mods { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
   .mods code {
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 6px;
     border-radius: 6px;
     background: var(--bg-tertiary);
@@ -331,7 +331,7 @@
   .dx-card-actions button:disabled { opacity: 0.55; cursor: not-allowed; }
   .risk {
     margin: 8px 0 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .risk.destructive { color: var(--accent-danger); font-weight: 600; }

@@ -286,7 +286,7 @@
   .rail-h h3 {
     margin: 0;
     color: var(--text-muted, var(--ftbq-text-muted));
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.04em;
     font-weight: 600;
     text-shadow: none;
@@ -324,7 +324,7 @@
     border: none;
     background: transparent;
     color: var(--ftbq-text-muted);
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.04em;
     cursor: pointer;
     font-weight: 600;
@@ -334,7 +334,7 @@
   }
   .group-count {
     margin-left: auto;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     padding: 1px 6px;
     border-radius: 999px;
@@ -466,7 +466,7 @@
     font-weight: 600;
   }
   .ch-text span {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .title-edit {

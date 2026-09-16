@@ -1314,12 +1314,12 @@
           <h1 class="text-sm font-bold text-[var(--text-primary)] m-0 leading-tight">
             {editorOpen ? "Recipe & Tag Editor" : "Recipe Browser"}
           </h1>
-          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold {recipeSource === 'runtime' ? 'bg-emerald-500/10 text-[var(--accent-primary)] border border-emerald-500/20' : 'bg-[var(--bg-card)] text-[var(--text-muted)] border border-[var(--border-color)]'}">
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[12px] font-semibold {recipeSource === 'runtime' ? 'bg-emerald-500/10 text-[var(--accent-primary)] border border-emerald-500/20' : 'bg-[var(--bg-card)] text-[var(--text-muted)] border border-[var(--border-color)]'}">
             <Radio size={10} class={recipeSource === 'runtime' ? 'text-[var(--accent-primary)]' : 'text-[var(--text-muted)]'} />
             {recipeSource === "runtime" ? "Live JEI" : "Offline Files"}
           </span>
         </div>
-        <div class="text-[11px] font-medium text-[var(--text-muted)] truncate mt-0.5">
+        <div class="text-[12px] font-medium text-[var(--text-muted)] truncate mt-0.5">
           {recipes.length} recipes · {items.length} items
           {#if scanMeta?.jarCount} · {scanMeta.jarCount} JARs{/if}
           {#if scanMeta?.datapackFiles} · {scanMeta.datapackFiles} datapacks{/if}
@@ -1607,7 +1607,7 @@
                         {:else if slotId}
                           <span class="letter font-bold text-xs text-white">{slotId.startsWith("#") ? "#" : prettifyItem(slotId).slice(0, 3)}</span>
                         {:else}
-                          <span class="text-[11px] text-[var(--text-muted)] font-mono">{i + 1}</span>
+                          <span class="text-[12px] text-[var(--text-muted)] font-mono">{i + 1}</span>
                         {/if}
                       </button>
                     {/each}
@@ -1640,7 +1640,7 @@
                         <em class="absolute bottom-1 right-1.5 text-xs font-black text-[var(--accent-warning)] font-mono not-italic">{editCount}</em>
                       {/if}
                     </button>
-                    <span class="text-[11px] text-[var(--text-muted)]">Shift+Click for count</span>
+                    <span class="text-[12px] text-[var(--text-muted)]">Shift+Click for count</span>
                   </div>
                 </div>
 
@@ -1956,7 +1956,7 @@
                   </span>
                   <div class="min-w-0">
                     <strong class="text-sm font-bold text-[var(--text-primary)] truncate block">{prettifyItem(selectedItem)}</strong>
-                    <code class="text-[11px] text-[var(--text-muted)] font-mono truncate block">{selectedItem}</code>
+                    <code class="text-[12px] text-[var(--text-muted)] font-mono truncate block">{selectedItem}</code>
                   </div>
                 </div>
 
@@ -1978,7 +1978,7 @@
                   onclick={() => { focusMode = "recipes"; recipeIndex = 0; }}
                 >
                   <span>Recipes</span>
-                  <span class="text-[11px] px-1.5 py-0.2 rounded-full {focusMode === 'recipes' ? 'bg-white/20 text-white' : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'}">
+                  <span class="text-[12px] px-1.5 py-0.2 rounded-full {focusMode === 'recipes' ? 'bg-white/20 text-white' : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'}">
                     {recipesForItem(selectedItem, "recipes").length}
                   </span>
                 </button>
@@ -1989,7 +1989,7 @@
                   onclick={() => { focusMode = "uses"; recipeIndex = 0; }}
                 >
                   <span>Uses</span>
-                  <span class="text-[11px] px-1.5 py-0.2 rounded-full {focusMode === 'uses' ? 'bg-white/20 text-white' : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'}">
+                  <span class="text-[12px] px-1.5 py-0.2 rounded-full {focusMode === 'uses' ? 'bg-white/20 text-white' : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'}">
                     {recipesForItem(selectedItem, "uses").length}
                   </span>
                 </button>
@@ -2230,13 +2230,13 @@
 
                   <!-- Metadata Chips -->
                   <div class="flex items-center gap-2 flex-wrap justify-center">
-                    <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-muted)]">
+                    <span class="text-[12px] font-mono px-2 py-0.5 rounded bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-muted)]">
                       {currentRecipe.recipeType.replace(/^minecraft:/, '')}
                     </span>
                     <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 truncate max-w-xs" title={currentRecipe.sourceFile}>
                       {currentRecipe.modSource}
                     </span>
-                    <code class="text-[11px] font-mono text-[var(--text-muted)]">{currentRecipe.id}</code>
+                    <code class="text-[12px] font-mono text-[var(--text-muted)]">{currentRecipe.id}</code>
                   </div>
 
                   <!-- Recipe Action Buttons -->
@@ -2343,7 +2343,7 @@
             </div>
           {:else}
             <span class="text-xs font-bold text-[var(--text-primary)]">Item Catalog</span>
-            <span class="text-[11px] font-mono text-[var(--text-muted)]">{filteredItems.length} items</span>
+            <span class="text-[12px] font-mono text-[var(--text-muted)]">{filteredItems.length} items</span>
           {/if}
 
           <!-- Page Navigation -->
@@ -2356,7 +2356,7 @@
             >
               <ChevronLeft size={13} />
             </button>
-            <span class="text-[11px] font-mono font-semibold text-[var(--text-muted)]">
+            <span class="text-[12px] font-mono font-semibold text-[var(--text-muted)]">
               {itemPage + 1} / {overlayPageCount}
             </span>
             <button
@@ -2436,7 +2436,7 @@
         <!-- Recent History Footer Strip -->
         {#if historyStack.length > 0}
           <div class="px-3 py-2 border-t border-[var(--border-color)] bg-[var(--bg-secondary)] flex flex-col gap-1 flex-shrink-0">
-            <span class="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
+            <span class="text-[12px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
               <History size={10} /> Recently Viewed
             </span>
             <div class="grid grid-cols-8 gap-1">

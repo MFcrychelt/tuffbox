@@ -61,9 +61,9 @@
       </div>
       <div class="mt-3 flex items-baseline gap-2">
         <strong class="truncate text-sm text-neutral-100">{format.title}</strong>
-        <span class="shrink-0 font-mono text-xs text-neutral-400">{format.badge}</span>
+        <span class="shrink-0 font-mono text-xs text-[var(--text-secondary)]">{format.badge}</span>
       </div>
-      <p class="mt-1 truncate text-xs text-neutral-400">{format.blurb}</p>
+      <p class="mt-1 truncate text-xs text-[var(--text-secondary)]">{format.blurb}</p>
     </button>
   {/each}
 </div>

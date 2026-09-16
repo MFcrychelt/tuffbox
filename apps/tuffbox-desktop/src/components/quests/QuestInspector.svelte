@@ -859,7 +859,7 @@
   }
   .field-label {
     display: block;
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
     margin-bottom: 4px;
@@ -868,7 +868,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    font-size: 12px;
     font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--text-muted);
     padding: 2px 6px;

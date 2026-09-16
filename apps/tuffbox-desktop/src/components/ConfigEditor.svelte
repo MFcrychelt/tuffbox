@@ -948,7 +948,7 @@
   .chip {
     line-height: 1.4;
     white-space: nowrap;
-    font-size: 11px; font-weight: 700; text-transform: lowercase; letter-spacing: .02em;
+    font-size: 12px; font-weight: 700; text-transform: lowercase; letter-spacing: .02em;
     padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-muted); cursor: pointer;
   }
@@ -1053,8 +1053,8 @@
   .search-hit { width: 100%; display: grid; gap: 2px; text-align: left; padding: 5px 6px; margin-bottom: 2px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); transform: none; }
   .search-hit:hover { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .hit-path { font-size: 11px; color: var(--accent-primary); font-family: var(--font-mono, ui-monospace, monospace); }
-  .hit-text { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .search-truncated { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
+  .hit-text { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .search-truncated { font-size: 12px; color: var(--text-muted); padding: 6px 8px; }
 
   .tree {
     flex: 1;
@@ -1078,7 +1078,7 @@
   .tree-dir :global(.folder-icon) { color: var(--accent-primary); opacity: 0.7; }
   .tree-dir-name, .tree-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tree-file-name { font-weight: 500; }
-  .tree-file-meta { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+  .tree-file-meta { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 
   .muted { padding: 16px 8px; line-height: 1.5; color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
 
@@ -1158,7 +1158,7 @@
   .lint-item.warning .lint-sev { background: color-mix(in srgb, var(--accent-warning) 20%, transparent); }
   .lint-item code { font-size: 11px; color: var(--accent-primary); }
   .lint-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lint-item small { color: var(--text-muted); font-size: 11px; }
+  .lint-item small { color: var(--text-muted); font-size: 12px; }
   @media (max-width: 1050px) {
     .layout { grid-template-columns: 1fr; }
     .layout.with-ai { grid-template-columns: 1fr; }

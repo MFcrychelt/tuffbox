@@ -2933,7 +2933,7 @@
   }
   .height-range .hr-label {
     font-weight: 700;
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.06em;
     color: var(--text-muted);
   }
@@ -3000,7 +3000,7 @@
   }
   .region-rail-title {
     padding: 9px 10px 8px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -3037,7 +3037,7 @@
   }
   .region-empty {
     padding: 12px 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     text-align: center;
   }
@@ -3128,7 +3128,7 @@
   }
   .tools-tab-body .hint {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     line-height: 1.4;
   }
@@ -3185,7 +3185,7 @@
     padding: 5px 10px;
     background: color-mix(in srgb, var(--bg-secondary) 80%, #000 20%);
     border-top: 1px solid var(--border-color);
-    font-size: 11px;
+    font-size: 12px;
     font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--text-muted);
     flex-shrink: 0;
@@ -3203,7 +3203,7 @@
   }
   .mca-status .st-k {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     text-transform: lowercase;
     opacity: 0.85;
   }
@@ -3275,7 +3275,7 @@
   .clip-banner-offsets {
     display: flex;
     gap: 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .clip-banner-offsets label {
@@ -3399,7 +3399,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .goto-fields input {
@@ -3456,7 +3456,7 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
   }
@@ -3505,7 +3505,7 @@
   }
   .fw-step p {
     margin: 2px 0 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     line-height: 1.35;
   }
@@ -3551,7 +3551,7 @@
     color: var(--text-primary);
   }
   .fw-card span {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     line-height: 1.35;
   }
@@ -3672,7 +3672,7 @@
     gap: 0;
   }
 
-  .stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+  .stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
   .stats .sel { color: #ff7a7e; }
   .stats .clip { color: #8fd3ff; }
   .stats .ok { color: var(--accent-primary); }
@@ -3752,7 +3752,7 @@
   }
   .hover-tip { position: fixed; pointer-events: none; z-index: 30; background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 8px; font-size: 11px; color: var(--text-secondary); box-shadow: 0 4px 16px rgba(0,0,0,.4); }
   .hover-tip code { color: var(--accent-primary); }
-  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); align-items: center; flex-shrink: 0; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); align-items: center; flex-shrink: 0; }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
   .legend i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; border: 1px solid rgba(255,255,255,.1); }
   .legend .hint { opacity: 0.7; margin-left: auto; }

@@ -27,7 +27,7 @@
   .diagnose-performance {
     margin-top: 4px;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
   summary { cursor: pointer; user-select: none; }
   .timing-grid { display: grid; gap: 4px; margin-top: 8px; }

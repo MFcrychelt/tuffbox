@@ -410,7 +410,7 @@
     gap: 6px;
     padding: 8px 10px;
     font-weight: 700;
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-muted);
@@ -485,7 +485,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .world-meta { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .world-meta { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
   .worlds-main {
     flex: 1;
@@ -551,7 +551,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .compact-right {

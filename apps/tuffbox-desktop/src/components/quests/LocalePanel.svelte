@@ -231,7 +231,7 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .field input,
@@ -265,7 +265,7 @@
   }
   .hint {
     margin: 6px 0 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .err {
@@ -275,7 +275,7 @@
   }
   .gap-count {
     margin: 8px 0 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .gap-list {
@@ -327,7 +327,7 @@
     white-space: nowrap;
   }
   .prev {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;

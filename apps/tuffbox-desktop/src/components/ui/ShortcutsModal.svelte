@@ -187,7 +187,7 @@
     text-align: center;
   }
   .plus {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted, #9a9aa0);
   }
   .action {

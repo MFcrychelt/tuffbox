@@ -655,7 +655,7 @@
       <Sparkles size={16} class="text-[var(--accent-primary)]" />
       <strong class="text-xs font-bold text-[var(--text-primary)]">Quest AI</strong>
       {#if sessionUsageLabel}
-        <span class="usage-pill text-[11px] text-[var(--text-muted)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded border border-[var(--border-color)]" title="Session token usage">
+        <span class="usage-pill text-[12px] text-[var(--text-muted)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded border border-[var(--border-color)]" title="Session token usage">
           {sessionUsageLabel}
         </span>
       {/if}
@@ -672,7 +672,7 @@
         <span class="text-[11px] uppercase font-semibold text-[var(--accent-primary)] block">Branch root</span>
         <span class="font-bold truncate block text-[var(--text-primary)]">{anchorQuest.title || "Untitled quest"}</span>
       </div>
-      <code class="text-[11px] font-mono bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-[var(--text-muted)] border border-[var(--border-color)]">
+      <code class="text-[12px] font-mono bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-[var(--text-muted)] border border-[var(--border-color)]">
         {anchorQuest.id.slice(0, 8)}
       </code>
     </div>
@@ -681,7 +681,7 @@
   <!-- Sessions List -->
   <div class="sessions px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] flex-shrink-0">
     <div class="flex items-center justify-between mb-1.5">
-      <span class="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Sessions</span>
+      <span class="text-[12px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Sessions</span>
       <button type="button" class="text-xs font-semibold text-[var(--accent-primary)] hover:brightness-110 flex items-center gap-1" onclick={newSession} disabled={!$projectPath}>
         <Plus size={13} /> New
       </button>
@@ -737,7 +737,7 @@
           </strong>
           <p class="whitespace-pre-wrap">{m.content}</p>
           {#if m.progressLog?.length}
-            <details class="prog mt-2 text-[11px] text-[var(--text-muted)] border-t border-[var(--border-color)] pt-1.5">
+            <details class="prog mt-2 text-[12px] text-[var(--text-muted)] border-t border-[var(--border-color)] pt-1.5">
               <summary class="cursor-pointer font-medium">{m.progressLog.length} generation log entries</summary>
               <ul class="list-disc pl-4 mt-1 space-y-0.5">
                 {#each m.progressLog as p, pi (`p-${pi}`)}
@@ -747,7 +747,7 @@
             </details>
           {/if}
           {#if formatUsage(m.usage)}
-            <div class="text-[11px] text-[var(--text-muted)] mt-1.5 text-right font-mono">{formatUsage(m.usage)}</div>
+            <div class="text-[12px] text-[var(--text-muted)] mt-1.5 text-right font-mono">{formatUsage(m.usage)}</div>
           {/if}
         </div>
       {/each}
@@ -762,7 +762,7 @@
     </div>
     {#if streamDraft}
       <details class="stream-wrap px-3 py-1 bg-[var(--bg-secondary)] border-t border-[var(--border-color)]" open={busy && !merge}>
-        <summary class="text-[11px] text-[var(--text-muted)] cursor-pointer font-medium">Live draft ({streamDraft.length} chars)</summary>
+        <summary class="text-[12px] text-[var(--text-muted)] cursor-pointer font-medium">Live draft ({streamDraft.length} chars)</summary>
         <pre class="text-[11px] max-h-24 overflow-y-auto bg-[var(--bg-primary)] p-2 rounded mt-1 font-mono text-[var(--text-secondary)] whitespace-pre-wrap border border-[var(--border-color)]">{streamDraft}</pre>
       </details>
     {/if}
@@ -919,14 +919,14 @@
       <div class="flex min-w-0 items-center gap-2">
         <button
           type="button"
-          class="text-[11px] font-semibold text-[var(--text-muted)] hover:text-[var(--text-primary)] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+          class="text-[12px] font-semibold text-[var(--text-muted)] hover:text-[var(--text-primary)] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
           onclick={() => (showJson = !showJson)}
           disabled={busy}
         >
           <Code size={12} />
           {showJson ? "Switch to Text" : "Paste JSON"}
         </button>
-        <span class="text-[11px] text-[var(--text-muted)] whitespace-nowrap">Ctrl+Enter to send</span>
+        <span class="text-[12px] text-[var(--text-muted)] whitespace-nowrap">Ctrl+Enter to send</span>
       </div>
 
       <div class="ml-auto flex items-center gap-1.5 flex-shrink-0">
@@ -952,7 +952,7 @@
       </div>
     </div>
 
-    <details class="text-[11px] text-[var(--text-muted)] pt-0.5">
+    <details class="text-[12px] text-[var(--text-muted)] pt-0.5">
       <summary class="cursor-pointer font-medium hover:text-[var(--text-primary)]">Advanced settings</summary>
       <label class="flex items-center gap-2 mt-1.5 cursor-pointer">
         <input type="checkbox" bind:checked={forceAi} />

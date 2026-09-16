@@ -696,7 +696,7 @@
   }
 
   .mr-stat {
-    font-size: 11px;
+    font-size: 12px;
     color: #94a3b8;
     text-align: center;
   }

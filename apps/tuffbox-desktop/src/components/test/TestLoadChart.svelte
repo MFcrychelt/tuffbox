@@ -186,7 +186,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px 14px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     min-width: 0;
   }

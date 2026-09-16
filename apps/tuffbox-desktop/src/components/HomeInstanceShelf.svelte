@@ -172,7 +172,7 @@
     min-width: 1.4em;
     padding: 1px 7px;
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--text-muted);
     background: color-mix(in srgb, var(--bg-hover) 80%, transparent);

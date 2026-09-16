@@ -721,7 +721,7 @@
   }
 
   .qw-now-pos {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -901,7 +901,7 @@
   }
 
   .qw-field-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1016,7 +1016,7 @@
   }
 
   .qw-res-channel {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
@@ -1033,7 +1033,7 @@
   .qw-note {
     margin: 0;
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.45;
     color: var(--text-muted);
     opacity: 0.85;

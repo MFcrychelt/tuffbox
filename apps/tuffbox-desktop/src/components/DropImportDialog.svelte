@@ -199,7 +199,7 @@
     color: var(--text-primary);
   }
   .drop-counts span {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .drop-note,

@@ -660,7 +660,7 @@
     align-items: center;
     gap: 7px;
     margin: 0 0 10px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -719,12 +719,12 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     color: var(--text-muted);
   }
   .creators .name { color: var(--text-primary); font-weight: 650; }
-  .creators .role { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+  .creators .role { margin-left: auto; font-size: 12px; color: var(--text-muted); }
   .snippet {
     display: flex;
     align-items: center;
@@ -846,7 +846,7 @@
     margin-bottom: 6px;
   }
   .changelog strong { color: var(--text-primary); font-size: 13px; }
-  .changelog small { color: var(--text-muted); font-size: 11px; }
+  .changelog small { color: var(--text-muted); font-size: 12px; }
 
   .versions-toolbar {
     display: flex;
@@ -868,7 +868,7 @@
   }
   .versions li.incompat { opacity: 0.55; }
   .versions strong { display: block; color: var(--text-primary); font-size: 13px; }
-  .versions small { color: var(--text-muted); font-size: 11px; }
+  .versions small { color: var(--text-muted); font-size: 12px; }
   .badge {
     align-self: center;
     font-size: 11px;

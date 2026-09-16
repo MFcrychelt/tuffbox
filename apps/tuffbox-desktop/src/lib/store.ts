@@ -892,36 +892,9 @@ export function pushIdeRecent(id: string, label: string) {
   });
 }
 
-/** Deterministic Next Action for IdeNextBar / Open IDE. */
-export function computeIdeNextAction(opts: {
-  issueCount: number;
-  needsHealth: boolean;
-  briefDirty: boolean;
-  tuneDirty: boolean;
-  questDirty: boolean;
-}): { label: string; stage: string | null; kind: "stage" | "none"; detail?: string } {
-  if (opts.issueCount > 0) {
-    return {
-      label: "Fix pack graph",
-      stage: "resolve",
-      kind: "stage",
-      detail: `${opts.issueCount} issue${opts.issueCount === 1 ? "" : "s"}`,
-    };
-  }
-  if (opts.needsHealth) {
-    return { label: "Open Health", stage: "diagnose", kind: "stage", detail: "Crash needs a look" };
-  }
-  if (opts.briefDirty) {
-    return { label: "Finish Brief", stage: "brief", kind: "stage", detail: "Unsaved listing" };
-  }
-  if (opts.tuneDirty) {
-    return { label: "Save Tune", stage: "configs", kind: "stage", detail: "Unsaved configs" };
-  }
-  if (opts.questDirty) {
-    return { label: "Save Quests", stage: "quests", kind: "stage", detail: "Unsaved quests" };
-  }
-  return { label: "Open Launch", stage: "test", kind: "stage", detail: "Verify the pack in Test" };
-}
+// Next-action guidance copy lives in its own pure module (unit-tested
+// there): plain language for first-time users, no launcher jargon.
+export { computeIdeNextAction, packStatusLabel } from "./ideNextAction";
 
 /** One-shot: open Quests AI sidebar on this quest chat session id. Cleared by QuestAiSidebar. */
 export const questChatFocusId = writable<string | null>(null);

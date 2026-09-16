@@ -193,7 +193,7 @@
       />
     </div>
     {#if logTruncated}
-      <span class="text-[11px] text-[color:var(--text-muted)] whitespace-nowrap">
+      <span class="text-[12px] text-[color:var(--text-muted)] whitespace-nowrap">
         tail {LOG_TAIL_LINES}/{logLineCount}
       </span>
     {/if}

@@ -330,7 +330,7 @@
     color: var(--text-primary, var(--ftbq-text));
   }
   .cm-count {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     padding: 2px 6px;
     border: 1px solid var(--ftbq-frame);
@@ -369,7 +369,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     cursor: pointer;
   }
@@ -487,7 +487,7 @@
     color: var(--text-primary, var(--ftbq-text));
   }
   .hit-field {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     font-family: var(--font-mono, ui-monospace, monospace);
   }
@@ -507,7 +507,7 @@
     flex-shrink: 0;
   }
   .hit-segment {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     overflow: hidden;
     text-overflow: ellipsis;

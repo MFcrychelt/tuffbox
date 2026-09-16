@@ -307,7 +307,7 @@
   .type { color: var(--accent-secondary); min-width: 72px; }
   .name { color: var(--text-primary); font-weight: 600; }
   .val { color: var(--accent-primary); margin-left: 6px; word-break: break-all; }
-  .muted { color: var(--text-muted); font-size: 11px; }
+  .muted { color: var(--text-muted); font-size: 12px; }
   .err { color: var(--accent-danger); padding: 8px 14px; font-size: 12px; }
   .pad { width: 12px; display: inline-block; }
   .edit {
@@ -315,6 +315,6 @@
     background: var(--bg-secondary); color: var(--text-primary);
     border: 1px solid rgba(120,200,255,.5); border-radius: 4px; padding: 2px 6px; font-size: 12px;
   }
-  .hint { padding: 8px 14px; font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border-color); }
+  .hint { padding: 8px 14px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border-color); }
   .ghost { display: inline-flex; align-items: center; gap: 5px; }
 </style>

@@ -157,7 +157,7 @@
     white-space: nowrap;
   }
   .raw-note {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     line-height: 1.35;
   }
@@ -193,7 +193,7 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .find-count {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     min-width: 2.5em;
     text-align: right;

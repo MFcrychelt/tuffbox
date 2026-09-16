@@ -60,7 +60,7 @@
     </div>
     <div class="min-w-0">
       <div class="truncate text-sm font-semibold text-[var(--text-primary)]">{title}</div>
-      <div class="text-[11px] font-medium text-[var(--text-muted)]">{chapterCount} chapters · {questCount} quests</div>
+      <div class="text-[12px] font-medium text-[var(--text-muted)]">{chapterCount} chapters · {questCount} quests</div>
     </div>
   </div>
 

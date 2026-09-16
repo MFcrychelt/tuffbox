@@ -915,7 +915,7 @@
   }
 
   .cape-tile-src {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.4px;
@@ -1110,7 +1110,7 @@
   }
 
   .account-text .meta {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -1201,7 +1201,7 @@
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     user-select: none;

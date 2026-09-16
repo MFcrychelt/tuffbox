@@ -755,7 +755,7 @@
     border: 0;
     background: none;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     cursor: pointer;
     text-decoration: underline;
   }
@@ -845,7 +845,7 @@
   .mem-scale {
     display: flex;
     justify-content: space-between;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -860,7 +860,7 @@
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent); color: var(--accent-primary);
   }
   .muted { color: var(--text-muted); font-size: 13px; }
-  .path-hint { font-size: 11px; color: var(--text-muted); }
+  .path-hint { font-size: 12px; color: var(--text-muted); }
   .opt-check {
     display: flex; align-items: center; gap: 8px;
     font-size: 13px; color: var(--text-secondary); font-weight: 600;

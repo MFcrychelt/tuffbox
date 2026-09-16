@@ -1217,7 +1217,7 @@
   }
   .attr {
     margin: 10px 0 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .attr a {
@@ -1322,7 +1322,7 @@
     align-items: center;
     gap: 4px;
     margin-top: 2px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .hit-card :global(svg:last-child) {

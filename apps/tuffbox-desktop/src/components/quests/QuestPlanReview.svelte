@@ -343,7 +343,7 @@
     margin-left: auto;
   }
   .sel-btn {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     padding: 2px 8px;
     color: var(--ftbq-text-muted);

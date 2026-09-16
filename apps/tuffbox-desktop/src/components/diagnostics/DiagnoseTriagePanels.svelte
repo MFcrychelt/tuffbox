@@ -334,7 +334,7 @@
   }
   .sig-group small {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
   .sig-group ul {
     margin: 0;
@@ -371,7 +371,7 @@
   }
   .sec-card pre {
     margin: 6px 0 0;
-    font-size: 11px;
+    font-size: 12px;
     white-space: pre-wrap;
     color: var(--text-muted);
     max-height: 72px;
@@ -429,7 +429,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     cursor: pointer;
   }
@@ -441,7 +441,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 11px;
+    font-size: 12px;
     padding: 1px 6px;
     border-radius: 999px;
     background: var(--bg-elevated, rgba(255, 255, 255, 0.06));

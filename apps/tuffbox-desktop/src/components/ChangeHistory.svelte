@@ -1304,7 +1304,7 @@
   .change-tree, .change-preview, .summary-card, .diff-card { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .change-tree { position: relative; padding: 14px 14px 14px 28px; overflow: auto; background: transparent; border-color: transparent; }
   .timeline-line { position: absolute; left: 18px; top: 20px; bottom: 20px; width: 2px; background: linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 70%, transparent), color-mix(in srgb, var(--accent-secondary) 25%, transparent)); border-radius: 999px; }
-  h3 { margin: 16px 6px 8px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+  h3 { margin: 16px 6px 8px; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
   .timeline-item { position: relative; margin-bottom: 10px; }
   .timeline-item::before { content: ""; position: absolute; left: -15px; top: 23px; width: 15px; height: 2px; background: color-mix(in srgb, var(--accent-primary) 50%, transparent); }
   .timeline-item::after { content: ""; position: absolute; left: -19px; top: 18px; width: 10px; height: 10px; border-radius: 50%; background: var(--bg-secondary); border: 2px solid var(--accent-primary); }
@@ -1397,7 +1397,7 @@
   .nested-action.manifest:hover { opacity: 1; }
   .nested-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .nested-head strong { color: var(--text-primary); font-size: 13px; }
-  .nested-head small { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .nested-head small { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
   .empty-actions { color: var(--text-muted); font-size: 13px; padding: 12px; }
   pre { overflow: auto; white-space: pre-wrap; margin: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.55; color: var(--text-secondary); }
   .diff-card pre { max-height: 58vh; background: var(--bg-elevated); border-radius: var(--border-radius-md); padding: 12px; }
