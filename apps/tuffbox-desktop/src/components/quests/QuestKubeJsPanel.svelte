@@ -2,7 +2,8 @@
   import { X, RefreshCw, Copy, Code2, Link2, Unlink, Plus, Save } from "@lucide/svelte";
   import CodeMirror from "svelte-codemirror-editor";
   import { javascript } from "@codemirror/lang-javascript";
-  import { oneDark } from "@codemirror/theme-one-dark";
+  import { editorThemeFor } from "../../lib/editorTheme";
+  import { completionsForExtension } from "../../lib/editorAutocomplete";
   import { EditorView } from "@codemirror/view";
   import {
     api,
@@ -12,7 +13,7 @@
     type QuestKubeJsBinding,
     type QuestKubeJsTemplateParams,
   } from "../../lib/api";
-  import { projectPath } from "../../lib/store";
+  import { projectPath, theme } from "../../lib/store";
   import { onMount } from "svelte";
 
   let {
@@ -436,7 +437,8 @@
         <CodeMirror
           bind:value={content}
           lang={javascript()}
-          theme={oneDark}
+          theme={editorThemeFor($theme)}
+          extensions={completionsForExtension("kubejs")}
           styles={{ ".cm-editor": { height: "100%", "font-size": "12px" } }}
           on:ready={(e) => onCmReady(e.detail)}
         />

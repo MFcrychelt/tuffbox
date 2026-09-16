@@ -17,7 +17,9 @@
   import { StreamLanguage, LanguageSupport } from "@codemirror/language";
   import { toml } from "@codemirror/legacy-modes/mode/toml";
   import { properties as propertiesMode } from "@codemirror/legacy-modes/mode/properties";
-  import { oneDark } from "@codemirror/theme-one-dark";
+  import { editorThemeFor } from "../lib/editorTheme";
+  import { completionsForExtension, type CompletionKind } from "../lib/editorAutocomplete";
+  import { theme } from "../lib/store";
 
   /** CM6 doesn't map legacy token "quote" → string; remap so key=value actually colors. */
   const mcProperties = {
@@ -349,6 +351,20 @@
   }
 
   const currentLang = $derived(langForFile(selected) ?? (looksLikeProps(content) ? propsLang() : undefined));
+
+  /** Autocomplete source kind for the open file (Tune built-in editor). */
+  const completionKind = $derived.by(() => {
+    const ext = selected?.extension?.toLowerCase() ?? "";
+    if (ext === "json" || ext === "json5") return "json" as CompletionKind;
+    if (ext === "js" || ext === "zs") return "kubejs" as CompletionKind;
+    if (["toml", "txt", "properties", "cfg", "conf", "ini"].includes(ext)) return "flat" as CompletionKind;
+    if (looksLikeProps(content)) return "flat" as CompletionKind;
+    return null;
+  });
+
+  /** Editor follows the app theme (all 18) instead of hard-coded one-dark. */
+  const editorTheme = $derived(editorThemeFor($theme));
+  const editorExts = $derived(completionsForExtension(completionKind));
   const dirty = $derived(content !== originalContent);
   $effect(() => {
     tuneDirty.set(dirty);
@@ -832,7 +848,8 @@
               <CodeMirror
                 value={content}
                 lang={currentLang}
-                theme={oneDark}
+                theme={editorTheme}
+                extensions={editorExts}
                 on:change={(e) => handleCmChange(e.detail)}
                 on:ready={(e) => onCmReady(e.detail)}
               />
