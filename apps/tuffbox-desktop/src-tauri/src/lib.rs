@@ -11163,6 +11163,7 @@ async fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String
                     "path": result.path.to_string_lossy(),
                     "files": result.file_count,
                     "overrideCount": result.override_count,
+                    "warnings": result.warnings,
                     "status": "ok",
                 }));
             }
@@ -11181,6 +11182,7 @@ async fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String
                 path: result.path.clone(),
                 file_count: result.file_count,
                 override_count: result.override_count,
+                warnings: result.warnings.clone(),
             };
             let _ = append_release_artifact(&path, "packwiz", &mapped);
             results.push(serde_json::json!({
@@ -14177,7 +14179,15 @@ fn get_snapshot_file_diff(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn validate_modrinth_export(path: String) -> Result<Vec<tuffbox_core::ExportIssue>, String> {
+async fn validate_modrinth_export(path: String) -> Result<Vec<tuffbox_core::ExportIssue>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || validate_modrinth_export_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn validate_modrinth_export_impl(path: String) -> Result<Vec<tuffbox_core::ExportIssue>, String> {
     let manifest_path = resolve_manifest_path(&path)?;
     let manifest =
         ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
@@ -14314,7 +14324,18 @@ fn resolve_export_output(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_modrinth_pack(
+async fn export_modrinth_pack(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || export_modrinth_pack_impl(path, target_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_modrinth_pack_impl(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
@@ -14347,7 +14368,15 @@ fn export_modrinth_pack(
 /// Reuses the same manifest walk as the real exporter so counts match what a
 /// subsequent export produces.
 #[tauri::command(rename_all = "camelCase")]
-fn export_preview(path: String, kind: String) -> Result<serde_json::Value, String> {
+async fn export_preview(path: String, kind: String) -> Result<serde_json::Value, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || export_preview_impl(path, kind))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_preview_impl(path: String, kind: String) -> Result<serde_json::Value, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let manifest_dir = PathBuf::from(&path);
     let project_dir = manifest_dir
@@ -14398,7 +14427,18 @@ fn export_preview(path: String, kind: String) -> Result<serde_json::Value, Strin
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_server_pack(
+async fn export_server_pack(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || export_server_pack_impl(path, target_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_server_pack_impl(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
@@ -14416,7 +14456,18 @@ fn export_server_pack(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_prism_instance(
+async fn export_prism_instance(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || export_prism_instance_impl(path, target_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_prism_instance_impl(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
@@ -14434,7 +14485,18 @@ fn export_prism_instance(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_curseforge_pack(
+async fn export_curseforge_pack(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || export_curseforge_pack_impl(path, target_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_curseforge_pack_impl(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
@@ -14507,6 +14569,7 @@ fn export_packwiz_pack(
         path: result.path,
         file_count: result.file_count,
         override_count: result.override_count,
+        warnings: Vec::new(),
     };
     append_release_artifact(&path, "packwiz", &mapped).map_err(|e| e.to_string())?;
     swarm_api::spawn_pack_cooccurrence(path, "pack_export");

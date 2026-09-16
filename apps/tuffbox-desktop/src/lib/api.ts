@@ -985,6 +985,8 @@ export interface ExportResult {
   path: string;
   fileCount: number;
   overrideCount: number;
+  /** Non-fatal problems: files skipped because they were unreadable. */
+  warnings?: string[] | null;
 }
 
 export interface ExportIssue {
