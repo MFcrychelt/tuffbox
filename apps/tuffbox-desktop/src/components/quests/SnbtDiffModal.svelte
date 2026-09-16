@@ -244,7 +244,7 @@
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
     border: 1px solid var(--border-color, var(--ftbq-border));
-    font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 11px;
     line-height: 1.45;
     white-space: pre;

@@ -270,3 +270,145 @@ Hardening store (после аудита):
   ретрай с задержкой, затем fallback copy.
 - нелинковать ничего в `saves/`, `config/`, `screenshots/` — соблюдаются
   и в retro_candidates, и в M2-путях.
+
+---
+
+## Часть 4. Аудит безопасности + per-pack opt-out (2026-09-16)
+
+> **СТАТУС: РЕАЛИЗОВАНО.** Полный аудит механизма + исправления найденных
+> уязвимостей + выключение дедупликации для отдельного модпака.
+
+### 4.1 Аудит «теряются ли файлы пользователя»
+
+Классическая семантика hard links: удаление одного имени не трогает данные,
+пока жив другой. Проверенные пути:
+
+| Операция | Вердикт |
+|---|---|
+| Удаление инстанса/мода | safe: снимается одна ссылка, объект store жив |
+| Экспорт (.mrpack/server) | safe: только чтение (read_export_file, ретраи) |
+| Замена мода при обновлении | safe: `.part` + rename — атомарная замена записи каталога |
+| Включение/выключение мода (.disabled) | safe: rename, тот же inode |
+| Запуск/верификация | safe: только чтение/хеширование |
+| GC store | safe по nlink/identity + grace 24h (см. 4.3) |
+
+Найденные и исправленные уязвимости (все — вариант «запись поверх
+существующего файла», мутирующая общий inode):
+
+1. **snapshot restore** (`snapshot.rs::copy_file`) и восстановление файла
+   снапшота (`lib.rs`) писали `fs::copy` «в место» — при восстановлении
+   поверх hardlink'а в mods/ байты улетали бы в общий объект store
+   (порча всех сборок сразу). → `fs_util::copy_replacing`
+   (tmp + атомарный rename, старый inode только отвязывается).
+2. **`helpers::copy_dir_recursive`** и **github- pack `copy_tree`** — тот же
+   in-place `fs::copy` при переустановке поверх существующего пака.
+   → переведены на `copy_replacing`.
+3. **`fs_util::restore_from_backup`** — тот же паттерн для конфигов
+   (не линкуются, но защита «на будущее»). → `copy_replacing`.
+4. **`mc_install::download_with_sha1`** — удаление несовпадающего файла
+   перед перекачкой падало бы на read-only линке (Windows). →
+   `fs_util::clear_readonly` перед remove.
+5. **`relink_to_store`** имел окно remove→link (краш = потерянный файл). →
+   линк создаётся под уникальным tmp-именем и атомарно переименовывается;
+   при любой ошибке исходный файл остаётся на месте (не нужен copy-restore).
+
+Регресс-тесты: `restore_replaces_hardlinks_without_corrupting_siblings`,
+`copy_replacing_never_mutates_a_hardlinked_destination`,
+`restore_from_backup_keeps_hardlinked_siblings_intact` — все падают на
+старом in-place коде и проходят на новом.
+
+### 4.2 Per-pack opt-out (запрос пользователя)
+
+Маркер `.tuffbox-no-dedup` в корне проекта:
+
+- **materialize_mod_file** (установка/синк модов): при маркере store не
+  консультируется и не пополняется — пак получает независимые копии.
+- **retro_dedup**: корень с маркером пропускается целиком
+  (`RetroReport.disabled_roots`).
+- **UI**: Project Settings → «File deduplication» — статус-бейдж
+  (Shared store / Independent files), переключение в любой момент:
+  - off → маркер + `materialize_project`: каждый jar/zip, являющийся
+    ссылкой в store, заменяется независимой копией тех же байтов
+    (tmp + атомарный rename; краш в худшем случае оставляет файл
+    линком, потеря данных невозможна). Store и другие паки не затронуты.
+  - on → маркер снимается + одиночный retro-dedup этого корня.
+- Команды: `dedup_project_status`, `dedup_project_set_enabled`
+  (spawn_blocking — хеширование уходит с главного потока).
+- Тесты: `retro_dedup_skips_packs_that_opted_out`,
+  `materialize_project_restores_independence`,
+  `materialize_mod_file_respects_per_pack_opt_out`.
+
+### 4.3 GC: единая grace-политика
+
+Unix удалял свежезаписанные объекты (nlink==1) немедленно — кэш store
+стирался сразу после первой установки, до того как второй инстанс успеет
+линкнуть. Теперь 24-часовой grace применяется на всех ОС (документированная
+политика). Тест: `fresh_unlinked_object_survives_gc`.
+
+### 4.4 Импорт сборок (Prism и др.) + вопрос о дедупе (2026-09-16, доп.)
+
+Ответ на вопрос «импортирую 2 сборки Prism — они дедуплицируются?»:
+- **zip-импорт** (Prism zip / .mrpack / CF): моды качаются через
+  `materialize_mod_file` → store используется автоматически ✓.
+- **folder-импорт** (папка Prism): контент копируется как есть → до сих
+  пор НЕ дедуплицировался между сборками.
+
+Теперь **при каждом импорте спрашивается решение** (docs/17 §4):
+- AddInstanceModal (страница Import): чипы «Share identical files
+  (recommended) / Keep independent files», по умолчанию share.
+- Library / LibraryInstancesPane (файл, папка инстанса, drop-импорт):
+  диалог `DedupAskDialog` ДО запуска импорта (GitHub-импорт не спрашивает
+  — там свой флоу). Закрытие диалога = отмена импорта.
+- `install_modpack` принимает `dedup: Option<bool>`:
+  - `Some(true)`  → после установки `retro_dedup` одного корня: второй
+    Prism-пак сразу линкуется к байтам первого (в ответе `dedup.linked` /
+    `bytesReclaimed`, UI показывает тост «N file(s) shared, ~X MB saved»);
+  - `Some(false)` → маркер `.tuffbox-no-dedup`;
+  - `None`        → прежнее поведение (совместимость, CreationTrends).
+
+### 4.4a Аудит всех pack-импортов (2026-09-16, доп. 2)
+
+Проверены ВСЕ пути, создающие новый пак (не только Prism):
+
+| Путь | Вопрос о дедупе |
+|---|---|
+| AddInstanceModal (файл .mrpack/zip) | чипы на странице импорта ✓ |
+| Library / LibraryInstancesPane: файл, папка, drop | DedupAskDialog ✓ |
+| Library → Discover «Add to library» (api.modpacks.install) | DedupAskDialog ✓ (добавлено) |
+| CreationTrends (уставка модпака из трендов) | DedupAskDialog ✓ (добавлено) |
+| GitHub-пак (вкл. deep links tuffbox://install) | DedupAskDialog ✓ (добавлено; раньше делегировал в github_pack_install мимо dedup — теперь `dedup` пробрасывается и применяется к `final_instance_dir`) |
+| Шаблоны (save_as_template) | не нужен — только метаданные |
+| Optimize-паки / пресеты / одиночные моды | не нужен — ставятся в существующий пак, подчиняются его маркеру |
+| `import_project` / `import_curseforge_project` (legacy-команды) | UI не использует; поведение по умолчанию |
+
+### 4.5 Полное удаление файла (2026-09-16, доп.)
+
+«Пользователь удалил файл, других пользователей нет → место на диске
+должно освободиться»: `mod_store::release(sha1, instance_roots)` удаляет
+объект store, когда его больше никто не линкует:
+- Unix: точно по nlink (после снятия ссылки пака nlink==1 → удалить);
+- Windows: identity-скан известных корней проектов (same-file). Неизвестные
+  папки безопасны: их ссылки держат inode, store лишь теряет кэш-имя.
+- Без grace-периода (это явное удаление, не эвристика); гонки с параллельным
+  record/link деградируют в «кэш-мисс → перекачка», не в потерю данных.
+
+Врезано в пути удаления (через `release_store_object_detached` —
+отдельный поток, не блокирует UI): remove_loose_jar,
+keep_one_duplicate_mod_jar, remove_mod_file_from_disk (хеш из манифеста
+или перехеш перед удалением), same-bytes cleanup. Тест:
+`release_frees_space_only_when_last_linker_is_gone`.
+
+### 4.6 Идеи развития (не реализовано, backlog)
+
+- Reflink/copy-on-write (ReFS/APFS/Btrfs `clonefile`) — нулевая цена копии
+  там, где поддерживается.
+- Windows: честный nlink через `number_of_links()` при стабилизации в std
+  (или winapi) — уберёт age-эвристику в GC.
+- `meta/<sha1>.json` реестр происхождения объектов (откуда скачан, счётчик
+  линков) для диагностики и точного GC без эвристик.
+- Дедуп `libraries/` инстанс-локальных лоадеров (сейчас только shared
+  runtime) и `assets/` между версиями.
+- Фоновый ретро-дедуп новых проектов после первой установки (сейчас —
+  только вручную из Settings → Storage).
+- Пер-пак opt-out для shared runtime libraries (сейчас флаг действует на
+  файлы внутри папки пака).

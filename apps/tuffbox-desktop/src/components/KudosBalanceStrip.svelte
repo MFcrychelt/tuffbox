@@ -81,7 +81,7 @@
   .kudos-hint {
     margin-left: 6px;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
   .kudos-chip {
     display: inline-flex;

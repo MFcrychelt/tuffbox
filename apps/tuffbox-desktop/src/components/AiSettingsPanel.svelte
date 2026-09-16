@@ -771,6 +771,13 @@
       <button type="button" class:on={surface === "local"} onclick={() => setSurface("local")}>Local</button>
       <button type="button" class:on={surface === "cloud"} onclick={() => setSurface("cloud")}>Cloud</button>
     </div>
+    <p class="hint">
+      {#if surface === "local"}
+        Runs on your own PC with Ollama — private and works offline, but needs a model downloaded below.
+      {:else}
+        Uses an online AI service — nothing to download, but needs an API key.
+      {/if}
+    </p>
 
     <div class="status" class:ok={statusKind === "ok"} class:warn={statusKind === "warn"} class:bad={statusKind === "bad"}>
       <span class="status-text">{statusText}</span>
@@ -988,16 +995,19 @@
         {/if}
 
         <label>
-          Diagnose mode
+          Crash explanations come from
           <select bind:value={diagnoseMode}>
-            <option value="server">Server (Crash KB)</option>
-            <option value="local">Local LLM</option>
-            <option value="kb_only">KB only</option>
+            <option value="server">TuffBox's online knowledge base (recommended)</option>
+            <option value="local">My local AI model</option>
+            <option value="kb_only">Knowledge base only, no AI</option>
           </select>
+          <small class="hint" style="margin-top: 2px;">
+            When the game crashes, this decides who writes the explanation you see.
+          </small>
         </label>
         <label class="check-row">
           <input type="checkbox" bind:checked={speculativeDecoding} />
-          Draft→verify (small local draft, then main model)
+          Speed up the local AI (draft model)
         </label>
         {#if speculativeDecoding}
           <label>
@@ -1009,21 +1019,24 @@
             />
           </label>
           <p class="hint">
-            Opt-in L3 assist: draft ActionPlan with a tiny model, then your main model validates.
-            Pull the draft tag in Ollama first. Not used on Fog L2.
+            Lets a tiny helper model sketch the answer first, and your main model checks it —
+            noticeably faster on big models. Download the draft model in Ollama before enabling.
           </p>
         {/if}
         <label class="check-row">
           <input type="checkbox" bind:checked={tuneWebResearch} />
-          Tune Config AI — allowlisted web research for unknown keys
+          Let the Tune tab look up unknown settings online
         </label>
         <p class="hint">
-          When Tune AI does not know a config key, look up Modrinth / wiki / GitHub (allowlisted hosts only).
-          Off = local comments, templates, and inventory only.
+          When the Tune AI meets a config option it doesn't know, it may check a short list of
+          trusted sites (Modrinth, wikis, GitHub). Off = it only uses what's already on your PC.
         </p>
         <label>
           Crash KB URL
           <input bind:value={crashKbEndpoint} placeholder="https://kb.example.com" autocomplete="off" />
+          <small class="hint" style="margin-top: 2px;">
+            Only change this if you run your own crash knowledge base.
+          </small>
         </label>
         <label>
           Crash KB token
@@ -1116,7 +1129,7 @@
     gap: 8px;
   }
   .block-head strong { font-size: 13px; color: var(--text-primary); }
-  .block-head small { font-size: 11px; color: var(--text-muted); }
+  .block-head small { font-size: 12px; color: var(--text-muted); }
   .model-table {
     display: flex;
     flex-direction: column;
@@ -1158,7 +1171,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .fit {
@@ -1185,7 +1198,7 @@
   .progress.paused .bar {
     background: linear-gradient(145deg, #94a3b8, #64748b);
   }
-  .progress small { font-size: 11px; color: var(--text-muted); }
+  .progress small { font-size: 12px; color: var(--text-muted); }
   .suggestions {
     display: flex;
     flex-direction: column;
@@ -1209,13 +1222,13 @@
     background: rgba(251, 191, 36, 0.08);
   }
   .sug-name { font-size: 12px; font-weight: 700; color: var(--text-primary); }
-  .sug-meta { font-size: 11px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .sug-meta { font-size: 12px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .sug-note { font-size: 11px; color: var(--text-secondary); }
   .storage {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     padding: 6px 2px;
   }
@@ -1224,7 +1237,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
   .presets { display: flex; flex-wrap: wrap; gap: 6px; }
   .preset {
@@ -1323,6 +1336,7 @@
     color: var(--text-muted);
     font-size: 12px;
     line-height: 1.4;
+    overflow-wrap: anywhere;
   }
   .notice {
     display: flex;

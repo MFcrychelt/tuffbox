@@ -82,7 +82,7 @@
           {validationBadge.label}
         </span>
       {/if}
-      <span class="ml-auto text-[11px] text-[color:var(--text-muted)]">
+      <span class="ml-auto text-[12px] text-[color:var(--text-muted)]">
         {validationLoading
           ? "Checking the pack…"
           : validationReport
@@ -186,7 +186,7 @@
             : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
         }">
           <strong class="text-[18px] { validationReport.graphErrors > 0 ? "text-[var(--accent-danger)]" : "text-[var(--text-primary)]" }">{ validationReport.graphErrors }</strong>
-          <span class="text-[11px] text-[var(--text-muted)]">graph</span>
+          <span class="text-[12px] text-[var(--text-muted)]">graph</span>
         </div>
         <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
           (validationReport.jsonErrors?.length ?? 0) > 0
@@ -194,7 +194,7 @@
             : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
         }">
           <strong class="text-[18px] { (validationReport.jsonErrors?.length ?? 0) > 0 ? "text-[var(--accent-danger)]" : "text-[var(--text-primary)]" }">{ validationReport.jsonErrors?.length ?? 0 }</strong>
-          <span class="text-[11px] text-[var(--text-muted)]">JSON</span>
+          <span class="text-[12px] text-[var(--text-muted)]">JSON</span>
         </div>
         <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
           (validationReport.circularDeps?.length ?? 0) > 0
@@ -202,7 +202,7 @@
             : "border-[var(--border-color)] bg-[var(--bg-tertiary)]"
         }">
           <strong class="text-[18px] { (validationReport.circularDeps?.length ?? 0) > 0 ? "text-[var(--accent-danger)]" : "text-[var(--text-primary)]" }">{ validationReport.circularDeps?.length ?? 0 }</strong>
-          <span class="text-[11px] text-[var(--text-muted)]">cycles</span>
+          <span class="text-[12px] text-[var(--text-muted)]">cycles</span>
         </div>
       </div>
       <button class="ghost" onclick={() => (validationReport = null)}>Hide</button>
@@ -264,7 +264,7 @@
     width: 100%;
     min-height: 30px;
     padding: 5px 10px 5px 30px;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
     color: var(--text-secondary);
     white-space: nowrap;
@@ -334,10 +334,10 @@
     font-size: 12px;
     font-weight: 600;
     color: var(--text-primary);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
   .switch-desc {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 </style>

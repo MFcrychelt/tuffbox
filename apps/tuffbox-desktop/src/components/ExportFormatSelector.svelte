@@ -52,18 +52,18 @@
           <FormatIcon size={22} />
         </span>
         {#if errors > 0}
-          <span class="inline-flex items-center gap-1 rounded-full border border-red-400/30 bg-red-500/10 px-2 py-1 text-[10px] font-bold text-red-200"><AlertTriangle size={12} /> {errors} error{errors === 1 ? '' : 's'}</span>
+          <span class="inline-flex items-center gap-1 rounded-full border border-red-400/30 bg-red-500/10 px-2 py-1 text-[11px] font-bold text-red-200"><AlertTriangle size={12} /> {errors} error{errors === 1 ? '' : 's'}</span>
         {:else if warnings > 0}
-          <span class="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[10px] font-bold text-amber-200">{warnings} warning{warnings === 1 ? '' : 's'}</span>
+          <span class="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[11px] font-bold text-amber-200">{warnings} warning{warnings === 1 ? '' : 's'}</span>
         {:else}
           <CheckCircle2 size={16} class="text-emerald-400" aria-label="Ready to export" />
         {/if}
       </div>
       <div class="mt-3 flex items-baseline gap-2">
         <strong class="truncate text-sm text-neutral-100">{format.title}</strong>
-        <span class="shrink-0 font-mono text-xs text-neutral-400">{format.badge}</span>
+        <span class="shrink-0 font-mono text-xs text-[var(--text-secondary)]">{format.badge}</span>
       </div>
-      <p class="mt-1 truncate text-xs text-neutral-400">{format.blurb}</p>
+      <p class="mt-1 truncate text-xs text-[var(--text-secondary)]">{format.blurb}</p>
     </button>
   {/each}
 </div>

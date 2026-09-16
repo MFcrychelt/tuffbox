@@ -4,7 +4,8 @@
   import { open as openShell } from "@tauri-apps/plugin-shell";
   import CodeMirror from "svelte-codemirror-editor";
   import { markdown } from "@codemirror/lang-markdown";
-  import { oneDark } from "@codemirror/theme-one-dark";
+  import { editorThemeFor } from "../lib/editorTheme";
+  import { theme } from "../lib/store";
   import { EditorView } from "@codemirror/view";
   import PromptDialog from "./PromptDialog.svelte";
   import { marked } from "marked";
@@ -973,7 +974,7 @@
               <CodeMirror
                 value={bodyMarkdown}
                 lang={markdown()}
-                theme={oneDark}
+                theme={editorThemeFor($theme)}
                 on:change={onBodyChange}
                 on:ready={(e) => (cmView = e.detail)}
               />
@@ -1657,7 +1658,7 @@
     height: 100%;
   }
   .cm-wrap :global(.cm-scroller) {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 13.5px;
     line-height: 1.6;
   }

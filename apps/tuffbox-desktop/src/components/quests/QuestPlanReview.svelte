@@ -343,7 +343,7 @@
     margin-left: auto;
   }
   .sel-btn {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     padding: 2px 8px;
     color: var(--ftbq-text-muted);
@@ -408,7 +408,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -421,11 +421,11 @@
   .ch small,
   .q small {
     margin-left: auto;
-    font-size: 10px;
+    font-size: 11px;
     opacity: 0.7;
   }
   .dep-anch {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--ftbq-line, #5c8a9e);
     max-width: 40%;
     overflow: hidden;

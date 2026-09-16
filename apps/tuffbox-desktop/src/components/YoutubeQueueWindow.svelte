@@ -721,7 +721,7 @@
   }
 
   .qw-now-pos {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -844,7 +844,7 @@
     border-radius: var(--border-radius-sm);
     background: var(--accent-primary);
     color: var(--on-accent, #000);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -901,7 +901,7 @@
   }
 
   .qw-field-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1016,7 +1016,7 @@
   }
 
   .qw-res-channel {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
@@ -1033,7 +1033,7 @@
   .qw-note {
     margin: 0;
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.45;
     color: var(--text-muted);
     opacity: 0.85;

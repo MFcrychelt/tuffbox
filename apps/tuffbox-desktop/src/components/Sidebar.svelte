@@ -429,17 +429,17 @@
   }
 
   .brand-logo {
-    width: 40px;
-    height: 40px;
+    width: 32px;
+    height: 32px;
     border-radius: var(--border-radius-lg);
     background: var(--brand-mark-gradient, linear-gradient(135deg, #ffc500, #ff9500));
     color: var(--brand-mark-fg, #241703);
     font-weight: 900;
-    font-size: 19px;
+    font-size: 16px;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: var(--brand-mark-shadow, 0 4px 14px rgba(255, 197, 0, 0.28));
+    box-shadow: var(--brand-mark-shadow, 0 3px 10px rgba(255, 197, 0, 0.24));
     animation: tb-logo-reveal 1.15s cubic-bezier(0.22, 1, 0.36, 1) both;
     overflow: hidden;
   }
@@ -449,7 +449,7 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
-    padding: 3px;
+    padding: 2px;
     box-sizing: border-box;
     /* Task #55: PNG transparency must survive — no own background, no square
        borders visible, glyph centered and never clipped by the rounded box. */

@@ -221,7 +221,7 @@
     color: var(--text-secondary);
   }
   .dup-jar-list .pill {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;

@@ -985,6 +985,8 @@ export interface ExportResult {
   path: string;
   fileCount: number;
   overrideCount: number;
+  /** Non-fatal problems: files skipped because they were unreadable. */
+  warnings?: string[] | null;
 }
 
 export interface ExportIssue {
@@ -2847,12 +2849,37 @@ export const api = {
   // ── Modpack library (remote browse + import) ─────────────────────
   modpacks: {
     getModpackUrl(projectId: string) { return cmd<string>("get_modrinth_pack_download", { projectId }); },
-    install(url: string, targetDir: string, instanceName: string) {
-      return cmd<{ path: string; download?: Record<string, unknown> }>("install_modpack", {
+    install(url: string, targetDir: string, instanceName: string, dedup?: boolean | null) {
+      return cmd<{
+        path: string;
+        download?: Record<string, unknown>;
+        dedup?: Record<string, unknown>;
+      }>("install_modpack", {
         source: url,
         targetDir,
         instanceName,
+        dedup: dedup ?? null,
       });
+    },
+  },
+
+  // ── Personal YouTube feed (own channels via the RSS hub) ──────────
+  youtubeMyFeed: {
+    lookup(query: string) {
+      return cmd<{ channelId: string; label: string }>("youtube_my_feed_lookup", { query });
+    },
+    fetch(channelIds: string[]) {
+      return cmd<{
+        videos: {
+          videoId: string;
+          title: string;
+          thumbnailUrl: string | null;
+          channelName: string | null;
+          viewCount: number | null;
+          publishedAt: string | null;
+        }[];
+        errors: string[];
+      }>("youtube_my_feed_fetch", { channelIds });
     },
   },
 
@@ -3079,6 +3106,7 @@ export const api = {
     getAuthStatus() { return cmd<AuthState>("mc_get_auth_status"); },
     logout() { return cmd<AuthState>("mc_logout"); },
     refreshProfile() { return cmd<McProfile>("mc_refresh_profile"); },
+    refreshToken() { return cmd<AuthState>("mc_refresh_token"); },
     getSkinPath(uuid: string) { return cmd<string>("mc_get_skin_path", { uuid }); },
     fetchSkinUrl(uuid: string) { return cmd<string | null>("mc_fetch_skin_url", { uuid }); },
     fetchSkinForUsername(username: string, source: SkinSource) {

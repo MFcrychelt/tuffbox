@@ -262,7 +262,7 @@
           toasts.success("Registered and signed in");
         } else {
           authNote =
-            "Check your email to confirm. If the link opens localhost:3000 and fails, the account is still confirmed — return here and Sign in. New confirms open a success page in the browser.";
+            "Check your email to confirm, then sign in here. If the link fails to open, the account is still confirmed.";
           toasts.success("Check your email to confirm registration");
           authMode = "signin";
         }
@@ -775,7 +775,7 @@
 
   .author-kudos {
     margin-top: 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .author-kudos strong {
@@ -968,7 +968,7 @@
     align-items: center;
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1068,7 +1068,7 @@
     flex: 1;
     min-width: 0;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .meta-bits span {
@@ -1130,7 +1130,7 @@
   .trust-label {
     color: var(--text-muted);
     text-transform: uppercase;
-    font-size: 10px;
+    font-size: 12px;
     letter-spacing: 0.06em;
     font-weight: 700;
   }
@@ -1141,7 +1141,7 @@
     align-items: center;
     gap: 4px;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .trust-meter {
@@ -1166,7 +1166,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -1228,9 +1228,9 @@
 
   .fp-key {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     word-break: break-all;
   }
 
@@ -1262,7 +1262,7 @@
 
   .panel-note {
     margin: -4px 0 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -1350,7 +1350,7 @@
   }
 
   .risk {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     color: var(--text-muted);

@@ -14,6 +14,7 @@
     escalateIgnoredWorkTrail,
     WORK_TRAIL_ESCALATE_MS,
     computeIdeNextAction,
+    packStatusLabel,
     briefDirty,
     tuneDirty,
     questDirty,
@@ -37,6 +38,7 @@
   // disabled until the game is actually running (process-started) or exits.
   const launchingFromPath = $derived($launchingPath === $projectPath);
 
+  const statusLabel = $derived(packStatusLabel($ideIssueCount, $ideNeedsHealth));
   const next = $derived(
     computeIdeNextAction({
       issueCount: $ideIssueCount,
@@ -181,16 +183,16 @@
   <div class="ide-next-status">
     {#if $ideIssueCount > 0}
       <span class="pill warn">
-        <AlertTriangle size={12} />
-        {$ideIssueCount} pack issue{$ideIssueCount === 1 ? "" : "s"}
+        <AlertTriangle size={13} />
+        {statusLabel}
       </span>
     {:else if $ideNeedsHealth}
-      <span class="pill warn"><Stethoscope size={12} /> Needs Health check</span>
+      <span class="pill warn"><Stethoscope size={13} /> {statusLabel}</span>
     {:else}
-      <span class="pill ok">Pack graph OK</span>
+      <span class="pill ok"><Stethoscope size={13} /> {statusLabel}</span>
     {/if}
     {#if next.detail}
-      <span class="detail">{next.detail}</span>
+      <span class="detail" title={next.detail}>{next.detail}</span>
     {/if}
     {#if launching}
       <span class="detail launch-detail" title={launchSession?.message}>
@@ -200,17 +202,28 @@
   </div>
 
   <div class="ide-next-main">
-    <span class="next-label">Next</span>
-    <button type="button" class="next-cta" onclick={runNext} disabled={launching}>
+    <button
+      type="button"
+      class="next-cta"
+      onclick={runNext}
+      disabled={launching}
+      title={`Suggested next step: ${next.label}`}
+      aria-label={`Suggested next step: ${next.label}`}
+    >
       {next.label}
       <ArrowRight size={14} />
     </button>
   </div>
 
   <div class="ide-next-actions">
-    <button type="button" class="ghost" onclick={() => go("diagnose")} title="Health check">
+    <button
+      type="button"
+      class="ghost"
+      onclick={() => go("diagnose")}
+      title="Open the Health check — read crash logs and find what breaks the pack"
+    >
       <Stethoscope size={14} />
-      Health
+      Health check
     </button>
   </div>
 </div>
@@ -256,10 +269,11 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 3px 8px;
+    padding: 3px 9px;
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
+    white-space: nowrap;
   }
   .pill.ok {
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
@@ -270,8 +284,8 @@
     color: var(--accent-warning);
   }
   .detail {
-    font-size: 12px;
-    color: var(--text-muted);
+    font-size: 12.5px;
+    color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -283,13 +297,6 @@
     flex: 1;
     min-width: 140px;
   }
-  .next-label {
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
   .next-cta {
     display: inline-flex;
     align-items: center;
@@ -298,8 +305,8 @@
     border-radius: var(--border-radius-sm);
     border: none;
     background: var(--accent-primary);
-    color: #000;
-    font-size: 12px;
+    color: var(--on-accent, #000);
+    font-size: 12.5px;
     font-weight: 700;
     cursor: pointer;
   }
@@ -342,10 +349,10 @@
   .trail-msg { color: var(--text-primary); font-weight: 600; }
   .trail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .secondary.mini, .ghost.mini {
-    padding: 4px 8px;
+    padding: 4px 9px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     cursor: pointer;
   }
@@ -353,7 +360,7 @@
     background: var(--bg-primary);
     color: var(--text-primary);
   }
-  .ghost.mini { background: transparent; color: var(--text-muted); }
+  .ghost.mini { background: transparent; color: var(--text-secondary); }
   .icon-x {
     border: none;
     background: transparent;

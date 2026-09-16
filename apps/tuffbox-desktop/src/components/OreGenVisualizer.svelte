@@ -392,30 +392,30 @@
   .ore-chart { width: 100%; height: auto; min-height: 240px; }
   .chart-empty, .chart-note {
     margin: 8px 0 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .chart-empty { margin: 24px 8px; }
   .ore-list { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 14px; max-height: min(70vh, 640px); overflow: auto; }
   .ore-list h3 { color: var(--text-secondary); font-size: 14px; margin: 0 0 10px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-  .list-cap-note { font-size: 11px; font-weight: 500; color: var(--text-muted); }
+  .list-cap-note { font-size: 12px; font-weight: 500; color: var(--text-muted); }
   .list-cap-note.footer { margin: 8px 0 0; }
   .ore-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); background: transparent; color: var(--text-secondary); border: 1px solid transparent; text-align: left; margin-bottom: 4px; transform: none; }
   .ore-row:hover, .ore-row.selected { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .ore-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
   .ore-detail { display: grid; gap: 2px; flex: 1; min-width: 0; }
   .ore-detail strong { color: var(--text-primary); font-size: 12px; text-transform: capitalize; }
-  .ore-detail span { color: var(--text-muted); font-size: 10px; }
+  .ore-detail span { color: var(--text-muted); font-size: 12px; }
   .ore-tags { display: flex; gap: 4px; flex-shrink: 0; }
-  .ore-conf-tag { font-size: 9px; text-transform: uppercase; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); font-weight: 700; }
+  .ore-conf-tag { font-size: 11px; text-transform: uppercase; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); font-weight: 700; }
   .ore-conf-tag.high { color: var(--accent-primary); }
   .ore-conf-tag.medium { color: #fbbf24; }
   .ore-conf-tag.low { color: var(--text-muted); }
-  .ore-disabled { font-size: 9px; padding: 2px 5px; border-radius: 4px; background: rgba(239,68,68,.15); color: #fca5a5; }
-  .ore-unknown { font-size: 9px; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); }
-  .ore-mod-tag { font-size: 9px; padding: 2px 5px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
+  .ore-disabled { font-size: 11px; padding: 2px 5px; border-radius: 4px; background: rgba(239,68,68,.15); color: #fca5a5; }
+  .ore-unknown { font-size: 12px; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); }
+  .ore-mod-tag { font-size: 11px; padding: 2px 5px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
   .ore-details { margin-left: 22px; margin-bottom: 6px; padding: 6px 10px; border-radius: 6px; background: var(--bg-tertiary); }
-  .ore-details code { font-size: 10px; color: var(--text-muted); word-break: break-all; }
+  .ore-details code { font-size: 12px; color: var(--text-muted); word-break: break-all; }
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 920px) { .layout { grid-template-columns: 1fr; } }

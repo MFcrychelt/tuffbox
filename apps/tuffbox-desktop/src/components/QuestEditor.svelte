@@ -2913,7 +2913,7 @@
   .dot-mini {
     color: var(--accent-warning);
     margin-left: 4px;
-    font-size: 10px;
+    font-size: 11px;
   }
   .drawer-h {
     display: flex;
@@ -3278,7 +3278,7 @@
   }
   .hit-field {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 12px;
   }
   .hit-text {
     overflow: hidden;

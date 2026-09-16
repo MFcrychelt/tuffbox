@@ -686,7 +686,7 @@
     await ensureTagsLoaded();
     message =
       kind === "tags"
-        ? "Select or enter a tag, click or drag items to add members, click to remove, then click Save."
+        ? "Pick a tag, add items by click or drag, then Save."
         : `Compose ingredients for ${kind} recipe, then click Add.`;
   }
 
@@ -1314,12 +1314,12 @@
           <h1 class="text-sm font-bold text-[var(--text-primary)] m-0 leading-tight">
             {editorOpen ? "Recipe & Tag Editor" : "Recipe Browser"}
           </h1>
-          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold {recipeSource === 'runtime' ? 'bg-emerald-500/10 text-[var(--accent-primary)] border border-emerald-500/20' : 'bg-[var(--bg-card)] text-[var(--text-muted)] border border-[var(--border-color)]'}">
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[12px] font-semibold {recipeSource === 'runtime' ? 'bg-emerald-500/10 text-[var(--accent-primary)] border border-emerald-500/20' : 'bg-[var(--bg-card)] text-[var(--text-muted)] border border-[var(--border-color)]'}">
             <Radio size={10} class={recipeSource === 'runtime' ? 'text-[var(--accent-primary)]' : 'text-[var(--text-muted)]'} />
             {recipeSource === "runtime" ? "Live JEI" : "Offline Files"}
           </span>
         </div>
-        <div class="text-[11px] font-medium text-[var(--text-muted)] truncate mt-0.5">
+        <div class="text-[12px] font-medium text-[var(--text-muted)] truncate mt-0.5">
           {recipes.length} recipes · {items.length} items
           {#if scanMeta?.jarCount} · {scanMeta.jarCount} JARs{/if}
           {#if scanMeta?.datapackFiles} · {scanMeta.datapackFiles} datapacks{/if}
@@ -1607,7 +1607,7 @@
                         {:else if slotId}
                           <span class="letter font-bold text-xs text-white">{slotId.startsWith("#") ? "#" : prettifyItem(slotId).slice(0, 3)}</span>
                         {:else}
-                          <span class="text-[10px] text-[var(--text-muted)] font-mono">{i + 1}</span>
+                          <span class="text-[12px] text-[var(--text-muted)] font-mono">{i + 1}</span>
                         {/if}
                       </button>
                     {/each}
@@ -1640,7 +1640,7 @@
                         <em class="absolute bottom-1 right-1.5 text-xs font-black text-[var(--accent-warning)] font-mono not-italic">{editCount}</em>
                       {/if}
                     </button>
-                    <span class="text-[10px] text-[var(--text-muted)]">Shift+Click for count</span>
+                    <span class="text-[12px] text-[var(--text-muted)]">Shift+Click for count</span>
                   </div>
                 </div>
 
@@ -1722,7 +1722,7 @@
                     { key: "addition", label: "Addition", val: editAddition },
                   ] as slot, i (slot.key)}
                     <div class="flex flex-col items-center gap-1.5">
-                      <span class="text-[10px] font-bold text-[var(--text-secondary)] uppercase">{slot.label}</span>
+                      <span class="text-[11px] font-bold text-[var(--text-secondary)] uppercase">{slot.label}</span>
                       <button
                         type="button"
                         class="mc-slot w-14 h-14 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] hover:border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer"
@@ -1754,7 +1754,7 @@
                   <ArrowRight size={28} class="text-[var(--text-secondary)] mt-4 mx-2" />
 
                   <div class="flex flex-col items-center gap-1.5">
-                    <span class="text-[10px] font-bold text-[var(--text-secondary)] uppercase">Result</span>
+                    <span class="text-[11px] font-bold text-[var(--text-secondary)] uppercase">Result</span>
                     <button
                       type="button"
                       class="mc-slot out w-14 h-14 rounded-lg bg-[var(--bg-elevated)] border-2 border-[var(--accent-primary)] flex items-center justify-center relative cursor-pointer shadow-md"
@@ -1956,7 +1956,7 @@
                   </span>
                   <div class="min-w-0">
                     <strong class="text-sm font-bold text-[var(--text-primary)] truncate block">{prettifyItem(selectedItem)}</strong>
-                    <code class="text-[11px] text-[var(--text-muted)] font-mono truncate block">{selectedItem}</code>
+                    <code class="text-[12px] text-[var(--text-muted)] font-mono truncate block">{selectedItem}</code>
                   </div>
                 </div>
 
@@ -1978,7 +1978,7 @@
                   onclick={() => { focusMode = "recipes"; recipeIndex = 0; }}
                 >
                   <span>Recipes</span>
-                  <span class="text-[10px] px-1.5 py-0.2 rounded-full {focusMode === 'recipes' ? 'bg-white/20 text-white' : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'}">
+                  <span class="text-[12px] px-1.5 py-0.2 rounded-full {focusMode === 'recipes' ? 'bg-white/20 text-white' : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'}">
                     {recipesForItem(selectedItem, "recipes").length}
                   </span>
                 </button>
@@ -1989,7 +1989,7 @@
                   onclick={() => { focusMode = "uses"; recipeIndex = 0; }}
                 >
                   <span>Uses</span>
-                  <span class="text-[10px] px-1.5 py-0.2 rounded-full {focusMode === 'uses' ? 'bg-white/20 text-white' : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'}">
+                  <span class="text-[12px] px-1.5 py-0.2 rounded-full {focusMode === 'uses' ? 'bg-white/20 text-white' : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]'}">
                     {recipesForItem(selectedItem, "uses").length}
                   </span>
                 </button>
@@ -2042,7 +2042,7 @@
                         · {CATEGORY_META[currentRecipe.layout.category]?.label ?? runtimeCategory(currentRecipe.category)?.title ?? currentRecipe.layout.category}
                       </span>
                       {#if currentRecipe.layout.shapeless}
-                        <span class="text-[10px] font-bold text-[var(--accent-secondary)] bg-cyan-400/10 px-1.5 py-0.5 rounded">Shapeless</span>
+                        <span class="text-[11px] font-bold text-[var(--accent-secondary)] bg-cyan-400/10 px-1.5 py-0.5 rounded">Shapeless</span>
                       {/if}
                     </div>
 
@@ -2126,10 +2126,10 @@
                       <div class="flex flex-col items-center gap-1">
                         <Flame size={26} class="text-[var(--accent-warning)] animate-pulse" />
                         {#if currentRecipe.layout.cookTime}
-                          <span class="text-[10px] font-mono text-[var(--text-secondary)]">{(currentRecipe.layout.cookTime / 20).toFixed(1)}s</span>
+                          <span class="text-[11px] font-mono text-[var(--text-secondary)]">{(currentRecipe.layout.cookTime / 20).toFixed(1)}s</span>
                         {/if}
                         {#if currentRecipe.layout.experience}
-                          <span class="text-[10px] font-bold text-[var(--accent-primary)] font-mono">+{currentRecipe.layout.experience} XP</span>
+                          <span class="text-[11px] font-bold text-[var(--accent-primary)] font-mono">+{currentRecipe.layout.experience} XP</span>
                         {/if}
                       </div>
 
@@ -2230,13 +2230,13 @@
 
                   <!-- Metadata Chips -->
                   <div class="flex items-center gap-2 flex-wrap justify-center">
-                    <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-muted)]">
+                    <span class="text-[12px] font-mono px-2 py-0.5 rounded bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-muted)]">
                       {currentRecipe.recipeType.replace(/^minecraft:/, '')}
                     </span>
                     <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border border-[var(--accent-primary)]/20 truncate max-w-xs" title={currentRecipe.sourceFile}>
                       {currentRecipe.modSource}
                     </span>
-                    <code class="text-[10px] font-mono text-[var(--text-muted)]">{currentRecipe.id}</code>
+                    <code class="text-[12px] font-mono text-[var(--text-muted)]">{currentRecipe.id}</code>
                   </div>
 
                   <!-- Recipe Action Buttons -->
@@ -2295,7 +2295,7 @@
         {#if showBookmarks && bookmarkItems.length > 0}
           <div class="px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-card)] flex flex-col gap-1.5 flex-shrink-0">
             <div class="flex items-center justify-between">
-              <span class="text-[10px] font-bold uppercase tracking-wider text-[var(--accent-warning)] flex items-center gap-1">
+              <span class="text-[11px] font-bold uppercase tracking-wider text-[var(--accent-warning)] flex items-center gap-1">
                 <Star size={11} /> Bookmarks ({bookmarkItems.length})
               </span>
             </div>
@@ -2314,7 +2314,7 @@
                   {#if iconSrc(item.id)}
                     <img src={iconSrc(item.id)} alt="" class="w-6 h-6 object-contain pixelated" onerror={() => onIconError(item.id)} />
                   {:else}
-                    <span class="text-[9px] font-bold text-[var(--text-primary)] uppercase">{item.name.slice(0, 2)}</span>
+                    <span class="text-[11px] font-bold text-[var(--text-primary)] uppercase">{item.name.slice(0, 2)}</span>
                   {/if}
                 </button>
               {/each}
@@ -2343,7 +2343,7 @@
             </div>
           {:else}
             <span class="text-xs font-bold text-[var(--text-primary)]">Item Catalog</span>
-            <span class="text-[11px] font-mono text-[var(--text-muted)]">{filteredItems.length} items</span>
+            <span class="text-[12px] font-mono text-[var(--text-muted)]">{filteredItems.length} items</span>
           {/if}
 
           <!-- Page Navigation -->
@@ -2356,7 +2356,7 @@
             >
               <ChevronLeft size={13} />
             </button>
-            <span class="text-[11px] font-mono font-semibold text-[var(--text-muted)]">
+            <span class="text-[12px] font-mono font-semibold text-[var(--text-muted)]">
               {itemPage + 1} / {overlayPageCount}
             </span>
             <button
@@ -2417,13 +2417,13 @@
                   {#if iconSrc(item.id)}
                     <img src={iconSrc(item.id)} alt="" class="w-7 h-7 object-contain pixelated pointer-events-none" onerror={() => onIconError(item.id)} />
                   {:else}
-                    <span class="text-[10px] font-bold text-[var(--text-primary)] uppercase pointer-events-none">{item.name.slice(0, 2)}</span>
+                    <span class="text-[11px] font-bold text-[var(--text-primary)] uppercase pointer-events-none">{item.name.slice(0, 2)}</span>
                   {/if}
                   {#if bookmarks.includes(item.id)}
                     <span class="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-amber-400 shadow-sm"></span>
                   {/if}
                   {#if !editorOpen && focusCountForItem(item) > 0}
-                    <span class="absolute bottom-0.5 right-1 text-[9px] font-mono font-bold text-[var(--accent-warning)] pointer-events-none">
+                    <span class="absolute bottom-0.5 right-1 text-[11px] font-mono font-bold text-[var(--accent-warning)] pointer-events-none">
                       {focusCountForItem(item)}
                     </span>
                   {/if}
@@ -2436,7 +2436,7 @@
         <!-- Recent History Footer Strip -->
         {#if historyStack.length > 0}
           <div class="px-3 py-2 border-t border-[var(--border-color)] bg-[var(--bg-secondary)] flex flex-col gap-1 flex-shrink-0">
-            <span class="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
+            <span class="text-[12px] font-bold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
               <History size={10} /> Recently Viewed
             </span>
             <div class="grid grid-cols-8 gap-1">
@@ -2451,7 +2451,7 @@
                   {#if iconSrc(id)}
                     <img src={iconSrc(id)} alt="" class="w-6 h-6 object-contain pixelated" onerror={() => onIconError(id)} />
                   {:else}
-                    <span class="text-[9px] font-bold text-[var(--text-primary)] uppercase">{prettifyItem(id).slice(0, 2)}</span>
+                    <span class="text-[11px] font-bold text-[var(--text-primary)] uppercase">{prettifyItem(id).slice(0, 2)}</span>
                   {/if}
                 </button>
               {/each}

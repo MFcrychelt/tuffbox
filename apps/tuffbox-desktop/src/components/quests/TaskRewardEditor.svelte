@@ -1247,7 +1247,7 @@
   .hint {
     margin: 0;
     padding: 8px 10px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     text-transform: none;
     background: rgba(0, 0, 0, 0.15);
@@ -1257,7 +1257,7 @@
 
   .raw {
     margin-top: 4px;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     text-transform: none;
   }
@@ -1277,8 +1277,8 @@
   }
   .raw textarea {
     width: 100%;
-    font-family: ui-monospace, monospace;
-    font-size: 10px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
     text-transform: none;
     background: var(--ftbq-bg);
     border: 1px solid var(--ftbq-frame);

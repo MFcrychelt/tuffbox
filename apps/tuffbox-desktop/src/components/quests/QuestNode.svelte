@@ -323,7 +323,7 @@
   .ch-badge {
     display: inline-block;
     vertical-align: baseline;
-    font-size: 8px;
+    font-size: 11px;
     line-height: 1.1;
     /* Same cap as the label: this span also sizes the wrap, so a percentage
        width only ever resolved against the already-stretched wrap. */
@@ -356,7 +356,7 @@
     position: absolute;
     top: -3px;
     right: -3px;
-    font-size: 9px;
+    font-size: 11px;
     color: var(--ftbq-quest-started);
     font-weight: 900;
     text-shadow: none;
@@ -371,7 +371,7 @@
     background: linear-gradient(180deg, var(--ftbq-accent-green), color-mix(in srgb, var(--ftbq-accent-green) 70%, #000));
     border: 1px solid var(--ftbq-bg);
     color: var(--ftbq-bg);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 900;
     display: flex;
     align-items: center;

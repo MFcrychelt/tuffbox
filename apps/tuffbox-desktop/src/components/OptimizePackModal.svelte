@@ -1004,7 +1004,7 @@
     background: color-mix(in srgb, var(--accent, #6ee7b7) 12%, var(--bg-tertiary));
   }
   .mode-tabs .hint {
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     opacity: 0.7;
   }
@@ -1060,7 +1060,7 @@
     gap: 8px;
   }
   .opt-section h3 .count {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-muted);
   }
@@ -1096,11 +1096,11 @@
   .opt-meta-col code,
   .opt-meta-col .muted,
   .opt-meta-col .role {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .pill {
-    font-size: 10px;
+    font-size: 12px;
     text-transform: uppercase;
     font-weight: 700;
     padding: 2px 6px;
@@ -1118,7 +1118,7 @@
     border-color: rgba(59, 130, 246, 0.35);
   }
   .risk {
-    font-size: 10px;
+    font-size: 12px;
     text-transform: uppercase;
     color: var(--text-muted);
   }

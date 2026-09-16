@@ -411,7 +411,7 @@
     border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
   }
   .fact-badge.mono {
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     max-width: 160px;
     overflow: hidden;
     text-overflow: ellipsis;

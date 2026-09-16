@@ -523,7 +523,7 @@ collapse; this component always renders expanded. -->
     align-items: center;
     gap: 4px;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
     background: transparent;
@@ -683,7 +683,7 @@ collapse; this component always renders expanded. -->
   }
 
   .srv-sub {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;

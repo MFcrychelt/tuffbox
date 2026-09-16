@@ -177,7 +177,7 @@
     background: var(--ftbq-bg-panel);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
     color: var(--ftbq-text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
   .prog-modes {
     display: inline-flex;
@@ -204,7 +204,7 @@
     border-radius: 3px;
   }
   .prog-path {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -213,7 +213,7 @@
   }
   .prog-empty-hint {
     margin: 0 4px 8px;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.35;
     color: var(--ftbq-text-muted);
   }

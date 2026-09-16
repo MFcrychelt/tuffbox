@@ -465,7 +465,7 @@
     position: absolute;
     top: 6px;
     left: 6px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     padding: 2px 6px;
     border-radius: 3px;
@@ -696,7 +696,7 @@
   }
 
   .mr-stat {
-    font-size: 11px;
+    font-size: 12px;
     color: #94a3b8;
     text-align: center;
   }

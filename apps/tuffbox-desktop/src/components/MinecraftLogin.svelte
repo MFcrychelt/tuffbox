@@ -797,7 +797,7 @@
 
   /* ─── Login options ──────────────────────── */
   .existing-accounts { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
-  .existing-label { font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .existing-label { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .account-row {
     display: flex; align-items: center; gap: 12px; width: 100%;
     padding: 10px 12px; border-radius: 10px; text-align: left;
@@ -819,19 +819,19 @@
   .account-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .mc-nick {
     font-family: var(--font-minecraft);
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.4px;
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
-  .account-type { font-size: 10px; font-weight: 800; text-transform: uppercase; }
+  .account-type { font-size: 11px; font-weight: 800; text-transform: uppercase; }
   .account-type.mojang { color: var(--badge-ms-fg, #93c5fd); }
   .account-type.offline { color: var(--badge-offline-fg, #fde68a); }
   .account-type.ygg { color: var(--badge-ygg-fg, #e9d5ff); }
   :global(.check) { color: var(--accent-primary); }
   .divider {
     display: flex; align-items: center; gap: 10px; margin: 14px 0;
-    color: var(--text-muted); font-size: 11px;
+    color: var(--text-muted); font-size: 12px;
   }
   .divider::before, .divider::after {
     content: ""; flex: 1; height: 1px; background: var(--border-color);
@@ -849,7 +849,7 @@
   .ms-other-label {
     width: 100%;
     text-align: center;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -878,7 +878,7 @@
 
   :global(.option-arrow) { color: var(--text-muted); }
 
-  .hint { font-size: 11px; color: var(--text-muted); text-align: center; margin-top: 12px; }
+  .hint { font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 12px; }
 
   /* ─── Code display ───────────────────────── */
   .code-content { display: flex; flex-direction: column; align-items: center; gap: 16px; }
@@ -889,7 +889,7 @@
     border-radius: var(--border-radius-md); padding: 14px 20px;
   }
   .code {
-    font-family: ui-monospace, monospace; font-size: 28px; font-weight: 900;
+    font-family: var(--font-mono, ui-monospace, monospace); font-size: 28px; font-weight: 900;
     letter-spacing: 4px; color: var(--accent-primary);
   }
   .copy-btn {
@@ -918,13 +918,13 @@
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .code-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
     text-align: center;

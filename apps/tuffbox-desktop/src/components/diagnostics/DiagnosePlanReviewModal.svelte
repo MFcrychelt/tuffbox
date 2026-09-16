@@ -242,7 +242,7 @@
   .plan-review-body p { margin: 4px 0 0; font-size: 12px; color: var(--text-secondary); }
   .problem-ref {
     margin: 0 0 2px !important;
-    font-size: 11px !important;
+    font-size: 12px !important;
     color: var(--text-muted) !important;
     font-weight: 600;
   }
@@ -251,7 +251,7 @@
     padding: 8px;
     max-height: 120px;
     overflow: auto;
-    font-size: 11px;
+    font-size: 12px;
     border-radius: 6px;
     background: var(--bg-primary);
     color: var(--text-muted);
@@ -269,7 +269,7 @@
     gap: 8px;
   }
   .risk-pill {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     padding: 1px 6px;

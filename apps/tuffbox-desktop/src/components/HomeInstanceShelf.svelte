@@ -141,8 +141,8 @@
   .shelf {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding: 14px 16px 12px;
+    gap: 14px;
+    padding: 18px 16px 16px;
     border-radius: var(--border-radius-xl);
   }
   .shelf-head {
@@ -172,7 +172,7 @@
     min-width: 1.4em;
     padding: 1px 7px;
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--text-muted);
     background: color-mix(in srgb, var(--bg-hover) 80%, transparent);
@@ -216,8 +216,8 @@
     gap: 12px;
   }
   .ghost-pack {
-    width: 60px;
-    height: 60px;
+    width: 72px;
+    height: 72px;
     border-radius: 50%;
     border: 1px dashed color-mix(in srgb, var(--text-muted) 35%, transparent);
     background:
@@ -236,7 +236,7 @@
   .shelf-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 14px 12px;
+    gap: 16px 14px;
     padding-bottom: 4px;
   }
   .shelf-grid::after {
@@ -255,9 +255,9 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
-    width: 80px;
-    padding: 4px 2px 2px;
+    gap: 10px;
+    width: 104px;
+    padding: 6px 2px 4px;
     border: 0;
     background: transparent;
     color: var(--text-secondary);
@@ -311,8 +311,8 @@
   }
   .pack-icon-wrap {
     position: relative;
-    width: 60px;
-    height: 60px;
+    width: 72px;
+    height: 72px;
     flex-shrink: 0;
     transition: transform var(--motion-fast, 160ms) var(--ease-spring, ease);
     /* Own compositor layer: the hover lift animates without repainting the
@@ -321,8 +321,8 @@
   }
   .pack-icon {
     position: relative;
-    width: 60px;
-    height: 60px;
+    width: 72px;
+    height: 72px;
     border-radius: 50%;
     overflow: hidden;
     display: grid;
@@ -354,7 +354,7 @@
   }
   .pack-letter {
     font-weight: 900;
-    font-size: 22px;
+    font-size: 26px;
     line-height: 1;
     text-transform: uppercase;
     color: color-mix(in srgb, var(--accent-primary) 18%, var(--text-primary));
@@ -385,9 +385,9 @@
     }
   }
   .pack-name {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
-    line-height: 1.25;
+    line-height: 1.3;
     text-align: center;
     max-width: 100%;
     /* Clamp to two lines WITHOUT a fixed-height pill: the old fixed box left a
@@ -402,6 +402,22 @@
     border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
   }
+  /* TuffBox dark: the section heading, count, actions and empty state
+     were lost in dim gray on the dark glass — lift them to primary/secondary
+     ink. Other themes keep their tuned palettes. */
+  :global(html[data-theme="tuffbox"]) .shelf-head h2 {
+    color: var(--text-primary);
+  }
+  :global(html[data-theme="tuffbox"]) .shelf-count {
+    color: var(--text-secondary);
+  }
+  :global(html[data-theme="tuffbox"]) .text-btn {
+    color: var(--text-secondary);
+  }
+  :global(html[data-theme="tuffbox"]) .shelf-empty p {
+    color: var(--text-secondary);
+  }
+
   .potato .pack-tile:hover .pack-icon-wrap {
     transform: none;
   }

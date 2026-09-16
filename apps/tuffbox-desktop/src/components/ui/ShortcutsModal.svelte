@@ -178,7 +178,7 @@
     display: inline-block;
     padding: 3px 8px;
     font-size: 11px;
-    font-family: monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     background: var(--ftbq-bg, #1a1a1e);
     border: 1px solid var(--ftbq-border, #3a3a42);
     border-radius: 3px;
@@ -187,7 +187,7 @@
     text-align: center;
   }
   .plus {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-text-muted, #9a9aa0);
   }
   .action {

@@ -512,7 +512,7 @@
     border-radius: 999px;
     background: var(--accent-primary);
     color: var(--on-accent);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     white-space: nowrap;
     pointer-events: none;
@@ -574,7 +574,7 @@
     border-radius: var(--border-radius-sm);
     background: color-mix(in srgb, var(--badge-offline-bg, rgba(245, 158, 11, 0.12)) 60%, transparent);
     color: var(--badge-offline-fg, #fde68a);
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.35;
     text-align: center;
   }

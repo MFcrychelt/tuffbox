@@ -78,11 +78,18 @@ pub struct CrashDiagnoseResponse {
 }
 
 /// Convert remote lookup hits into the prompt/RAG SimilarCaseHit shape.
-pub fn hits_to_similar_cases(hits: &[CrashLookupHit]) -> Vec<SimilarCaseHit> {
+/// `anchored` marks hits that identify THE SAME crash (fingerprint-key
+/// equality/soft-match or a blamed-mod overlap) — remote scores alone are
+/// not anchors, they are additive over generic signals server-side too.
+pub fn hits_to_similar_cases(
+    hits: &[CrashLookupHit],
+    fp: &crate::crash_kb::CrashFingerprint,
+) -> Vec<SimilarCaseHit> {
     hits.iter()
         .map(|h| SimilarCaseHit {
             id: h.id.clone(),
             score: h.score,
+            anchored: remote_hit_anchored(h, fp),
             solution: h.solution.clone(),
             suspected_mods: h.suspected_mods.clone(),
             actions: h
@@ -106,6 +113,42 @@ pub fn hits_to_similar_cases(hits: &[CrashLookupHit]) -> Vec<SimilarCaseHit> {
             source: "remote".into(),
         })
         .collect()
+}
+
+
+/// A remote hit counts as anchored only when it identifies the same crash:
+/// fingerprint-key equality (exact, soft with the trailing blame suffix
+/// ignored, or prefix) — or a blamed-mod overlap with our fingerprint.
+fn remote_hit_anchored(h: &CrashLookupHit, fp: &crate::crash_kb::CrashFingerprint) -> bool {
+    let trunc = |k: &str| {
+        k.rsplit_once('|')
+            .map(|(head, _)| head.to_string())
+            .unwrap_or_else(|| k.to_string())
+    };
+    if !h.fingerprint_key.is_empty() && !fp.key.is_empty() {
+        if h.fingerprint_key == fp.key
+            || trunc(&h.fingerprint_key) == trunc(&fp.key)
+            || h.fingerprint_key.starts_with(&fp.key)
+            || fp.key.starts_with(&h.fingerprint_key)
+        {
+            return true;
+        }
+    }
+    if !fp.blame_mod_ids.is_empty() {
+        let hit_mods: Vec<String> = h
+            .suspected_mods
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        if fp
+            .blame_mod_ids
+            .iter()
+            .any(|id| hit_mods.contains(&id.to_ascii_lowercase()))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn join_url(base: &str, path: &str) -> String {

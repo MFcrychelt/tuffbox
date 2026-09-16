@@ -40,6 +40,7 @@
     void load(path);
     if (!pollTimer) {
       pollTimer = setInterval(() => {
+        if (document.hidden) return; // "while visible" — a hidden window skips the scan
         const p = $projectPath;
         if (p) void load(p);
       }, 60000);

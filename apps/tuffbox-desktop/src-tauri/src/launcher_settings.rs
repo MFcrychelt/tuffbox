@@ -55,6 +55,10 @@ pub struct LauncherSettings {
     /// Show the YouTube feed strip on the home dashboard. Off by default; enable in Settings.
     #[serde(default)]
     pub show_youtube_on_home: bool,
+    /// Show Minecraft game updates (snapshots & releases) in the home news feed.
+    /// Off-by-default would hide the strip for existing users, so default = true.
+    #[serde(default = "default_news_show_updates")]
+    pub news_show_updates: bool,
     /// Hide IDE workflow rail (Content / Setup / …); reveal on bottom-edge hover.
     #[serde(default)]
     pub auto_hide_workflow_rail: bool,
@@ -162,6 +166,7 @@ impl Default for LauncherSettings {
             default_memory_mb: default_memory(),
             youtube_inline_player: default_youtube_inline_player(),
             show_youtube_on_home: false,
+            news_show_updates: default_news_show_updates(),
             auto_hide_workflow_rail: false,
             sidebar_mode: default_sidebar_mode(),
             ui_scale_percent: default_ui_scale_percent(),

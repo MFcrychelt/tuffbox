@@ -3,7 +3,9 @@ import {
   canStartLaunch,
   createLaunchSession,
   normalizeInstanceId,
+  needsTokenRefresh,
   reduceLaunchSession,
+  TOKEN_REFRESH_MARGIN_S,
 } from "./launchState";
 
 describe("normalizeInstanceId", () => {
@@ -119,5 +121,26 @@ describe("launch session transitions", () => {
       quickPlayValue: "mc.example.test",
     });
     expect(canStartLaunch(failed, "C:/packs/beta/tuffbox.json")).toBe(true);
+  });
+});
+
+describe("needsTokenRefresh", () => {
+  it("never refreshes sessions without an expiry (offline / yggdrasil)", () => {
+    expect(needsTokenRefresh(null)).toBe(false);
+    expect(needsTokenRefresh(undefined)).toBe(false);
+  });
+
+  it("refreshes when the remaining validity is under the margin", () => {
+    const now = 1_000_000;
+    expect(needsTokenRefresh(now + 60, now)).toBe(true);
+    expect(needsTokenRefresh(now + TOKEN_REFRESH_MARGIN_S - 1, now)).toBe(true);
+    expect(needsTokenRefresh(now - 3600, now)).toBe(true);
+  });
+
+  it("keeps a fresh session untouched", () => {
+    const now = 1_000_000;
+    expect(needsTokenRefresh(now + TOKEN_REFRESH_MARGIN_S, now)).toBe(false);
+    expect(needsTokenRefresh(now + TOKEN_REFRESH_MARGIN_S + 1, now)).toBe(false);
+    expect(needsTokenRefresh(now + 86400, now)).toBe(false);
   });
 });

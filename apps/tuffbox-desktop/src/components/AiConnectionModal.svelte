@@ -86,7 +86,7 @@
   }
   .title small {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
   .icon {
     border: none;

@@ -17,7 +17,9 @@
   import { StreamLanguage, LanguageSupport } from "@codemirror/language";
   import { toml } from "@codemirror/legacy-modes/mode/toml";
   import { properties as propertiesMode } from "@codemirror/legacy-modes/mode/properties";
-  import { oneDark } from "@codemirror/theme-one-dark";
+  import { editorThemeFor } from "../lib/editorTheme";
+  import { completionsForExtension, type CompletionKind } from "../lib/editorAutocomplete";
+  import { theme } from "../lib/store";
 
   /** CM6 doesn't map legacy token "quote" → string; remap so key=value actually colors. */
   const mcProperties = {
@@ -349,6 +351,20 @@
   }
 
   const currentLang = $derived(langForFile(selected) ?? (looksLikeProps(content) ? propsLang() : undefined));
+
+  /** Autocomplete source kind for the open file (Tune built-in editor). */
+  const completionKind = $derived.by(() => {
+    const ext = selected?.extension?.toLowerCase() ?? "";
+    if (ext === "json" || ext === "json5") return "json" as CompletionKind;
+    if (ext === "js" || ext === "zs") return "kubejs" as CompletionKind;
+    if (["toml", "txt", "properties", "cfg", "conf", "ini"].includes(ext)) return "flat" as CompletionKind;
+    if (looksLikeProps(content)) return "flat" as CompletionKind;
+    return null;
+  });
+
+  /** Editor follows the app theme (all 18) instead of hard-coded one-dark. */
+  const editorTheme = $derived(editorThemeFor($theme));
+  const editorExts = $derived(completionsForExtension(completionKind));
   const dirty = $derived(content !== originalContent);
   $effect(() => {
     tuneDirty.set(dirty);
@@ -832,7 +848,8 @@
               <CodeMirror
                 value={content}
                 lang={currentLang}
-                theme={oneDark}
+                theme={editorTheme}
+                extensions={editorExts}
                 on:change={(e) => handleCmChange(e.detail)}
                 on:ready={(e) => onCmReady(e.detail)}
               />
@@ -931,7 +948,7 @@
   .chip {
     line-height: 1.4;
     white-space: nowrap;
-    font-size: 11px; font-weight: 700; text-transform: lowercase; letter-spacing: .02em;
+    font-size: 12px; font-weight: 700; text-transform: lowercase; letter-spacing: .02em;
     padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-muted); cursor: pointer;
   }
@@ -1035,9 +1052,9 @@
   }
   .search-hit { width: 100%; display: grid; gap: 2px; text-align: left; padding: 5px 6px; margin-bottom: 2px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); transform: none; }
   .search-hit:hover { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
-  .hit-path { font-size: 11px; color: var(--accent-primary); font-family: ui-monospace, monospace; }
-  .hit-text { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .search-truncated { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
+  .hit-path { font-size: 11px; color: var(--accent-primary); font-family: var(--font-mono, ui-monospace, monospace); }
+  .hit-text { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .search-truncated { font-size: 12px; color: var(--text-muted); padding: 6px 8px; }
 
   .tree {
     flex: 1;
@@ -1061,7 +1078,7 @@
   .tree-dir :global(.folder-icon) { color: var(--accent-primary); opacity: 0.7; }
   .tree-dir-name, .tree-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tree-file-name { font-weight: 500; }
-  .tree-file-meta { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+  .tree-file-meta { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 
   .muted { padding: 16px 8px; line-height: 1.5; color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
 
@@ -1136,12 +1153,12 @@
   .lint-item.error { background: color-mix(in srgb, var(--accent-danger) 8%, transparent); color: var(--accent-danger); }
   .lint-item.warning { background: color-mix(in srgb, var(--accent-warning) 8%, transparent); color: var(--accent-warning); }
   .lint-item:hover { border-color: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
-  .lint-sev { font-weight: 800; text-transform: uppercase; font-size: 9px; padding: 1px 4px; border-radius: 3px; }
+  .lint-sev { font-weight: 800; text-transform: uppercase; font-size: 11px; padding: 1px 4px; border-radius: 3px; }
   .lint-item.error .lint-sev { background: color-mix(in srgb, var(--accent-danger) 20%, transparent); }
   .lint-item.warning .lint-sev { background: color-mix(in srgb, var(--accent-warning) 20%, transparent); }
-  .lint-item code { font-size: 10px; color: var(--accent-primary); }
+  .lint-item code { font-size: 11px; color: var(--accent-primary); }
   .lint-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lint-item small { color: var(--text-muted); font-size: 10px; }
+  .lint-item small { color: var(--text-muted); font-size: 12px; }
   @media (max-width: 1050px) {
     .layout { grid-template-columns: 1fr; }
     .layout.with-ai { grid-template-columns: 1fr; }

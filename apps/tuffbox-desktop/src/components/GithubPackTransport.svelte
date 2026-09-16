@@ -468,7 +468,7 @@
   {/if}
 
   {#if preview}
-    <small class="text-[11px] text-[var(--text-muted)]">{preview.fileCount} files · v{preview.packVersion}{preview.hasExternalAssets ? " · large jars via Release assets" : ""}</small>
+    <small class="text-[12px] text-[var(--text-muted)]">{preview.fileCount} files · v{preview.packVersion}{preview.hasExternalAssets ? " · large jars via Release assets" : ""}</small>
   {/if}
   {#if message}<p class="m-0 text-xs text-[var(--accent-primary)]">{message}</p>{/if}
   {#if conflict}<p class="m-0 text-xs text-[#fecaca]">Conflict: {conflict}</p>{/if}

@@ -443,7 +443,7 @@
 
   .field-label,
   legend.field-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -666,7 +666,7 @@
   }
 
   .cape-src {
-    font-size: 9px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);

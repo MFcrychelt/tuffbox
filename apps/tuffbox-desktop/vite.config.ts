@@ -45,6 +45,10 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    // Browser preview (e2b.app sandbox proxy) hits the dev server through a
+    // generated *.e2b.app host — allow it or Vite answers 403.
+    allowedHosts: true,
+
     hmr: host
       ? {
           protocol: "ws",

@@ -739,6 +739,12 @@ import { trapFocus } from "../lib/focusTrap";
     return n;
   }
 
+  /** Empty-state action: clear the query too, not just the side filters. */
+  function resetSearchAndFilters() {
+    searchQuery = "";
+    resetCatalogFilters();
+  }
+
   function resetCatalogFilters() {
     filterGameVersion = "";
     filterCategory = "";
@@ -760,6 +766,16 @@ import { trapFocus } from "../lib/focusTrap";
     if (filter.startsWith("list:")) return filter.slice(5);
     return "Saved";
   }
+
+  /** Add-browser header title: proper nouns, never the raw `list:` prefix. */
+  const addBrowserTitle = $derived.by(() => {
+    if (contentFilter === "mod") return "mods";
+    if (contentFilter === "resourcepack") return "resource packs";
+    if (contentFilter === "datapack") return "datapacks";
+    if (contentFilter === "shader") return "shaders";
+    if (contentFilter === "favorites") return "favorites";
+    return savedViewLabel(contentFilter);
+  });
 
   function modIconLookupKey(mod: ModRow): string | null {
     if (mod.source === "curseforge") return null;
@@ -3172,7 +3188,7 @@ import { trapFocus } from "../lib/focusTrap";
       <label
         class="ideas-toggle often-together"
         class:on={ideasEnabled}
-        title="Often together — after installing from Add mods, offer popular companion mods from community stats"
+        title="Often together — suggest popular companion mods after installing"
       >
         <input
           type="checkbox"
@@ -3278,7 +3294,7 @@ import { trapFocus } from "../lib/focusTrap";
             role="menuitem"
             onclick={() => { actionsMenuOpen = false; optimizePackOpen = true; }}
             disabled={!$projectPath || contentFilter !== "mod"}
-            title="Install a curated Fabric opt pack or missing performance mods + safe configs"
+            title="Install a curated performance pack with safe configs"
           >
             <Zap size={14} />
             Optimize
@@ -3326,6 +3342,7 @@ import { trapFocus } from "../lib/focusTrap";
             <div class="recs-main">
               <span class="recs-prio {rec.priority}">{rec.priority}</span>
               {#if rec.source}<span class="recs-source">{rec.source}</span>{/if}
+              {#if rec.compatibility === "unverified"}<span class="recs-source unverified" title="Modrinth could not be reached — compatibility not verified">unverified</span>{/if}
               <strong>{rec.name}</strong>
               <span>{rec.description}</span>
               {#if rec.loader || rec.minecraftVersion || rec.compatibleVersion}
@@ -3803,11 +3820,15 @@ import { trapFocus } from "../lib/focusTrap";
       <div class="add-mods-browse" class:behind-catalog={!!catalogViewResult} aria-hidden={!!catalogViewResult}>
       <div class="modal-header">
         <div>
-          <h2>Add {catalogProvider === "both" ? "" : (catalogProvider === "curseforge" ? "CurseForge " : "Modrinth ")}{contentFilter}</h2>
-          <p>
-            {contentFilter === "mod"
-              ? "Search is filtered by the current Minecraft version and loader."
-              : "Search is filtered by the current Minecraft version."}
+          <h2>Add {addBrowserTitle}</h2>
+          <p class="add-context">
+            {#if filterGameVersion || filterLoader}
+              Filtered by
+              {#if filterGameVersion}<span class="ctx-chip">{filterGameVersion}</span>{/if}
+              {#if filterLoader}<span class="ctx-chip">{filterLoader}</span>{/if}
+            {:else}
+              No version or loader filters — searching everything
+            {/if}
           </p>
         </div>
         <button class="icon-btn" onclick={() => (addOpen = false)}><X size={18} /></button>
@@ -3869,6 +3890,8 @@ import { trapFocus } from "../lib/focusTrap";
           />
           {#if searchLoading}
             <span class="search-spinner"><Loader2 size={16} class="spin" /></span>
+          {:else if searchQuery.trim()}
+            <kbd class="search-kbd" title="Press Enter to search">Enter</kbd>
           {/if}
         </div>
         <div class="topbar-controls">
@@ -4040,7 +4063,7 @@ import { trapFocus } from "../lib/focusTrap";
                     {#if !filterCategory}<Check size={13} />{/if}
                   </button>
                   {#each categoryGroups as group (group.header)}
-                    <div class="px-2.5 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{group.header}</div>
+                    <div class="px-2.5 pt-2.5 pb-1 text-[12px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{group.header}</div>
                     {#each group.names as category (category)}
                       <button
                         type="button"
@@ -4211,7 +4234,7 @@ import { trapFocus } from "../lib/focusTrap";
 
           <!-- Sidebar footer: reset -->
           <div class="shrink-0 border-t border-[var(--border-color)] px-3 py-2.5 flex items-center justify-between">
-            <span class="text-[11px] text-[var(--text-muted)]">
+            <span class="text-[12px] text-[var(--text-muted)]">
               {activeFilterCount() > 0 ? `${activeFilterCount()} active filter${activeFilterCount() === 1 ? "" : "s"}` : "No extra filters"}
             </span>
             <button
@@ -4225,7 +4248,22 @@ import { trapFocus } from "../lib/focusTrap";
         </aside>
 
         <section class="browser-results" bind:this={browserResultsEl}>
-          {#if viewMode !== "infinite"}
+          {#snippet skeletonGrid()}
+            <div class="results grid card-size-m" aria-busy="true" aria-label="Loading projects">
+              {#each Array(8) as _, i (i)}
+                <div class="result-card tb-card skeleton-card" aria-hidden="true">
+                  <div class="sk sk-icon"></div>
+                  <div class="sk sk-main">
+                    <div class="sk sk-title"></div>
+                    <div class="sk sk-line"></div>
+                  </div>
+                  <div class="sk sk-actions"></div>
+                  <div class="sk sk-footer"></div>
+                </div>
+              {/each}
+            </div>
+          {/snippet}
+          {#if viewMode !== "infinite" && !isSavedViewFilter(contentFilter)}
           <div class="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
@@ -4265,16 +4303,16 @@ import { trapFocus } from "../lib/focusTrap";
                 class="inline-flex items-center gap-2 px-3.5 py-2 rounded-[var(--border-radius-md)] border font-semibold text-[13px] cursor-pointer transition-colors duration-150 bg-[var(--accent-primary)] border-[color-mix(in_srgb,var(--accent-primary)_60%,#000)] text-[var(--on-accent,#fff)] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed"
                 onclick={bulkInstallSelected}
                 disabled={selectedResults.length === 0 || mutating}
-                title="Install selected projects with required dependencies (one provider at a time)"
+                title="Install selected projects with dependencies (one provider at a time)"
               >Install selected + dependencies</button>
             </div>
           </div>
 
           {#if searchLoading && searchResults.length === 0 && !isSavedViewFilter(contentFilter)}
-            <div class="loading compact">Loading {catalogProvider === "both" ? "Modrinth & CurseForge" : (catalogProvider === "curseforge" ? "CurseForge" : "Modrinth")} projects...</div>
+            {@render skeletonGrid()}
           {:else if isSavedViewFilter(contentFilter)}
             {#if savedModsLoading}
-              <div class="loading compact">Loading saved projects...</div>
+              {@render skeletonGrid()}
             {:else if savedMods.length === 0}
               {#if contentFilter === "favorites"}
                 <EmptyState icon={Bookmark} compact={true} title="No favorites yet" description="Heart projects in Add (Modrinth or CurseForge) to see them here." />
@@ -4375,7 +4413,14 @@ import { trapFocus } from "../lib/focusTrap";
               </div>
             {/if}
           {:else if displayedResults.length === 0}
-            <EmptyState icon={Search} compact={true} title="No results" description="Adjust filters or search text." />
+            <EmptyState
+              icon={Search}
+              compact={true}
+              title="No results"
+              description="Adjust filters or search text."
+              actionLabel="Reset filters"
+              onaction={resetSearchAndFilters}
+            />
           {:else}
             <div class="results {viewMode === 'list' ? 'list' : 'grid'} card-size-{cardSize.toLowerCase()} tb-stagger">
           {#each displayedResults as result, i (result.id)}
@@ -5283,7 +5328,7 @@ import { trapFocus } from "../lib/focusTrap";
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -5344,7 +5389,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .stat-pill span {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -5950,8 +5995,8 @@ import { trapFocus } from "../lib/focusTrap";
     min-width: 0;
   }
   .ideas-meta strong { font-size: 13px; color: var(--text-primary); }
-  .ideas-meta code { font-size: 11px; color: var(--text-muted); }
-  .ideas-meta small { font-size: 10px; color: var(--text-muted); }
+  .ideas-meta code { font-size: 12px; color: var(--text-muted); }
+  .ideas-meta small { font-size: 12px; color: var(--text-muted); }
   .ideas-row .muted {
     margin-left: auto;
     color: var(--text-muted);
@@ -6033,7 +6078,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .tabs .tab-count {
     margin-left: 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     background: var(--bg-elevated);
     padding: 1px 6px;
@@ -6066,7 +6111,7 @@ import { trapFocus } from "../lib/focusTrap";
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -6147,7 +6192,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .disabled-badge {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
     padding: 2px 6px;
@@ -6527,7 +6572,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .download-status {
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
@@ -6542,7 +6587,7 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     justify-content: space-between;
     margin-top: 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -6645,7 +6690,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .version,
   code {
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 13px;
   }
 
@@ -6975,7 +7020,76 @@ import { trapFocus } from "../lib/focusTrap";
     pointer-events: none;
   }
 
-  .modal.add-mods-modal .loading-more {
+    .add-context {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 2px 0 0;
+  }
+
+  .ctx-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    text-transform: capitalize;
+  }
+
+  .modal.add-mods-modal .search .search-kbd {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .modal.add-mods-modal .search:has(.search-kbd) input {
+    padding-right: 64px;
+  }
+
+  .skeleton-card {
+    cursor: default;
+  }
+
+  .sk {
+    border-radius: var(--border-radius-sm);
+    background: color-mix(in srgb, var(--text-muted) 15%, transparent);
+    animation: tb-skeleton-pulse 1.5s ease-in-out infinite;
+  }
+
+  .sk-icon { grid-area: icon; width: 44px; height: 44px; }
+  .sk-main { grid-area: main; display: flex; flex-direction: column; gap: 7px; padding-top: 3px; }
+  .sk-title { height: 13px; width: 62%; }
+  .sk-line { height: 11px; width: 88%; }
+  .sk-actions { grid-area: actions; height: 30px; width: 116px; }
+  .sk-footer { grid-area: footer; height: 12px; width: 46%; }
+
+  @keyframes tb-skeleton-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sk { animation: none; }
+  }
+
+.modal.add-mods-modal .loading-more {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -7044,7 +7158,7 @@ import { trapFocus } from "../lib/focusTrap";
     height: 18px;
     padding: 0 5px;
     border-radius: 4px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.02em;
     flex-shrink: 0;
@@ -7539,7 +7653,7 @@ import { trapFocus } from "../lib/focusTrap";
     background: var(--bg-elevated);
     border: 1px solid var(--border-color);
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
   }
 
@@ -7600,7 +7714,7 @@ import { trapFocus } from "../lib/focusTrap";
     border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     padding: 6px; display: flex; flex-direction: column; gap: 2px;
   }
-  .save-dropdown-header { padding: 6px 10px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .save-dropdown-header { padding: 6px 10px; font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .save-dropdown-item {
     display: flex; align-items: center; gap: 8px; width: 100%;
     padding: 8px 10px; border-radius: 6px; background: transparent; border: none;
@@ -7619,7 +7733,7 @@ import { trapFocus } from "../lib/focusTrap";
     align-items: center;
     gap: 10px;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     padding-top: 4px;
     border-top: 1px solid var(--border-color);
   }
@@ -7633,7 +7747,7 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 6px;
     margin: 8px 0;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .install-preview > span {
@@ -7694,11 +7808,11 @@ import { trapFocus } from "../lib/focusTrap";
   .install-plan-panel .dep-entry.required { border-left: 3px solid var(--accent-primary); }
   .install-plan-panel .dep-entry.optional { border-left: 3px solid rgba(161,161,170,.4); }
   .install-plan-panel .dep-entry.already-installed { opacity: 0.72; }
-  .install-plan-panel .dep-target { font-family: ui-monospace,monospace; font-size: 12px; }
-  .install-plan-panel .dep-entry small { color: var(--text-muted); font-size: 11px; }
+  .install-plan-panel .dep-target { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
+  .install-plan-panel .dep-entry small { color: var(--text-muted); font-size: 12px; }
   .dep-installed-pill {
     margin-left: auto;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.02em;
     text-transform: uppercase;
@@ -7710,7 +7824,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .dep-installed-count {
     margin-left: 6px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-muted);
     text-transform: none;
@@ -7731,14 +7845,14 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-item strong { color: var(--text-primary); font-size: 13px; }
   .plan-item span { color: var(--text-muted); font-size: 13px; text-align: right; }
   .plan-item .side-tag { text-transform: uppercase; font-weight: 700; }
-  .plan-item .mono { font-family: ui-monospace,monospace; font-size: 11px; }
+  .plan-item .mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; }
   .plan-deps-section, .plan-conflicts { padding: 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); }
   .plan-deps-section > strong { color: var(--accent-primary); font-size: 13px; display: block; margin-bottom: 8px; }
   .plan-conflicts > strong { color: #fca5a5; font-size: 13px; display: block; margin-bottom: 8px; }
   .plan-dep-list { display: grid; gap: 4px; }
   .plan-dep-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg-secondary); }
   .plan-dep-row code { font-size: 12px; }
-  .plan-dep-row span { color: var(--text-muted); font-size: 11px; }
+  .plan-dep-row span { color: var(--text-muted); font-size: 12px; }
   .plan-dep-row.already-installed { opacity: 0.72; }
   .plan-dep-row.conflict { border-left: 3px solid rgba(239,68,68,.6); }
   .plan-no-deps { color: var(--text-muted); font-size: 12px; padding: 8px; }
@@ -7749,7 +7863,7 @@ import { trapFocus } from "../lib/focusTrap";
   .dep-review-list { max-height: 220px; overflow: auto; }
   .dep-review .plan-dep-row.selectable { cursor: pointer; align-items: center; }
   .dep-review .plan-dep-row.selectable code { margin-left: calc((var(--depth, 1) - 1) * 14px); }
-  .dep-review-hint { margin: 8px 0 0; font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+  .dep-review-hint { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); line-height: 1.4; }
   .plan-modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border-color); margin-top: 8px; }
 
   .update-confirm-modal { max-width: 600px; }
@@ -7760,7 +7874,7 @@ import { trapFocus } from "../lib/focusTrap";
   .update-confirm-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
   .update-confirm-vers { color: var(--text-muted); font-size: 12px; }
   .update-confirm-vers strong { color: var(--accent-primary); }
-  .update-confirm-chip { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 2px 6px; border-radius: 999px; }
+  .update-confirm-chip { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 2px 6px; border-radius: 999px; }
   .update-confirm-chip.rename { background: color-mix(in srgb, var(--accent-secondary) 18%, transparent); color: var(--accent-secondary); }
   .update-confirm-chip.loader { background: rgba(251,191,36,.14); color: #fbbf24; }
   .update-confirm-chip.mc { background: rgba(251,191,36,.14); color: #fbbf24; }
@@ -7816,10 +7930,11 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .recs-main { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
   .recs-main strong { color: var(--text-primary); font-size: 13px; }
-  .recs-main span { color: var(--text-muted); font-size: 11px; }
+  .recs-main span { color: var(--text-muted); font-size: 12px; }
   .recs-meta { opacity: 0.8; }
-  .recs-source { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
-  .recs-prio { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
+  .recs-source { font-size: 11px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
+  .recs-source.unverified { background: color-mix(in srgb, var(--accent-warning) 14%, transparent); color: var(--accent-warning); }
+  .recs-prio { font-size: 11px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
   .recs-prio.critical { background: rgba(239,68,68,.15); color: #fca5a5; }
   .recs-prio.high { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-primary); }
   .recs-prio.medium { background: rgba(96,165,250,.12); color: #93c5fd; }

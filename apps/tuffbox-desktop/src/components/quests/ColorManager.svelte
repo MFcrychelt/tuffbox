@@ -330,7 +330,7 @@
     color: var(--text-primary, var(--ftbq-text));
   }
   .cm-count {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     padding: 2px 6px;
     border: 1px solid var(--ftbq-frame);
@@ -369,7 +369,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     cursor: pointer;
   }
@@ -409,7 +409,7 @@
     border-radius: var(--ftbq-radius-control);
     background: color-mix(in srgb, var(--ftbq-bg) 45%, transparent);
     cursor: pointer;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-primary, var(--ftbq-text));
     transition: border-color 0.15s, background 0.15s;
   }
@@ -425,7 +425,7 @@
     border: 1px solid color-mix(in srgb, #000 25%, transparent);
   }
   .chip-code {
-    font-family: monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-weight: 600;
   }
   .chip-count {
@@ -487,18 +487,18 @@
     color: var(--text-primary, var(--ftbq-text));
   }
   .hit-field {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
-    font-family: monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
   .hit-color {
     margin-left: auto;
     display: flex;
     align-items: center;
     gap: 3px;
-    font-family: monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-weight: 600;
-    font-size: 10px;
+    font-size: 11px;
   }
   .mini-swatch {
     width: 8px;
@@ -507,7 +507,7 @@
     flex-shrink: 0;
   }
   .hit-segment {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     overflow: hidden;
     text-overflow: ellipsis;

@@ -28,6 +28,35 @@ pub struct ExportResult {
     pub path: PathBuf,
     pub file_count: usize,
     pub override_count: usize,
+    /// Non-fatal problems: files that could not be read (locked by the
+    /// running game / antivirus / permissions) and were SKIPPED. The caller
+    /// must surface these — a silently missing file is a broken pack.
+    pub warnings: Vec<String>,
+}
+
+/// Read a file for archiving with a small retry loop. While the game is
+/// running, Windows briefly holds config/log files with a sharing violation
+/// (and antivirus scanners do the same to jars); retrying a few times turns
+/// a hard export failure into a millisecond delay.
+fn read_export_file(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut last_err = None;
+    for attempt in 0..3 {
+        match fs::read(path) {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) => {
+                // ERROR_SHARING_VIOLATION (32) and PermissionDenied are the
+                // transient kinds worth waiting for; anything else fails fast.
+                let transient = e.raw_os_error() == Some(32)
+                    || matches!(e.kind(), std::io::ErrorKind::PermissionDenied);
+                last_err = Some(e);
+                if !transient || attempt == 2 {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| std::io::Error::other("unreadable file")))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -418,11 +447,17 @@ pub fn export_modrinth_pack(
     zip.start_file("modrinth.index.json", options)?;
     zip.write_all(serde_json::to_string_pretty(&index)?.as_bytes())?;
 
-    let mut override_count =
-        add_modrinth_overrides(&mut zip, project_dir, options, &skip_override_paths)?;
+    let mut warnings: Vec<String> = Vec::new();
+    let mut override_count = add_modrinth_overrides(
+        &mut zip,
+        project_dir,
+        options,
+        &skip_override_paths,
+        &mut warnings,
+    )?;
     for (src, dest) in &override_content {
         zip.start_file(dest, options)?;
-        zip.write_all(&fs::read(src)?)?;
+        zip.write_all(&read_export_file(src)?)?;
         override_count += 1;
     }
     override_count += add_listing_pack_icon(
@@ -438,6 +473,7 @@ pub fn export_modrinth_pack(
         path: output_path.to_path_buf(),
         file_count: index.files.len(),
         override_count,
+        warnings,
     })
 }
 
@@ -487,7 +523,7 @@ pub fn export_server_pack(
         let local_path = project_dir.join("mods").join(&file_name);
         if local_path.is_file() {
             zip.start_file(format!("mods/{file_name}"), options)?;
-            zip.write_all(&fs::read(&local_path)?)?;
+            zip.write_all(&read_export_file(&local_path)?)?;
             file_count += 1;
             included_mods.push(ServerPackMod {
                 id: module.id.clone(),
@@ -509,7 +545,8 @@ pub fn export_server_pack(
         }
     }
 
-    let override_count = add_server_overrides(&mut zip, project_dir, options)?;
+    let mut warnings: Vec<String> = Vec::new();
+    let override_count = add_server_overrides(&mut zip, project_dir, options, &mut warnings)?;
     let server_manifest = ServerPackManifest {
         name: manifest.project.name.clone(),
         version: manifest.project.version.clone(),
@@ -540,6 +577,7 @@ pub fn export_server_pack(
         path: output_path.to_path_buf(),
         file_count,
         override_count,
+        warnings,
     })
 }
 
@@ -568,13 +606,15 @@ pub fn export_prism_instance(
     zip.start_file("tuffbox.remote-mods.json", options)?;
     zip.write_all(serde_json::to_string_pretty(&remote_mod_manifest(manifest))?.as_bytes())?;
 
-    let override_count = add_prism_files(&mut zip, project_dir, options)?;
+    let mut warnings: Vec<String> = Vec::new();
+    let override_count = add_prism_files(&mut zip, project_dir, options, &mut warnings)?;
     zip.finish()?;
 
     Ok(ExportResult {
         path: output_path.to_path_buf(),
         file_count: 3,
         override_count,
+        warnings,
     })
 }
 
@@ -634,7 +674,8 @@ pub fn export_curseforge_pack(
         zip.write_all(serde_json::to_string_pretty(&remotes)?.as_bytes())?;
     }
 
-    let mut override_count = add_overrides(&mut zip, project_dir, options)?;
+    let mut warnings: Vec<String> = Vec::new();
+    let mut override_count = add_overrides(&mut zip, project_dir, options, &mut warnings)?;
     override_count += add_listing_pack_icon(
         &mut zip,
         manifest,
@@ -650,7 +691,7 @@ pub fn export_curseforge_pack(
                 .unwrap_or_else(|| "mod.jar".into())
         );
         zip.start_file(&dest, options)?;
-        zip.write_all(&fs::read(jar)?)?;
+        zip.write_all(&read_export_file(jar)?)?;
         override_count += 1;
     }
     zip.finish()?;
@@ -659,6 +700,7 @@ pub fn export_curseforge_pack(
         path: output_path.to_path_buf(),
         file_count: cf_manifest.files.len() + if remotes.is_empty() { 1 } else { 2 },
         override_count,
+        warnings,
     })
 }
 
@@ -915,6 +957,7 @@ fn add_prism_files<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     project_dir: &Path,
     options: SimpleFileOptions,
+    warnings: &mut Vec<String>,
 ) -> Result<usize, ExportError> {
     let mut count = 0;
     for root in [
@@ -928,7 +971,7 @@ fn add_prism_files<W: Write + Seek>(
     ] {
         let dir = project_dir.join(root);
         if dir.is_dir() {
-            count += add_dir_plain(zip, project_dir, &dir, options)?;
+            count += add_dir_plain(zip, project_dir, &dir, options, warnings)?;
         }
     }
     Ok(count)
@@ -939,6 +982,7 @@ fn add_dir_plain<W: Write + Seek>(
     project_dir: &Path,
     dir: &Path,
     options: SimpleFileOptions,
+    warnings: &mut Vec<String>,
 ) -> Result<usize, ExportError> {
     let mut count = 0;
     for entry in fs::read_dir(dir)? {
@@ -948,15 +992,28 @@ fn add_dir_plain<W: Write + Seek>(
         }
         let path = entry.path();
         if path.is_dir() {
-            count += add_dir_plain(zip, project_dir, &path, options)?;
+            count += add_dir_plain(zip, project_dir, &path, options, warnings)?;
         } else if path.is_file() {
             let relative = path
                 .strip_prefix(project_dir)
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .replace('\\', "/");
+            let bytes = match read_export_file(&path) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    // A mod jar is pack payload — a missing jar means a
+                    // broken export, so mods/ still fails hard. Everything
+                    // else (configs etc.) is skipped with a loud warning.
+                    if relative.starts_with("mods/") {
+                        return Err(ExportError::Io(e));
+                    }
+                    warnings.push(format!("skipped {relative}: {e}"));
+                    continue;
+                }
+            };
             zip.start_file(relative, options)?;
-            zip.write_all(&fs::read(&path)?)?;
+            zip.write_all(&bytes)?;
             count += 1;
         }
     }
@@ -967,8 +1024,15 @@ fn add_overrides<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     project_dir: &Path,
     options: SimpleFileOptions,
+    warnings: &mut Vec<String>,
 ) -> Result<usize, ExportError> {
-    add_modrinth_overrides(zip, project_dir, options, &std::collections::HashSet::new())
+    add_modrinth_overrides(
+        zip,
+        project_dir,
+        options,
+        &std::collections::HashSet::new(),
+        warnings,
+    )
 }
 
 fn add_modrinth_overrides<W: Write + Seek>(
@@ -976,6 +1040,7 @@ fn add_modrinth_overrides<W: Write + Seek>(
     project_dir: &Path,
     options: SimpleFileOptions,
     skip_paths: &std::collections::HashSet<String>,
+    warnings: &mut Vec<String>,
 ) -> Result<usize, ExportError> {
     let ignore = TuffboxIgnore::load(project_dir);
     let mut count = 0;
@@ -990,7 +1055,7 @@ fn add_modrinth_overrides<W: Write + Seek>(
     ] {
         let dir = project_dir.join(root);
         if dir.is_dir() {
-            count += add_dir(zip, project_dir, &dir, options, &ignore, skip_paths)?;
+            count += add_dir(zip, project_dir, &dir, options, &ignore, skip_paths, warnings)?;
         }
     }
     Ok(count)
@@ -1015,7 +1080,7 @@ fn add_listing_pack_icon<W: Write + Seek>(
     let Some(src) = crate::listing::resolve_listing_icon(project_dir, listing) else {
         return Ok(0);
     };
-    let bytes = fs::read(&src)?;
+    let bytes = read_export_file(&src)?;
     let mut count = 0;
     match mode {
         ListingIconMode::Modrinth => {
@@ -1039,6 +1104,7 @@ fn add_server_overrides<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     project_dir: &Path,
     options: SimpleFileOptions,
+    warnings: &mut Vec<String>,
 ) -> Result<usize, ExportError> {
     let ignore = TuffboxIgnore::load(project_dir);
     let mut count = 0;
@@ -1052,6 +1118,7 @@ fn add_server_overrides<W: Write + Seek>(
                 options,
                 &ignore,
                 &std::collections::HashSet::new(),
+                warnings,
             )?;
         }
     }
@@ -1124,6 +1191,7 @@ pub fn export_logs_zip(
         path: output_path.to_path_buf(),
         file_count,
         override_count: 0,
+        warnings: Vec::new(),
     })
 }
 
@@ -1152,7 +1220,7 @@ fn add_dir_flat<W: Write + Seek>(
                 .to_string_lossy()
                 .replace('\\', "/");
             zip.start_file(relative, options)?;
-            zip.write_all(&fs::read(&path)?)?;
+            zip.write_all(&read_export_file(&path)?)?;
             count += 1;
         }
     }
@@ -1174,6 +1242,7 @@ fn add_dir<W: Write + Seek>(
     options: SimpleFileOptions,
     ignore: &TuffboxIgnore,
     skip_paths: &std::collections::HashSet<String>,
+    warnings: &mut Vec<String>,
 ) -> Result<usize, ExportError> {
     let mut count = 0;
     for entry in fs::read_dir(dir)? {
@@ -1191,10 +1260,20 @@ fn add_dir<W: Write + Seek>(
             continue;
         }
         if path.is_dir() {
-            count += add_dir(zip, project_dir, &path, options, ignore, skip_paths)?;
+            count += add_dir(zip, project_dir, &path, options, ignore, skip_paths, warnings)?;
         } else if path.is_file() {
+            let bytes = match read_export_file(&path) {
+                Ok(bytes) => bytes,
+                // Config-style override: skip with a loud warning instead of
+                // failing a multi-GB export at 95% because one file was
+                // briefly locked by the running game or an antivirus.
+                Err(e) => {
+                    warnings.push(format!("skipped {relative}: {e}"));
+                    continue;
+                }
+            };
             zip.start_file(format!("overrides/{relative}"), options)?;
-            zip.write_all(&fs::read(&path)?)?;
+            zip.write_all(&bytes)?;
             count += 1;
         }
     }

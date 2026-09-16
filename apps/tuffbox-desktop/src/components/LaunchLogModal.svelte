@@ -560,7 +560,7 @@
 
   .live-hint {
     flex: 1;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, #9aa4b2);
   }
 

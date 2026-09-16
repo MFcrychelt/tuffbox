@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import DedupAskDialog from "./DedupAskDialog.svelte";
   import { fade, fly, slide } from "svelte/transition";
   import { quintOut } from "svelte/easing";
   import {
@@ -158,6 +159,20 @@
   /** Android-style long-press → drag onto another tile to make a folder. */
   let dragSource = $state<RecentProject | null>(null);
   let dropTargetPath = $state<string | null>(null);
+  // Import-time dedup question (docs/17 §4).
+  let dedupAsk = $state<{ resolve: (v: boolean | null) => void; name: string } | null>(null);
+
+  function askDedupChoice(name: string): Promise<boolean | null> {
+    return new Promise((resolve) => {
+      dedupAsk = {
+        resolve: (v) => {
+          dedupAsk = null;
+          resolve(v);
+        },
+        name,
+      };
+    });
+  }
   let dropTargetGroup = $state<string | null>(null);
   let dragGhost = $state<{ x: number; y: number; letter: string; colorA: string; colorB: string } | null>(null);
   let suppressNextClick = $state(false);
@@ -781,16 +796,33 @@
     actionBusy = true;
     const isGithub = /^(gh:|https:\/\/github\.com\/|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$)/.test(source.trim()) && !/\.(mrpack|zip)$/i.test(source.trim());
     if (isGithub) githubInstallActive = true;
+    let dedup: boolean | null = true;
+    dedup = await askDedupChoice(source.replace(/\\/g, "/").split("/").pop() ?? "");
+    if (dedup === null) {
+      actionBusy = false;
+      githubInstallActive = false;
+      return; // user closed the question — abort the import
+    }
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
         toasts.error("Set an instances folder in Settings first.");
         return;
       }
-      const result: { path?: string; name?: string; modCount?: number } = await invoke(
-        "install_modpack",
-        { source, targetDir, instanceName: null },
-      );
+      const result: any = await invoke("install_modpack", {
+        source,
+        targetDir,
+        instanceName: null,
+        dedup,
+      });
+      const dedupInfo = result?.dedup;
+      if (dedupInfo?.mode === "shared" && (dedupInfo.linked ?? 0) > 0) {
+        const mb = Math.round((dedupInfo.bytesReclaimed ?? 0) / 1e6);
+        toasts.info(
+          `File deduplication on — ${dedupInfo.linked} file(s) shared${mb > 0 ? `, ~${mb} MB saved` : ""}.`,
+          4000,
+        );
+      }
       const path = result.path;
       if (!path) throw new Error("Import returned no path");
       const info = (await invoke("validate_project", { path })) as RecentProject["info"] & {
@@ -1068,6 +1100,13 @@
     endDrag();
   });
 </script>
+
+<DedupAskDialog
+  open={!!dedupAsk}
+  packName={dedupAsk?.name ?? ""}
+  onanswer={(v) => dedupAsk?.resolve(v)}
+  oncancel={() => dedupAsk?.resolve(null)}
+/>
 
 <div class="prism-lib" class:drag-mode={dragging}>
   <div class="prism-toolbar lib-toolbar-enter">
@@ -1911,7 +1950,7 @@
   }
   .tb-account-name { font-size: 12px; font-weight: 700; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tb-account-badge {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -2038,7 +2077,7 @@
     border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
   }
   .group-count {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
   }
@@ -2236,7 +2275,7 @@
       border-color var(--motion-fast) var(--ease-out);
   }
   .inst-version {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-muted);
     max-width: 100%;
@@ -2423,7 +2462,7 @@
     min-width: 0;
   }
   .side-meta-label {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -2561,7 +2600,7 @@
   }
   .group-new-label {
     display: block;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
     margin-bottom: 4px;
@@ -2674,7 +2713,7 @@
   .side-content-hint {
     flex: 1 1 auto;
     text-align: left;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;

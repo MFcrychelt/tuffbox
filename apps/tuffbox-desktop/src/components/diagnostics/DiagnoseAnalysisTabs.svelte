@@ -225,7 +225,7 @@
   .notice.warning { color: var(--accent-warning); background: color-mix(in srgb, var(--accent-warning) 8%, transparent); border-color: color-mix(in srgb, var(--accent-warning) 28%, transparent); }
   .notice.tight { padding: 8px 10px; margin-bottom: 10px; font-size: 12px; }
   .risk-pill {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     padding: 1px 6px;
@@ -246,7 +246,7 @@
   .sev-chip {
     display: inline-flex;
     align-items: center;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.02em;
     text-transform: uppercase;
@@ -317,7 +317,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
   }
   .ai-human { margin: 0 0 12px; color: var(--text-primary); font-size: 14px; line-height: 1.5; }

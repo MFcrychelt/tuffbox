@@ -264,7 +264,7 @@
   .pip-meta {
     display: flex;
     justify-content: space-between;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -296,6 +296,6 @@
   }
 
   .pip-state { flex-shrink: 0; color: var(--text-muted); }
-  .pip-more { color: var(--text-muted); font-size: 11px; }
+  .pip-more { color: var(--text-muted); font-size: 12px; }
   .pip-fail { margin: 0; color: var(--accent-danger); font-size: 12px; }
 </style>

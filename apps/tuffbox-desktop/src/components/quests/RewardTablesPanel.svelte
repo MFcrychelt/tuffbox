@@ -304,7 +304,7 @@
   summary {
     cursor: pointer;
     padding: 10px 4px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -327,7 +327,7 @@
     border: 1px solid var(--ftbq-border);
     background: rgba(0, 0, 0, 0.25);
     color: var(--ftbq-text-muted);
-    font-size: 11px;
+    font-size: 12px;
     cursor: pointer;
   }
   .rt-side button.sel,
@@ -352,7 +352,7 @@
   }
   .rt-empty p {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .rt-edit {
@@ -362,7 +362,7 @@
   .rt-edit label {
     display: grid;
     gap: 3px;
-    font-size: 10px;
+    font-size: 12px;
     text-transform: uppercase;
     color: var(--ftbq-text-muted);
   }
@@ -381,7 +381,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .entry-card {
@@ -427,12 +427,12 @@
     color: var(--ftbq-text-muted);
   }
   .extra {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .extra textarea {
     width: 100%;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     margin: 6px 0;
   }
   @media (max-width: 900px) {

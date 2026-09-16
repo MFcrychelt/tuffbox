@@ -804,7 +804,7 @@
 
   .stage-text small {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .skeleton-page {
@@ -903,7 +903,7 @@
     }
 
     .stage-text small {
-      font-size: 10px;
+      font-size: 11px;
     }
   }
 </style>

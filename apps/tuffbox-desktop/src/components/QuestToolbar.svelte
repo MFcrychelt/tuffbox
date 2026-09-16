@@ -60,7 +60,7 @@
     </div>
     <div class="min-w-0">
       <div class="truncate text-sm font-semibold text-[var(--text-primary)]">{title}</div>
-      <div class="text-[11px] font-medium text-[var(--text-muted)]">{chapterCount} chapters · {questCount} quests</div>
+      <div class="text-[12px] font-medium text-[var(--text-muted)]">{chapterCount} chapters · {questCount} quests</div>
     </div>
   </div>
 
@@ -143,7 +143,7 @@
     >
       <Save size={14} />
       {saving ? "Saving…" : "Save all"}
-      <kbd class="hidden text-[10px] text-white/70 sm:inline ml-1 font-mono">Ctrl S</kbd>
+      <kbd class="hidden text-[11px] text-white/70 sm:inline ml-1 font-mono">Ctrl S</kbd>
     </button>
 
     <button

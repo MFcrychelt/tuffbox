@@ -193,7 +193,7 @@
       />
     </div>
     {#if logTruncated}
-      <span class="text-[11px] text-[color:var(--text-muted)] whitespace-nowrap">
+      <span class="text-[12px] text-[color:var(--text-muted)] whitespace-nowrap">
         tail {LOG_TAIL_LINES}/{logLineCount}
       </span>
     {/if}
@@ -219,7 +219,7 @@
 
 <style>
   .console-log {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12.5px;
     line-height: 1.6;
     color: var(--text-secondary);
@@ -233,7 +233,7 @@
     gap: 6px;
     font-size: 12px;
     color: var(--text-muted);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
   .status-dot {
     width: 7px;
@@ -328,7 +328,7 @@
     line-height: 1.4;
     white-space: nowrap;
     vertical-align: baseline;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 11px;
     padding: 2px 6px;
     border-radius: 6px;
@@ -341,7 +341,7 @@
     line-height: 1.4;
     white-space: nowrap;
     vertical-align: baseline;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 11px;
     padding: 2px 6px;
     border-radius: 6px;

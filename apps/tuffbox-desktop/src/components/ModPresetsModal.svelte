@@ -721,7 +721,7 @@
   }
 
   .preset-count {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     flex-shrink: 0;
   }
@@ -855,7 +855,7 @@
   }
 
   .row-meta code {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -870,7 +870,7 @@
   }
 
   .pill {
-    font-size: 10px;
+    font-size: 12px;
     text-transform: uppercase;
     font-weight: 700;
     padding: 2px 6px;
@@ -897,7 +897,7 @@
   }
 
   .mods-head .count {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-muted);
   }

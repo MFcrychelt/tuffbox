@@ -537,7 +537,7 @@
     flex-shrink: 0;
   }
   .pill {
-    font-size: 10px;
+    font-size: 12px;
     padding: 2px 7px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
@@ -560,7 +560,7 @@
     flex-shrink: 0;
   }
   .chip {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     padding: 3px 8px;
     border-radius: 999px;
@@ -576,7 +576,7 @@
   .chip:disabled { opacity: 0.5; cursor: default; }
   .focus-hint {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     word-break: break-all;
   }
@@ -605,7 +605,7 @@
   .bubble.assistant { background: var(--bg-tertiary); }
   .bubble.system { background: transparent; color: var(--text-muted); border-style: dashed; }
   .progress {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     display: grid;
     gap: 2px;
@@ -613,7 +613,7 @@
   .err { margin: 0; font-size: 12px; color: var(--accent-danger); }
   .research {
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-sm);
@@ -629,7 +629,7 @@
     gap: 4px;
   }
   .research li { display: flex; flex-direction: column; gap: 2px; }
-  .research .step { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.8; }
+  .research .step { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.8; }
   .research a {
     color: var(--accent-primary);
     text-decoration: none;
