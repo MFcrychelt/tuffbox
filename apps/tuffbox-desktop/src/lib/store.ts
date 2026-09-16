@@ -215,6 +215,8 @@ export interface LauncherSettings {
   gpuPreference: "auto" | "discrete" | "integrated";
   /** Hide IDE bottom workflow rail until cursor hits the window bottom edge. */
   autoHideWorkflowRail: boolean;
+  /** Hide the IDE top panel (status / next-step / health strip). */
+  hideIdeNextBar: boolean;
   /** Left nav: full labels | icons (button toggle) | autoHide (left-edge hover). */
   sidebarMode: SidebarMode;
   /** Interface zoom percent (75–150). */
@@ -945,6 +947,9 @@ export const questDirty = writable(false);
 
 /** Live mirror of launcherSettings.autoHideWorkflowRail for IDE rail. */
 export const autoHideWorkflowRail = writable(false);
+
+/** Live mirror of launcherSettings.hideIdeNextBar for the IDE top panel. */
+export const hideIdeNextBar = writable(false);
 
 /** Live mirror of launcherSettings.sidebarMode. */
 export const sidebarMode = writable<SidebarMode>("full");

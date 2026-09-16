@@ -62,6 +62,10 @@ pub struct LauncherSettings {
     /// Hide IDE workflow rail (Content / Setup / …); reveal on bottom-edge hover.
     #[serde(default)]
     pub auto_hide_workflow_rail: bool,
+    /// Hide the IDE top panel (IdeNextBar: pack status, suggested next step,
+    /// health-check strip). Triggers (shortcuts / command palette) keep working.
+    #[serde(default)]
+    pub hide_ide_next_bar: bool,
     /// Left nav: `full` | `icons` (toggle labels) | `autoHide` (left-edge hover).
     #[serde(default = "default_sidebar_mode")]
     pub sidebar_mode: String,
@@ -173,6 +177,7 @@ impl Default for LauncherSettings {
             show_youtube_on_home: false,
             news_show_updates: default_news_show_updates(),
             auto_hide_workflow_rail: false,
+            hide_ide_next_bar: false,
             sidebar_mode: default_sidebar_mode(),
             ui_scale_percent: default_ui_scale_percent(),
             ui_scale_mode: "auto".into(),

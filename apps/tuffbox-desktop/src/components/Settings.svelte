@@ -12,6 +12,7 @@
   import type { PresenceSettings, LauncherSettings, SidebarMode, UiScaleMode } from "../lib/store";
   import {
     autoHideWorkflowRail,
+    hideIdeNextBar,
     sidebarMode,
     normalizeSidebarMode,
     applyUiScaleFromSettings,
@@ -195,6 +196,7 @@
     cpuAffinityMask: null,
     gpuPreference: "auto",
     autoHideWorkflowRail: false,
+    hideIdeNextBar: false,
     sidebarMode: "full",
     uiScalePercent: 100,
     uiScaleMode: "auto",
@@ -367,6 +369,7 @@
       applyPotatoPc(reducedMotion);
       localStorage.setItem("tuffbox-reduced-motion", reducedMotion ? "1" : "0");
       autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
+      hideIdeNextBar.set(!!launcher.hideIdeNextBar);
       sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
       const applied = applyUiScaleFromSettings(launcher);
       launcher = { ...launcher, uiScalePercent: applied };
@@ -446,6 +449,9 @@
       if (partial && "autoHideWorkflowRail" in partial) {
         autoHideWorkflowRail.set(!!next.autoHideWorkflowRail);
       }
+      if (partial && "hideIdeNextBar" in partial) {
+        hideIdeNextBar.set(!!next.hideIdeNextBar);
+      }
       if (partial && "sidebarMode" in partial) {
         sidebarMode.set(normalizeSidebarMode(next.sidebarMode));
       }
@@ -465,6 +471,9 @@
       }
       if (partial && "autoHideWorkflowRail" in partial) {
         autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
+      }
+      if (partial && "hideIdeNextBar" in partial) {
+        hideIdeNextBar.set(!!launcher.hideIdeNextBar);
       }
       if (partial && "sidebarMode" in partial) {
         sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
@@ -1446,6 +1455,39 @@
                 class:active={launcher.autoHideWorkflowRail !== true}
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ autoHideWorkflowRail: false })}
+              >
+                Always visible
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <strong>IDE top panel</strong>
+            <p>
+              Hide the strip at the top of the IDE (pack status, suggested next step, Health
+              check) to give the workspace more room. Shortcuts and the command palette keep
+              working while it is hidden.
+            </p>
+          </div>
+          <div class="settings-row-control">
+            <div class="chip-row tight">
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.hideIdeNextBar === true}
+                disabled={launcherSaving}
+                onclick={() => void persistLauncher({ hideIdeNextBar: true })}
+              >
+                Hidden
+              </button>
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.hideIdeNextBar !== true}
+                disabled={launcherSaving}
+                onclick={() => void persistLauncher({ hideIdeNextBar: false })}
               >
                 Always visible
               </button>

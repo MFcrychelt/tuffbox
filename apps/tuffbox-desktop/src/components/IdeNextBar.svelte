@@ -23,6 +23,7 @@
     idePlayTrigger,
     launchSessions,
     isProjectLaunching,
+    hideIdeNextBar,
   } from "../lib/store";
 
   let {
@@ -179,7 +180,10 @@
   }
 </script>
 
-<div class="ide-next-bar">
+<!-- The component stays mounted when the "IDE top panel" setting hides it:
+     its effects also serve the global ide:next / play (Ctrl+Shift+P)
+     triggers — unmounting would orphan those shortcuts. -->
+<div class="ide-next-bar" class:panel-hidden={$hideIdeNextBar}>
   <div class="ide-next-status">
     {#if $ideIssueCount > 0}
       <span class="pill warn">
@@ -229,7 +233,12 @@
 </div>
 
 {#if $workTrail}
-  <div class="ide-work-trail" class:escalated={!!$workTrail.escalated} role="status">
+  <div
+    class="ide-work-trail"
+    class:panel-hidden={$hideIdeNextBar}
+    class:escalated={!!$workTrail.escalated}
+    role="status"
+  >
     <span class="trail-msg">{$workTrail.message}</span>
     <div class="trail-actions">
       {#each $workTrail.actions as act (act.id)}
@@ -258,6 +267,12 @@
     border-bottom: 1px solid var(--border-color);
     background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
     flex-shrink: 0;
+  }
+  /* "IDE top panel" setting (Settings → Appearance): the bar (and the work
+     trail in the same strip) leave the layout entirely, while the component
+     stays mounted to keep serving global triggers. */
+  .panel-hidden {
+    display: none;
   }
   .ide-next-status {
     display: flex;
