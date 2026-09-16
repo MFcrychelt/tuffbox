@@ -41,6 +41,7 @@
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import PromptDialog from "./PromptDialog.svelte";
   import { openModsBrowserWindow } from "../lib/modsBrowserWindow";
+  import { refreshUpdateCount, setUpdateCount } from "../lib/instanceUpdates";
   import {
     isProjectLaunching,
     isProjectRunning,
@@ -167,6 +168,12 @@
   const selectedRows = $derived(visibleMods.filter((m) => selectedMods.has(m.id)));
   const selectedUpdateCount = $derived(selectedRows.filter((m) => updates[m.id]).length);
 
+  // Keep the library badge truthful after in-manager checks and updates.
+  $effect(() => {
+    if (!path || !updatesChecked) return;
+    setUpdateCount(path, updateCount);
+  });
+
   function toggleModSelected(id: string) {
     const next = new Set(selectedMods);
     if (next.has(id)) next.delete(id);
@@ -284,6 +291,12 @@
       }
       updates = {};
       updatesChecked = false;
+      if (errors.length > 0) {
+        // Partial failure — re-check for the real remaining count.
+        void refreshUpdateCount(path, true);
+      } else {
+        setUpdateCount(path, 0);
+      }
       await loadMods(true);
     } catch (e) {
       toasts.error(`Update failed: ${String(e)}`);
@@ -451,6 +464,8 @@
       toasts.success(`Restored "${entry.name}"`);
       updates = {};
       updatesChecked = false;
+      // The restored pack is a different state — re-check its updates.
+      void refreshUpdateCount(path, true);
       await Promise.all([loadMods(true), loadBackups(true)]);
     } catch (e) {
       toasts.error(`Restore failed: ${String(e)}`);

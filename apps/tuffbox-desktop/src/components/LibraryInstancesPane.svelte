@@ -20,6 +20,7 @@
     ChevronDown,
     ChevronRight,
     Package,
+  ArrowUpCircle,
   Pencil,
     Wrench,
   SlidersHorizontal,
@@ -73,6 +74,7 @@
     type GroupMap,
   } from "../lib/libraryGroups";
   import { getNote, loadNotes, setNote } from "../lib/libraryNotes";
+import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
   import {
     isValidSortMode,
     matchesInstanceFilter,
@@ -207,6 +209,38 @@
   function saveNote() {
     if (!selectedPath) return;
     setNote(loadNotes(), selectedPath, notesDraft);
+  }
+
+  // ── Update center: badge refresh + one-click Update all ──
+  $effect(() => {
+    const p = selectedPath;
+    if (!p) return;
+    // Lazily refresh when the cached counter is missing or stale (6h window).
+    void refreshUpdateCount(p);
+  });
+
+  async function updateAllSelected() {
+    const target = selected;
+    if (!target || actionBusy) return;
+    actionBusy = true;
+    try {
+      const res = await api.mods.updateAll(target.path, false);
+      const updated = Array.isArray(res.updated) ? res.updated.length : 0;
+      const errors = Array.isArray(res.errors) ? res.errors : [];
+      if (errors.length > 0) {
+        toasts.warning(`Updated ${updated}, failed ${errors.length}: ${errors[0]}`);
+      } else if (updated > 0) {
+        toasts.success(`Updated ${updated} ${updated === 1 ? "mod" : "mods"}`);
+      } else {
+        toasts.success("Nothing to update");
+      }
+      // Re-check for real — a partial failure leaves some updates pending.
+      void refreshUpdateCount(target.path, true);
+    } catch (e) {
+      toasts.error(`Update failed: ${String(e)}`);
+    } finally {
+      actionBusy = false;
+    }
   }
 
   let showGroupPrompt = $state(false);
@@ -1492,6 +1526,16 @@
         {:else}
           {project.info.name[0]?.toUpperCase() ?? "?"}
         {/if}
+        {#if ($updateCounts[project.path]?.count ?? 0) > 0}
+          <span
+            class="tile-upd"
+            title={`${$updateCounts[project.path]?.count} mods have updates`}
+          >
+            {($updateCounts[project.path]?.count ?? 0) > 9
+              ? "9+"
+              : $updateCounts[project.path]?.count}
+          </span>
+        {/if}
         {#if !dragging && !dropTargetPath}
           <!-- Home-card-style delayed hover reveal; buttons stop
                propagation so they never start a tile drag/hold,
@@ -1598,7 +1642,14 @@
       {/if}
     </div>
     <div class="row-main">
-      <span class="row-name" title={project.info.name}>{project.info.name}</span>
+      <span class="row-name" title={project.info.name}>
+        {project.info.name}
+        {#if ($updateCounts[project.path]?.count ?? 0) > 0}
+          <span class="row-upd" title={`${$updateCounts[project.path]?.count} mods have updates`}>
+            ↑ {$updateCounts[project.path]?.count > 9 ? "9+" : $updateCounts[project.path]?.count}
+          </span>
+        {/if}
+      </span>
       <span class="row-sub" title={`${project.info.minecraftVersion} · ${project.info.loaderKind}`}>
 {project.info.minecraftVersion} · {project.info.loaderKind}
       </span>
@@ -1766,6 +1817,26 @@ onkeydown={(e) => e.stopPropagation()}
                   <Play size={18} fill="currentColor" /> Play
                 {/if}
               </button>
+
+              {#if ($updateCounts[selected.path]?.count ?? 0) > 0}
+                <button
+                  type="button"
+                  class="side-updates"
+                  title="Update every mod with a newer release"
+                  disabled={actionBusy}
+                  onclick={() => void updateAllSelected()}
+                >
+                  <ArrowUpCircle size={14} />
+                  <span class="side-updates-text">
+                    {$updateCounts[selected.path]?.count}
+                    {$updateCounts[selected.path]?.count === 1
+                      ? "mod has"
+                      : "mods have"}
+                    updates
+                  </span>
+                  <strong>Update all</strong>
+                </button>
+              {/if}
 
               <!-- Labeled secondaries: the two most common destinations after
                    Play, promoted out of the icon row for discoverability. -->
@@ -3102,6 +3173,82 @@ onkeydown={(e) => e.stopPropagation()}
     opacity: 0.55;
     cursor: default;
   }
+  /* Update-center: amber count chip on the tile icon + row badge + side CTA. */
+  .tile-upd {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--accent-warning);
+    color: #1a1a1a;
+    font-size: 12px;
+    font-weight: 800;
+    pointer-events: none;
+  }
+  .row-upd {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    padding: 0 6px;
+    height: 16px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-warning) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 45%, transparent);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 800;
+    vertical-align: middle;
+  }
+  .side-updates {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 11px;
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 45%, var(--border-color));
+    border-radius: var(--border-radius-sm);
+    background: color-mix(in srgb, var(--accent-warning) 10%, transparent);
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    transform: none;
+    text-align: left;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out);
+  }
+  .side-updates:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-warning) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-warning) 65%, var(--border-color));
+  }
+  .side-updates:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
+  .side-updates :global(svg) {
+    color: var(--accent-warning);
+    flex-shrink: 0;
+  }
+  .side-updates-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .side-updates strong {
+    color: var(--accent-warning);
+    white-space: nowrap;
+  }
+
   /* Prism-style per-instance notes — autosaving, keyed by instance path. */
   .side-notes {
     display: flex;
