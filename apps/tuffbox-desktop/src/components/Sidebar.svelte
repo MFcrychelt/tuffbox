@@ -555,10 +555,32 @@
     overflow: hidden;
     /* Kill the global button hover translate — it would desync the edge pill. */
     transform: none !important;
+    /* Kill the global button hover/active filters too: brightness(1.18)
+       washes the pale hover pill out on light themes (#d5ddd1 → ~white on a
+       near-white rail — the invisible-hover bug), and the :active brightness
+       dip + margin shift break the rail's own press look and geometry. The
+       explicit background swaps below already encode hover/press. */
+    filter: none;
     transition:
       border-radius var(--motion-med, 240ms) var(--ease-hover-in, ease),
       background-color var(--motion-fast, 160ms) var(--ease-hover-in, ease),
       color var(--motion-fast, 160ms) var(--ease-hover-in, ease);
+  }
+
+  /* The bare `filter: none` above only covers the rest state (the global
+     filter rules only apply on :hover/:active). Re-assert with the same
+     pseudo-class shape — (0,4,1) here beats the global (0,2,1) on
+     specificity, so this holds no matter the stylesheet order. */
+  .rail .rail-btn:hover:not(:disabled),
+  .rail .rail-btn:active:not(:disabled) {
+    filter: none;
+  }
+
+  /* Global :active adds `margin-top: 2px` — that shift would visually detach
+     the button from the edge pill. Rail keeps its grid on press. */
+  .rail .rail-btn:active:not(:disabled) {
+    margin-top: 0;
+    border-bottom-width: 0;
   }
 
   .rail .rail-btn:hover,
