@@ -28,6 +28,8 @@
     X,
     Compass,
     Server,
+    LayoutGrid,
+    List,
   } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
@@ -145,6 +147,41 @@
   let collapsed = $state(loadCollapsedGroups());
   let projectStats = $state<Record<string, { playtime: number; lastLaunch: string | null }>>({});
   let refreshing = $state(false);
+
+  /** Grid (cover tiles) vs list (dense rows); persisted. */
+  const VIEW_KEY = "tuffbox.library.view";
+  let viewMode = $state<"grid" | "list">(
+    ((): "grid" | "list" => {
+      try {
+        return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "grid";
+      } catch {
+        return "grid";
+      }
+    })(),
+  );
+  function setViewMode(m: "grid" | "list") {
+    viewMode = m;
+    try {
+      localStorage.setItem(VIEW_KEY, m);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Short relative "last played" for tiles/rows ("5m ago", "3d ago", date). */
+  function lastPlayedShort(iso: string | null): string {
+    if (!iso) return "Never played";
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return "Never played";
+    const min = Math.floor((Date.now() - t) / 60000);
+    if (min < 1) return "Just now";
+    if (min < 60) return `${min}m ago`;
+    const h = Math.floor(min / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 7) return `${d}d ago`;
+    return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  }
 
   let showClonePrompt = $state(false);
   let cloneTarget = $state<RecentProject | null>(null);
@@ -1261,6 +1298,30 @@
             <option value="name">Name</option>
             <option value="playtime">Most played</option>
           </select>
+          <div class="view-toggle" role="group" aria-label="Layout">
+            <button
+              type="button"
+              class="view-btn"
+              class:active={viewMode === "grid"}
+              title="Grid view"
+              aria-label="Grid view"
+              aria-pressed={viewMode === "grid"}
+              onclick={() => setViewMode("grid")}
+            >
+              <LayoutGrid size={15} />
+            </button>
+            <button
+              type="button"
+              class="view-btn"
+              class:active={viewMode === "list"}
+              title="List view"
+              aria-label="List view"
+              aria-pressed={viewMode === "list"}
+              onclick={() => setViewMode("list")}
+            >
+              <List size={15} />
+            </button>
+          </div>
         </div>
       </div>
       {#if $recentProjects.length === 0}
@@ -1283,6 +1344,223 @@
         <p class="drag-hint" class:visible={dragging}>
           Drop on another instance to make a folder
         </p>
+{#snippet instanceTile(project: RecentProject)}
+  {@const tileRunning = isProjectRunning(project.path, $runningInstances)}
+  {@const tileLaunching = isProjectLaunching(project.path, $launchSessions)}
+    <div
+      class="inst-tile"
+      class:selected={selectedPath === project.path}
+      class:running={tileRunning}
+      class:dragging={dragSource?.path === project.path}
+      class:drop-target={dropTargetPath === project.path}
+      class:holding={holdingPath === project.path && !dragging}
+      data-path={project.path}
+      role="button"
+      tabindex="0"
+      aria-label={`${project.info.name}. Hold and drag onto another instance to create a folder`}
+      in:tileIntro
+      onclick={() => onTileClick(project)}
+      ondblclick={() => !dragging && void launchInstance(project)}
+      onkeydown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          selectInstance(project);
+        }
+      }}
+      oncontextmenu={(e) => openCtxMenu(e, project)}
+      onpointerdown={(e) => onTilePointerDown(e, project)}
+      onpointermove={onTilePointerMove}
+      onpointerup={onTilePointerUp}
+      onpointercancel={onTilePointerCancel}
+    >
+      <div class="hold-ring" aria-hidden="true"></div>
+      <div
+        class="inst-icon"
+        class:has-image={!!instanceIcons[project.path]}
+        class:folder-preview={dropTargetPath === project.path}
+        style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}
+      >
+        {#if instanceIcons[project.path]}
+          <img
+            class="inst-icon-img"
+            src={instanceIcons[project.path]!}
+            alt=""
+            draggable="false"
+          />
+        {:else if dropTargetPath === project.path && dragSource}
+          <span class="folder-stack" aria-hidden="true">
+            <span class="stack-a">{dragSource.info.name[0]?.toUpperCase()}</span>
+            <span class="stack-b">{project.info.name[0]?.toUpperCase()}</span>
+          </span>
+        {:else}
+          {project.info.name[0]?.toUpperCase() ?? "?"}
+        {/if}
+        {#if !dragging && !dropTargetPath}
+          <!-- Home-card-style delayed hover reveal; buttons stop
+               propagation so they never start a tile drag/hold,
+               re-select or double-launch. -->
+          <span class="tile-actions">
+            <button
+              type="button"
+              class="tile-play"
+              class:stop={tileRunning}
+              disabled={tileLaunching}
+              title={tileRunning ? "Stop" : "Play"}
+              aria-label={tileRunning ? `Stop ${project.info.name}` : `Play ${project.info.name}`}
+              onpointerdown={(e) => e.stopPropagation()}
+              onclick={(e) => { e.stopPropagation(); void launchInstance(project); }}
+              ondblclick={(e) => e.stopPropagation()}
+              onkeydown={(e) => e.stopPropagation()}
+            >
+              {#if tileLaunching}
+                <span class="mini-spinner"></span>
+              {:else if tileRunning}
+                <Square size={12} fill="currentColor" /> Stop
+              {:else}
+                <Play size={13} fill="currentColor" /> Play
+              {/if}
+            </button>
+            <span class="tile-acts">
+              <button
+                type="button"
+                class="tile-act"
+                title="Open in IDE"
+                aria-label={`Open ${project.info.name} in IDE`}
+                onpointerdown={(e) => e.stopPropagation()}
+                onclick={(e) => { e.stopPropagation(); openInIde(project); }}
+                ondblclick={(e) => e.stopPropagation()}
+                onkeydown={(e) => e.stopPropagation()}
+              >
+                <Package size={14} />
+              </button>
+              <button
+                type="button"
+                class="tile-act"
+                title="Open folder"
+                aria-label={`Open ${project.info.name} folder`}
+                onpointerdown={(e) => e.stopPropagation()}
+                onclick={(e) => { e.stopPropagation(); void runAction("folder", project); }}
+                ondblclick={(e) => e.stopPropagation()}
+                onkeydown={(e) => e.stopPropagation()}
+              >
+                <Folder size={14} />
+              </button>
+            </span>
+          </span>
+        {/if}
+      </div>
+      <span
+        class="inst-name"
+        title={project.info.name}
+      >{project.info.name}</span>
+      <span class="inst-version" title={`${project.info.minecraftVersion} · ${project.info.loaderKind}`}>
+        {project.info.minecraftVersion} · {project.info.loaderKind}
+      </span>
+      <span class="inst-last" title={formatLastLaunch(projectStats[project.path]?.lastLaunch ?? null)}>
+        {lastPlayedShort(projectStats[project.path]?.lastLaunch ?? null)}
+      </span>
+    </div>
+{/snippet}
+
+{#snippet instanceRow(project: RecentProject)}
+  {@const rowRunning = isProjectRunning(project.path, $runningInstances)}
+  {@const rowLaunching = isProjectLaunching(project.path, $launchSessions)}
+  {@const stats = projectStats[project.path]}
+  <div
+    class="inst-row"
+    class:selected={selectedPath === project.path}
+    class:running={rowRunning}
+    class:dragging={dragSource?.path === project.path}
+    class:drop-target={dropTargetPath === project.path}
+    data-path={project.path}
+    role="button"
+    tabindex="0"
+    aria-label={project.info.name}
+    in:tileIntro
+    onclick={() => onTileClick(project)}
+    ondblclick={() => !dragging && void launchInstance(project)}
+    onkeydown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+e.preventDefault();
+selectInstance(project);
+      }
+    }}
+    oncontextmenu={(e) => openCtxMenu(e, project)}
+  >
+    <div
+      class="row-icon"
+      class:has-image={!!instanceIcons[project.path]}
+      style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}
+    >
+      {#if instanceIcons[project.path]}
+<img class="inst-icon-img" src={instanceIcons[project.path]!} alt="" draggable="false" />
+      {:else}
+{project.info.name[0]?.toUpperCase() ?? "?"}
+      {/if}
+      {#if rowRunning}
+<span class="row-running-dot" aria-hidden="true"></span>
+      {/if}
+    </div>
+    <div class="row-main">
+      <span class="row-name" title={project.info.name}>{project.info.name}</span>
+      <span class="row-sub" title={`${project.info.minecraftVersion} · ${project.info.loaderKind}`}>
+{project.info.minecraftVersion} · {project.info.loaderKind}
+      </span>
+    </div>
+    <div class="row-stats" aria-label="Play statistics">
+      <span class="row-stat" title="Last played">
+{lastPlayedShort(stats?.lastLaunch ?? null)}
+      </span>
+      <span class="row-stat" title="Total playtime">
+{formatPlaytime(stats?.playtime ?? 0)} played
+      </span>
+    </div>
+    <div class="row-actions">
+      <button
+type="button"
+class="row-play"
+class:stop={rowRunning}
+disabled={rowLaunching}
+title={rowRunning ? "Stop" : "Play"}
+aria-label={rowRunning ? `Stop ${project.info.name}` : `Play ${project.info.name}`}
+onclick={(e) => { e.stopPropagation(); void launchInstance(project); }}
+ondblclick={(e) => e.stopPropagation()}
+onkeydown={(e) => e.stopPropagation()}
+      >
+{#if rowLaunching}
+  <span class="mini-spinner"></span>
+{:else if rowRunning}
+  <Square size={12} fill="currentColor" /> Stop
+{:else}
+  <Play size={13} fill="currentColor" /> Play
+{/if}
+      </button>
+      <button
+type="button"
+class="row-act"
+title="Open in IDE"
+aria-label={`Open ${project.info.name} in IDE`}
+onclick={(e) => { e.stopPropagation(); openInIde(project); }}
+ondblclick={(e) => e.stopPropagation()}
+onkeydown={(e) => e.stopPropagation()}
+      >
+<Package size={15} />
+      </button>
+      <button
+type="button"
+class="row-act"
+title="Open folder"
+aria-label={`Open ${project.info.name} folder`}
+onclick={(e) => { e.stopPropagation(); void runAction("folder", project); }}
+ondblclick={(e) => e.stopPropagation()}
+onkeydown={(e) => e.stopPropagation()}
+      >
+<Folder size={15} />
+      </button>
+    </div>
+  </div>
+{/snippet}
+
         {#each grouped.groups as group (group.name)}
           <section class="inst-group">
             <button
@@ -1302,67 +1580,19 @@
               <span class="group-count">{group.projects.length}</span>
             </button>
             {#if !group.collapsed}
-              <div class="inst-grid" transition:groupBodyIntro>
-                {#each group.projects as project (project.path)}
-                  <div
-                    class="inst-tile"
-                    class:selected={selectedPath === project.path}
-                    class:running={isProjectRunning(project.path, $runningInstances)}
-                    class:dragging={dragSource?.path === project.path}
-                    class:drop-target={dropTargetPath === project.path}
-                    class:holding={holdingPath === project.path && !dragging}
-                    data-path={project.path}
-                    role="button"
-                    tabindex="0"
-                    aria-label={`${project.info.name}. Hold and drag onto another instance to create a folder`}
-                    in:tileIntro
-                    onclick={() => onTileClick(project)}
-                    ondblclick={() => !dragging && void launchInstance(project)}
-                    onkeydown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        selectInstance(project);
-                      }
-                    }}
-                    oncontextmenu={(e) => openCtxMenu(e, project)}
-                    onpointerdown={(e) => onTilePointerDown(e, project)}
-                    onpointermove={onTilePointerMove}
-                    onpointerup={onTilePointerUp}
-                    onpointercancel={onTilePointerCancel}
-                  >
-                    <div class="hold-ring" aria-hidden="true"></div>
-                    <div
-                      class="inst-icon"
-                      class:has-image={!!instanceIcons[project.path]}
-                      class:folder-preview={dropTargetPath === project.path}
-                      style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}
-                    >
-                      {#if instanceIcons[project.path]}
-                        <img
-                          class="inst-icon-img"
-                          src={instanceIcons[project.path]!}
-                          alt=""
-                          draggable="false"
-                        />
-                      {:else if dropTargetPath === project.path && dragSource}
-                        <span class="folder-stack" aria-hidden="true">
-                          <span class="stack-a">{dragSource.info.name[0]?.toUpperCase()}</span>
-                          <span class="stack-b">{project.info.name[0]?.toUpperCase()}</span>
-                        </span>
-                      {:else}
-                        {project.info.name[0]?.toUpperCase() ?? "?"}
-                      {/if}
-                    </div>
-                    <span
-                      class="inst-name"
-                      title={project.info.name}
-                    >{project.info.name}</span>
-                    <span class="inst-version" title={`${project.info.minecraftVersion} · ${project.info.loaderKind}`}>
-                      {project.info.minecraftVersion} · {project.info.loaderKind}
-                    </span>
-                  </div>
-                {/each}
-              </div>
+              {#if viewMode === "grid"}
+                <div class="inst-grid" transition:groupBodyIntro>
+                  {#each group.projects as project (project.path)}
+                    {@render instanceTile(project)}
+                  {/each}
+                </div>
+              {:else}
+                <div class="inst-rows" transition:groupBodyIntro>
+                  {#each group.projects as project (project.path)}
+                    {@render instanceRow(project)}
+                  {/each}
+                </div>
+              {/if}
             {/if}
           </section>
         {/each}
@@ -1411,6 +1641,15 @@
               <div class="side-meta">
                 {selected.info.minecraftVersion} · {selected.info.loaderKind}
               </div>
+              <button
+                type="button"
+                class="side-group-chip"
+                title="Change group"
+                onclick={() => void runAction("change-group", selected)}
+              >
+                <Tags size={12} />
+                <span class="side-group-name">{getGroup(groupMap, selected.path)}</span>
+              </button>
             </div>
 
             <div class="side-actions">
@@ -1429,27 +1668,32 @@
                 {/if}
               </button>
 
-              <div class="side-icon-row">
+              <!-- Labeled secondaries: the two most common destinations after
+                   Play, promoted out of the icon row for discoverability. -->
+              <div class="side-secondary-row">
                 <button
                   type="button"
-                  class="side-icon-btn"
-                  title="Open in IDE"
+                  class="side-secondary"
+                  title="Open this pack in the IDE"
                   aria-label="Open in IDE"
                   disabled={actionBusy}
                   onclick={() => runAction("open-ide", selected)}
                 >
-                  <Package size={16} />
+                  <Package size={15} /> Open in IDE
                 </button>
                 <button
                   type="button"
-                  class="side-icon-btn"
-                  title="Open folder"
+                  class="side-secondary"
+                  title="Open the instance folder"
                   aria-label="Open folder"
                   disabled={actionBusy}
                   onclick={() => void runAction("folder", selected)}
                 >
-                  <Folder size={16} />
+                  <Folder size={15} /> Folder
                 </button>
+              </div>
+
+              <div class="side-icon-row">
                 <div class="tb-export-wrap">
                   <button
                     type="button"
@@ -2253,6 +2497,298 @@
   }
   .folder-stack .stack-a { top: 10px; left: 10px; }
   .folder-stack .stack-b { bottom: 10px; right: 10px; }
+
+  /* ── Tile hover quick actions (home-card parity) ──────────────────
+     Scrim + Play / IDE / Folder revealed on hover or keyboard focus with
+     the same calm delayed reveal the home shelf uses. Buttons stop event
+     propagation in markup so they never start a tile drag/hold. */
+  .tile-actions {
+    position: absolute;
+    inset: auto 0 0 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 16px 6px 6px;
+    border-radius: 0 0 var(--border-radius-sm) var(--border-radius-sm);
+    background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.62) 78%);
+    opacity: 0;
+    transform: translateY(4px);
+    pointer-events: none;
+    transition:
+      opacity var(--motion-fast, 160ms) var(--ease-out),
+      transform var(--motion-fast, 160ms) var(--ease-out);
+    transition-delay: var(--motion-hover-delay, 70ms);
+  }
+  .inst-tile:hover .tile-actions,
+  .inst-tile:focus-within .tile-actions {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+    transition-delay: var(--motion-hover-delay, 70ms);
+  }
+  /* Hidden while a drag/hold/folder-drop is in progress on the tile. */
+  .inst-tile.holding .tile-actions,
+  .inst-tile.dragging .tile-actions,
+  .inst-tile.drop-target .tile-actions,
+  .drag-mode .inst-tile .tile-actions {
+    opacity: 0;
+    pointer-events: none;
+    transition-delay: 0ms;
+  }
+  :global(.potato-pc) .tile-actions {
+    transition: none;
+  }
+  .tile-play {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 999px;
+    background: var(--accent-primary);
+    color: var(--on-accent, #fff);
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+    transform: none;
+  }
+  .tile-play.stop {
+    background: var(--accent-danger, #ef4444);
+  }
+  .tile-play:disabled {
+    cursor: wait;
+    opacity: 0.85;
+  }
+  .tile-play:hover {
+    filter: brightness(1.08);
+  }
+  .tile-acts {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .tile-act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+    transform: none;
+  }
+  .tile-act:hover {
+    background: rgba(0, 0, 0, 0.78);
+  }
+
+  /* Last-played line under the version — makes recency glanceable. */
+  .inst-last {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── List view: dense rows, same selection/hover language as tiles ── */
+  .inst-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .inst-row {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) auto auto;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    cursor: pointer;
+    outline: none;
+    position: relative;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out),
+      box-shadow var(--motion-fast) var(--ease-out);
+  }
+  .inst-row:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+    background: var(--bg-tertiary);
+  }
+  .inst-row.selected {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-secondary));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  }
+  .inst-row.selected .row-name {
+    color: var(--accent-primary);
+  }
+  .inst-row.drop-target {
+    background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
+  }
+  .inst-row.dragging {
+    opacity: 0.28;
+  }
+  .inst-row:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 70%, transparent);
+    outline-offset: 1px;
+  }
+  .row-icon {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--border-radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 19px;
+    font-weight: 900;
+    color: #fff;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .row-icon .inst-icon-img {
+    border-radius: 0;
+  }
+  .row-running-dot {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    border: 2px solid var(--bg-primary);
+  }
+  .row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .row-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-stats {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .row-stat {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .row-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .row-play {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 11px;
+    border: none;
+    border-radius: 999px;
+    background: var(--accent-primary);
+    color: var(--on-accent, #fff);
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    transform: none;
+  }
+  .row-play.stop {
+    background: var(--accent-danger, #ef4444);
+  }
+  .row-play:disabled {
+    cursor: wait;
+    opacity: 0.85;
+  }
+  .row-play:hover {
+    filter: brightness(1.08);
+  }
+  .row-act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transform: none;
+  }
+  .row-act:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    color: var(--text-primary);
+  }
+
+  /* Grid ⇄ list segmented toggle in the filter bar. */
+  .view-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+  }
+  .view-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transform: none;
+  }
+  .view-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+  .view-btn.active {
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    color: var(--accent-primary);
+  }
+
   .inst-name {
     font-size: 13px;
     font-weight: 700;
@@ -2362,6 +2898,75 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+  /* Labeled secondaries under Play — IDE + folder, the two most common
+     destinations, promoted out of the 32px icon row. */
+  .side-secondary-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .side-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 9px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    transform: none;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out);
+  }
+  .side-secondary:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .side-secondary:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  /* Group chip under the side hero — shows where the pack lives and opens
+     the change-group prompt on click. */
+  .side-group-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    margin-top: 8px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    color: var(--accent-primary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transform: none;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out);
+  }
+  .side-group-chip:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  }
+  .side-group-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .side-btn {
     display: inline-flex;
