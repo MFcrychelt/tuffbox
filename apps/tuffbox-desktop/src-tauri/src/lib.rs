@@ -202,6 +202,34 @@ fn update_project_brief(path: String, brief: PackBrief) -> Result<(), String> {
     save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())
 }
 
+/// Renames an instance in place (manifest `project.name`). The folder path is
+/// the identity everywhere (recents, groups, running processes), so only the
+/// display name changes. Keeps the storefront listing name in sync when it
+/// matched the old display name. Returns the applied (trimmed) name.
+#[tauri::command(rename_all = "camelCase")]
+fn rename_project(path: String, new_name: String) -> Result<String, String> {
+    let new_name = new_name.trim().to_string();
+    if new_name.is_empty() {
+        return Err("Instance name cannot be empty".into());
+    }
+    if new_name.len() > 80 {
+        return Err("Instance name is too long (max 80 characters)".into());
+    }
+    let manifest_path = resolve_manifest_path(&path)?;
+    auto_snapshot(&manifest_path, "rename-project").map_err(|e| e.to_string())?;
+    let mut manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let old_name = manifest.project.name.clone();
+    manifest.project.name = new_name.clone();
+    if let Some(listing) = manifest.listing.as_mut() {
+        if listing.name.trim().is_empty() || listing.name == old_name {
+            listing.name = new_name.clone();
+        }
+    }
+    save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+    Ok(new_name)
+}
+
 #[tauri::command]
 fn list_profiles(path: String) -> Result<Vec<ProfileSummary>, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -21532,6 +21560,7 @@ pub fn run() {
             resolve_project_path,
             get_project_brief,
             update_project_brief,
+            rename_project,
             listing_api::get_project_listing,
             listing_api::update_project_listing,
             listing_api::set_project_listing_icon,

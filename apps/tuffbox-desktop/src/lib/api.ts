@@ -3088,6 +3088,8 @@ export const api = {
     },
     deleteProject(p?: string) { return cmd<void>("delete_project", pathArg(p)); },
     cloneProject(newName: string, p?: string) { return cmd<string>("clone_project", { ...pathArg(p), newName }); },
+    /** Renames the instance (manifest display name; folder path is unchanged). */
+    rename(newName: string, p?: string) { return cmd<string>("rename_project", { ...pathArg(p), newName }); },
     createDesktopShortcut(p?: string) {
       return cmd<string>("create_project_desktop_shortcut", pathArg(p));
     },

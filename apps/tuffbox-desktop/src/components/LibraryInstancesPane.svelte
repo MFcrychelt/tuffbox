@@ -20,6 +20,7 @@
     ChevronDown,
     ChevronRight,
     Package,
+  Pencil,
     Wrench,
   SlidersHorizontal,
     Minus,
@@ -191,6 +192,8 @@
   let clonePromptName = $state("");
   /** Prism-style instance manager dialog target (mods / backups / health). */
   let manageTarget = $state<RecentProject | null>(null);
+  /** Rename prompt target (manifest display name; folder path unchanged). */
+  let renameTarget = $state<RecentProject | null>(null);
   /** Per-instance notes (Prism-style), autosaved to localStorage. */
   let notesDraft = $state("");
   // Reload the draft when the selection changes. localStorage is read
@@ -289,7 +292,7 @@
     const byGroup = new Map<string, RecentProject[]>();
     let total = 0;
     for (const p of $recentProjects) {
-      if (!matchesInstanceFilter(p, instanceFilter)) continue;
+      if (!matchesInstanceFilter(p, instanceFilter, getGroup(groupMap, p.path))) continue;
       total++;
       const g = getGroup(groupMap, p.path);
       const list = byGroup.get(g) ?? [];
@@ -1109,6 +1112,25 @@
     }
   }
 
+  async function confirmRename(newName: string) {
+    const target = renameTarget;
+    renameTarget = null;
+    if (!target || !newName.trim()) return;
+    actionBusy = true;
+    try {
+      const applied = await api.files.rename(newName.trim(), target.path);
+      const info = (await api.project.validate(target.path)) as RecentProject["info"] & {
+        manifestPath?: string;
+      };
+      recentProjects.updateInfo(info.manifestPath || target.path, info);
+      toasts.success(`Renamed to "${applied}"`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      actionBusy = false;
+    }
+  }
+
   async function confirmClone(newName: string) {
     showClonePrompt = false;
     if (!cloneTarget || !newName.trim()) return;
@@ -1771,6 +1793,9 @@ onkeydown={(e) => e.stopPropagation()}
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; manageTarget = selected; }}>
                         <SlidersHorizontal size={14} /> Manage…
                       </button>
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; renameTarget = selected; }}>
+                        <Pencil size={14} /> Rename…
+                      </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-group", selected); }}>
                         <Tags size={14} /> Change Group
                       </button>
@@ -1909,6 +1934,9 @@ onkeydown={(e) => e.stopPropagation()}
     <button type="button" role="menuitem" onclick={() => { ctxMenu = null; manageTarget = menuProject; }}>
       <SlidersHorizontal size={14} /> Manage…
     </button>
+    <button type="button" role="menuitem" onclick={() => { ctxMenu = null; renameTarget = menuProject; }}>
+      <Pencil size={14} /> Rename…
+    </button>
     <button type="button" role="menuitem" onclick={() => void runAction("change-group", menuProject)}>
       <Tags size={14} /> Change Group
     </button>
@@ -1957,6 +1985,18 @@ onkeydown={(e) => e.stopPropagation()}
     project={manageTarget}
     onclose={() => (manageTarget = null)}
     onBrowseMods={() => libraryTabRequest.set("discover")}
+  />
+{/if}
+
+{#if renameTarget}
+  <PromptDialog
+    title="Rename instance"
+    message={`New display name for "${renameTarget.info.name}". The folder name stays unchanged.`}
+    mode="text"
+    defaultValue={renameTarget.info.name}
+    confirmLabel="Rename"
+    onconfirm={(v) => void confirmRename(v)}
+    oncancel={() => (renameTarget = null)}
   />
 {/if}
 

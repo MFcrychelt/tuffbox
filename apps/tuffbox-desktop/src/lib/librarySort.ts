@@ -5,13 +5,19 @@ import type { HomeStatsBrief } from "./homeBootstrap";
 export type SortMode = "recent" | "name" | "playtime";
 
 /** Live instance filter: matches name, Minecraft version or loader. */
-export function matchesInstanceFilter(p: RecentProject, rawQuery: string): boolean {
+export function matchesInstanceFilter(
+  p: RecentProject,
+  rawQuery: string,
+  /** When set, the group name is searchable too ("server" finds its group). */
+  groupName?: string | null,
+): boolean {
   const q = rawQuery.trim().toLowerCase();
   if (!q) return true;
   return (
     p.info.name.toLowerCase().includes(q) ||
     p.info.minecraftVersion.toLowerCase().includes(q) ||
-    p.info.loaderKind.toLowerCase().includes(q)
+    p.info.loaderKind.toLowerCase().includes(q) ||
+    (!!groupName && groupName.toLowerCase().includes(q))
   );
 }
 
