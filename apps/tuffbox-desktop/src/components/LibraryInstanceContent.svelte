@@ -18,6 +18,7 @@ collapse; this component always renders expanded. -->
     ExternalLink,
     Play,
     Search,
+    SlidersHorizontal,
     Users,
   } from "@lucide/svelte";
   import { api, type ContentPackEntry, type McServerEntry } from "../lib/api";
@@ -44,9 +45,12 @@ collapse; this component always renders expanded. -->
   const {
     projectPath,
     onOpenMods,
+    onManage,
   }: {
     projectPath: string;
     onOpenMods: () => void;
+    /** Opens the Prism-style instance manager (mods / backups / health). */
+    onManage?: () => void;
   } = $props();
 
   const TAB_KEY = "tuffbox-instance-home-tab";
@@ -361,6 +365,11 @@ collapse; this component always renders expanded. -->
           <button type="button" class="mini-btn primary" onclick={onOpenMods}>
             <ExternalLink size={12} /> Open Mods
           </button>
+          {#if onManage}
+            <button type="button" class="mini-btn primary" onclick={onManage}>
+              <SlidersHorizontal size={12} /> Manage
+            </button>
+          {/if}
           <button type="button" class="mini-btn" title="Open instance folder" onclick={() => void openFolder()}>
             <FolderOpen size={12} /> Folder
           </button>

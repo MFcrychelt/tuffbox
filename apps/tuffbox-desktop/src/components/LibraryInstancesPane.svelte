@@ -21,6 +21,7 @@
     ChevronRight,
     Package,
     Wrench,
+  SlidersHorizontal,
     Minus,
     ImageIcon,
     Eraser,
@@ -70,6 +71,7 @@
     folderFromDrop,
     type GroupMap,
   } from "../lib/libraryGroups";
+  import { getNote, loadNotes, setNote } from "../lib/libraryNotes";
   import {
     isValidSortMode,
     matchesInstanceFilter,
@@ -79,6 +81,7 @@
   import { portal } from "../lib/portal";
   import PromptDialog from "./PromptDialog.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import InstanceManager from "./InstanceManager.svelte";
   import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
   import LibraryInstanceContent from "./LibraryInstanceContent.svelte";
@@ -186,6 +189,22 @@
   let showClonePrompt = $state(false);
   let cloneTarget = $state<RecentProject | null>(null);
   let clonePromptName = $state("");
+  /** Prism-style instance manager dialog target (mods / backups / health). */
+  let manageTarget = $state<RecentProject | null>(null);
+  /** Per-instance notes (Prism-style), autosaved to localStorage. */
+  let notesDraft = $state("");
+  // Reload the draft when the selection changes. localStorage is read
+  // non-reactively on purpose: re-tracking a notes state object would reset
+  // the draft on every autosave (and trim trailing spaces while typing).
+  $effect(() => {
+    const p = selectedPath;
+    notesDraft = p ? getNote(loadNotes(), p) : "";
+  });
+
+  function saveNote() {
+    if (!selectedPath) return;
+    setNote(loadNotes(), selectedPath, notesDraft);
+  }
 
   let showGroupPrompt = $state(false);
   let groupTarget = $state<RecentProject | null>(null);
@@ -1682,6 +1701,15 @@ onkeydown={(e) => e.stopPropagation()}
               <div class="side-secondary-row">
                 <button
                   type="button"
+                  class="side-secondary manage"
+                  title="Mods, backups and health for this pack"
+                  aria-label="Manage instance"
+                  onclick={() => (manageTarget = selected)}
+                >
+                  <SlidersHorizontal size={15} /> Manage…
+                </button>
+                <button
+                  type="button"
                   class="side-secondary"
                   title="Open this pack in the IDE"
                   aria-label="Open in IDE"
@@ -1740,6 +1768,9 @@ onkeydown={(e) => e.stopPropagation()}
                   </button>
                   {#if moreMenuOpen}
                     <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; manageTarget = selected; }}>
+                        <SlidersHorizontal size={14} /> Manage…
+                      </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-group", selected); }}>
                         <Tags size={14} /> Change Group
                       </button>
@@ -1794,6 +1825,18 @@ onkeydown={(e) => e.stopPropagation()}
                 <span class="side-meta-value">{memoryLabel(selected.info.memoryMb)}</span>
               </div>
             </div>
+            <div class="side-notes">
+              <label class="side-notes-label" for="side-notes-input">Notes</label>
+              <textarea
+                id="side-notes-input"
+                class="side-notes-input"
+                placeholder="Reminders, TODOs, server IPs… (saved automatically)"
+                bind:value={notesDraft}
+                oninput={() => saveNote()}
+                rows={3}
+                spellcheck="false"
+              ></textarea>
+            </div>
             <div class="side-content">
               <button
                 type="button"
@@ -1810,6 +1853,7 @@ onkeydown={(e) => e.stopPropagation()}
                   <LibraryInstanceContent
                     projectPath={selected.path}
                     onOpenMods={() => openInIde(selected)}
+                    onManage={() => (manageTarget = selected)}
                   />
                 </div>
               {/if}
@@ -1862,6 +1906,9 @@ onkeydown={(e) => e.stopPropagation()}
     <button type="button" role="menuitem" onclick={() => runAction("open-ide", menuProject)}>
       <Package size={14} /> Open IDE
     </button>
+    <button type="button" role="menuitem" onclick={() => { ctxMenu = null; manageTarget = menuProject; }}>
+      <SlidersHorizontal size={14} /> Manage…
+    </button>
     <button type="button" role="menuitem" onclick={() => void runAction("change-group", menuProject)}>
       <Tags size={14} /> Change Group
     </button>
@@ -1903,6 +1950,14 @@ onkeydown={(e) => e.stopPropagation()}
       <Trash2 size={14} /> Delete from disk
     </button>
   </div>
+{/if}
+
+{#if manageTarget}
+  <InstanceManager
+    project={manageTarget}
+    onclose={() => (manageTarget = null)}
+    onBrowseMods={() => libraryTabRequest.set("discover")}
+  />
 {/if}
 
 {#if showClonePrompt && cloneTarget}
@@ -2917,6 +2972,16 @@ onkeydown={(e) => e.stopPropagation()}
     grid-template-columns: 1fr 1fr;
     gap: 6px;
   }
+  .side-secondary.manage {
+    grid-column: 1 / -1;
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
+    color: var(--accent-primary);
+  }
+  .side-secondary.manage:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-hover));
+    color: var(--accent-primary);
+  }
   .side-secondary {
     display: inline-flex;
     align-items: center;
@@ -2948,6 +3013,40 @@ onkeydown={(e) => e.stopPropagation()}
     opacity: 0.55;
     cursor: default;
   }
+  /* Prism-style per-instance notes — autosaving, keyed by instance path. */
+  .side-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .side-notes-label {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .side-notes-input {
+    width: 100%;
+    min-height: 58px;
+    max-height: 130px;
+    padding: 7px 9px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1.45;
+    resize: vertical;
+    outline: none;
+  }
+  .side-notes-input:focus {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+  }
+  .side-notes-input::placeholder {
+    color: var(--text-muted);
+  }
+
   /* Group chip under the side hero — shows where the pack lives and opens
      the change-group prompt on click. */
   .side-group-chip {

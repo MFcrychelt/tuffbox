@@ -1028,6 +1028,9 @@ export interface ModInfo {
   clientSide?: string | null;
   serverSide?: string | null;
   contentType?: string;
+  /** Present since list_mods started reporting manifest status. */
+  disabled?: boolean;
+  status?: string[];
 }
 
 export interface SearchResult {
