@@ -493,6 +493,75 @@ pub fn retro_dedup(roots: &[&Path]) -> RetroReport {
     report
 }
 
+/// Outcome of [`release`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseOutcome {
+    /// The store object was deleted — its disk space is reclaimed.
+    Released,
+    /// Another instance still links the object — it was kept.
+    InUse,
+    /// No store object for this hash (never recorded / already gone).
+    NotFound,
+}
+
+/// Delete the store object for `sha1` once a pack stopped using its file, so
+/// that the user's «delete this file» actually frees disk space instead of
+/// leaving the bytes parked in the store until the next GC.
+///
+/// Safety (hard-link semantics): removing the store's directory entry can
+/// never affect other packs — their links keep the inode alive on their own.
+/// So the decision below only trades cache freshness, never correctness:
+/// - Unix: exact — `nlink > 1` after the caller's entry was removed means
+///   some other directory still links the object → keep.
+/// - Windows: std has no stable nlink, so the known instance roots are
+///   scanned for a file sharing the object's identity (`same-file`: volume
+///   serial + file index). A folder unknown to the registry is harmless:
+///   its link keeps the data; the store merely loses its cached name and
+///   the next install re-downloads.
+///
+/// No grace period here (unlike [`gc`]): this runs after an explicit user
+/// deletion, not a heuristic sweep. Races with a parallel `record`/link
+/// degrade to "cache miss → re-download", never to data loss.
+pub fn release(expected_sha1: &str, instance_roots: &[PathBuf]) -> ReleaseOutcome {
+    let obj = object_path(expected_sha1);
+    if !obj.is_file() {
+        return ReleaseOutcome::NotFound;
+    }
+    #[cfg(unix)]
+    {
+        let _ = instance_roots; // scan not needed — nlink is exact here
+        if let Ok(meta) = std::fs::metadata(&obj) {
+            use std::os::unix::fs::MetadataExt;
+            if meta.nlink() > 1 {
+                return ReleaseOutcome::InUse;
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        let Ok(obj_handle) = same_file::Handle::from_path(&obj) else {
+            return ReleaseOutcome::NotFound;
+        };
+        for root in instance_roots {
+            let mut candidates = Vec::new();
+            retro_candidates(root, &mut candidates);
+            for candidate in candidates {
+                if let Ok(handle) = same_file::Handle::from_path(&candidate) {
+                    if handle == obj_handle {
+                        return ReleaseOutcome::InUse;
+                    }
+                }
+            }
+        }
+    }
+    make_writable(&obj);
+    if std::fs::remove_file(&obj).is_ok() {
+        ReleaseOutcome::Released
+    } else {
+        ReleaseOutcome::NotFound
+    }
+}
+
 /// Result of the independence sweep run when a pack opts out of dedup.
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -804,6 +873,49 @@ mod tests {
             std::fs::write(proj_off.join(NO_DEDUP_MARKER), b"").unwrap();
             assert!(materialize_mod_file(&proj_off, &module).is_err());
             assert!(!proj_off.join("mods").join("probe.jar").is_file());
+        });
+    }
+
+    #[test]
+    fn release_frees_space_only_when_last_linker_is_gone() {
+        with_test_store(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("seed.jar");
+            std::fs::write(&src, b"shared jar bytes").unwrap();
+            let sha = sha1_of(&src).unwrap();
+            record(&src, &sha);
+
+            let p1 = dir.path().join("pack1").join("mods");
+            let p2 = dir.path().join("pack2").join("mods");
+            std::fs::create_dir_all(&p1).unwrap();
+            std::fs::create_dir_all(&p2).unwrap();
+            let f1 = p1.join("mod.jar");
+            let f2 = p2.join("mod.jar");
+            assert!(try_hardlink(&f1, &sha));
+            assert!(try_hardlink(&f2, &sha));
+
+            let roots = [dir.path().join("pack1"), dir.path().join("pack2")];
+
+            // Pack 1 deletes its file — pack 2 still links the object.
+            std::fs::remove_file(&f1).unwrap();
+            let out = release(&sha, &roots);
+            assert_eq!(out, ReleaseOutcome::InUse);
+            assert!(lookup(&sha).is_some());
+            assert_eq!(std::fs::read(&f2).unwrap(), b"shared jar bytes");
+
+            // Pack 2 deletes too — now nothing references it: the store must
+            // let go, otherwise "delete" would not free any disk space.
+            std::fs::remove_file(&f2).unwrap();
+            let out = release(&sha, &roots);
+            assert_eq!(out, ReleaseOutcome::Released);
+            assert!(!object_path(&sha).exists());
+
+            // Idempotent / unknown hashes are a quiet no-op.
+            assert_eq!(release(&sha, &roots), ReleaseOutcome::NotFound);
+            assert_eq!(
+                release("0000000000000000000000000000000000000000", &roots),
+                ReleaseOutcome::NotFound
+            );
         });
     }
 

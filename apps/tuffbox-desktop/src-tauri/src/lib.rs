@@ -2147,6 +2147,7 @@ async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> 
                             if actual.eq_ignore_ascii_case(hash) {
                                 tuffbox_core::fs_util::clear_readonly(&path);
                                 let _ = std::fs::remove_file(path);
+                                release_store_object_detached(actual);
                             }
                         }
                     }
@@ -3578,10 +3579,16 @@ async fn remove_loose_jar(path: String, file_name: String) -> Result<String, Str
         if !target.is_file() {
             return Err(format!("{} not found in mods/", file_name));
         }
+        // Remember the content hash so the store object can be released
+        // when no other pack uses these bytes.
+        let sha1 = tuffbox_core::sha1_file(&target).ok();
         // The jar may be a dedup-store hardlink carrying the store's
         // read-only attribute — clear it or remove fails on Windows.
         tuffbox_core::fs_util::clear_readonly(&target);
         std::fs::remove_file(&target).map_err(|e| e.to_string())?;
+        if let Some(sha1) = sha1 {
+            release_store_object_detached(sha1);
+        }
         Ok(format!("Removed {}", file_name))
     })
     .await
@@ -3795,8 +3802,12 @@ async fn keep_one_duplicate_mod_jar(
             if id != mod_id_l {
                 continue;
             }
+            let sha1 = tuffbox_core::sha1_file(&jar_path).ok();
             tuffbox_core::fs_util::clear_readonly(&jar_path);
             std::fs::remove_file(&jar_path).map_err(|e| e.to_string())?;
+            if let Some(sha1) = sha1 {
+                release_store_object_detached(sha1);
+            }
             removed.push(file_name);
         }
 
@@ -5930,6 +5941,21 @@ async fn store_retro_dedup(extra_paths: Option<Vec<String>>) -> Result<serde_jso
 fn store_gc() -> Result<serde_json::Value, String> {
     let (removed, bytes) = tuffbox_core::mod_store::gc().map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "removed": removed, "bytesReclaimed": bytes }))
+}
+
+/// After a pack file was deleted, drop the shared store object too when no
+/// other pack links it — the user's «delete» must free disk space, not just
+/// swap a link for a parked copy. Best-effort on a detached thread: never
+/// blocks a command, and hard-link semantics make a wrong call harmless
+/// (other packs' links keep the inode alive regardless).
+fn release_store_object_detached(sha1: String) {
+    let roots: Vec<PathBuf> = helpers::load_recent_projects()
+        .into_iter()
+        .map(|entry| PathBuf::from(entry.path))
+        .collect();
+    std::thread::spawn(move || {
+        tuffbox_core::mod_store::release(&sha1, &roots);
+    });
 }
 
 /// ── Per-pack dedup opt-out (docs/17) ─────────────────────────────────
@@ -16400,6 +16426,34 @@ async fn get_curseforge_modpack_files(
 /// Download a CurseForge / Modrinth / local pack and create an instance with
 /// resolved mods + download progress (Prism InstanceImportTask flow).
 ///
+/// Apply the user's import-time dedup choice to the freshly created pack:
+/// - `Some(true)`  → single-root retro-dedup: identical jars/zips already in
+///   the shared store (e.g. from another imported Prism pack) are linked in,
+///   new unique files are recorded — the pack immediately shares bytes.
+/// - `Some(false)` → `.tuffbox-no-dedup` marker: the pack keeps independent
+///   files (installs never consult or feed the store).
+/// - `None`        → no decision (legacy callers): store behavior unchanged.
+fn apply_import_dedup_choice(instance_dir: &Path, dedup: Option<bool>) -> serde_json::Value {
+    match dedup {
+        Some(true) => {
+            let report = tuffbox_core::mod_store::retro_dedup(&[instance_dir]);
+            serde_json::json!({
+                "mode": "shared",
+                "linked": report.linked,
+                "recorded": report.recorded,
+                "bytesReclaimed": report.bytes_reclaimed,
+                "errors": report.errors.len(),
+            })
+        }
+        Some(false) => {
+            let marker = instance_dir.join(tuffbox_core::mod_store::NO_DEDUP_MARKER);
+            let _ = std::fs::write(&marker, b"");
+            serde_json::json!({ "mode": "independent" })
+        }
+        None => serde_json::json!({ "mode": "default" }),
+    }
+}
+
 /// Also accepts launcher instance folders (Prism / MultiMC / CurseForge /
 /// plain `mods/`) and mods-only zip archives.
 #[tauri::command(rename_all = "camelCase")]
@@ -16408,6 +16462,7 @@ async fn install_modpack(
     source: String,
     target_dir: String,
     instance_name: Option<String>,
+    dedup: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     if !std::path::Path::new(&source).exists()
         && tuffbox_core::github_pack::parse_github_source(&source).is_ok()
@@ -16433,6 +16488,7 @@ async fn install_modpack(
             "modpack-install-progress",
             serde_json::json!({ "phase": "resolving", "message": "Preparing modpack…" }),
         );
+        let import_dedup = dedup;
         let task_id = tuffbox_core::task_progress::start_task(
             format!("modpack-{}", tuffbox_core::time_util::compact_now()),
             "Install modpack",
@@ -16482,11 +16538,13 @@ async fn install_modpack(
                 manifest_path.to_string_lossy().to_string(),
                 "pack_import",
             );
+            let dedup_info = apply_import_dedup_choice(&instance_dir, import_dedup);
             return Ok(serde_json::json!({
                 "path": manifest_path.to_string_lossy(),
                 "name": manifest.project.name,
                 "modCount": manifest.mods.len(),
                 "provider": "folder",
+                "dedup": dedup_info,
             }));
         }
 
@@ -16818,12 +16876,14 @@ async fn install_modpack(
             manifest_path.to_string_lossy().to_string(),
             "pack_import",
         );
+        let dedup_info = apply_import_dedup_choice(&instance_dir, import_dedup);
 
         Ok(serde_json::json!({
             "path": manifest_path.to_string_lossy(),
             "name": manifest.project.name,
             "modCount": manifest.mods.len(),
             "download": report,
+            "dedup": dedup_info,
             "provider": if is_cf {
                 "curseforge"
             } else if effective_ext == "mrpack" {
@@ -19350,12 +19410,22 @@ fn remove_mod_file_from_disk(manifest_path: &Path, removed_mod: &ModSpec) {
                 tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
             let live = content_dir.join(file_name);
             let disabled = content_dir.join(format!("{file_name}.disabled"));
+            // Hash the content before removal so the shared store object can
+            // be released when this was the last pack using these bytes.
+            let sha1 = removed_mod
+                .hashes
+                .as_ref()
+                .and_then(|h| h.sha1.clone())
+                .or_else(|| tuffbox_core::sha1_file(&live).ok());
             // Dedup-store hardlinks are read-only on Windows — clear before
             // remove or the file silently survives (stale jar on next sync).
             tuffbox_core::fs_util::clear_readonly(&live);
             tuffbox_core::fs_util::clear_readonly(&disabled);
             let _ = std::fs::remove_file(&live);
             let _ = std::fs::remove_file(&disabled);
+            if let Some(sha1) = sha1 {
+                release_store_object_detached(sha1);
+            }
         }
     }
 }

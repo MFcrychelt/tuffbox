@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import DedupAskDialog from "./DedupAskDialog.svelte";
   import {
     Search,
     Plus,
@@ -47,6 +48,21 @@
   let kudosLoading = $state(false);
   let importing = $state(false);
   let importMenuOpen = $state(false);
+  // Import-time dedup question (docs/17 §4): resolver kept in state, the
+  // DedupAskDialog feeds the answer back; closing it aborts the import.
+  let dedupAsk = $state<{ resolve: (v: boolean | null) => void; name: string } | null>(null);
+
+  function askDedupChoice(name: string): Promise<boolean | null> {
+    return new Promise((resolve) => {
+      dedupAsk = {
+        resolve: (v) => {
+          dedupAsk = null;
+          resolve(v);
+        },
+        name,
+      };
+    });
+  }
   let githubImportOpen = $state(false);
 
   // ── Drag & drop import (Library tab) ────────────────────────────────
@@ -157,6 +173,14 @@
     importMenuOpen = false;
     const isGithub = /^(gh:|https:\/\/github\.com\/|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$)/.test(source.trim()) && !/\.(mrpack|zip)$/i.test(source.trim());
     if (isGithub) githubInstallActive = true;
+    let dedup: boolean | null = true;
+    if (!isGithub) {
+      dedup = await askDedupChoice(source.replace(/\\/g, "/").split("/").pop() ?? "");
+      if (dedup === null) {
+        importing = false;
+        return; // user closed the question — abort the import
+      }
+    }
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
@@ -167,7 +191,16 @@
         source,
         targetDir,
         instanceName: null,
+        dedup,
       });
+      const dedupInfo = result?.dedup;
+      if (dedupInfo?.mode === "shared" && (dedupInfo.linked ?? 0) > 0) {
+        const mb = Math.round((dedupInfo.bytesReclaimed ?? 0) / 1e6);
+        toasts.info(
+          `File deduplication on — ${dedupInfo.linked} file(s) shared${mb > 0 ? `, ~${mb} MB saved` : ""}.`,
+          4000,
+        );
+      }
       await finishImportedPack(result);
     } catch (e) {
       toasts.error(String(e));
@@ -323,10 +356,16 @@
         toasts.error("Set an instances folder in Settings first.");
         return;
       }
+      const dedup = await askDedupChoice(offerName.trim());
+      if (dedup === null) {
+        offerBusy = false;
+        return; // closed the question — keep the offer dialog open
+      }
       const result: any = await invoke("install_modpack", {
         source: offerPath,
         targetDir,
         instanceName: offerName.trim(),
+        dedup,
       });
       await invoke("cancel_drop_import", { token: offerToken }).catch(() => {});
       offerOpen = false;
@@ -1258,6 +1297,13 @@
     oncancel={() => (githubImportOpen = false)}
   />
 {/if}
+
+<DedupAskDialog
+  open={!!dedupAsk}
+  packName={dedupAsk?.name ?? ""}
+  onanswer={(v) => dedupAsk?.resolve(v)}
+  oncancel={() => dedupAsk?.resolve(null)}
+/>
 
 {#if githubConfirmOpen}
   <ConfirmDialog

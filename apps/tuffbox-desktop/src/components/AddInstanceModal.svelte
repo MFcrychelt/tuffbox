@@ -75,6 +75,9 @@
   // --- Import pack (.mrpack / zip) ---
   let importName = $state("New Instance");
   let importPath = $state("");
+  // Dedup choice asked at import time (docs/17 §4): share identical files
+  // through the store, or keep the pack fully independent.
+  let importDedup = $state<"share" | "independent">("share");
 
   // --- Shared ---
   let location = $state("");
@@ -356,10 +359,19 @@
         source: importPath,
         targetDir,
         instanceName: importName,
+        dedup: importDedup === "share",
       });
       const failed = result?.download?.failed?.length ?? 0;
       if (failed > 0) {
         error = `Installed with ${failed} download failure(s) — open Content and Retry.`;
+      }
+      const dedupInfo = result?.dedup;
+      if (dedupInfo?.mode === "shared" && (dedupInfo.linked ?? 0) > 0) {
+        const mb = Math.round((dedupInfo.bytesReclaimed ?? 0) / 1e6);
+        toasts.info(
+          `File deduplication on — ${dedupInfo.linked} file(s) shared${mb > 0 ? `, ~${mb} MB saved` : ""}.`,
+          4000,
+        );
       }
       oncreated?.(result.path as string);
       onclose?.();
@@ -595,6 +607,35 @@
            <label for="inst-name-imp">Instance name</label>
            <input id="inst-name-imp" bind:value={importName} oninput={() => (location = guessLocation())} />
          </div>
+         <div class="field">
+           <span class="label-ish">File deduplication</span>
+           <div class="dedup-choice" role="radiogroup" aria-label="File deduplication">
+             <button
+               type="button"
+               role="radio"
+               aria-checked={importDedup === "share"}
+               class="dedup-chip"
+               class:active={importDedup === "share"}
+               onclick={() => (importDedup = "share")}
+             >
+               Share identical files (recommended)
+             </button>
+             <button
+               type="button"
+               role="radio"
+               aria-checked={importDedup === "independent"}
+               class="dedup-chip"
+               class:active={importDedup === "independent"}
+               onclick={() => (importDedup = "independent")}
+             >
+               Keep independent files
+             </button>
+           </div>
+           <p class="hint">
+             Identical files are stored once on disk and shared between your packs — nothing is
+             deleted, every pack keeps its full file list. Change it later in Project Settings.
+           </p>
+         </div>
        {/if}
 
        <div class="field">
@@ -687,7 +728,26 @@
   }
   .field { display: grid; gap: 6px; }
   .field.grow { flex: 1; min-width: 0; }
-  .field label, .field-label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+  .field label, .field-label, .label-ish { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+  .hint { margin: 6px 0 0; font-size: 12px; line-height: 1.4; color: var(--text-secondary); }
+  .dedup-choice { display: flex; flex-wrap: wrap; gap: 8px; }
+  .dedup-chip {
+    padding: 7px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out);
+  }
+  .dedup-chip:hover { color: var(--text-primary); border-color: var(--accent-primary); }
+  .dedup-chip.active {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 1px var(--accent-primary);
+  }
   .field input:not([type="radio"]):not([type="range"]):not([type="checkbox"]),
   .field select {
     box-sizing: border-box; width: 100%; height: 42px; padding: 0 12px; border-radius: 10px;

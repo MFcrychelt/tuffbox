@@ -345,7 +345,45 @@ Unix удалял свежезаписанные объекты (nlink==1) не�
 линкнуть. Теперь 24-часовой grace применяется на всех ОС (документированная
 политика). Тест: `fresh_unlinked_object_survives_gc`.
 
-### 4.4 Идеи развития (не реализовано, backlog)
+### 4.4 Импорт сборок (Prism и др.) + вопрос о дедупе (2026-09-16, доп.)
+
+Ответ на вопрос «импортирую 2 сборки Prism — они дедуплицируются?»:
+- **zip-импорт** (Prism zip / .mrpack / CF): моды качаются через
+  `materialize_mod_file` → store используется автоматически ✓.
+- **folder-импорт** (папка Prism): контент копируется как есть → до сих
+  пор НЕ дедуплицировался между сборками.
+
+Теперь **при каждом импорте спрашивается решение** (docs/17 §4):
+- AddInstanceModal (страница Import): чипы «Share identical files
+  (recommended) / Keep independent files», по умолчанию share.
+- Library / LibraryInstancesPane (файл, папка инстанса, drop-импорт):
+  диалог `DedupAskDialog` ДО запуска импорта (GitHub-импорт не спрашивает
+  — там свой флоу). Закрытие диалога = отмена импорта.
+- `install_modpack` принимает `dedup: Option<bool>`:
+  - `Some(true)`  → после установки `retro_dedup` одного корня: второй
+    Prism-пак сразу линкуется к байтам первого (в ответе `dedup.linked` /
+    `bytesReclaimed`, UI показывает тост «N file(s) shared, ~X MB saved»);
+  - `Some(false)` → маркер `.tuffbox-no-dedup`;
+  - `None`        → прежнее поведение (совместимость, CreationTrends).
+
+### 4.5 Полное удаление файла (2026-09-16, доп.)
+
+«Пользователь удалил файл, других пользователей нет → место на диске
+должно освободиться»: `mod_store::release(sha1, instance_roots)` удаляет
+объект store, когда его больше никто не линкует:
+- Unix: точно по nlink (после снятия ссылки пака nlink==1 → удалить);
+- Windows: identity-скан известных корней проектов (same-file). Неизвестные
+  папки безопасны: их ссылки держат inode, store лишь теряет кэш-имя.
+- Без grace-периода (это явное удаление, не эвристика); гонки с параллельным
+  record/link деградируют в «кэш-мисс → перекачка», не в потерю данных.
+
+Врезано в пути удаления (через `release_store_object_detached` —
+отдельный поток, не блокирует UI): remove_loose_jar,
+keep_one_duplicate_mod_jar, remove_mod_file_from_disk (хеш из манифеста
+или перехеш перед удалением), same-bytes cleanup. Тест:
+`release_frees_space_only_when_last_linker_is_gone`.
+
+### 4.6 Идеи развития (не реализовано, backlog)
 
 - Reflink/copy-on-write (ReFS/APFS/Btrfs `clonefile`) — нулевая цена копии
   там, где поддерживается.
