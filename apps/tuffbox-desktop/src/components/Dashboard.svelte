@@ -4,7 +4,6 @@
   import {
     LogIn,
     User,
-    Users,
   } from "@lucide/svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
   import { invoke } from "@tauri-apps/api/core";
@@ -24,7 +23,6 @@
     runningInstances,
     isProjectRunning,
     normalizeInstancePath,
-    loginTypeLabel,
     formatPlaytime,
     libraryTabRequest,
     addInstanceMode,
@@ -49,7 +47,6 @@
   } from "../lib/homeBootstrap";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import SkinPreview3D from "./SkinPreview3D.svelte";
-  import AccountManager from "./AccountManager.svelte";
   import HomeHero, { type PosterCoverKind } from "./HomeHero.svelte";
   import GithubPackUpdateBanner from "./GithubPackUpdateBanner.svelte";
   import GithubPackUpdateGate from "./GithubPackUpdateGate.svelte";
@@ -75,7 +72,6 @@
   const crashFixBanner = $derived($homeCrashFixBanner);
 
   let selectedPath = $state<string | null>($projectPath);
-  let showAccountManager = $state(false);
   let potatoPc = $state(
     typeof document !== "undefined" && document.documentElement.classList.contains("potato-pc"),
   );
@@ -736,29 +732,6 @@
             height={skinPreviewHeight}
           />
           {/if}
-          <div class="skin-panel-footer flex items-center justify-between px-4 py-3 border-t border-[var(--border-color)] gap-2">
-            <div class="skin-meta flex items-center gap-2 min-w-0">
-              <span
-                class={[
-                  "type-badge",
-                  {
-                    microsoft: $authState.loginType === "microsoft",
-                    offline: $authState.loginType === "offline",
-                    ygg: $authState.loginType === "yggdrasil",
-                  },
-                ]}
-              >
-                {loginTypeLabel(
-                  $authState.loginType,
-                  $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority
-                )}
-              </span>
-            </div>
-            <button class="change-skin-btn" onclick={() => (showAccountManager = true)}>
-              <Users size={14} />
-              Manage
-            </button>
-          </div>
           <div
             class="skin-player-name text-center overflow-hidden whitespace-nowrap text-ellipsis box-border max-w-full -mt-1 pb-3 px-2.5"
             title={$authState.profile.name}
@@ -796,10 +769,6 @@
     </aside>
   </div>
 </div>
-
-{#if showAccountManager}
-  <AccountManager onclose={() => (showAccountManager = false)} />
-{/if}
 
 {#if updateGateOpen && selectedPath}
   <GithubPackUpdateGate
@@ -978,46 +947,6 @@
     align-items: stretch;
   }
 
-  .skin-panel-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 16px;
-    border-top: 1px solid var(--border-color);
-    gap: 8px;
-  }
-
-  .skin-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .type-badge {
-    font-size: 11px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 3px 7px;
-    border-radius: 4px;
-  }
-  .type-badge.microsoft {
-    color: var(--badge-ms-fg, #93c5fd);
-    background: var(--badge-ms-bg, rgba(59, 130, 246, 0.15));
-    border: 1px solid var(--badge-ms-border, rgba(59, 130, 246, 0.35));
-  }
-  .type-badge.offline {
-    color: var(--badge-offline-fg, #fde68a);
-    background: var(--badge-offline-bg, rgba(245, 158, 11, 0.12));
-    border: 1px solid var(--badge-offline-border, rgba(245, 158, 11, 0.3));
-  }
-  .type-badge.ygg {
-    color: var(--badge-ygg-fg, #e9d5ff);
-    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.15));
-    border: 1px solid var(--badge-ygg-border, rgba(168, 85, 247, 0.35));
-  }
-
   .skin-player-name {
     font-family: var(--font-minecraft);
     font-weight: 400;
@@ -1041,26 +970,6 @@
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-  }
-
-  .change-skin-btn {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    padding: 6px 10px;
-    border-radius: var(--border-radius-sm);
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .change-skin-btn:hover {
-    border-color: var(--accent-primary);
-    color: var(--accent-primary);
   }
 
   /* skin-panel-empty* layouts moved to Tailwind classes in markup. */

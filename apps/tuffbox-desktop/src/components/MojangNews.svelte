@@ -411,7 +411,10 @@
             </span>
             <span class="card-cap">
               <span class="card-title">{entry.title}</span>
-              <span class="card-version">{entry.version} · {formatDate(entry.date)}</span>
+              <span class="card-version">
+                <span class="card-ver">{entry.version}</span>
+                <span class="card-date">{formatDate(entry.date)}</span>
+              </span>
             </span>
           </button>
         {/each}
@@ -750,7 +753,7 @@
     flex-direction: column;
     gap: 3px;
     align-items: flex-start;
-    min-height: 56px;
+    min-height: 68px;
     padding: 8px 10px;
     background: #000;
     border-radius: 0;
@@ -769,11 +772,29 @@
     color: #fff;
   }
 
+  /* Version and date stacked on their own lines — clearer than the old
+     "1.21.4 · 12 Mar 2025" dot-separated single line. */
   .card-version {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
     width: 100%;
+    min-width: 0;
+  }
+
+  .card-ver {
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .card-date {
     font-size: 11px;
     font-weight: 400;
-    color: rgba(255, 255, 255, 0.62);
+    color: rgba(255, 255, 255, 0.64);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
