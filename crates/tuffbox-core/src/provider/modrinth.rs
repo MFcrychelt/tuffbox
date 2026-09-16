@@ -209,6 +209,11 @@ impl ModrinthProvider {
         let creators: Vec<ProjectCreator> = self
             .get_json::<Vec<ModrinthTeamMember>>(&format!("/project/{}", project.project.id))
             .map(|members| {
+                // Modrinth ordering: Owner first, then by ordering/join date.
+                // The API usually returns members pre-sorted; sorting again
+                // keeps the owner-first contract even if the response isn't.
+                let mut members = members;
+                members.sort_by_key(|m| m.ordering);
                 members
                     .into_iter()
                     .filter(|m| m.user.username.is_some())

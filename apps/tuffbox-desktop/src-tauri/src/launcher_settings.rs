@@ -110,6 +110,11 @@ fn default_memory() -> u32 {
 fn default_youtube_inline_player() -> bool {
     true
 }
+/// Show Minecraft game updates in the home news feed by default — off-by-default
+/// would hide the strip for existing users (see `LauncherSettings::news_show_updates`).
+fn default_news_show_updates() -> bool {
+    true
+}
 fn default_sidebar_mode() -> String {
     "full".into()
 }

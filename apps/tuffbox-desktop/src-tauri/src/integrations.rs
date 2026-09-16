@@ -1926,7 +1926,8 @@ async fn ollama_pull_model_cli(
     }
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
+        // tokio::process::Command has an inherent `creation_flags` on Windows
+        // (no std CommandExt trait import needed).
         cmd.creation_flags(0x08000000);
     }
     let mut child = cmd

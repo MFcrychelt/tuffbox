@@ -5,7 +5,7 @@
 //! unified text diffs for changed config files.
 
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Deserialize;
 
@@ -174,7 +174,7 @@ fn load_state(source: &PackSourcePayload) -> Result<PackState, String> {
             }
             pack_state_from_parts(&manifest_text, config_files)
         }
-        other => Err(format!("unknown pack source type: {other}", other = source.kind)),
+        _ => Err(format!("unknown pack source type: {}", source.kind)),
     }
 }
 

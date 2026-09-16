@@ -63,7 +63,10 @@ fn default_risk_low() -> String {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OptimizeModsFile {
+    /// Schema marker of the embedded `optimize-mods.json`; parsed to keep the
+    /// data shape self-describing but not consumed by any migration yet.
     #[serde(default)]
+    #[allow(dead_code)]
     schema_version: u32,
     mods: HashMap<String, OptimizeModEntry>,
     profiles: HashMap<String, HashMap<String, Vec<String>>>,

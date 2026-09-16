@@ -7635,7 +7635,7 @@ async fn build_ai_crash_context(
         .unwrap_or(0);
     let similar_case_count = ai_ctx.similar_cases.len();
     let fingerprint_key = ai_ctx.fingerprint_key.clone();
-    let mut ui_ctx = ai_ctx;
+    let ui_ctx = ai_ctx;
 
     Ok(serde_json::json!({
         "context": ui_ctx,
@@ -7751,7 +7751,9 @@ async fn analyze_crash_with_ai_inner(
     let mut speculative_used = false;
     let mut speculative_draft_model: Option<String> = None;
     let mut fallback_notes: Vec<String> = Vec::new();
-    let mut cascade_stage = String::new();
+    // Assigned by every arm of the plan cascade below before its first read,
+    // so it is declared without an initializer.
+    let mut cascade_stage: String;
     let mut cascade_tried: Vec<String> = vec!["l1".into()];
 
     emit_diagnose_cascade(&app, "l1_searching");
@@ -12323,7 +12325,7 @@ fn diagnose_timing(
     eprintln!("[diagnose] phase={phase} elapsed_ms={elapsed_ms} cache_hit={cache_hit}");
 }
 
-fn diagnose_finish(app: &tauri::AppHandle, ok: bool, detail: &str) {
+fn diagnose_finish(_app: &tauri::AppHandle, ok: bool, detail: &str) {
     if ok {
         tuffbox_core::task_progress::succeed(DIAGNOSE_TASK_ID, Some(detail.to_string()));
     } else {
@@ -14143,7 +14145,7 @@ fn rollback_history_file(
     }
     // copy_replacing: the destination may be a dedup-store hardlink — an
     // in-place copy would corrupt every pack sharing that object.
-    tuffbox_core::fs_util::copy_replacing(src, &dst).map_err(|e| e.to_string())?;
+    tuffbox_core::fs_util::copy_replacing(&src, &dst).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -18314,7 +18316,7 @@ async fn retry_failed_mod_downloads(
 #[tauri::command(rename_all = "camelCase")]
 #[allow(deprecated)]
 fn open_project_folder(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     path: String,
     subdir: Option<String>,
 ) -> Result<(), String> {
