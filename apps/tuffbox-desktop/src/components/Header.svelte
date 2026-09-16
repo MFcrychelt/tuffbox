@@ -34,7 +34,12 @@
 
   onMount(() => {
     void refreshOnline();
-    onlineTimer = setInterval(() => void refreshOnline(), 15000);
+    // Cosmetic "online now" counter: 30s cadence, and no Supabase
+    // round-trip at all while the window is minimized / occluded.
+    onlineTimer = setInterval(() => {
+      if (document.hidden) return;
+      void refreshOnline();
+    }, 30000);
   });
 
   onDestroy(() => {

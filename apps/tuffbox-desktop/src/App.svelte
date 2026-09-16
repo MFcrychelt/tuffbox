@@ -20,6 +20,7 @@
   import YoutubeQueueWindow from "./components/YoutubeQueueWindow.svelte";
   import { api } from "./lib/api";
   import { needsTokenRefresh } from "./lib/launchState";
+  import { installAppHiddenSync } from "./lib/idlePerf";
   import { applyHomeSnapshot, ensureHomeEnrichListener } from "./lib/homeBootstrap";
   import { invoke, isTauri } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -234,6 +235,11 @@
       // best-effort — perfAutoDetected stays false server-side, so we simply retry next launch
     }
   }
+
+  // Idle CPU: body.app-hidden while the window is minimized/occluded —
+  // styles.css pauses every CSS animation for that class, so the
+  // backgrounded launcher stops compositing frames entirely.
+  onMount(() => installAppHiddenSync());
 
   // Hydrate the account session early and renew a Microsoft token that
   // expired while the launcher was closed (~24h lifetime) — the first Play
@@ -1129,9 +1135,18 @@
     min-width: 420px;
     min-height: 420px;
     border-radius: 50%;
-    filter: blur(90px);
+    /* Pre-blurred blob: radial-gradient instead of a runtime
+       `filter: blur(90px)`. A 42vw blur layer drifting forever kept the
+       WebView2 dispatcher at ~9% CPU on an otherwise idle home page (the
+       blur re-rasters as the layer scales); the gradient is visually
+       identical at this size and leaves only cheap compositor work. */
+    background: radial-gradient(
+      circle,
+      var(--accent-primary) 0%,
+      var(--accent-primary) 55%,
+      transparent 78%
+    );
     opacity: 0.14;
-    background: var(--accent-primary);
     will-change: transform;
   }
   .glow-a {

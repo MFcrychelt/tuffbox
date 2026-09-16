@@ -576,6 +576,8 @@ export function startRunningInstancesWatch(): () => void {
 
   const schedule = () => {
     if (timer) clearInterval(timer);
+    timer = null;
+    if (document.visibilityState !== "visible") return; // hidden: no idle polling
     const busy = get(isLaunching) || get(runningInstances).length > 0;
     // Hot while launching / game open; cool when idle (less CPU for the launcher UI).
     timer = setInterval(tick, busy ? 2500 : 12000);
@@ -586,15 +588,23 @@ export function startRunningInstancesWatch(): () => void {
   const unsubRun = runningInstances.subscribe(() => schedule());
   const onFocus = () => tick();
   window.addEventListener("focus", onFocus);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") tick();
-  });
+  document.addEventListener("visibilitychange", onVisChange);
+
+  function onVisChange() {
+    if (document.visibilityState === "visible") {
+      tick();
+      schedule(); // resume the watch after the hidden pause
+    } else {
+      schedule(); // pauses (clears) the interval while hidden
+    }
+  }
 
   return () => {
     if (timer) clearInterval(timer);
     unsubLaunch();
     unsubRun();
     window.removeEventListener("focus", onFocus);
+    document.removeEventListener("visibilitychange", onVisChange);
   };
 }
 

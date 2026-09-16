@@ -479,6 +479,16 @@ textarea:focus-visible,
 
 /* ── Reduced motion ───────────────────────────────────────────── */
 
+/* Idle CPU: while the window is minimized / fully occluded (WebView2 reports
+   document.visibilityState "hidden"), every CSS animation pauses — a
+   backgrounded launcher must cost ~0 CPU. Class toggled by
+   installAppHiddenSync() (src/lib/idlePerf.ts). */
+body.app-hidden *,
+body.app-hidden *::before,
+body.app-hidden *::after {
+  animation-play-state: paused !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     --glass-blur: 0;
