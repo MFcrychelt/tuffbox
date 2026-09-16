@@ -6178,8 +6178,16 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .installed-card.disabled {
-    opacity: 0.72;
     border-style: dashed;
+  }
+  /* Dim the CONTENT, not the card: the card is a glass surface
+     (backdrop-filter under "Glass transparency"), and toggling opacity on a
+     backdrop-filter element re-groups its backdrop layer — WebView2 then
+     paints a square sampling artifact over the launcher background on every
+     enable/disable. Child elements carry no backdrop-filter, so opacity here
+     is compositor-safe while looking the same. */
+  .installed-card.disabled :is(.mod-icon, .installed-main, .installed-tags, .card-actions) {
+    opacity: 0.72;
   }
 
   .installed-card.selected,

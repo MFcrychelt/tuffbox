@@ -594,7 +594,11 @@
   .card.focus {
     box-shadow: inset 0 0 0 1px rgba(61, 184, 168, 0.55);
   }
-  .card.orphan {
+  /* Dim the CONTENT, not the glass card itself: `.card` is a backdrop-filter
+     surface (glass toggle / quiet-glass themes), and opacity on the card
+     element re-groups its backdrop layer — the WebView2 square-artifact
+     class (see scripts/check-glass-compositing.mjs). */
+  .card.orphan :is(.card-t, .meta, .row) {
     opacity: 0.9;
   }
   .card-t {
