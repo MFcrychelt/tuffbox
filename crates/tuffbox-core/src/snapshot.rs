@@ -537,7 +537,10 @@ fn files_differ(left: &Path, right: &Path) -> std::io::Result<bool> {
 fn copy_file(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<(), SnapshotError> {
     let from = from.as_ref();
     let to = to.as_ref();
-    fs::copy(from, to).map_err(|source| SnapshotError::Copy {
+    // copy_replacing, never fs::copy: restoring over an existing file must
+    // not write into its inode — jars/zips can be dedup-store hardlinks,
+    // and an in-place write would corrupt every other pack sharing them.
+    crate::fs_util::copy_replacing(from, to).map_err(|source| SnapshotError::Copy {
         from: from.to_path_buf(),
         to: to.to_path_buf(),
         source,
@@ -606,6 +609,26 @@ mod tests {
         let mut file = fs::File::create(&manifest_path).unwrap();
         writeln!(file, "{{\"schemaVersion\":\"0.1.0\"}}").unwrap();
         (dir, project_dir)
+    }
+
+    #[test]
+    fn restore_replaces_hardlinks_without_corrupting_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.jar");
+        let b = dir.path().join("b.jar");
+        std::fs::write(&a, b"original shared bytes").unwrap();
+        std::fs::hard_link(&a, &b).unwrap(); // simulate a dedup-store link pair
+
+        // "Restore" a.jar from a snapshot with different content.
+        let incoming = dir.path().join("incoming.jar");
+        std::fs::write(&incoming, b"restored bytes").unwrap();
+        copy_file(&incoming, &a).unwrap();
+
+        // a.jar got the new content; b.jar — the same inode the OLD a.jar
+        // pointed at — must still hold the original bytes. An in-place
+        // fs::copy would have mutated both.
+        assert_eq!(std::fs::read(&a).unwrap(), b"restored bytes");
+        assert_eq!(std::fs::read(&b).unwrap(), b"original shared bytes");
     }
 
     #[test]

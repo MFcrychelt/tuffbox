@@ -2145,6 +2145,7 @@ async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> 
                         }
                         if let Ok(actual) = tuffbox_core::sha1_file(&path) {
                             if actual.eq_ignore_ascii_case(hash) {
+                                tuffbox_core::fs_util::clear_readonly(&path);
                                 let _ = std::fs::remove_file(path);
                             }
                         }
@@ -2220,6 +2221,7 @@ async fn disable_project_mod(path: String, mod_id: String) -> Result<serde_json:
             // Already renamed on disk — just mark the status.
         } else if active.is_file() {
             if disabled.exists() {
+                tuffbox_core::fs_util::clear_readonly(&disabled);
                 let _ = std::fs::remove_file(&disabled);
             }
             std::fs::rename(&active, &disabled).map_err(|e| {
@@ -2376,6 +2378,7 @@ fn set_mod_jar_disabled(
             // already on disk
         } else if active.is_file() {
             if disabled.exists() {
+                tuffbox_core::fs_util::clear_readonly(&disabled);
                 let _ = std::fs::remove_file(&disabled);
             }
             std::fs::rename(&active, &disabled).map_err(|e| e.to_string())?;
@@ -2909,6 +2912,7 @@ fn disable_project_mod_inner(
         // Already renamed on disk.
     } else if active.is_file() {
         if disabled.exists() {
+            tuffbox_core::fs_util::clear_readonly(&disabled);
             let _ = std::fs::remove_file(&disabled);
         }
         std::fs::rename(&active, &disabled).map_err(|e| {
@@ -3574,6 +3578,9 @@ async fn remove_loose_jar(path: String, file_name: String) -> Result<String, Str
         if !target.is_file() {
             return Err(format!("{} not found in mods/", file_name));
         }
+        // The jar may be a dedup-store hardlink carrying the store's
+        // read-only attribute — clear it or remove fails on Windows.
+        tuffbox_core::fs_util::clear_readonly(&target);
         std::fs::remove_file(&target).map_err(|e| e.to_string())?;
         Ok(format!("Removed {}", file_name))
     })
@@ -3788,6 +3795,7 @@ async fn keep_one_duplicate_mod_jar(
             if id != mod_id_l {
                 continue;
             }
+            tuffbox_core::fs_util::clear_readonly(&jar_path);
             std::fs::remove_file(&jar_path).map_err(|e| e.to_string())?;
             removed.push(file_name);
         }
@@ -5922,6 +5930,73 @@ async fn store_retro_dedup(extra_paths: Option<Vec<String>>) -> Result<serde_jso
 fn store_gc() -> Result<serde_json::Value, String> {
     let (removed, bytes) = tuffbox_core::mod_store::gc().map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "removed": removed, "bytesReclaimed": bytes }))
+}
+
+/// ── Per-pack dedup opt-out (docs/17) ─────────────────────────────────
+
+/// Is the shared dedup store used for this pack? Reads the
+/// `.tuffbox-no-dedup` marker in the project root (cheap — no hashing).
+#[tauri::command(rename_all = "camelCase")]
+fn dedup_project_status(path: String) -> Result<serde_json::Value, String> {
+    let manifest_path = resolve_manifest_path(&path)?;
+    let project_dir = manifest_path
+        .parent()
+        .ok_or("manifest has no parent directory")?
+        .to_path_buf();
+    Ok(serde_json::json!({
+        "enabled": !tuffbox_core::mod_store::dedup_disabled(&project_dir),
+    }))
+}
+
+/// Turn the shared dedup store on/off for one pack. Reversible at any time:
+/// - off  → writes the marker, then materializes every store hardlink in
+///   the pack back into independent copies (atomic per file; the store and
+///   other packs keep their objects).
+/// - on   → removes the marker and immediately links matching files into
+///   the store (single-root retro-dedup).
+/// Both sweeps hash the pack's jars/zips — run off the main thread.
+#[tauri::command(rename_all = "camelCase")]
+async fn dedup_project_set_enabled(path: String, enabled: bool) -> Result<serde_json::Value, String> {
+    let manifest_path = resolve_manifest_path(&path)?;
+    let project_dir = manifest_path
+        .parent()
+        .ok_or("manifest has no parent directory")?
+        .to_path_buf();
+
+    tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let marker = project_dir.join(tuffbox_core::mod_store::NO_DEDUP_MARKER);
+        if enabled {
+            let _ = std::fs::remove_file(&marker);
+            let report = tuffbox_core::mod_store::retro_dedup(&[&project_dir]);
+            Ok(serde_json::json!({
+                "enabled": true,
+                "action": "linked",
+                "scanned": report.scanned,
+                "linked": report.linked,
+                "recorded": report.recorded,
+                "skipped": report.skipped,
+                "bytesReclaimed": report.bytes_reclaimed,
+                "errors": report.errors,
+            }))
+        } else {
+            if let Some(parent) = marker.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&marker, b"")
+                .map_err(|e| format!("write {}: {e}", marker.display()))?;
+            let report = tuffbox_core::mod_store::materialize_project(&project_dir);
+            Ok(serde_json::json!({
+                "enabled": false,
+                "action": "materialized",
+                "scanned": report.scanned,
+                "materialized": report.materialized,
+                "skipped": report.skipped,
+                "errors": report.errors,
+            }))
+        }
+    })
+    .await
+    .map_err(|e| format!("dedup toggle task panicked: {e}"))?
 }
 
 /// Sodium config checks: (filename, fn(&content, &mut findings))
@@ -13850,7 +13925,9 @@ fn rollback_history_file(
     if !canonical_parent.starts_with(&canonical_project) {
         return Err("file is outside project directory".to_string());
     }
-    std::fs::copy(src, dst).map_err(|e| e.to_string())?;
+    // copy_replacing: the destination may be a dedup-store hardlink — an
+    // in-place copy would corrupt every pack sharing that object.
+    tuffbox_core::fs_util::copy_replacing(src, &dst).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -19271,8 +19348,14 @@ fn remove_mod_file_from_disk(manifest_path: &Path, removed_mod: &ModSpec) {
         if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(manifest_path) {
             let content_dir =
                 tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
-            let _ = std::fs::remove_file(content_dir.join(file_name));
-            let _ = std::fs::remove_file(content_dir.join(format!("{file_name}.disabled")));
+            let live = content_dir.join(file_name);
+            let disabled = content_dir.join(format!("{file_name}.disabled"));
+            // Dedup-store hardlinks are read-only on Windows — clear before
+            // remove or the file silently survives (stale jar on next sync).
+            tuffbox_core::fs_util::clear_readonly(&live);
+            tuffbox_core::fs_util::clear_readonly(&disabled);
+            let _ = std::fs::remove_file(&live);
+            let _ = std::fs::remove_file(&disabled);
         }
     }
 }
@@ -21482,6 +21565,8 @@ pub fn run() {
             store_stats,
             store_retro_dedup,
             store_gc,
+            dedup_project_status,
+            dedup_project_set_enabled,
             scan_ore_generation,
             detect_duplicate_items,
             generate_unify_config,

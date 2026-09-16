@@ -279,7 +279,9 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+            // copy_replacing: never write into an inode that may be shared
+            // with the dedup store (re-installing over an existing pack).
+            tuffbox_core::fs_util::copy_replacing(&src, &dest).map_err(|e| e.to_string())?;
         }
     }
     Ok(())

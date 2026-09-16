@@ -270,3 +270,92 @@ Hardening store (после аудита):
   ретрай с задержкой, затем fallback copy.
 - нелинковать ничего в `saves/`, `config/`, `screenshots/` — соблюдаются
   и в retro_candidates, и в M2-путях.
+
+---
+
+## Часть 4. Аудит безопасности + per-pack opt-out (2026-09-16)
+
+> **СТАТУС: РЕАЛИЗОВАНО.** Полный аудит механизма + исправления найденных
+> уязвимостей + выключение дедупликации для отдельного модпака.
+
+### 4.1 Аудит «теряются ли файлы пользователя»
+
+Классическая семантика hard links: удаление одного имени не трогает данные,
+пока жив другой. Проверенные пути:
+
+| Операция | Вердикт |
+|---|---|
+| Удаление инстанса/мода | safe: снимается одна ссылка, объект store жив |
+| Экспорт (.mrpack/server) | safe: только чтение (read_export_file, ретраи) |
+| Замена мода при обновлении | safe: `.part` + rename — атомарная замена записи каталога |
+| Включение/выключение мода (.disabled) | safe: rename, тот же inode |
+| Запуск/верификация | safe: только чтение/хеширование |
+| GC store | safe по nlink/identity + grace 24h (см. 4.3) |
+
+Найденные и исправленные уязвимости (все — вариант «запись поверх
+существующего файла», мутирующая общий inode):
+
+1. **snapshot restore** (`snapshot.rs::copy_file`) и восстановление файла
+   снапшота (`lib.rs`) писали `fs::copy` «в место» — при восстановлении
+   поверх hardlink'а в mods/ байты улетали бы в общий объект store
+   (порча всех сборок сразу). → `fs_util::copy_replacing`
+   (tmp + атомарный rename, старый inode только отвязывается).
+2. **`helpers::copy_dir_recursive`** и **github- pack `copy_tree`** — тот же
+   in-place `fs::copy` при переустановке поверх существующего пака.
+   → переведены на `copy_replacing`.
+3. **`fs_util::restore_from_backup`** — тот же паттерн для конфигов
+   (не линкуются, но защита «на будущее»). → `copy_replacing`.
+4. **`mc_install::download_with_sha1`** — удаление несовпадающего файла
+   перед перекачкой падало бы на read-only линке (Windows). →
+   `fs_util::clear_readonly` перед remove.
+5. **`relink_to_store`** имел окно remove→link (краш = потерянный файл). →
+   линк создаётся под уникальным tmp-именем и атомарно переименовывается;
+   при любой ошибке исходный файл остаётся на месте (не нужен copy-restore).
+
+Регресс-тесты: `restore_replaces_hardlinks_without_corrupting_siblings`,
+`copy_replacing_never_mutates_a_hardlinked_destination`,
+`restore_from_backup_keeps_hardlinked_siblings_intact` — все падают на
+старом in-place коде и проходят на новом.
+
+### 4.2 Per-pack opt-out (запрос пользователя)
+
+Маркер `.tuffbox-no-dedup` в корне проекта:
+
+- **materialize_mod_file** (установка/синк модов): при маркере store не
+  консультируется и не пополняется — пак получает независимые копии.
+- **retro_dedup**: корень с маркером пропускается целиком
+  (`RetroReport.disabled_roots`).
+- **UI**: Project Settings → «File deduplication» — статус-бейдж
+  (Shared store / Independent files), переключение в любой момент:
+  - off → маркер + `materialize_project`: каждый jar/zip, являющийся
+    ссылкой в store, заменяется независимой копией тех же байтов
+    (tmp + атомарный rename; краш в худшем случае оставляет файл
+    линком, потеря данных невозможна). Store и другие паки не затронуты.
+  - on → маркер снимается + одиночный retro-dedup этого корня.
+- Команды: `dedup_project_status`, `dedup_project_set_enabled`
+  (spawn_blocking — хеширование уходит с главного потока).
+- Тесты: `retro_dedup_skips_packs_that_opted_out`,
+  `materialize_project_restores_independence`,
+  `materialize_mod_file_respects_per_pack_opt_out`.
+
+### 4.3 GC: единая grace-политика
+
+Unix удалял свежезаписанные объекты (nlink==1) немедленно — кэш store
+стирался сразу после первой установки, до того как второй инстанс успеет
+линкнуть. Теперь 24-часовой grace применяется на всех ОС (документированная
+политика). Тест: `fresh_unlinked_object_survives_gc`.
+
+### 4.4 Идеи развития (не реализовано, backlog)
+
+- Reflink/copy-on-write (ReFS/APFS/Btrfs `clonefile`) — нулевая цена копии
+  там, где поддерживается.
+- Windows: честный nlink через `number_of_links()` при стабилизации в std
+  (или winapi) — уберёт age-эвристику в GC.
+- `meta/<sha1>.json` реестр происхождения объектов (откуда скачан, счётчик
+  линков) для диагностики и точного GC без эвристик.
+- Дедуп `libraries/` инстанс-локальных лоадеров (сейчас только shared
+  runtime) и `assets/` между версиями.
+- Фоновый ретро-дедуп новых проектов после первой установки (сейчас —
+  только вручную из Settings → Storage).
+- Пер-пак opt-out для shared runtime libraries (сейчас флаг действует на
+  файлы внутри папки пака).

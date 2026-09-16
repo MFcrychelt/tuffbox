@@ -234,6 +234,53 @@
     }
   }
 
+  // ── Per-pack dedup store opt-out (docs/17) ─────────────────────────────
+  let dedupEnabled = $state(true);
+  let dedupBusy = $state(false);
+
+  async function loadDedupStatus() {
+    if (!$projectPath) return;
+    try {
+      const s: any = await invoke("dedup_project_status", { path: $projectPath });
+      dedupEnabled = s.enabled !== false;
+    } catch {
+      /* status stays at defaults */
+    }
+  }
+
+  async function setDedupEnabled(next: boolean) {
+    if (!$projectPath || dedupBusy) return;
+    dedupBusy = true;
+    error = "";
+    successMessage = "";
+    try {
+      const r: any = await invoke("dedup_project_set_enabled", {
+        path: $projectPath,
+        enabled: next,
+      });
+      dedupEnabled = r.enabled !== false;
+      if (next) {
+        const linked = r.linked ?? 0;
+        const recorded = r.recorded ?? 0;
+        successMessage =
+          `Deduplication on — ${linked} file(s) linked into the shared store` +
+          (recorded ? `, ${recorded} new unique file(s) recorded` : "") +
+          ".";
+      } else {
+        const made = r.materialized ?? 0;
+        successMessage =
+          made > 0
+            ? `Deduplication off — ${made} file(s) are now independent copies owned by this pack.`
+            : "Deduplication off — this pack already owns all of its files.";
+      }
+      await loadDedupStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      dedupBusy = false;
+    }
+  }
+
   async function migrateSchema() {
     if (!$projectPath) return;
     saving = true;
@@ -303,6 +350,7 @@
     void detectJavaPreview();
     void loadSchemaStatus();
     void loadOptionsStatus();
+    void loadDedupStatus();
     void (async () => {
       try {
         const versions = (await invoke("get_minecraft_versions")) as {
@@ -871,6 +919,73 @@
                   </button>
                 {/if}
               </div>
+            </div>
+          </section>
+
+          <!-- File deduplication block -->
+          <section class="panel glass-card">
+            <div class="card-head-row">
+              <div class="card-head-title">
+                <Database size={18} />
+                <h3>File deduplication</h3>
+              </div>
+              <span class="options-badge" class:shared={dedupEnabled}>
+                {#if dedupEnabled}
+                  <Share2 size={12} /> Shared store
+                {:else}
+                  <Shield size={12} /> Independent files
+                {/if}
+              </span>
+            </div>
+            <p class="card-desc">
+              Identical mods, resource packs and shaders are stored once on disk and shared
+              between your packs — nothing is deleted, and every pack still sees its own
+              complete file list.
+            </p>
+
+            <div class="options-actions-block">
+              <div class="options-status-text">
+                {#if dedupEnabled}
+                  <span>
+                    This pack shares identical jars/zips with other packs through the TuffBox
+                    store (read-only, verified by checksum).
+                  </span>
+                {:else}
+                  <span>
+                    This pack keeps fully independent copies of every file. Uses more disk
+                    space, but the pack is 100% self-contained.
+                  </span>
+                {/if}
+              </div>
+
+              <div class="flex flex-wrap gap-2.5">
+                {#if dedupEnabled}
+                  <button
+                    type="button"
+                    class="sm-btn secondary-btn"
+                    onclick={() => setDedupEnabled(false)}
+                    disabled={dedupBusy}
+                    title="Replace shared files with this pack's own copies"
+                  >
+                    {dedupBusy ? "Working…" : "Turn off (make files independent)"}
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    class="sm-btn primary-action-btn"
+                    onclick={() => setDedupEnabled(true)}
+                    disabled={dedupBusy}
+                    title="Link identical files into the shared store to save disk space"
+                  >
+                    <Share2 size={13} />
+                    {dedupBusy ? "Working…" : "Turn on (share identical files)"}
+                  </button>
+                {/if}
+              </div>
+              <p class="card-desc" style="margin: 2px 0 0;">
+                You can flip this at any time — turning it off copies shared files back into
+                the pack, turning it on links them again.
+              </p>
             </div>
           </section>
         </div>
