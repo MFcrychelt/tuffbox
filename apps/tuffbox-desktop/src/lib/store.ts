@@ -737,7 +737,8 @@ export function removeRunning(
     error?: LaunchErrorInfo;
   },
 ) {
-  runningInstances.update((list) => list.filter((r) => r.id !== id));
+  const key = normalizeInstancePath(id);
+  runningInstances.update((list) => list.filter((r) => normalizeInstancePath(r.id) !== key));
   markLaunchExited(id, opts);
 }
 

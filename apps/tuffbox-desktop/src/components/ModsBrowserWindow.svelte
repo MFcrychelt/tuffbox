@@ -3,6 +3,7 @@
      OS window so the main window stays on any IDE tab. The target instance
      comes from the ?path= query param; ?type= seeds the content tab. -->
 <script lang="ts">
+  import { untrack } from "svelte";
   import { Search, Grid2X2, List, Loader2, X, FolderOpen } from "@lucide/svelte";
   import { api } from "../lib/api";
   import { toasts } from "../lib/toast";
@@ -226,8 +227,15 @@
     }
   }
 
+  // Initial load only — `load` reads `filter`, so it must run untracked or
+  // every keystroke in the search box would fire a full reset search.
+  // Filter changes reload through their explicit onchange/Enter handlers.
   $effect(() => {
-    void load(true);
+    const target = projectPath;
+    if (!target) return;
+    untrack(() => {
+      void load(true);
+    });
   });
 
   void loadInstanceHeader();
