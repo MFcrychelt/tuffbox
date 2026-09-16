@@ -771,7 +771,7 @@
   }
 
   .poster-action-bar {
-    margin-top: 14px;
+    margin-top: 8px;
     width: 100%;
   }
 
@@ -782,7 +782,7 @@
     gap: 12px;
     min-width: 0;
     width: 100%;
-    padding: 10px 16px 6px;
+    padding: 6px 16px 4px;
     /* Nearly invisible block: a whisper of tint over the page background,
        no border, no shadow — the carousel floats on the page itself. */
     background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
