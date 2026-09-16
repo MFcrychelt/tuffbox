@@ -608,6 +608,65 @@
     }
   }
 
+  // ── Roving keyboard focus across tiles/rows (↑↓←→ / Home / End) ──
+  function focusableItems(): HTMLElement[] {
+    return Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".prism-lib .inst-tile[data-path], .prism-lib .inst-row[data-path]",
+      ),
+    ).filter((el) => el.offsetParent !== null);
+  }
+
+  function onTileKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      const path = (e.currentTarget as HTMLElement).dataset.path;
+      const project = path ? $recentProjects.find((p) => p.path === path) : null;
+      if (project) selectInstance(project);
+      return;
+    }
+    const keys = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown", "Home", "End"];
+    if (!keys.includes(e.key)) return;
+    const items = focusableItems();
+    const idx = items.indexOf(e.currentTarget as HTMLElement);
+    if (idx < 0) return;
+    // Group items into visual rows by offsetTop (shared offsetParent, so the
+    // CSS zoom on .app-shell does not matter). Left/Right step within the
+    // flat order; Up/Down keep the column position across rows.
+    const rows: number[][] = [];
+    let top: number | null = null;
+    for (let i = 0; i < items.length; i++) {
+      const t = items[i].offsetTop;
+      if (t !== top) {
+        rows.push([i]);
+        top = t;
+      } else {
+        rows[rows.length - 1].push(i);
+      }
+    }
+    let rowIdx = 0;
+    let colIdx = 0;
+    for (let r = 0; r < rows.length; r++) {
+      const c = rows[r].indexOf(idx);
+      if (c >= 0) {
+        rowIdx = r;
+        colIdx = c;
+        break;
+      }
+    }
+    let target = -1;
+    if (e.key === "ArrowRight") target = Math.min(items.length - 1, idx + 1);
+    else if (e.key === "ArrowLeft") target = Math.max(0, idx - 1);
+    else if (e.key === "Home") target = 0;
+    else if (e.key === "End") target = items.length - 1;
+    else if (e.key === "ArrowDown") target = rows[rowIdx + 1]?.[colIdx] ?? idx;
+    else if (e.key === "ArrowUp") target = rows[rowIdx - 1]?.[Math.min(colIdx, rows[rowIdx - 1].length - 1)] ?? idx;
+    if (target >= 0 && target !== idx) {
+      e.preventDefault();
+      items[target].focus();
+    }
+  }
+
   function onTilePointerDown(e: PointerEvent, project: RecentProject) {
     if (e.button !== 0) return;
     clearLongPressTimer();
@@ -1404,12 +1463,7 @@
       in:tileIntro
       onclick={() => onTileClick(project)}
       ondblclick={() => !dragging && void launchInstance(project)}
-      onkeydown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          selectInstance(project);
-        }
-      }}
+      onkeydown={onTileKeydown}
       oncontextmenu={(e) => openCtxMenu(e, project)}
       onpointerdown={(e) => onTilePointerDown(e, project)}
       onpointermove={onTilePointerMove}
@@ -1522,12 +1576,7 @@
     in:tileIntro
     onclick={() => onTileClick(project)}
     ondblclick={() => !dragging && void launchInstance(project)}
-    onkeydown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
-e.preventDefault();
-selectInstance(project);
-      }
-    }}
+    onkeydown={onTileKeydown}
     oncontextmenu={(e) => openCtxMenu(e, project)}
     onpointerdown={(e) => onTilePointerDown(e, project)}
     onpointermove={onTilePointerMove}
