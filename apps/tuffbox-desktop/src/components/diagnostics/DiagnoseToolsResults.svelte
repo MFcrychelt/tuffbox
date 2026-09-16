@@ -82,6 +82,6 @@
 
 <style>
   .tools-results { margin-bottom: 14px; padding: 14px; }
-  .tools-results h2, .tools-results h3 { margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  .tools-results h2{ margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
   .log-pre { margin: 0; max-height: 320px; padding: 12px; border-radius: var(--border-radius-md); background: #09090b; color: #d4d4d8; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow: auto; }
 </style>

@@ -1400,11 +1400,6 @@
     font-size: 12px;
     line-height: 1.45;
   }
-  .recommendation-box .rec-icon {
-    color: var(--accent-primary);
-    margin-top: 1px;
-    flex-shrink: 0;
-  }
 
   /* JVM Arguments */
   .jvm-actions {
@@ -1459,9 +1454,6 @@
     justify-content: space-between;
     font-size: 12.5px;
     font-weight: 700;
-  }
-  .preset-title-row .check-icon {
-    color: var(--accent-primary);
   }
   .jvm-preset-card small {
     font-size: 11px;

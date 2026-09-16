@@ -578,11 +578,9 @@
     .release-panel { display: grid; gap: 18px; align-content: start; }
     label { display: grid; gap: 8px; color: var(--text-secondary); font-weight: 700; }
     .version-row { gap: 10px; }
-    .version-row input { flex: 1; }
     .scorecards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-    .scorecards div { background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 12px; display: grid; gap: 3px; }
     .scorecards strong { font-size: 24px; }
-    .scorecards span, .changelog-header p { color: var(--text-muted); font-size: 12px; }
+    .scorecards span{ color: var(--text-muted); font-size: 12px; }
     .error-card { border-color: rgba(239, 68, 68, 0.35) !important; color: #fecaca; }
     .warning-card { border-color: rgba(245, 158, 11, 0.35) !important; color: #fde68a; }
     .release-checklist, .artifact-list, .publish-targets, .publish-config { display: grid; gap: 8px; }
@@ -590,7 +588,8 @@
     .release-checklist-details summary { padding: 10px 12px; cursor: pointer; color: var(--text-secondary); font-size: 14px; font-weight: 700; list-style: none; }
     .release-checklist-details summary::-webkit-details-marker { display: none; }
     .release-checklist-details .release-checklist { padding: 0 12px 12px; }
-    .artifact-list h3, .publish-targets h3, .publish-config h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
+    .artifact-list h3,
+ .publish-targets h3{ margin: 0; color: var(--text-secondary); font-size: 14px; }
     .config-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
     .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--border-radius-md); text-transform: none; letter-spacing: 0; }
     .release-checklist label.done { border-color: rgba(16, 185, 129, 0.35); }
@@ -644,7 +643,6 @@
   code { color: var(--text-secondary); font-family: var(--font-mono, ui-monospace, monospace); }
   .changelog-panel { overflow: hidden; display: flex; flex-direction: column; min-height: 680px; }
     .changelog-header { justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 0; }
-    textarea { flex: 1; resize: none; min-height: 600px; border: 0; outline: none; background: rgba(0, 0, 0, 0.35); color: #e5e7eb; padding: 18px; font-family: var(--font-mono, ui-monospace, monospace); line-height: 1.6; }
   /* (removed dead .empty rule — no element uses it) */
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }

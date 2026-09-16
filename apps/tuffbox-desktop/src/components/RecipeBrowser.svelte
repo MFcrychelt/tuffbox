@@ -1546,6 +1546,7 @@
               {#if !replaceRecipeId}
                 <div class="flex bg-[var(--bg-card)] p-1 rounded-lg border border-[var(--border-color)] gap-1">
                   {#each EDITOR_KINDS as k (k.id)}
+                    {@const KindIcon = k.icon}
                     <button
                       type="button"
                       class="px-2.5 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 {editorKind === k.id ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
@@ -1554,7 +1555,7 @@
                         paletteMode = k.id === "tags" ? "tags" : "items";
                       }}
                     >
-                      <svelte:component this={k.icon} size={13} />
+                      <KindIcon size={13} />
                       <span>{k.label}</span>
                     </button>
                   {/each}

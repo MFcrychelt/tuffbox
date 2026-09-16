@@ -96,9 +96,9 @@
     margin-bottom: 20px;
     white-space: pre-wrap;
   }
-  .cd-dialog h3 { font-size: 18px; margin-bottom: 8px; color: var(--text-primary); }
-  .cd-dialog p { color: var(--text-muted); font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
   .cd-actions { display: flex; gap: 10px; justify-content: flex-end; }
-  button.danger { background: var(--accent-danger); color: var(--on-accent, #fff); }
-  button.danger:hover { background: color-mix(in srgb, var(--accent-danger) 85%, #000 15%); }
+  /* bits-ui renders the button, so the element part must be :global; the
+     .cd-actions ancestor keeps the rule scoped to this component. */
+  .cd-actions :global(button.danger) { background: var(--accent-danger); color: var(--on-accent, #fff); }
+  .cd-actions :global(button.danger:hover) { background: color-mix(in srgb, var(--accent-danger) 85%, #000 15%); }
 </style>

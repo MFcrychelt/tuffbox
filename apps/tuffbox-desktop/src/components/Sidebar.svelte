@@ -394,13 +394,6 @@
 </aside>
 
 <style>
-  .rail-stop-glyph {
-    width: 15px;
-    height: 15px;
-    display: block;
-    background: currentColor;
-    border-radius: 2px;
-  }
 
   .rail {
     width: 72px;

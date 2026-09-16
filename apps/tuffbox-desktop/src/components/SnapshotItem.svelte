@@ -24,7 +24,7 @@
     onSelect: () => void;
   } = $props();
 
-  const kindLabel = kind === "crash" ? "Crash fix" : kind === "auto" ? "Auto" : "Manual";
+  const kindLabel = $derived(kind === "crash" ? "Crash fix" : kind === "auto" ? "Auto" : "Manual");
 </script>
 
 <button type="button" class="snapshot-item {selected ? `selected ${kind}` : ""}" onclick={onSelect}>
@@ -73,7 +73,7 @@
   .snapshot-item-title-row { min-width: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
   .snapshot-item-title-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--text-primary); }
   .snapshot-operation { max-width: 130px; flex: 0 0 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px ui-monospace, SFMono-Regular, monospace; color: var(--text-muted); }
-  .snapshot-item p { margin: 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .snapshot-item p { margin: 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
   .snapshot-item-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
   .snapshot-date, .snapshot-files { display: inline-flex; align-items: center; gap: 4px; }
   .kind-tag { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: 999px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
