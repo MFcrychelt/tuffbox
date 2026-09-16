@@ -21755,6 +21755,8 @@ pub fn run() {
             worlds::list_world_backups,
             worlds::delete_world_backup,
             worlds::read_world_icon,
+            worlds::list_screenshots,
+            worlds::delete_screenshot,
             mca_selector::open_mca_selector,
             list_content_packs,
             set_content_pack_enabled,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatBytes,
+  formatDayStamp,
   formatStamp,
   matchesModFilter,
   mergeUpdates,
@@ -106,6 +107,17 @@ describe("formatBytes", () => {
     expect(formatBytes(null)).toBe("—");
     expect(formatBytes(undefined)).toBe("—");
     expect(formatBytes(-5)).toBe("—");
+  });
+});
+
+describe("formatDayStamp", () => {
+  it("returns never for absent/invalid stamps", () => {
+    expect(formatDayStamp(null)).toBe("never");
+    expect(formatDayStamp(0)).toBe("never");
+    expect(formatDayStamp(Number.NaN)).toBe("never");
+  });
+  it("formats a valid millisecond stamp", () => {
+    expect(formatDayStamp(new Date("2026-03-04T12:00:00Z").getTime())).toMatch(/2026/);
   });
 });
 

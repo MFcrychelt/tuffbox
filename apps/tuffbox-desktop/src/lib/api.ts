@@ -1183,6 +1183,16 @@ export interface WorldBackupEntry {
   createdAt: number;
 }
 
+export interface ScreenshotEntry {
+  fileName: string;
+  /** Absolute path — render via convertFileSrc (asset protocol). */
+  path: string;
+  sizeBytes: number;
+  sizeFormatted: string;
+  /** Unix epoch milliseconds (file mtime). */
+  modifiedMs: number;
+}
+
 export interface ContentPackEntry {
   name: string;
   fileName: string;
@@ -2125,6 +2135,11 @@ export const api = {
     },
     readIcon(worldName: string, p?: string) {
       return cmd<string | null>("read_world_icon", { ...pathArg(p), worldName });
+    },
+    /** Instance screenshots (newest first) for the manager grid. */
+    listScreenshots(p?: string) { return cmd<ScreenshotEntry[]>("list_screenshots", pathArg(p)); },
+    deleteScreenshot(fileName: string, p?: string) {
+      return cmd<void>("delete_screenshot", { ...pathArg(p), fileName });
     },
     /** Open bundled Querz MCA Selector for this world (File → Open Recent). No download. */
     openMcaSelector(worldName: string, p?: string) {

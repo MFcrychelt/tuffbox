@@ -3,11 +3,16 @@
      mutation goes through an existing api.* command that owns its own
      auto-snapshot on the Rust side. -->
 <script lang="ts">
+  import { convertFileSrc } from "@tauri-apps/api/core";
+  import { open as openShell } from "@tauri-apps/plugin-shell";
   import {
     AlertTriangle,
     Archive,
     ArrowUpCircle,
+    Camera,
+    Check,
     CheckCircle2,
+    Globe,
     ChevronDown,
     Copy,
     FolderOpen,
@@ -15,6 +20,7 @@
     History,
     MoreVertical,
     Package,
+    Play,
     Plus,
     Power,
     RefreshCw,
@@ -34,8 +40,17 @@
   import { portal } from "../lib/portal";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import PromptDialog from "./PromptDialog.svelte";
+  import { openModsBrowserWindow } from "../lib/modsBrowserWindow";
+  import {
+    isProjectLaunching,
+    isProjectRunning,
+    launchSessions,
+    runningInstances,
+  } from "../lib/store";
+  import { launchWithFeedback } from "../lib/launch";
   import {
     formatBytes,
+    formatDayStamp,
     formatStamp,
     matchesModFilter,
     mergeUpdates,
@@ -60,7 +75,7 @@
     onBrowseMods?: () => void;
   } = $props();
 
-  type ManagerTab = "mods" | "backups" | "health";
+  type ManagerTab = "mods" | "worlds" | "shots" | "backups" | "health";
   type HealthReport = Awaited<ReturnType<typeof api.diagnostics.getPackHealth>>;
   type BackupEntry = Awaited<ReturnType<typeof api.backups.list>>[number];
   type UpdateRow = ModInfo & { hasUpdate?: boolean };
@@ -78,10 +93,12 @@
     return fallback;
   }
 
-  let tab = $state<ManagerTab>(readStored(TAB_KEY, ["mods", "backups", "health"], "mods"));
+  let tab = $state<ManagerTab>(
+    readStored(TAB_KEY, ["mods", "worlds", "shots", "backups", "health"], "mods"),
+  );
   // Apply before first paint; the modal remounts on each open so this runs once.
   $effect.pre(() => {
-    tab = readStored(TAB_KEY, ["mods", "backups", "health"], initialTab);
+    tab = readStored(TAB_KEY, ["mods", "worlds", "shots", "backups", "health"], initialTab);
   });
   $effect(() => {
     try {
@@ -119,6 +136,11 @@
   let overflowOpen = $state(false);
   let rowMenuId = $state<string | null>(null);
   let confirmRemoveMod: ModInfo | null = $state(null);
+  let confirmRemoveMods: ModInfo[] | null = $state(null);
+
+  // ── Multi-select + batch operations ──
+  let selectedMods = $state<Set<string>>(new Set());
+  let batchBusy = $state<{ label: string; done: number; total: number } | null>(null);
   let versionTarget: ModInfo | null = $state(null);
   let versionChoices: VersionOption[] = $state([]);
 
@@ -133,6 +155,74 @@
   const visibleMods = $derived(modRows.filter((m) => matchesModFilter(m, modFilter)));
   const disabledCount = $derived(modRows.filter((m) => m.disabled).length);
   const updateCount = $derived(modRows.filter((m) => m.hasUpdate).length);
+  const selectedRows = $derived(visibleMods.filter((m) => selectedMods.has(m.id)));
+  const selectedUpdateCount = $derived(selectedRows.filter((m) => updates[m.id]).length);
+
+  function toggleModSelected(id: string) {
+    const next = new Set(selectedMods);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selectedMods = next;
+  }
+  function selectAllFiltered() {
+    selectedMods = new Set(visibleMods.map((m) => m.id));
+  }
+  function clearSelection() {
+    selectedMods = new Set();
+  }
+
+  /** Runs op over ids sequentially with progress; toasts a failure summary. */
+  async function runBatch(ids: string[], label: string, op: (id: string) => Promise<void>) {
+    if (batchBusy || ids.length === 0) return;
+    batchBusy = { label, done: 0, total: ids.length };
+    let failed = 0;
+    let firstError = "";
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        await op(ids[i]);
+      } catch (e) {
+        failed++;
+        if (!firstError) firstError = String(e);
+      }
+      batchBusy = { label, done: i + 1, total: ids.length };
+    }
+    batchBusy = null;
+    if (failed > 0) toasts.error(`${label}: ${failed} failed — ${firstError}`);
+    else toasts.success(`${label}: ${ids.length} done`);
+  }
+
+  async function batchEnable() {
+    const ids = [...selectedMods];
+    await runBatch(ids, "Enable", (id) => api.mods.enable(id, path).then(() => undefined));
+    clearSelection();
+    await loadMods(true);
+  }
+  async function batchDisable() {
+    const ids = [...selectedMods];
+    await runBatch(ids, "Disable", (id) => api.mods.disable(id, path).then(() => undefined));
+    clearSelection();
+    await loadMods(true);
+  }
+  async function batchUpdateSelected() {
+    const ids = selectedRows.filter((m) => updates[m.id]).map((m) => m.id);
+    await runBatch(ids, "Update", async (id) => {
+      await api.mods.update(id, path, updates[id]?.versionId ?? undefined);
+      delete updates[id];
+      updates = { ...updates };
+    });
+    clearSelection();
+    await loadMods(true);
+  }
+  async function batchRemoveMods(list: ModInfo[]) {
+    confirmRemoveMods = null;
+    await runBatch(
+      list.map((m) => m.id),
+      "Remove",
+      (id) => api.mods.remove(id, path),
+    );
+    clearSelection();
+    await loadMods(true);
+  }
 
   async function loadMods(force = false) {
     if (modsLoading) return;
@@ -300,6 +390,14 @@
     onclose?.();
   }
 
+  /** Open the standalone content browser window; fall back to the Discover
+      tab when separate windows are unavailable. */
+  async function addMods() {
+    overflowOpen = false;
+    if (await openModsBrowserWindow(path, "mod")) return;
+    browseMods();
+  }
+
   // ── Backups tab ──────────────────────────────────────────────────────
   let backups = $state<BackupEntry[]>([]);
   let backupsLoading = $state(false);
@@ -360,6 +458,147 @@
     }
   }
 
+  // ── Worlds tab ───────────────────────────────────────────────────────
+  type WorldRow = Awaited<ReturnType<typeof api.worlds.list>>[number];
+  let worlds = $state<WorldRow[]>([]);
+  let worldsLoading = $state(false);
+  let worldsLoadedOnce = $state(false);
+  let worldIcons = $state<Record<string, string>>({});
+  let worldBusy = $state<string | null>(null);
+  let confirmDeleteWorld: WorldRow | null = $state(null);
+
+  async function loadWorlds(force = false) {
+    if (worldsLoading) return;
+    if (worldsLoadedOnce && !force) return;
+    worldsLoading = true;
+    try {
+      worlds = await api.worlds.list(path);
+      worldsLoadedOnce = true;
+      void loadWorldIcons();
+    } catch (e) {
+      toasts.error(`Failed to read saves: ${String(e)}`);
+    } finally {
+      worldsLoading = false;
+    }
+  }
+
+  async function loadWorldIcons() {
+    for (const world of worlds) {
+      if (worldIcons[world.name]) continue;
+      try {
+        const icon = await api.worlds.readIcon(world.name, path);
+        if (icon) {
+          worldIcons = { ...worldIcons, [world.name]: icon };
+        }
+      } catch {
+        /* decorative — ignore */
+      }
+    }
+  }
+
+  async function playWorld(world: WorldRow) {
+    if (worldBusy) return;
+    if (isProjectRunning(path, $runningInstances) || isProjectLaunching(path, $launchSessions)) {
+      toasts.warning("Stop the instance before joining a world.");
+      return;
+    }
+    worldBusy = world.name;
+    try {
+      await launchWithFeedback({
+        path,
+        profile: "client",
+        quickPlayType: "world",
+        quickPlayValue: world.name,
+      });
+    } catch (e) {
+      toasts.error(`Launch failed: ${String(e)}`);
+    } finally {
+      worldBusy = null;
+    }
+  }
+
+  async function backupWorld(world: WorldRow) {
+    worldBusy = `backup:${world.name}`;
+    try {
+      const file = await api.worlds.backup(world.name, path);
+      toasts.success(`World backed up: ${file}`);
+    } catch (e) {
+      toasts.error(`Backup failed: ${String(e)}`);
+    } finally {
+      worldBusy = null;
+    }
+  }
+
+  async function deleteWorld(world: WorldRow) {
+    confirmDeleteWorld = null;
+    worldBusy = world.name;
+    try {
+      await api.worlds.delete(world.name, true, path);
+      toasts.success(`World "${world.displayName || world.name}" deleted (backup kept)`);
+      worldIcons = { ...worldIcons, [world.name]: undefined } as Record<string, string>;
+      await loadWorlds(true);
+    } catch (e) {
+      toasts.error(`Delete failed: ${String(e)}`);
+    } finally {
+      worldBusy = null;
+    }
+  }
+
+  function openSavesFolder() {
+    void api.files
+      .openFolder(path, "saves")
+      .catch((e) => toasts.error(String(e)));
+  }
+
+  // ── Screenshots tab ──────────────────────────────────────────────────
+  let shots = $state<Awaited<ReturnType<typeof api.worlds.listScreenshots>>>([]);
+  let shotsLoading = $state(false);
+  let shotsLoadedOnce = $state(false);
+  let confirmDeleteShot: (typeof shots)[number] | null = $state(null);
+
+  async function loadShots(force = false) {
+    if (shotsLoading) return;
+    if (shotsLoadedOnce && !force) return;
+    shotsLoading = true;
+    try {
+      shots = await api.worlds.listScreenshots(path);
+      shotsLoadedOnce = true;
+    } catch (e) {
+      toasts.error(`Failed to list screenshots: ${String(e)}`);
+    } finally {
+      shotsLoading = false;
+    }
+  }
+
+  async function deleteShot(shot: (typeof shots)[number]) {
+    confirmDeleteShot = null;
+    try {
+      await api.worlds.deleteScreenshot(shot.fileName, path);
+      shots = shots.filter((s) => s.fileName !== shot.fileName);
+      toasts.success("Screenshot deleted");
+    } catch (e) {
+      toasts.error(`Delete failed: ${String(e)}`);
+    }
+  }
+
+  function shotUrl(absPath: string): string {
+    return convertFileSrc(absPath);
+  }
+
+  async function openShot(shot: (typeof shots)[number]) {
+    try {
+      await openShell(shot.path);
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
+  function openScreenshotsFolder() {
+    void api.files
+      .openFolder(path, "screenshots")
+      .catch((e) => toasts.error(String(e)));
+  }
+
   // ── Health tab ───────────────────────────────────────────────────────
   let health = $state<HealthReport | null>(null);
   let healthLoading = $state(false);
@@ -417,6 +656,8 @@
   // Tab drives lazy loading — each pane loads itself once.
   $effect(() => {
     if (tab === "mods") void loadMods();
+    else if (tab === "worlds") void loadWorlds();
+    else if (tab === "shots") void loadShots();
     else if (tab === "backups") void loadBackups();
     else if (tab === "health") void loadHealth();
   });
@@ -515,6 +756,30 @@
       <button
         type="button"
         role="tab"
+        aria-selected={tab === "worlds"}
+        class:active={tab === "worlds"}
+        onclick={() => (tab = "worlds")}
+      >
+        <Globe size={14} /> Worlds
+        {#if worldsLoadedOnce && worlds.length > 0}
+          <span class="im-tab-badge">{worlds.length}</span>
+        {/if}
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={tab === "shots"}
+        class:active={tab === "shots"}
+        onclick={() => (tab = "shots")}
+      >
+        <Camera size={14} /> Screenshots
+        {#if shotsLoadedOnce && shots.length > 0}
+          <span class="im-tab-badge">{shots.length}</span>
+        {/if}
+      </button>
+      <button
+        type="button"
+        role="tab"
         aria-selected={tab === "backups"}
         class:active={tab === "backups"}
         onclick={() => (tab = "backups")}
@@ -596,7 +861,7 @@
                 >
                   <ArrowUpCircle size={13} /> Update all{#if updateCount > 0}&nbsp;({updateCount}){/if}
                 </button>
-                <button type="button" role="menuitem" onclick={browseMods}>
+                <button type="button" role="menuitem" onclick={() => void addMods()}>
                   <Plus size={13} /> Add mods…
                 </button>
                 <button type="button" role="menuitem" onclick={() => void syncFolder()}>
@@ -609,6 +874,45 @@
             {/if}
           </div>
         </div>
+
+        {#if selectedMods.size > 0 || batchBusy}
+          <div class="im-batchbar" role="toolbar" aria-label="Batch mod actions">
+            {#if batchBusy}
+              <span class="im-batch-status">
+                <RefreshCw size={13} class="spin" />
+                {batchBusy.label} {batchBusy.done}/{batchBusy.total}…
+              </span>
+            {:else}
+              <span class="im-batch-count">{selectedMods.size} selected</span>
+              <button type="button" class="im-mini" disabled={batchBusy !== null} onclick={() => void batchEnable()}>
+                <Power size={12} /> Enable
+              </button>
+              <button type="button" class="im-mini" disabled={batchBusy !== null} onclick={() => void batchDisable()}>
+                <Power size={12} /> Disable
+              </button>
+              <button
+                type="button"
+                class="im-mini"
+                disabled={batchBusy !== null || selectedUpdateCount === 0}
+                title={selectedUpdateCount === 0 ? "No updates among selected mods" : `Update ${selectedUpdateCount} selected mods`}
+                onclick={() => void batchUpdateSelected()}
+              >
+                <ArrowUpCircle size={12} /> Update{#if selectedUpdateCount > 0}&nbsp;({selectedUpdateCount}){/if}
+              </button>
+              <button
+                type="button"
+                class="im-mini danger"
+                disabled={batchBusy !== null}
+                onclick={() => (confirmRemoveMods = selectedRows)}
+              >
+                <Trash2 size={12} /> Remove
+              </button>
+              <span class="im-spacer"></span>
+              <button type="button" class="im-mini" disabled={batchBusy !== null} onclick={selectAllFiltered}>All</button>
+              <button type="button" class="im-mini" disabled={batchBusy !== null} onclick={clearSelection}>Clear</button>
+            {/if}
+          </div>
+        {/if}
 
         {#if modsLoadedOnce}
           <div class="im-chips" role="status">
@@ -634,13 +938,24 @@
               No mods match "{modFilter.trim()}".
             {:else}
               No mods yet — browse the catalog to add some.
-              <button type="button" class="im-link" onclick={browseMods}>Open catalog</button>
+              <button type="button" class="im-link" onclick={() => void addMods()}>Open catalog</button>
             {/if}
           </div>
         {:else}
           <ul class="im-rows" in:fade>
             {#each visibleMods as mod (mod.id)}
-              <li class="im-row" class:disabled-row={mod.disabled}>
+              <li class="im-row" class:disabled-row={mod.disabled} class:selected-row={selectedMods.has(mod.id)}>
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={selectedMods.has(mod.id)}
+                  aria-label={`Select ${mod.name}`}
+                  class="im-check"
+                  class:checked={selectedMods.has(mod.id)}
+                  onclick={() => toggleModSelected(mod.id)}
+                >
+                  {#if selectedMods.has(mod.id)}<Check size={12} />{/if}
+                </button>
                 <span
                   class="im-row-icon"
                   style={`background: linear-gradient(135deg, hsl(${(mod.name.length * 47) % 360} 45% 42%), hsl(${(mod.name.length * 47 + 40) % 360} 45% 30%))`}
@@ -711,6 +1026,151 @@
               </li>
             {/each}
           </ul>
+        {/if}
+
+        <!-- ════════════════════════ WORLDS ════════════════════════ -->
+      {:else if tab === "worlds"}
+        <div class="im-toolbar">
+          <button type="button" class="im-primary" onclick={openSavesFolder}>
+            <FolderOpen size={13} /> Open saves folder
+          </button>
+          <span class="im-toolbar-hint">World saves live in saves/, with per-world zip backups.</span>
+          <span class="im-spacer"></span>
+          <button
+            type="button"
+            class="im-tool-btn"
+            title="Refresh worlds"
+            aria-label="Refresh worlds"
+            disabled={worldsLoading}
+            onclick={() => void loadWorlds(true)}
+          >
+            <RefreshCw size={14} class={worldsLoading ? "spin" : ""} />
+          </button>
+        </div>
+
+        {#if worldsLoading && !worldsLoadedOnce}
+          <div class="im-empty" in:fade>Reading saves…</div>
+        {:else if worlds.length === 0}
+          <div class="im-empty" in:fade>
+            No worlds yet — create one in game (Singleplayer), it will show up here.
+          </div>
+        {:else}
+          <ul class="im-rows" in:fade>
+            {#each worlds as world (world.name)}
+              <li class="im-row">
+                <span class="im-row-icon" aria-hidden="true">
+                  {#if worldIcons[world.name]}
+                    <img class="im-world-img" src={worldIcons[world.name]} alt="" />
+                  {:else}
+                    {(world.displayName || world.name)[0]?.toUpperCase() ?? "?"}
+                  {/if}
+                </span>
+                <div class="im-row-main">
+                  <span class="im-row-name" title={world.displayName || world.name}>
+                    {world.displayName || world.name}
+                  </span>
+                  <span class="im-row-sub">
+                    {world.sizeFormatted} · last played {formatDayStamp(world.lastPlayed ?? null)}
+                  </span>
+                  <span class="im-world-chips">
+                    {#if world.gameType}{world.gameType}{/if}
+                    {#if world.difficulty} · {world.difficulty}{/if}
+                    {#if world.hardcore} · hardcore{/if}
+                    {#if !world.hasLevelDat} · unreadable level.dat{/if}
+                  </span>
+                </div>
+                <div class="im-row-actions">
+                  <button
+                    type="button"
+                    class="im-mini"
+                    title="Launch the instance and join this world"
+                    disabled={worldBusy === world.name || worldBusy?.startsWith("backup:") || !world.hasLevelDat}
+                    onclick={() => void playWorld(world)}
+                  >
+                    {#if worldBusy === world.name}<RefreshCw size={12} class="spin" />{:else}<Play size={12} />{/if}
+                    Play
+                  </button>
+                  <button
+                    type="button"
+                    class="im-mini"
+                    disabled={!!worldBusy}
+                    title="Zip this world into per-world backups"
+                    onclick={() => void backupWorld(world)}
+                  >
+                    {#if worldBusy === `backup:${world.name}`}<RefreshCw size={12} class="spin" />{:else}<Archive size={12} />{/if}
+                    Backup
+                  </button>
+                  <button
+                    type="button"
+                    class="im-tool-btn small"
+                    title="Delete world (a backup is kept automatically)"
+                    aria-label={`Delete world ${world.displayName || world.name}`}
+                    disabled={!!worldBusy}
+                    onclick={() => (confirmDeleteWorld = world)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        <!-- ════════════════════════ SCREENSHOTS ════════════════════════ -->
+      {:else if tab === "shots"}
+        <div class="im-toolbar">
+          <button type="button" class="im-primary" onclick={openScreenshotsFolder}>
+            <FolderOpen size={13} /> Open folder
+          </button>
+          <span class="im-toolbar-hint">Press F2 in game to take a screenshot.</span>
+          <span class="im-spacer"></span>
+          <button
+            type="button"
+            class="im-tool-btn"
+            title="Refresh screenshots"
+            aria-label="Refresh screenshots"
+            disabled={shotsLoading}
+            onclick={() => void loadShots(true)}
+          >
+            <RefreshCw size={14} class={shotsLoading ? "spin" : ""} />
+          </button>
+        </div>
+
+        {#if shotsLoading && !shotsLoadedOnce}
+          <div class="im-empty" in:fade>Listing screenshots…</div>
+        {:else if shots.length === 0}
+          <div class="im-empty" in:fade>
+            No screenshots yet — press F2 in game and they will appear here.
+          </div>
+        {:else}
+          <div class="im-shots" in:fade>
+            {#each shots as shot (shot.fileName)}
+              <figure class="im-shot">
+                <button
+                  type="button"
+                  class="im-shot-frame"
+                  title="Open in system viewer"
+                  aria-label={`Open ${shot.fileName}`}
+                  onclick={() => void openShot(shot)}
+                >
+                  <img src={shotUrl(shot.path)} alt={shot.fileName} loading="lazy" />
+                </button>
+                <figcaption class="im-shot-cap">
+                  <span class="im-shot-name" title={shot.fileName}>{shot.fileName}</span>
+                  <span class="im-shot-meta">{formatDayStamp(shot.modifiedMs)} · {shot.sizeFormatted}</span>
+                  <button
+                    type="button"
+                    class="im-tool-btn small"
+                    title="Delete screenshot"
+                    aria-label={`Delete ${shot.fileName}`}
+                    onclick={() => (confirmDeleteShot = shot)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </figcaption>
+              </figure>
+            {/each}
+          </div>
         {/if}
 
         <!-- ════════════════════════ BACKUPS ════════════════════════ -->
@@ -923,6 +1383,39 @@
     danger
     onconfirm={() => confirmRemoveMod && void removeMod(confirmRemoveMod)}
     oncancel={() => (confirmRemoveMod = null)}
+  />
+{/if}
+
+{#if confirmRemoveMods && confirmRemoveMods.length > 0}
+  <ConfirmDialog
+    title="Remove mods"
+    message={`Remove ${confirmRemoveMods.length} selected ${confirmRemoveMods.length === 1 ? "mod" : "mods"} from this instance? The jars are deleted from the mods folder.`}
+    confirmLabel="Remove"
+    danger
+    onconfirm={() => void batchRemoveMods(confirmRemoveMods!)}
+    oncancel={() => (confirmRemoveMods = null)}
+  />
+{/if}
+
+{#if confirmDeleteWorld}
+  <ConfirmDialog
+    title="Delete world"
+    message={`Delete "${confirmDeleteWorld.displayName || confirmDeleteWorld.name}"? A zip backup is kept automatically before deletion.`}
+    confirmLabel="Delete"
+    danger
+    onconfirm={() => confirmDeleteWorld && void deleteWorld(confirmDeleteWorld)}
+    oncancel={() => (confirmDeleteWorld = null)}
+  />
+{/if}
+
+{#if confirmDeleteShot}
+  <ConfirmDialog
+    title="Delete screenshot"
+    message={`Delete "${confirmDeleteShot.fileName}"? This cannot be undone.`}
+    confirmLabel="Delete"
+    danger
+    onconfirm={() => confirmDeleteShot && void deleteShot(confirmDeleteShot)}
+    oncancel={() => (confirmDeleteShot = null)}
   />
 {/if}
 
@@ -1557,6 +2050,140 @@
     padding: 2px 8px;
     font-size: 12px;
     color: var(--text-muted);
+  }
+
+  /* Multi-select checkbox + batch action bar. */
+  .im-check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-tertiary);
+    color: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    transform: none;
+  }
+  .im-check:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+  }
+  .im-check.checked {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: var(--on-accent, #fff);
+  }
+  .im-row.selected-row {
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 6%, var(--bg-secondary));
+  }
+  .im-batchbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 7px 10px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+    border-radius: var(--border-radius-md);
+    background: color-mix(in srgb, var(--accent-primary) 7%, var(--bg-secondary));
+  }
+  .im-batch-count {
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--accent-primary);
+    white-space: nowrap;
+  }
+  .im-batch-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+  .im-mini.danger {
+    border-color: color-mix(in srgb, var(--accent-danger) 40%, var(--border-color));
+    color: var(--accent-danger);
+  }
+  .im-mini.danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-danger) 10%, var(--bg-tertiary));
+  }
+
+  /* Worlds: icon thumbnails + metadata chips. */
+  .im-world-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+  }
+  .im-world-chips {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Screenshots: responsive grid, fixed-height frames, caption row. */
+  .im-shots {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+  }
+  .im-shot {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+  }
+  .im-shot-frame {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    padding: 0;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    overflow: hidden;
+    background: var(--bg-tertiary);
+    cursor: zoom-in;
+  }
+  .im-shot-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .im-shot-frame:hover img {
+    filter: brightness(1.08);
+  }
+  .im-shot-cap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .im-shot-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .im-shot-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .spin {
