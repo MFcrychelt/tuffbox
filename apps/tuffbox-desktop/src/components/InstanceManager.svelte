@@ -141,6 +141,8 @@
   // ── Multi-select + batch operations ──
   let selectedMods = $state<Set<string>>(new Set());
   let batchBusy = $state<{ label: string; done: number; total: number } | null>(null);
+  /** Chip quick-filter: show only disabled mods / only ones with updates. */
+  let quickFilter = $state<"none" | "disabled" | "updates">("none");
   let versionTarget: ModInfo | null = $state(null);
   let versionChoices: VersionOption[] = $state([]);
 
@@ -152,7 +154,14 @@
       modSort,
     ),
   );
-  const visibleMods = $derived(modRows.filter((m) => matchesModFilter(m, modFilter)));
+  const quickFiltered = $derived(
+    quickFilter === "disabled"
+      ? modRows.filter((m) => m.disabled)
+      : quickFilter === "updates"
+        ? modRows.filter((m) => m.hasUpdate)
+        : modRows,
+  );
+  const visibleMods = $derived(quickFiltered.filter((m) => matchesModFilter(m, modFilter)));
   const disabledCount = $derived(modRows.filter((m) => m.disabled).length);
   const updateCount = $derived(modRows.filter((m) => m.hasUpdate).length);
   const selectedRows = $derived(visibleMods.filter((m) => selectedMods.has(m.id)));
@@ -232,6 +241,7 @@
       const list = await api.mods.list(path);
       mods = Array.isArray(list) ? list : [];
       modsLoadedOnce = true;
+      quickFilter = "none";
     } catch (e) {
       toasts.error(`Failed to read mods: ${String(e)}`);
     } finally {
@@ -483,16 +493,30 @@
   }
 
   async function loadWorldIcons() {
-    for (const world of worlds) {
-      if (worldIcons[world.name]) continue;
-      try {
-        const icon = await api.worlds.readIcon(world.name, path);
+    // Parallel in small chunks — a 30-world saves folder used to serialize
+    // into 30 sequential IPC round-trips before the last icon appeared.
+    const pending = worlds.filter((w) => !worldIcons[w.name]);
+    const CHUNK = 6;
+    for (let i = 0; i < pending.length; i += CHUNK) {
+      const batch = pending.slice(i, i + CHUNK);
+      const loaded = await Promise.all(
+        batch.map(async (w) => {
+          try {
+            return [w.name, await api.worlds.readIcon(w.name, path)] as const;
+          } catch {
+            return [w.name, null] as const;
+          }
+        }),
+      );
+      const next = { ...worldIcons };
+      let dirty = false;
+      for (const [name, icon] of loaded) {
         if (icon) {
-          worldIcons = { ...worldIcons, [world.name]: icon };
+          next[name] = icon;
+          dirty = true;
         }
-      } catch {
-        /* decorative — ignore */
       }
+      if (dirty) worldIcons = next;
     }
   }
 
@@ -555,6 +579,28 @@
   let shotsLoading = $state(false);
   let shotsLoadedOnce = $state(false);
   let confirmDeleteShot: (typeof shots)[number] | null = $state(null);
+  /** In-app full preview — replaces jumping straight to the system viewer. */
+  let lightbox = $state<(typeof shots)[number] | null>(null);
+
+  $effect(() => {
+    if (!lightbox) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") lightbox = null;
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  async function deleteFromLightbox() {
+    const shot = lightbox;
+    lightbox = null;
+    if (shot) await deleteShot(shot);
+  }
+
+  function openFromLightbox() {
+    const shot = lightbox;
+    if (shot) void openShot(shot);
+  }
 
   async function loadShots(force = false) {
     if (shotsLoading) return;
@@ -915,15 +961,42 @@
         {/if}
 
         {#if modsLoadedOnce}
-          <div class="im-chips" role="status">
-            <span class="im-chip">{modRows.length} {modRows.length === 1 ? "mod" : "mods"}</span>
+          <div class="im-chips" role="toolbar" aria-label="Quick filters">
+            <button
+              type="button"
+              class="im-chip chip-btn"
+              class:active-chip={quickFilter === "none"}
+              title={quickFilter === "none" ? "All mods" : "Clear the quick filter"}
+              aria-pressed={quickFilter === "none"}
+              onclick={() => (quickFilter = "none")}
+            >
+              {modRows.length} {modRows.length === 1 ? "mod" : "mods"}
+            </button>
             {#if disabledCount > 0}
-              <span class="im-chip muted" title="Mods disabled in this instance">{disabledCount} disabled</span>
+              <button
+                type="button"
+                class="im-chip chip-btn muted"
+                class:active-chip={quickFilter === "disabled"}
+                title={quickFilter === "disabled" ? "Showing only disabled mods — click to clear" : "Show only disabled mods"}
+                aria-pressed={quickFilter === "disabled"}
+                onclick={() => (quickFilter = quickFilter === "disabled" ? "none" : "disabled")}
+              >
+                {disabledCount} disabled
+              </button>
             {/if}
             {#if updatesChecked}
-              <span class="im-chip" class:warn={updateCount > 0}>
+              <button
+                type="button"
+                class="im-chip chip-btn"
+                class:warn={updateCount > 0}
+                class:active-chip={quickFilter === "updates"}
+                disabled={updateCount === 0 && quickFilter !== "updates"}
+                title={quickFilter === "updates" ? "Showing only mods with updates — click to clear" : "Show only mods with updates"}
+                aria-pressed={quickFilter === "updates"}
+                onclick={() => (quickFilter = quickFilter === "updates" ? "none" : "updates")}
+              >
                 {updateCount === 0 ? "Up to date" : `${updateCount} update${updateCount === 1 ? "" : "s"}`}
-              </span>
+              </button>
             {/if}
           </div>
         {/if}
@@ -958,10 +1031,14 @@
                 </button>
                 <span
                   class="im-row-icon"
-                  style={`background: linear-gradient(135deg, hsl(${(mod.name.length * 47) % 360} 45% 42%), hsl(${(mod.name.length * 47 + 40) % 360} 45% 30%))`}
+                  style={mod.iconUrl ? "background: var(--bg-tertiary)" : `background: linear-gradient(135deg, hsl(${(mod.name.length * 47) % 360} 45% 42%), hsl(${(mod.name.length * 47 + 40) % 360} 45% 30%))`}
                   aria-hidden="true"
                 >
-                  {mod.name[0]?.toUpperCase() ?? "?"}
+                  {#if mod.iconUrl}
+                    <img class="im-row-img" src={mod.iconUrl} alt="" loading="lazy" />
+                  {:else}
+                    {mod.name[0]?.toUpperCase() ?? "?"}
+                  {/if}
                 </span>
                 <div class="im-row-main">
                   <span class="im-row-name" title={mod.fileName ?? mod.name}>{mod.name}</span>
@@ -1149,9 +1226,9 @@
                 <button
                   type="button"
                   class="im-shot-frame"
-                  title="Open in system viewer"
-                  aria-label={`Open ${shot.fileName}`}
-                  onclick={() => void openShot(shot)}
+                  title="Preview"
+                  aria-label={`Preview ${shot.fileName}`}
+                  onclick={() => (lightbox = shot)}
                 >
                   <img src={shotUrl(shot.path)} alt={shot.fileName} loading="lazy" />
                 </button>
@@ -1406,6 +1483,35 @@
     onconfirm={() => confirmDeleteWorld && void deleteWorld(confirmDeleteWorld)}
     oncancel={() => (confirmDeleteWorld = null)}
   />
+{/if}
+
+{#if lightbox}
+  <div
+    class="im-lightbox"
+    use:portal
+    style="position:fixed; inset:0; z-index:10001;"
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    aria-label={`Screenshot ${lightbox.fileName}`}
+    transition:fade={{ duration: 120 }}
+    onclick={(e) => e.target === e.currentTarget && (lightbox = null)}
+    onkeydown={(e) => e.key === "Enter" && (lightbox = null)}
+  >
+    <img class="im-lightbox-img" src={shotUrl(lightbox.path)} alt={lightbox.fileName} />
+    <div class="im-lightbox-bar">
+      <span class="im-lightbox-name" title={lightbox.fileName}>{lightbox.fileName}</span>
+      <span class="im-lightbox-meta">{formatDayStamp(lightbox.modifiedMs)} · {lightbox.sizeFormatted}</span>
+      <span class="im-spacer"></span>
+      <button type="button" class="im-mini" onclick={openFromLightbox}>
+        <FolderOpen size={12} /> Open in viewer
+      </button>
+      <button type="button" class="im-mini danger" onclick={() => void deleteFromLightbox()}>
+        <Trash2 size={12} /> Delete
+      </button>
+      <button type="button" class="im-mini" onclick={() => (lightbox = null)}>Close</button>
+    </div>
+  </div>
 {/if}
 
 {#if confirmDeleteShot}
@@ -2050,6 +2156,72 @@
     padding: 2px 8px;
     font-size: 12px;
     color: var(--text-muted);
+  }
+
+  .im-row-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+  }
+  /* Chips double as quick-filter toggles; the count chip clears them. */
+  .im-chips .im-chip.active-chip {
+    border-color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+  }
+  .chip-btn {
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 800;
+    transform: none;
+  }
+  .chip-btn:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+  }
+  .chip-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .chip-btn.warn.active-chip {
+    border-color: var(--accent-warning);
+  }
+
+  /* Full-screen screenshot preview. */
+  .im-lightbox {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.82);
+  }
+  .im-lightbox-img {
+    max-width: min(1200px, 100%);
+    max-height: calc(100vh - 110px);
+    object-fit: contain;
+    border-radius: var(--border-radius-md);
+    box-shadow: 0 18px 64px rgba(0, 0, 0, 0.6);
+  }
+  .im-lightbox-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: min(900px, 100%);
+  }
+  .im-lightbox-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .im-lightbox-meta {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.72);
+    white-space: nowrap;
   }
 
   /* Multi-select checkbox + batch action bar. */
