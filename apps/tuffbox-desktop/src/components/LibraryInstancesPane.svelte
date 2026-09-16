@@ -525,7 +525,9 @@
 
     // Prefer rect hit-testing over elementFromPoint — CSS `zoom` on `.app-shell`
     // can desync the latter from the visual cursor in Chromium/Electron.
-    const tiles = document.querySelectorAll<HTMLElement>(".prism-lib .inst-tile[data-path]");
+    const tiles = document.querySelectorAll<HTMLElement>(
+      ".prism-lib .inst-tile[data-path], .prism-lib .inst-row[data-path]",
+    );
     for (const tile of tiles) {
       const r = tile.getBoundingClientRect();
       if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
@@ -1486,6 +1488,10 @@ selectInstance(project);
       }
     }}
     oncontextmenu={(e) => openCtxMenu(e, project)}
+    onpointerdown={(e) => onTilePointerDown(e, project)}
+    onpointermove={onTilePointerMove}
+    onpointerup={onTilePointerUp}
+    onpointercancel={onTilePointerCancel}
   >
     <div
       class="row-icon"
@@ -1523,6 +1529,7 @@ class:stop={rowRunning}
 disabled={rowLaunching}
 title={rowRunning ? "Stop" : "Play"}
 aria-label={rowRunning ? `Stop ${project.info.name}` : `Play ${project.info.name}`}
+onpointerdown={(e) => e.stopPropagation()}
 onclick={(e) => { e.stopPropagation(); void launchInstance(project); }}
 ondblclick={(e) => e.stopPropagation()}
 onkeydown={(e) => e.stopPropagation()}
@@ -1540,6 +1547,7 @@ type="button"
 class="row-act"
 title="Open in IDE"
 aria-label={`Open ${project.info.name} in IDE`}
+onpointerdown={(e) => e.stopPropagation()}
 onclick={(e) => { e.stopPropagation(); openInIde(project); }}
 ondblclick={(e) => e.stopPropagation()}
 onkeydown={(e) => e.stopPropagation()}
@@ -1551,6 +1559,7 @@ type="button"
 class="row-act"
 title="Open folder"
 aria-label={`Open ${project.info.name} folder`}
+onpointerdown={(e) => e.stopPropagation()}
 onclick={(e) => { e.stopPropagation(); void runAction("folder", project); }}
 ondblclick={(e) => e.stopPropagation()}
 onkeydown={(e) => e.stopPropagation()}
@@ -2210,7 +2219,8 @@ onkeydown={(e) => e.stopPropagation()}
     cursor: grabbing;
     user-select: none;
   }
-  .prism-body.is-dragging .inst-tile {
+  .prism-body.is-dragging .inst-tile,
+  .prism-body.is-dragging .inst-row {
     cursor: grabbing;
   }
   @media (max-width: 720px) {
@@ -2389,7 +2399,8 @@ onkeydown={(e) => e.stopPropagation()}
     opacity: 0.28;
     filter: saturate(0.7);
   }
-  .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+  .drag-mode .inst-tile:not(.dragging):not(.drop-target),
+  .drag-mode .inst-row:not(.dragging):not(.drop-target) {
     opacity: 0.7;
   }
   .inst-tile.drop-target {
@@ -3346,7 +3357,8 @@ onkeydown={(e) => e.stopPropagation()}
     transform: none !important;
     filter: none !important;
   }
-  :global(.potato-pc) .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+  :global(.potato-pc) .drag-mode .inst-tile:not(.dragging):not(.drop-target),
+  :global(.potato-pc) .drag-mode .inst-row:not(.dragging):not(.drop-target) {
     opacity: 1;
   }
 
