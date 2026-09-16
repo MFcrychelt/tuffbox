@@ -310,6 +310,20 @@ pub fn managed_install_needed(runtimes: &[JavaRuntime], required_major: u32) -> 
     !runtimes.iter().any(|r| r.major >= required_major)
 }
 
+/// True when a managed JDK download must happen before launching with
+/// `required_major`. Legacy majors (Java 8 for MC <=1.16.4, Java 16 for 1.17)
+/// require an EXACT match — old Forge breaks on newer JVMs, so a newer
+/// installed runtime must not silently satisfy the requirement. Modern
+/// majors accept any newer runtime (vanilla / Fabric run fine on newer
+/// JVMs) and keep the historical `>=` behavior.
+pub fn managed_jdk_needed(runtimes: &[JavaRuntime], required_major: u32) -> bool {
+    if required_major <= 16 {
+        !runtimes.iter().any(|r| r.major == required_major)
+    } else {
+        managed_install_needed(runtimes, required_major)
+    }
+}
+
 /// Like [`ensure_java`], then picks the best match for `mc_version`.
 /// If no installed runtime satisfies the Minecraft requirement, the matching
 /// GraalVM Community JDK major is downloaded automatically — instead of
@@ -330,11 +344,11 @@ where
         runtimes = find_all_runtimes_full()?;
     }
     let required = required_java_major(mc_version);
-    if managed_install_needed(&runtimes, required) {
+    if managed_jdk_needed(&runtimes, required) {
         log(&format!(
-            "# No compatible Java found (need Java {required}+ for Minecraft {mc_version}) — downloading GraalVM Community JDK {required}…"
+            "# Minecraft {mc_version} needs Java {required} and no matching runtime is installed — downloading a managed JDK {required}…"
         ));
-        let installed = install_graalvm_major(required, &mut log)?;
+        let installed = install_managed_jdk_major(required, &mut log)?;
         invalidate_runtime_cache();
         runtimes.push(installed);
         runtimes.sort_by(|a, b| b.major.cmp(&a.major));
@@ -659,6 +673,168 @@ where
     Ok(runtime)
 }
 
+/// Which distribution a managed JDK download uses for a given major.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JdkSource {
+    /// Modern LTS majors (17/21) — the existing default runtime.
+    GraalVM,
+    /// Legacy majors (8 for MC <=1.16.4, 16 for 1.17): GraalVM CE publishes
+    /// no jdk-8 / jdk-16 builds, so Adoptium Temurin — the community-standard
+    /// runtime for old Forge — fills the gap.
+    Temurin,
+}
+
+fn jdk_source_for_major(major: u32) -> JdkSource {
+    match major {
+        8 | 16 => JdkSource::Temurin,
+        _ => JdkSource::GraalVM,
+    }
+}
+
+/// Download a managed JDK for `major` from whichever distribution has a
+/// build for it (see [`JdkSource`]).
+pub fn install_managed_jdk_major<F>(major: u32, log: &mut F) -> Result<JavaRuntime, JreError>
+where
+    F: FnMut(&str),
+{
+    match jdk_source_for_major(major) {
+        JdkSource::Temurin => install_temurin_major(major, log),
+        JdkSource::GraalVM => install_graalvm_major(major, log),
+    }
+}
+
+/// Adoptium Temurin release metadata (`/v3/assets/latest/{major}/hotspot`).
+#[derive(Debug, serde::Deserialize)]
+struct TemurinAsset {
+    binary: TemurinBinary,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TemurinBinary {
+    /// Archive file name, e.g. `OpenJDK8U-jdk_x64_windows_hotspot_8u422b05.zip`.
+    name: String,
+    /// Direct download link (GitHub `adoptium/temurinN-binaries`).
+    link: String,
+    /// sha256 of the archive (hex, no `sha256:` prefix).
+    #[serde(default)]
+    checksum: Option<String>,
+}
+
+fn adoptium_os() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "mac"
+    } else {
+        "linux"
+    }
+}
+
+fn adoptium_arch() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x64"
+    }
+}
+
+fn adoptium_assets_url(major: u32, os: &str, arch: &str) -> String {
+    format!(
+        "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture={arch}&image_type=jdk&os={os}&project=jdk"
+    )
+}
+
+/// Install the latest Adoptium Temurin JDK for `major` into the managed
+/// runtime root. Mirrors [`install_graalvm_matching`]: checksum-verified
+/// download, extract (zip / tar.gz), flatten the single top-level folder,
+/// mark with `.tuffbox-java-ok` so re-runs reuse the install.
+pub fn install_temurin_major<F>(major: u32, log: &mut F) -> Result<JavaRuntime, JreError>
+where
+    F: FnMut(&str),
+{
+    let os = adoptium_os();
+    let arch = adoptium_arch();
+    let url = adoptium_assets_url(major, os, arch);
+
+    let root = managed_java_root();
+    fs::create_dir_all(&root).map_err(JreError::Io)?;
+    let downloads = root.join("downloads");
+    fs::create_dir_all(&downloads).map_err(JreError::Io)?;
+
+    log("# Fetching Adoptium Temurin release metadata…");
+    let assets: Vec<TemurinAsset> = crate::http::get_json(&url)
+        .map_err(|e| JreError::Download(format!("Adoptium API: {e}")))?;
+    let binary = assets.first().map(|a| &a.binary).ok_or_else(|| {
+        JreError::Download(format!(
+            "Adoptium has no Temurin JDK {major} build for {os}/{arch}"
+        ))
+    })?;
+
+    // Per-release directory (e.g. `temurin-OpenJDK8U-jdk_x64_windows_hotspot_8u422b05`)
+    // so updating the same major installs beside, never over, the old one.
+    let release_name = binary
+        .name
+        .trim_end_matches(".zip")
+        .trim_end_matches(".tar.gz");
+    let install_dir = root.join(format!("temurin-{release_name}"));
+    let marker = install_dir.join(".tuffbox-java-ok");
+    if marker.is_file() {
+        if let Ok(rt) = find_java_under(&install_dir) {
+            log(&format!(
+                "# Reusing managed Temurin {release_name} at {}",
+                rt.path
+            ));
+            return Ok(rt);
+        }
+    }
+
+    let archive_path = downloads.join(&binary.name);
+    let checksum = binary
+        .checksum
+        .as_deref()
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty());
+
+    log(&format!(
+        "# Downloading {} (Temurin JDK {major})…",
+        binary.name
+    ));
+    crate::download_engine::download_resumable(
+        &binary.link,
+        &archive_path,
+        checksum.map(|c| (c, crate::download_engine::ChecksumKind::Sha256)),
+        None,
+        Some(std::time::Duration::from_secs(600)),
+    )
+    .map_err(|e| JreError::Download(e.to_string()))?;
+
+    // Fresh extract target.
+    if install_dir.exists() {
+        let _ = fs::remove_dir_all(&install_dir);
+    }
+    fs::create_dir_all(&install_dir).map_err(JreError::Io)?;
+
+    log(&format!("# Extracting to {}…", install_dir.display()));
+    extract_archive(&archive_path, &install_dir)?;
+
+    // Temurin archives wrap a single top-level `jdk-…` / `jdk8u…` folder.
+    flatten_single_child_dir(&install_dir)?;
+
+    let runtime = find_java_under(&install_dir).map_err(|e| {
+        JreError::Install(format!(
+            "extracted Temurin but java binary not found under {}: {e}",
+            install_dir.display()
+        ))
+    })?;
+
+    fs::write(&marker, release_name.as_bytes()).map_err(JreError::Io)?;
+    log(&format!(
+        "# Temurin {release_name} ready: {} (Java {})",
+        runtime.path, runtime.major
+    ));
+    Ok(runtime)
+}
+
 fn find_java_under(dir: &Path) -> Result<JavaRuntime, JreError> {
     let candidates = [
         dir.join("bin"),
@@ -796,6 +972,54 @@ mod tests {
             version: format!("{major}.0.0"),
             major,
         }
+    }
+
+    #[test]
+    fn managed_jdk_needed_legacy_majors_require_exact_match() {
+        // Old Forge (MC <=1.16.4 -> Java 8, 1.17 -> Java 16) crashes on
+        // newer JVMs: a newer installed runtime must NOT satisfy the
+        // requirement — the exact major has to be downloaded (Temurin).
+        assert!(managed_jdk_needed(&[], 8));
+        assert!(managed_jdk_needed(&[runtime(17)], 8));
+        assert!(managed_jdk_needed(&[runtime(21)], 16));
+        assert!(!managed_jdk_needed(&[runtime(8)], 8));
+        assert!(!managed_jdk_needed(&[runtime(8), runtime(21)], 8));
+        assert!(!managed_jdk_needed(&[runtime(16)], 16));
+    }
+
+    #[test]
+    fn managed_jdk_needed_modern_majors_accept_newer_runtimes() {
+        // Modern MC runs fine on newer JVMs — no forced download.
+        assert!(!managed_jdk_needed(&[runtime(21)], 17));
+        assert!(!managed_jdk_needed(&[runtime(25)], 21));
+        assert!(managed_jdk_needed(&[runtime(8)], 17));
+        assert!(managed_jdk_needed(&[], 21));
+    }
+
+    #[test]
+    fn jdk_source_routing_fills_graalvm_gaps_with_temurin() {
+        // GraalVM CE publishes no jdk-8 / jdk-16 builds.
+        assert_eq!(jdk_source_for_major(8), JdkSource::Temurin);
+        assert_eq!(jdk_source_for_major(16), JdkSource::Temurin);
+        assert_eq!(jdk_source_for_major(11), JdkSource::GraalVM);
+        assert_eq!(jdk_source_for_major(17), JdkSource::GraalVM);
+        assert_eq!(jdk_source_for_major(21), JdkSource::GraalVM);
+    }
+
+    #[test]
+    fn adoptium_url_targets_major_and_platform() {
+        let url = adoptium_assets_url(8, "windows", "x64");
+        assert!(url.starts_with("https://api.adoptium.net/v3/assets/latest/"));
+        assert!(url.contains("/8/hotspot?"));
+        assert!(url.contains("architecture=x64"));
+        assert!(url.contains("os=windows"));
+        assert!(url.contains("project=jdk"));
+    }
+
+    #[test]
+    fn adoptium_platform_names_are_api_valid() {
+        assert!(["windows", "linux", "mac"].contains(&adoptium_os()));
+        assert!(["x64", "aarch64"].contains(&adoptium_arch()));
     }
 
     #[test]

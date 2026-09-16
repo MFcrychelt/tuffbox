@@ -3106,6 +3106,7 @@ export const api = {
     getAuthStatus() { return cmd<AuthState>("mc_get_auth_status"); },
     logout() { return cmd<AuthState>("mc_logout"); },
     refreshProfile() { return cmd<McProfile>("mc_refresh_profile"); },
+    refreshToken() { return cmd<AuthState>("mc_refresh_token"); },
     getSkinPath(uuid: string) { return cmd<string>("mc_get_skin_path", { uuid }); },
     fetchSkinUrl(uuid: string) { return cmd<string | null>("mc_fetch_skin_url", { uuid }); },
     fetchSkinForUsername(username: string, source: SkinSource) {

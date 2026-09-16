@@ -149,3 +149,19 @@ export function reduceLaunchSession(
       return null;
   }
 }
+
+/** Renew the MSA token when less than this remains (tokens live ~24h). */
+export const TOKEN_REFRESH_MARGIN_S = 10 * 60;
+
+/**
+ * True when a logged-in session's expiry is close enough (or already past)
+ * that launching should renew it first. `null` expiry (offline / Yggdrasil
+ * accounts) never needs a renewal.
+ */
+export function needsTokenRefresh(
+  expiresAt: number | null | undefined,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): boolean {
+  if (expiresAt == null) return false;
+  return expiresAt - nowSec < TOKEN_REFRESH_MARGIN_S;
+}

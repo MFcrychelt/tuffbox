@@ -3227,8 +3227,9 @@ fn execute_fix_action_inner(
             }
             let mut manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
             // ensure_java_for_minecraft_with_log picks the best installed
-            // runtime for the Minecraft version AND downloads the matching
-            // GraalVM JDK when nothing installed satisfies the requirement.
+            // runtime for the Minecraft version AND downloads a managed JDK
+            // (GraalVM for modern majors, Adoptium Temurin for legacy
+            // Java 8/16) when no matching runtime is installed.
             let best = {
                 let log = |line: &str| eprintln!("[autoJava] {line}");
                 tuffbox_core::jre::ensure_java_for_minecraft_with_log(
@@ -15688,7 +15689,8 @@ fn build_and_spawn(
         // — using e.g. Java 21 for Forge 1.20.1 (which needs Java 17)
         // fails deep inside Forge's bootstrap launcher with a confusing
         // module-system error instead of launching at all.
-        // If nothing is installed, download the latest GraalVM Community JDK.
+        // If nothing matching is installed, download a managed JDK
+        // (GraalVM for modern majors, Temurin 8/16 for legacy versions).
         emit_launch_progress(&app, "java", "Installing Java…", Some(20));
         tuffbox_core::jre::ensure_java_for_minecraft_with_log(
             &manifest.minecraft.version,
@@ -21970,6 +21972,7 @@ pub fn run() {
             auth::mc_get_auth_status,
             auth::mc_logout,
             auth::mc_refresh_profile,
+            auth::mc_refresh_token,
             auth::mc_get_skin_path,
             auth::mc_fetch_skin_url,
             auth::mc_offline_login,

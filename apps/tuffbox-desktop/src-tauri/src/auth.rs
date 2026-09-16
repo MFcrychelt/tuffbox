@@ -2000,6 +2000,10 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
                             .await;
                         }
                         state.profile = Some(profile);
+                        // The silent renewal keeps the session alive — slide
+                        // the reported expiry forward so the UI (and the
+                        // launch path) don't treat a fresh token as stale.
+                        state.expires_at = Some(now_secs() + 86400);
                         save_token(&account_access_key(uuid), &login.mc_access_token)?;
                         save_token("mc-access-token", &login.mc_access_token)?;
                         if let Some(rt) = new_refresh {
@@ -2073,54 +2077,81 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+/// Renew the active Microsoft session: exchange the stored refresh token for
+/// fresh MSA + Minecraft tokens, persist both to the keyring, slide the ~24h
+/// expiry forward, and return the refreshed auth state. Errors when the
+/// session cannot be renewed (revoked refresh token, network) — the caller
+/// decides whether to ask for a fresh sign-in.
+pub async fn refresh_active_microsoft_session() -> Result<AuthState, String> {
+    let state = load_auth_state();
+    if state.login_type != LoginType::Microsoft {
+        return Err("active session is not a Microsoft account".into());
+    }
+    let uuid = state
+        .active_account_uuid
+        .clone()
+        .ok_or("no active Microsoft account")?;
+    let refresh_token = load_token(&account_refresh_key(&uuid))?;
+    let backend = account_ms_oauth_backend(&uuid);
+    let (login, new_refresh) = login_with_refresh_token(&refresh_token, backend).await?;
+    save_token(&account_access_key(&uuid), &login.mc_access_token)?;
+    save_token("mc-access-token", &login.mc_access_token)?;
+    if let Some(rt) = new_refresh {
+        let _ = save_token(&account_refresh_key(&uuid), &rt);
+    }
+
+    let accounts = load_accounts_file();
+    let new_state = AuthState {
+        logged_in: true,
+        profile: Some(login.profile.clone()),
+        expires_at: Some(now_secs() + 86400),
+        login_type: LoginType::Microsoft,
+        skin_source: SkinSource::Mojang,
+        cape_provider: state.cape_provider.clone(),
+        accounts: accounts.accounts,
+        active_account_uuid: accounts.active_account_uuid,
+    };
+    save_auth_state(&new_state)?;
+
+    if let Some(ref skin_url) = login.profile.skin_url {
+        let _ = download_and_cache_skin(skin_url, &login.profile.uuid).await;
+    }
+    Ok(new_state)
+}
+
+/// Force an MSA token renewal, bypassing the 30s status-refresh throttle:
+/// used right before a launch so the game's auth handshake never sees a
+/// stale token. Non-Microsoft sessions error — offline and Yggdrasil
+/// accounts have no refresh token to renew (their expiry is null and the
+/// frontend never calls this for them).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mc_refresh_token() -> Result<AuthState, String> {
+    refresh_active_microsoft_session().await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_refresh_profile() -> Result<McProfile, String> {
     let state = load_auth_state();
 
     if state.login_type == LoginType::Microsoft {
-        if let Some(ref uuid) = state.active_account_uuid {
-            let refresh_token = load_token(&account_refresh_key(uuid))?;
-            let backend = account_ms_oauth_backend(uuid);
-            let (login, new_refresh) = login_with_refresh_token(&refresh_token, backend).await?;
-            save_token(&account_access_key(uuid), &login.mc_access_token)?;
-            save_token("mc-access-token", &login.mc_access_token)?;
-            if let Some(rt) = new_refresh {
-                let _ = save_token(&account_refresh_key(uuid), &rt);
-            }
+        let new_state = refresh_active_microsoft_session().await?;
+        let mut profile = new_state.profile.ok_or("Not logged in")?;
 
-            let accounts = load_accounts_file();
-            let new_state = AuthState {
-                logged_in: true,
-                profile: Some(login.profile.clone()),
-                expires_at: Some(now_secs() + 86400),
-                login_type: LoginType::Microsoft,
-                skin_source: SkinSource::Mojang,
-                cape_provider: state.cape_provider.clone(),
-                accounts: accounts.accounts,
-                active_account_uuid: accounts.active_account_uuid,
-            };
-            save_auth_state(&new_state)?;
-
-            if let Some(ref skin_url) = login.profile.skin_url {
-                let _ = download_and_cache_skin(skin_url, &login.profile.uuid).await;
-            }
-
-            // Apply selected display cape provider over Mojang active cape when needed.
-            let mut profile = login.profile;
-            if state.cape_provider != CapeProvider::Mojang {
-                profile.cape_url = resolve_display_cape(
-                    &profile.name,
-                    &profile.uuid,
-                    &state.cape_provider,
-                    &profile.capes,
-                )
-                .await;
-                let mut s = load_auth_state();
-                s.profile = Some(profile.clone());
-                let _ = save_auth_state(&s);
-            }
-
-            return Ok(profile);
+        // Apply selected display cape provider over Mojang active cape when needed.
+        if state.cape_provider != CapeProvider::Mojang {
+            profile.cape_url = resolve_display_cape(
+                &profile.name,
+                &profile.uuid,
+                &state.cape_provider,
+                &profile.capes,
+            )
+            .await;
+            let mut s = load_auth_state();
+            s.profile = Some(profile.clone());
+            let _ = save_auth_state(&s);
         }
+
+        return Ok(profile);
     }
 
     // Offline: refresh skin from source

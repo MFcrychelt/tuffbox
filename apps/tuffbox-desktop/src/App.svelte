@@ -15,10 +15,11 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, youtubeQueueOpen, theme, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, authState, youtubeQueueOpen, theme, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import YoutubeQueueWindow from "./components/YoutubeQueueWindow.svelte";
   import { api } from "./lib/api";
+  import { needsTokenRefresh } from "./lib/launchState";
   import { applyHomeSnapshot, ensureHomeEnrichListener } from "./lib/homeBootstrap";
   import { invoke, isTauri } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -233,6 +234,28 @@
       // best-effort — perfAutoDetected stays false server-side, so we simply retry next launch
     }
   }
+
+  // Hydrate the account session early and renew a Microsoft token that
+  // expired while the launcher was closed (~24h lifetime) — the first Play
+  // of the day must not fail on a stale session. Offline / Yggdrasil
+  // accounts (null expiry) need no renewal.
+  onMount(() => {
+    void (async () => {
+      try {
+        let state = await api.mcAuth.getAuthStatus();
+        if (state.loggedIn && needsTokenRefresh(state.expiresAt)) {
+          try {
+            state = await api.mcAuth.refreshToken();
+          } catch {
+            // Keep the stale session — the launch flow asks again.
+          }
+        }
+        authState.set(state);
+      } catch {
+        // Auth store unavailable — the login modal handles sign-in.
+      }
+    })();
+  });
 
   onMount(() => {
     // Orphan portals / error overlays can survive HMR and eat all clicks.
