@@ -8,6 +8,7 @@
     type RecentProject,
   } from "../lib/store";
   import { homeIcons } from "../lib/homeBootstrap";
+  import { t } from "../lib/i18n";
   import HomeYoutubePlacementToggle from "./HomeYoutubePlacementToggle.svelte";
 
   let {
@@ -86,15 +87,15 @@
         <span class="ghost-pack"></span>
         <span class="ghost-pack"></span>
       </div>
-      <p>Your shelf is empty. Create a pack or import one you already have.</p>
+      <p>{$t("home.shelfEmpty")}</p>
       <div class="shelf-empty-actions">
         <button type="button" class="text-btn accent" onclick={() => openAddInstance("blank")}>
           <Plus size={14} />
-          Create
+          {$t("home.create")}
         </button>
         <button type="button" class="text-btn" onclick={() => openAddInstance("import")}>
           <FolderInput size={14} />
-          Import
+          {$t("home.import")}
         </button>
       </div>
     </div>
@@ -127,7 +128,7 @@
               {/if}
             </span>
             {#if running}
-              <span class="running-dot" title="Running"></span>
+              <span class="running-dot" title={$t("home.running")}></span>
             {/if}
           </span>
           <span class="pack-name">{project.info.name}</span>

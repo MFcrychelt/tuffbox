@@ -42,6 +42,7 @@
   import PromptDialog from "./PromptDialog.svelte";
   import { openModsBrowserWindow } from "../lib/modsBrowserWindow";
   import { refreshUpdateCount, setUpdateCount } from "../lib/instanceUpdates";
+  import { t } from "../lib/i18n";
   import {
     isProjectLaunching,
     isProjectRunning,
@@ -793,12 +794,12 @@
           {project.info.minecraftVersion} · {project.info.loaderKind}
         </span>
       </div>
-      <button type="button" class="im-close" onclick={() => onclose?.()} aria-label="Close manager">
+      <button type="button" class="im-close" onclick={() => onclose?.()} aria-label={$t("manager.closeManager")}>
         <X size={17} />
       </button>
     </header>
 
-    <div class="im-tabs" role="tablist" aria-label="Manager sections">
+    <div class="im-tabs" role="tablist" aria-label={$t("manager.sections")}>
       <button
         type="button"
         role="tab"
@@ -806,11 +807,11 @@
         class:active={tab === "mods"}
         onclick={() => (tab = "mods")}
       >
-        <Package size={14} /> Mods
+        <Package size={14} /> {$t("manager.mods")}
         {#if modsLoadedOnce}
           <span class="im-tab-badge">{modRows.length}</span>
           {#if updateCount > 0}
-            <span class="im-tab-badge update" title="Updates available">{updateCount}</span>
+            <span class="im-tab-badge update" title={$t("manager.updatesAvailable")}>{updateCount}</span>
           {/if}
         {/if}
       </button>
@@ -821,7 +822,7 @@
         class:active={tab === "worlds"}
         onclick={() => (tab = "worlds")}
       >
-        <Globe size={14} /> Worlds
+        <Globe size={14} /> {$t("manager.worlds")}
         {#if worldsLoadedOnce && worlds.length > 0}
           <span class="im-tab-badge">{worlds.length}</span>
         {/if}
@@ -833,7 +834,7 @@
         class:active={tab === "shots"}
         onclick={() => (tab = "shots")}
       >
-        <Camera size={14} /> Screenshots
+        <Camera size={14} /> {$t("manager.screenshots")}
         {#if shotsLoadedOnce && shots.length > 0}
           <span class="im-tab-badge">{shots.length}</span>
         {/if}
@@ -845,7 +846,7 @@
         class:active={tab === "backups"}
         onclick={() => (tab = "backups")}
       >
-        <Archive size={14} /> Backups
+        <Archive size={14} /> {$t("manager.backups")}
         {#if backupsLoadedOnce && backups.length > 0}
           <span class="im-tab-badge">{backups.length}</span>
         {/if}
@@ -857,7 +858,7 @@
         class:active={tab === "health"}
         onclick={() => (tab = "health")}
       >
-        <HeartPulse size={14} /> Health
+        <HeartPulse size={14} /> {$t("manager.health")}
         {#if healthLoadedOnce && health}
           <span class="im-tab-dot {overallMeta.cls}" aria-hidden="true"></span>
         {/if}
@@ -872,27 +873,27 @@
             <Search size={14} />
             <input
               type="text"
-              placeholder="Filter mods…"
-              aria-label="Filter mods"
+              placeholder={$t("manager.filterMods")}
+              aria-label={$t("manager.filterModsAria")}
               bind:value={modFilter}
               maxlength={120}
             />
           </div>
           <select
             class="im-sort"
-            aria-label="Sort mods"
+            aria-label={$t("manager.sortMods")}
             value={modSort}
             onchange={(e) => (modSort = (e.currentTarget as HTMLSelectElement).value as ModSortMode)}
           >
-            <option value="name">Name</option>
-            <option value="source">Source</option>
-            <option value="updates">Updates first</option>
+            <option value="name">{$t("manager.sortName")}</option>
+            <option value="source">{$t("manager.sortSource")}</option>
+            <option value="updates">{$t("manager.sortUpdates")}</option>
           </select>
           <button
             type="button"
             class="im-tool-btn"
-            title="Refresh mod list"
-            aria-label="Refresh mod list"
+            title={$t("manager.refreshMods")}
+            aria-label={$t("manager.refreshMods")}
             disabled={modsLoading}
             onclick={() => void loadMods(true)}
           >
@@ -902,8 +903,8 @@
             <button
               type="button"
               class="im-tool-btn"
-              title="More mod actions"
-              aria-label="More mod actions"
+              title={$t("manager.moreModActions")}
+              aria-label={$t("manager.moreModActions")}
               aria-expanded={overflowOpen}
               onclick={() => (overflowOpen = !overflowOpen)}
             >
@@ -912,7 +913,7 @@
             {#if overflowOpen}
               <div class="im-menu" role="menu">
                 <button type="button" role="menuitem" onclick={() => { overflowOpen = false; void checkUpdates(); }} disabled={checkingUpdates}>
-                  <RefreshCw size={13} /> Check for updates
+                  <RefreshCw size={13} /> {$t("manager.checkUpdates")}
                 </button>
                 <button
                   type="button"
@@ -920,16 +921,16 @@
                   onclick={() => { overflowOpen = false; void updateAll(); }}
                   disabled={updatingAll || !updatesChecked || updateCount === 0}
                 >
-                  <ArrowUpCircle size={13} /> Update all{#if updateCount > 0}&nbsp;({updateCount}){/if}
+                  <ArrowUpCircle size={13} /> {$t("manager.updateAll")}{#if updateCount > 0}&nbsp;({updateCount}){/if}
                 </button>
                 <button type="button" role="menuitem" onclick={() => void addMods()}>
-                  <Plus size={13} /> Add mods…
+                  <Plus size={13} /> {$t("manager.addMods")}
                 </button>
                 <button type="button" role="menuitem" onclick={() => void syncFolder()}>
-                  <RefreshCw size={13} /> Sync mods folder
+                  <RefreshCw size={13} /> {$t("manager.syncFolder")}
                 </button>
                 <button type="button" role="menuitem" onclick={() => void openModsFolder()}>
-                  <FolderOpen size={13} /> Open mods folder
+                  <FolderOpen size={13} /> {$t("manager.openModsFolder")}
                 </button>
               </div>
             {/if}
@@ -937,28 +938,30 @@
         </div>
 
         {#if selectedMods.size > 0 || batchBusy}
-          <div class="im-batchbar" role="toolbar" aria-label="Batch mod actions">
+          <div class="im-batchbar" role="toolbar" aria-label={$t("manager.batchActions")}>
             {#if batchBusy}
               <span class="im-batch-status">
                 <RefreshCw size={13} class="spin" />
                 {batchBusy.label} {batchBusy.done}/{batchBusy.total}…
               </span>
             {:else}
-              <span class="im-batch-count">{selectedMods.size} selected</span>
+              <span class="im-batch-count">{$t("manager.selected", { n: selectedMods.size })}</span>
               <button type="button" class="im-mini" disabled={batchBusy !== null} onclick={() => void batchEnable()}>
-                <Power size={12} /> Enable
+                <Power size={12} /> {$t("manager.enable")}
               </button>
               <button type="button" class="im-mini" disabled={batchBusy !== null} onclick={() => void batchDisable()}>
-                <Power size={12} /> Disable
+                <Power size={12} /> {$t("manager.disable")}
               </button>
               <button
                 type="button"
                 class="im-mini"
                 disabled={batchBusy !== null || selectedUpdateCount === 0}
-                title={selectedUpdateCount === 0 ? "No updates among selected mods" : `Update ${selectedUpdateCount} selected mods`}
+                title={selectedUpdateCount === 0
+                  ? $t("manager.noUpdatesSelected")
+                  : $t("manager.updateN", { n: selectedUpdateCount })}
                 onclick={() => void batchUpdateSelected()}
               >
-                <ArrowUpCircle size={12} /> Update{#if selectedUpdateCount > 0}&nbsp;({selectedUpdateCount}){/if}
+                <ArrowUpCircle size={12} /> {$t("manager.update")}{#if selectedUpdateCount > 0}&nbsp;({selectedUpdateCount}){/if}
               </button>
               <button
                 type="button"
@@ -966,37 +969,39 @@
                 disabled={batchBusy !== null}
                 onclick={() => (confirmRemoveMods = selectedRows)}
               >
-                <Trash2 size={12} /> Remove
+                <Trash2 size={12} /> {$t("manager.remove")}
               </button>
               <span class="im-spacer"></span>
-              <button type="button" class="im-mini" disabled={batchBusy !== null} onclick={selectAllFiltered}>All</button>
-              <button type="button" class="im-mini" disabled={batchBusy !== null} onclick={clearSelection}>Clear</button>
+              <button type="button" class="im-mini" disabled={batchBusy !== null} onclick={selectAllFiltered}>{$t("manager.all")}</button>
+              <button type="button" class="im-mini" disabled={batchBusy !== null} onclick={clearSelection}>{$t("manager.clear")}</button>
             {/if}
           </div>
         {/if}
 
         {#if modsLoadedOnce}
-          <div class="im-chips" role="toolbar" aria-label="Quick filters">
+          <div class="im-chips" role="toolbar" aria-label={$t("manager.quickFilters")}>
             <button
               type="button"
               class="im-chip chip-btn"
               class:active-chip={quickFilter === "none"}
-              title={quickFilter === "none" ? "All mods" : "Clear the quick filter"}
+              title={quickFilter === "none" ? $t("manager.allMods") : $t("manager.clearQuickFilter")}
               aria-pressed={quickFilter === "none"}
               onclick={() => (quickFilter = "none")}
             >
-              {modRows.length} {modRows.length === 1 ? "mod" : "mods"}
+              {modRows.length} {modRows.length === 1 ? $t("manager.modWord") : $t("manager.modsWord")}
             </button>
             {#if disabledCount > 0}
               <button
                 type="button"
                 class="im-chip chip-btn muted"
                 class:active-chip={quickFilter === "disabled"}
-                title={quickFilter === "disabled" ? "Showing only disabled mods — click to clear" : "Show only disabled mods"}
+                title={quickFilter === "disabled"
+                  ? $t("manager.showingDisabled")
+                  : $t("manager.showDisabled")}
                 aria-pressed={quickFilter === "disabled"}
                 onclick={() => (quickFilter = quickFilter === "disabled" ? "none" : "disabled")}
               >
-                {disabledCount} disabled
+                {disabledCount} {$t("manager.disabledWord")}
               </button>
             {/if}
             {#if updatesChecked}
@@ -1006,27 +1011,29 @@
                 class:warn={updateCount > 0}
                 class:active-chip={quickFilter === "updates"}
                 disabled={updateCount === 0 && quickFilter !== "updates"}
-                title={quickFilter === "updates" ? "Showing only mods with updates — click to clear" : "Show only mods with updates"}
+                title={quickFilter === "updates"
+                  ? $t("manager.showingUpdates")
+                  : $t("manager.showUpdates")}
                 aria-pressed={quickFilter === "updates"}
                 onclick={() => (quickFilter = quickFilter === "updates" ? "none" : "updates")}
               >
-                {updateCount === 0 ? "Up to date" : `${updateCount} update${updateCount === 1 ? "" : "s"}`}
+                {updateCount === 0 ? $t("manager.upToDate") : $t("manager.updatesCount", { n: updateCount })}
               </button>
             {/if}
           </div>
         {/if}
 
         {#if modsLoading && !modsLoadedOnce}
-          <div class="im-empty" in:fade>Reading the mod list…</div>
+          <div class="im-empty" in:fade>{$t("manager.readingMods")}</div>
         {:else if !modsLoadedOnce}
-          <div class="im-empty">Couldn't read the mod list.</div>
+          <div class="im-empty">{$t("manager.modsError")}</div>
         {:else if visibleMods.length === 0}
           <div class="im-empty" in:fade>
             {#if modFilter.trim()}
-              No mods match "{modFilter.trim()}".
+              {$t("manager.noModsMatch", { filter: modFilter.trim() })}
             {:else}
-              No mods yet — browse the catalog to add some.
-              <button type="button" class="im-link" onclick={() => void addMods()}>Open catalog</button>
+              {$t("manager.noMods")}
+              <button type="button" class="im-link" onclick={() => void addMods()}>{$t("manager.openCatalog")}</button>
             {/if}
           </div>
         {:else}
@@ -1091,7 +1098,7 @@
                   <button
                     type="button"
                     class="im-tool-btn small"
-                    title="More actions"
+                    title={$t("common.more")}
                     aria-label={`More actions for ${mod.name}`}
                     aria-expanded={rowMenuId === mod.id}
                     disabled={rowBusy === mod.id}
@@ -1107,10 +1114,10 @@
                         </button>
                       {/if}
                       <button type="button" role="menuitem" onclick={() => void openVersionPicker(mod)}>
-                        <History size={13} /> Change version…
+                        <History size={13} /> {$t("manager.changeVersion")}
                       </button>
                       <button type="button" role="menuitem" class="danger" onclick={() => { rowMenuId = null; confirmRemoveMod = mod; }}>
-                        <Trash2 size={13} /> Remove mod
+                        <Trash2 size={13} /> {$t("manager.removeMod")}
                       </button>
                     </div>
                   {/if}
@@ -1126,13 +1133,13 @@
           <button type="button" class="im-primary" onclick={openSavesFolder}>
             <FolderOpen size={13} /> Open saves folder
           </button>
-          <span class="im-toolbar-hint">World saves live in saves/, with per-world zip backups.</span>
+          <span class="im-toolbar-hint">{$t("manager.worldsHint")}</span>
           <span class="im-spacer"></span>
           <button
             type="button"
             class="im-tool-btn"
-            title="Refresh worlds"
-            aria-label="Refresh worlds"
+            title={$t("manager.refreshWorlds")}
+            aria-label={$t("manager.refreshWorlds")}
             disabled={worldsLoading}
             onclick={() => void loadWorlds(true)}
           >
@@ -1141,7 +1148,7 @@
         </div>
 
         {#if worldsLoading && !worldsLoadedOnce}
-          <div class="im-empty" in:fade>Reading saves…</div>
+          <div class="im-empty" in:fade>{$t("manager.readingWorlds")}</div>
         {:else if worlds.length === 0}
           <div class="im-empty" in:fade>
             No worlds yet — create one in game (Singleplayer), it will show up here.
@@ -1175,7 +1182,7 @@
                   <button
                     type="button"
                     class="im-mini"
-                    title="Launch the instance and join this world"
+                    title={$t("manager.launchWorld")}
                     disabled={worldBusy === world.name || worldBusy?.startsWith("backup:") || !world.hasLevelDat}
                     onclick={() => void playWorld(world)}
                   >
@@ -1186,7 +1193,7 @@
                     type="button"
                     class="im-mini"
                     disabled={!!worldBusy}
-                    title="Zip this world into per-world backups"
+                    title={$t("manager.zipWorld")}
                     onclick={() => void backupWorld(world)}
                   >
                     {#if worldBusy === `backup:${world.name}`}<RefreshCw size={12} class="spin" />{:else}<Archive size={12} />{/if}
@@ -1195,8 +1202,8 @@
                   <button
                     type="button"
                     class="im-tool-btn small"
-                    title="Delete world (a backup is kept automatically)"
-                    aria-label={`Delete world ${world.displayName || world.name}`}
+                    title={$t("manager.deleteWorldTitle")}
+                    aria-label={$t("manager.deleteWorldAria", { name: world.displayName || world.name })}
                     disabled={!!worldBusy}
                     onclick={() => (confirmDeleteWorld = world)}
                   >
@@ -1214,13 +1221,13 @@
           <button type="button" class="im-primary" onclick={openScreenshotsFolder}>
             <FolderOpen size={13} /> Open folder
           </button>
-          <span class="im-toolbar-hint">Press F2 in game to take a screenshot.</span>
+          <span class="im-toolbar-hint">{$t("manager.shotsHint")}</span>
           <span class="im-spacer"></span>
           <button
             type="button"
             class="im-tool-btn"
-            title="Refresh screenshots"
-            aria-label="Refresh screenshots"
+            title={$t("manager.refreshShots")}
+            aria-label={$t("manager.refreshShots")}
             disabled={shotsLoading}
             onclick={() => void loadShots(true)}
           >
@@ -1229,7 +1236,7 @@
         </div>
 
         {#if shotsLoading && !shotsLoadedOnce}
-          <div class="im-empty" in:fade>Listing screenshots…</div>
+          <div class="im-empty" in:fade>{$t("manager.listingShots")}</div>
         {:else if shots.length === 0}
           <div class="im-empty" in:fade>
             No screenshots yet — press F2 in game and they will appear here.
@@ -1241,7 +1248,7 @@
                 <button
                   type="button"
                   class="im-shot-frame"
-                  title="Preview"
+                  title={$t("manager.preview")}
                   aria-label={`Preview ${shot.fileName}`}
                   onclick={() => (lightbox = shot)}
                 >
@@ -1253,7 +1260,7 @@
                   <button
                     type="button"
                     class="im-tool-btn small"
-                    title="Delete screenshot"
+                    title={$t("manager.deleteShot")}
                     aria-label={`Delete ${shot.fileName}`}
                     onclick={() => (confirmDeleteShot = shot)}
                   >
@@ -1277,13 +1284,13 @@
             {#if creatingBackup}<RefreshCw size={13} class="spin" />{:else}<Plus size={13} />{/if}
             Create backup
           </button>
-          <span class="im-toolbar-hint">Snapshots the whole instance folder.</span>
+          <span class="im-toolbar-hint">{$t("manager.backupsHint")}</span>
           <span class="im-spacer"></span>
           <button
             type="button"
             class="im-tool-btn"
-            title="Refresh backups"
-            aria-label="Refresh backups"
+            title={$t("manager.refreshBackups")}
+            aria-label={$t("manager.refreshBackups")}
             disabled={backupsLoading}
             onclick={() => void loadBackups(true)}
           >
@@ -1292,7 +1299,7 @@
         </div>
 
         {#if backupsLoading && !backupsLoadedOnce}
-          <div class="im-empty" in:fade>Loading backups…</div>
+          <div class="im-empty" in:fade>{$t("manager.loadingBackups")}</div>
         {:else if backups.length === 0}
           <div class="im-empty" in:fade>
             No backups yet. Create one before trying risky changes — updates and
@@ -1316,12 +1323,12 @@
                     disabled={creatingBackup}
                     onclick={() => (confirmRestore = entry)}
                   >
-                    <RotateCcw size={12} /> Restore
+                    <RotateCcw size={12} /> {$t("manager.restore")}
                   </button>
                   <button
                     type="button"
                     class="im-tool-btn small"
-                    title="Delete backup"
+                    title={$t("manager.deleteBackup")}
                     aria-label={`Delete backup ${entry.name}`}
                     onclick={() => (confirmDeleteBackup = entry)}
                   >
@@ -1345,13 +1352,13 @@
             {#if validating}<RefreshCw size={13} class="spin" />{:else}<Wrench size={13} />{/if}
             Run validation
           </button>
-          <span class="im-toolbar-hint">Manifest, graph and config checks.</span>
+          <span class="im-toolbar-hint">{$t("manager.healthHint")}</span>
           <span class="im-spacer"></span>
           <button
             type="button"
             class="im-tool-btn"
-            title="Refresh health report"
-            aria-label="Refresh health report"
+            title={$t("manager.refreshHealth")}
+            aria-label={$t("manager.refreshHealth")}
             disabled={healthLoading}
             onclick={() => void loadHealth(true)}
           >
@@ -1360,9 +1367,9 @@
         </div>
 
         {#if healthLoading && !healthLoadedOnce}
-          <div class="im-empty" in:fade>Scanning the pack…</div>
+          <div class="im-empty" in:fade>{$t("manager.scanningPack")}</div>
         {:else if !health}
-          <div class="im-empty">Couldn't load the health report.</div>
+          <div class="im-empty">{$t("manager.healthError")}</div>
         {:else}
           <div class="im-health" in:fade>
             <div class={`im-verdict ${overallMeta.cls}`}>
@@ -1376,26 +1383,26 @@
             </div>
 
             <div class="im-tiles">
-              <div class="im-tile" class:bad={health.wrongLoaderCount > 0} title="Mods built for a different loader">
+              <div class="im-tile" class:bad={health.wrongLoaderCount > 0} title={$t("manager.wrongLoader")}>
                 <strong>{health.wrongLoaderCount}</strong>
-                <span>wrong loader</span>
+                <span>{$t("manager.wrongLoaderWord")}</span>
               </div>
-              <div class="im-tile" class:bad={health.duplicateGroups.length > 0} title="Duplicate mod jars">
+              <div class="im-tile" class:bad={health.duplicateGroups.length > 0} title={$t("manager.duplicateJarsTitle")}>
                 <strong>{health.duplicateGroups.length}</strong>
-                <span>dup groups</span>
+                <span>{$t("manager.dupGroups")}</span>
               </div>
-              <div class="im-tile" class:bad={health.questIssues > 0} title="Quest book issues">
+              <div class="im-tile" class:bad={health.questIssues > 0} title={$t("manager.questIssuesTitle")}>
                 <strong>{health.questIssues}</strong>
-                <span>quest issues</span>
+                <span>{$t("manager.questIssuesWord")}</span>
               </div>
               <div class="im-tile" class:bad={!!health.lastCrash} title={health.lastCrash ? `Last crash ${formatStamp(health.lastCrash.at)} (exit ${health.lastCrash.exitCode ?? "?"})` : "No crashes recorded"}>
                 <strong>{health.lastCrash ? "yes" : "no"}</strong>
-                <span>recent crash</span>
+                <span>{$t("manager.recentCrash")}</span>
               </div>
             </div>
 
             {#if health.exportIssues.length > 0}
-              <div class="im-section-title">Export issues</div>
+              <div class="im-section-title">{$t("manager.exportIssues")}</div>
               <ul class="im-rows compact">
                 {#each health.exportIssues.slice(0, 12) as issue}
                   <li class="im-issue" class:severe={issue.severity === "error"}>
@@ -1405,28 +1412,30 @@
                   </li>
                 {/each}
                 {#if health.exportIssues.length > 12}
-                  <li class="im-issue-more">…and {health.exportIssues.length - 12} more</li>
+                  <li class="im-issue-more">{$t("manager.andMore", { n: health.exportIssues.length - 12 })}</li>
                 {/if}
               </ul>
             {/if}
 
             {#if health.duplicateGroups.length > 0}
-              <div class="im-section-title">Duplicate jars</div>
+              <div class="im-section-title">{$t("manager.duplicateJars")}</div>
               <ul class="im-rows compact">
                 {#each health.duplicateGroups as dup (dup.modId)}
                   <li class="im-issue">
                     <Copy size={13} />
                     <span class="im-issue-text">
-                      {dup.count} jars of <strong>{dup.modId}</strong>
+                      {$t("manager.jarsOf", { n: dup.count, mod: dup.modId })}
                     </span>
                     <button
                       type="button"
                       class="im-mini"
                       disabled={keepingDup === dup.modId}
-                      title={`Keep ${dup.keepCandidate}, delete the rest`}
+                      title={$t("manager.keepRest", { name: dup.keepCandidate })}
                       onclick={() => void keepOneDuplicate(dup.modId, dup.keepCandidate)}
                     >
-                      Keep {dup.keepCandidate.length > 18 ? `${dup.keepCandidate.slice(0, 18)}…` : dup.keepCandidate}
+                      {$t("manager.keep", {
+                        name: dup.keepCandidate.length > 18 ? `${dup.keepCandidate.slice(0, 18)}…` : dup.keepCandidate,
+                      })}
                     </button>
                   </li>
                 {/each}
@@ -1434,7 +1443,7 @@
             {/if}
 
             {#if validationSummary}
-              <div class="im-section-title">Last validation</div>
+              <div class="im-section-title">{$t("manager.lastValidation")}</div>
               <div class={`im-verdict ${validationSummary.passed ? "ok" : validationSummary.errors > 0 ? "bad" : "warn"}`}>
                 {#if validationSummary.passed}
                   <CheckCircle2 size={18} />
@@ -1442,7 +1451,7 @@
                   <AlertTriangle size={18} />
                 {/if}
                 <div>
-                  <strong>{validationSummary.passed ? "Validation passed" : "Issues found"}</strong>
+                  <strong>{validationSummary.passed ? $t("manager.validationPassed") : $t("manager.issuesFound")}</strong>
                   <span>
                     {validationSummary.totalMods} mods · {validationSummary.totalProfiles} profiles ·
                     {validationSummary.errors} errors · {validationSummary.warnings} warnings
@@ -1469,9 +1478,9 @@
 
 {#if confirmRemoveMod}
   <ConfirmDialog
-    title="Remove mod"
-    message={`Remove "${confirmRemoveMod.name}" from this instance? The jar is deleted from the mods folder.`}
-    confirmLabel="Remove"
+    title={$t("manager.removeMod")}
+    message={$t("manager.removeModMsg", { name: confirmRemoveMod.name })}
+    confirmLabel={$t("manager.remove")}
     danger
     onconfirm={() => confirmRemoveMod && void removeMod(confirmRemoveMod)}
     oncancel={() => (confirmRemoveMod = null)}
@@ -1480,9 +1489,9 @@
 
 {#if confirmRemoveMods && confirmRemoveMods.length > 0}
   <ConfirmDialog
-    title="Remove mods"
-    message={`Remove ${confirmRemoveMods.length} selected ${confirmRemoveMods.length === 1 ? "mod" : "mods"} from this instance? The jars are deleted from the mods folder.`}
-    confirmLabel="Remove"
+    title={$t("manager.removeMods")}
+    message={$t("manager.removeModsMsg", { n: confirmRemoveMods.length })}
+    confirmLabel={$t("manager.remove")}
     danger
     onconfirm={() => void batchRemoveMods(confirmRemoveMods!)}
     oncancel={() => (confirmRemoveMods = null)}
@@ -1491,9 +1500,9 @@
 
 {#if confirmDeleteWorld}
   <ConfirmDialog
-    title="Delete world"
-    message={`Delete "${confirmDeleteWorld.displayName || confirmDeleteWorld.name}"? A zip backup is kept automatically before deletion.`}
-    confirmLabel="Delete"
+    title={$t("manager.deleteWorld")}
+    message={$t("manager.deleteWorldMsg", { name: confirmDeleteWorld.displayName || confirmDeleteWorld.name })}
+    confirmLabel={$t("common.delete")}
     danger
     onconfirm={() => confirmDeleteWorld && void deleteWorld(confirmDeleteWorld)}
     oncancel={() => (confirmDeleteWorld = null)}
@@ -1519,21 +1528,21 @@
       <span class="im-lightbox-meta">{formatDayStamp(lightbox.modifiedMs)} · {lightbox.sizeFormatted}</span>
       <span class="im-spacer"></span>
       <button type="button" class="im-mini" onclick={openFromLightbox}>
-        <FolderOpen size={12} /> Open in viewer
+        <FolderOpen size={12} /> {$t("manager.openInViewer")}
       </button>
       <button type="button" class="im-mini danger" onclick={() => void deleteFromLightbox()}>
-        <Trash2 size={12} /> Delete
+        <Trash2 size={12} /> {$t("common.delete")}
       </button>
-      <button type="button" class="im-mini" onclick={() => (lightbox = null)}>Close</button>
+      <button type="button" class="im-mini" onclick={() => (lightbox = null)}>{$t("common.close")}</button>
     </div>
   </div>
 {/if}
 
 {#if confirmDeleteShot}
   <ConfirmDialog
-    title="Delete screenshot"
-    message={`Delete "${confirmDeleteShot.fileName}"? This cannot be undone.`}
-    confirmLabel="Delete"
+    title={$t("manager.deleteShot")}
+    message={$t("manager.deleteShotMsg", { name: confirmDeleteShot.fileName })}
+    confirmLabel={$t("common.delete")}
     danger
     onconfirm={() => confirmDeleteShot && void deleteShot(confirmDeleteShot)}
     oncancel={() => (confirmDeleteShot = null)}
@@ -1542,9 +1551,12 @@
 
 {#if confirmRestore}
   <ConfirmDialog
-    title="Restore backup"
-    message={`Replace the current instance state with "${confirmRestore.name}" (${formatStamp(confirmRestore.createdAt)})? Anything changed since the backup is lost.`}
-    confirmLabel="Restore"
+    title={$t("manager.restoreBackup")}
+    message={$t("manager.restoreBackupMsg", {
+      name: confirmRestore.name,
+      stamp: formatStamp(confirmRestore.createdAt),
+    })}
+    confirmLabel={$t("manager.restore")}
     danger
     onconfirm={() => confirmRestore && void restoreBackup(confirmRestore)}
     oncancel={() => (confirmRestore = null)}
@@ -1553,9 +1565,9 @@
 
 {#if confirmDeleteBackup}
   <ConfirmDialog
-    title="Delete backup"
-    message={`Delete backup "${confirmDeleteBackup.name}"? This cannot be undone.`}
-    confirmLabel="Delete"
+    title={$t("manager.deleteBackup")}
+    message={$t("manager.deleteBackupMsg", { name: confirmDeleteBackup.name })}
+    confirmLabel={$t("common.delete")}
     danger
     onconfirm={() => confirmDeleteBackup && void deleteBackup(confirmDeleteBackup)}
     oncancel={() => (confirmDeleteBackup = null)}
@@ -1564,11 +1576,11 @@
 
 {#if versionTarget}
   <PromptDialog
-    title="Change version"
+    title={$t("manager.changeVersionTitle")}
     message={versionChoices.length === 0 ? "Loading versions…" : `Versions of "${versionTarget.name}" for ${project.info.minecraftVersion}`}
     mode="select"
     options={versionChoices.map((v) => v.label)}
-    confirmLabel="Install"
+    confirmLabel={$t("manager.install")}
     onconfirm={(label) => void applyVersion(label)}
     oncancel={() => (versionTarget = null)}
   />
