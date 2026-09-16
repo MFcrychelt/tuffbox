@@ -23,6 +23,7 @@
     loginTypeLabel,
   } from "../lib/store";
   import { api } from "../lib/api";
+  import { locale, LOCALES, t } from "../lib/i18n";
   import { homeIcons } from "../lib/homeBootstrap";
   import { killWithFeedback, launchWithFeedback } from "../lib/launch";
   import HeadAvatar from "./HeadAvatar.svelte";
@@ -226,14 +227,14 @@
     {/if}
   </div>
 
-  <nav class="rail-zone" aria-label="App">
+  <nav class="rail-zone" aria-label={$t("nav.app")}>
     <div class="rail-item">
       <button
         type="button"
         class="rail-btn ghost"
         class:active={currentView === "dashboard"}
-        title="Home"
-        aria-label="Home"
+        title={$t("nav.home")}
+        aria-label={$t("nav.home")}
         onclick={openHome}
       >
         <Home size={21} />
@@ -245,12 +246,12 @@
         type="button"
         class="rail-btn ghost"
         class:active={currentView === "library"}
-        title="Library"
-        aria-label="Library"
+        title={$t("nav.library")}
+        aria-label={$t("nav.library")}
         onclick={() => (currentView = "library")}
       >
         <Library size={21} />
-        <span class="rail-label">Library</span>
+        <span class="rail-label">{$t("nav.library")}</span>
       </button>
     </div>
     <div class="rail-item">
@@ -258,8 +259,8 @@
         type="button"
         class="rail-btn ghost"
         class:active={currentView === "ide"}
-        title="IDE"
-        aria-label="IDE"
+        title={$t("nav.ide")}
+        aria-label={$t("nav.ide")}
         onclick={openIde}
       >
         <Workflow size={21} />
@@ -270,8 +271,8 @@
       <button
         type="button"
         class="rail-btn add"
-        title="Add instance"
-        aria-label="Add instance"
+        title={$t("nav.addInstance")}
+        aria-label={$t("nav.addInstance")}
         onclick={openNewProject}
       >
         <Plus size={22} />
@@ -282,7 +283,7 @@
 
   <div class="rail-divider" aria-hidden="true"></div>
 
-  <nav class="rail-zone rail-instances" aria-label="Instances">
+  <nav class="rail-zone rail-instances" aria-label={$t("nav.library")}>
     {#each $recentProjects as instance (instance.path)}
       {#if instance.info}
       {@const icon = instanceIcons[instance.path]}
@@ -317,8 +318,8 @@
         <button
           type="button"
           class="rail-btn add rail-empty-add"
-          title="Add instance"
-          aria-label="Add instance"
+          title={$t("nav.addInstance")}
+          aria-label={$t("nav.addInstance")}
           onclick={openNewProject}
         >
           <Plus size={18} />
@@ -328,7 +329,7 @@
     {/if}
   </nav>
 
-  <nav class="rail-zone rail-bottom" aria-label="Launcher">
+  <nav class="rail-zone rail-bottom" aria-label={$t("nav.app")}>
     <div class="rail-item rail-compact">
       <button
         type="button"
@@ -355,13 +356,13 @@
       <button
         type="button"
         class="rail-btn ghost"
-        title="Logs"
-        aria-label="Logs"
+        title={$t("nav.logs")}
+        aria-label={$t("nav.logs")}
         disabled={!$projectPath}
         onclick={openLogs}
       >
         <Terminal size={21} />
-        <span class="rail-label">Logs</span>
+        <span class="rail-label">{$t("nav.logs")}</span>
       </button>
     </div>
     <div class="rail-item">
@@ -369,12 +370,12 @@
         type="button"
         class="rail-btn ghost"
         class:active={currentView === "settings"}
-        title="Settings"
-        aria-label="Settings"
+        title={$t("nav.settings")}
+        aria-label={$t("nav.settings")}
         onclick={() => (currentView = "settings")}
       >
         <Settings size={21} />
-        <span class="rail-label">Settings</span>
+        <span class="rail-label">{$t("nav.settings")}</span>
       </button>
     </div>
     <div class="rail-item rail-compact">
@@ -382,13 +383,29 @@
         type="button"
         class="rail-btn ghost"
         class:active={currentView === "me"}
-        title="Profile"
-        aria-label="Profile"
+        title={$t("nav.profile")}
+        aria-label={$t("nav.profile")}
         onclick={() => (currentView = "me")}
       >
         <User size={21} />
-        <span class="rail-label">Profile</span>
+        <span class="rail-label">{$t("nav.profile")}</span>
       </button>
+    </div>
+    <div class="rail-item rail-compact">
+      <div class="lang-switch" role="group" aria-label={$t("nav.language")}>
+        {#each LOCALES as l (l.id)}
+          <button
+            type="button"
+            class="lang-btn"
+            class:active={$locale === l.id}
+            aria-pressed={$locale === l.id}
+            title={l.label}
+            onclick={() => locale.set(l.id)}
+          >
+            {l.label}
+          </button>
+        {/each}
+      </div>
     </div>
   </nav>
 </aside>
@@ -450,6 +467,36 @@
     box-shadow: none;
     color: transparent;
     font-size: 0;
+  }
+
+  .lang-switch {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: transparent;
+  }
+  .lang-btn {
+    padding: 2px 8px;
+    border-radius: var(--border-radius-sm);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition:
+      background var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out);
+  }
+  .lang-btn:hover {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  }
+  .lang-btn.active {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
   }
 
   .rail-zone {

@@ -75,6 +75,7 @@
   } from "../lib/libraryGroups";
   import { getNote, loadNotes, setNote } from "../lib/libraryNotes";
 import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
+import { t } from "../lib/i18n";
   import {
     isValidSortMode,
     matchesInstanceFilter,
@@ -1291,11 +1292,11 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
         <button
           type="button"
           class="tb-btn primary"
-          title="Add an instance to the library"
+          title={$t("library.addInstanceTitle")}
           onclick={(e) => { e.stopPropagation(); (addMenuOpen = !addMenuOpen);  }}
         >
           <Plus size={16} />
-          <span>Add Instance</span>
+          <span>{$t("library.addInstance")}</span>
           <ChevronDown size={14} />
         </button>
         {#if addMenuOpen}
@@ -1324,11 +1325,11 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
         <button
           type="button"
           class="tb-btn"
-          title="Folders"
+          title={$t("library.folders")}
           onclick={(e) => { e.stopPropagation(); (foldersMenuOpen = !foldersMenuOpen);  }}
         >
           <Folder size={16} />
-          <span>Folders</span>
+          <span>{$t("library.folders")}</span>
         </button>
         {#if foldersMenuOpen}
           <div class="tb-menu" role="menu">
@@ -1349,31 +1350,31 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
       <button
         type="button"
         class="tb-btn"
-        title="Refresh"
+        title={$t("common.refresh")}
         disabled={refreshing}
         onclick={() => void refreshAll()}
       >
         <span class:spinning={refreshing}><RefreshCw size={16} /></span>
-        <span>Update</span>
+        <span>{$t("library.update")}</span>
       </button>
       <button
         type="button"
         class="tb-btn"
-        title="Help"
+        title={$t("common.help")}
         onclick={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
       >
         <HelpCircle size={16} />
-        <span>Help</span>
+        <span>{$t("common.help")}</span>
       </button>
-      <button type="button" class="tb-btn" title="Settings" onclick={() => (currentView = "settings")}>
+      <button type="button" class="tb-btn" title={$t("common.settings")} onclick={() => (currentView = "settings")}>
         <Settings size={16} />
-        <span>Settings</span>
+        <span>{$t("common.settings")}</span>
       </button>
       {#if $authState.loggedIn && $authState.profile}
         <button
           type="button"
           class="tb-account"
-          title="Account"
+          title={$t("library.account")}
           onclick={() => (currentView = "me")}
         >
           <HeadAvatar skinSrc={$skinPath} size={28} alt={$authState.profile.name} />
@@ -1397,7 +1398,7 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
     <div class="prism-grid-pane">
       <div class="lib-page-head">
         <div class="lib-page-title">
-          <h2 class="lib-title">Library</h2>
+          <h2 class="lib-title">{$t("library.title")}</h2>
           {#if $recentProjects.length > 0}
             <span class="lib-title-count">{visibleCount} of {$recentProjects.length}</span>
           {/if}
@@ -1407,8 +1408,8 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
             <Search size={15} class="tb-search-icon" />
             <input
               type="text"
-              placeholder="Filter instances…"
-              aria-label="Filter instances"
+              placeholder={$t("library.filterPlaceholder")}
+              aria-label={$t("library.filterAria")}
               spellcheck="false"
               bind:value={instanceFilter}
             />
@@ -1416,7 +1417,7 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
               <button
                 type="button"
                 class="tb-search-clear"
-                aria-label="Clear filter"
+                aria-label={$t("library.clearFilter")}
                 onclick={() => (instanceFilter = "")}
               >
                 <X size={13} />
@@ -1425,22 +1426,22 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
           </div>
           <select
             class="tb-sort"
-            aria-label="Sort instances"
+            aria-label={$t("library.sort")}
             title="Sort instances"
             value={sortMode}
             onchange={(e) => setSortMode((e.currentTarget as HTMLSelectElement).value as SortMode)}
           >
-            <option value="recent">Last played</option>
-            <option value="name">Name</option>
-            <option value="playtime">Most played</option>
+            <option value="recent">{$t("library.sortRecent")}</option>
+            <option value="name">{$t("library.sortName")}</option>
+            <option value="playtime">{$t("library.sortPlaytime")}</option>
           </select>
-          <div class="view-toggle" role="group" aria-label="Layout">
+          <div class="view-toggle" role="group" aria-label={$t("library.layout")}>
             <button
               type="button"
               class="view-btn"
               class:active={viewMode === "grid"}
               title="Grid view"
-              aria-label="Grid view"
+              aria-label={$t("library.gridView")}
               aria-pressed={viewMode === "grid"}
               onclick={() => setViewMode("grid")}
             >
@@ -1451,7 +1452,7 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
               class="view-btn"
               class:active={viewMode === "list"}
               title="List view"
-              aria-label="List view"
+              aria-label={$t("library.listView")}
               aria-pressed={viewMode === "list"}
               onclick={() => setViewMode("list")}
             >
@@ -1462,16 +1463,16 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
       </div>
       {#if $recentProjects.length === 0}
         <div class="empty-state">
-          <h3>No instances yet</h3>
-          <p>Create or import a pack to build your library.</p>
+          <h3>{$t("library.emptyTitle")}</h3>
+          <p>{$t("library.emptyBody")}</p>
           <button type="button" class="empty-cta" onclick={() => openAddInstance("blank")}>
             <Plus size={16} /> Add Instance
           </button>
         </div>
       {:else if visibleCount === 0}
         <div class="empty-state">
-          <h3>No matches</h3>
-          <p>Nothing matches “{instanceFilter}”. Try another name, version or loader.</p>
+          <h3>{$t("library.noMatchesTitle")}</h3>
+          <p>{$t("library.noMatchesBody", { filter: instanceFilter })}</p>
           <button type="button" class="empty-cta" onclick={() => (instanceFilter = "")}>
             <X size={16} /> Clear filter
           </button>
@@ -1529,7 +1530,7 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
         {#if ($updateCounts[project.path]?.count ?? 0) > 0}
           <span
             class="tile-upd"
-            title={`${$updateCounts[project.path]?.count} mods have updates`}
+            title={$t("library.updatesBadgeTitle", { n: $updateCounts[project.path]?.count ?? 0 })}
           >
             {($updateCounts[project.path]?.count ?? 0) > 9
               ? "9+"
@@ -1546,8 +1547,10 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
               class="tile-play"
               class:stop={tileRunning}
               disabled={tileLaunching}
-              title={tileRunning ? "Stop" : "Play"}
-              aria-label={tileRunning ? `Stop ${project.info.name}` : `Play ${project.info.name}`}
+              title={tileRunning ? $t("common.stop") : $t("common.play")}
+              aria-label={tileRunning
+                ? $t("library.stopAria", { name: project.info.name })
+                : $t("library.playAria", { name: project.info.name })}
               onpointerdown={(e) => e.stopPropagation()}
               onclick={(e) => { e.stopPropagation(); void launchInstance(project); }}
               ondblclick={(e) => e.stopPropagation()}
@@ -1565,7 +1568,7 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
               <button
                 type="button"
                 class="tile-act"
-                title="Open in IDE"
+                title={$t("library.openInIde")}
                 aria-label={`Open ${project.info.name} in IDE`}
                 onpointerdown={(e) => e.stopPropagation()}
                 onclick={(e) => { e.stopPropagation(); openInIde(project); }}
@@ -1577,7 +1580,7 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
               <button
                 type="button"
                 class="tile-act"
-                title="Open folder"
+                title={$t("library.openFolder")}
                 aria-label={`Open ${project.info.name} folder`}
                 onpointerdown={(e) => e.stopPropagation()}
                 onclick={(e) => { e.stopPropagation(); void runAction("folder", project); }}
@@ -1645,7 +1648,7 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
       <span class="row-name" title={project.info.name}>
         {project.info.name}
         {#if ($updateCounts[project.path]?.count ?? 0) > 0}
-          <span class="row-upd" title={`${$updateCounts[project.path]?.count} mods have updates`}>
+          <span class="row-upd" title={$t("library.updatesBadgeTitle", { n: $updateCounts[project.path]?.count ?? 0 })}>
             ↑ {$updateCounts[project.path]?.count > 9 ? "9+" : $updateCounts[project.path]?.count}
           </span>
         {/if}
@@ -1654,11 +1657,11 @@ import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
 {project.info.minecraftVersion} · {project.info.loaderKind}
       </span>
     </div>
-    <div class="row-stats" aria-label="Play statistics">
-      <span class="row-stat" title="Last played">
+    <div class="row-stats" aria-label={$t("library.playStats")}>
+      <span class="row-stat" title={$t("library.lastPlayed")}>
 {lastPlayedShort(stats?.lastLaunch ?? null)}
       </span>
-      <span class="row-stat" title="Total playtime">
+      <span class="row-stat" title={$t("library.playtime")}>
 {formatPlaytime(stats?.playtime ?? 0)} played
       </span>
     </div>
@@ -1668,8 +1671,10 @@ type="button"
 class="row-play"
 class:stop={rowRunning}
 disabled={rowLaunching}
-title={rowRunning ? "Stop" : "Play"}
-aria-label={rowRunning ? `Stop ${project.info.name}` : `Play ${project.info.name}`}
+title={rowRunning ? $t("common.stop") : $t("common.play")}
+aria-label={rowRunning
+      ? $t("library.stopAria", { name: project.info.name })
+      : $t("library.playAria", { name: project.info.name })}
 onpointerdown={(e) => e.stopPropagation()}
 onclick={(e) => { e.stopPropagation(); void launchInstance(project); }}
 ondblclick={(e) => e.stopPropagation()}
@@ -1686,7 +1691,7 @@ onkeydown={(e) => e.stopPropagation()}
       <button
 type="button"
 class="row-act"
-title="Open in IDE"
+title={$t("library.openInIde")}
 aria-label={`Open ${project.info.name} in IDE`}
 onpointerdown={(e) => e.stopPropagation()}
 onclick={(e) => { e.stopPropagation(); openInIde(project); }}
@@ -1698,7 +1703,7 @@ onkeydown={(e) => e.stopPropagation()}
       <button
 type="button"
 class="row-act"
-title="Open folder"
+title={$t("library.openFolder")}
 aria-label={`Open ${project.info.name} folder`}
 onpointerdown={(e) => e.stopPropagation()}
 onclick={(e) => { e.stopPropagation(); void runAction("folder", project); }}
@@ -1794,7 +1799,7 @@ onkeydown={(e) => e.stopPropagation()}
               <button
                 type="button"
                 class="side-group-chip"
-                title="Change group"
+                title={$t("library.changeGroup")}
                 onclick={() => void runAction("change-group", selected)}
               >
                 <Tags size={12} />
@@ -1812,9 +1817,9 @@ onkeydown={(e) => e.stopPropagation()}
                 {#if selectedLaunching}
                   <span class="mini-spinner"></span> {selectedLaunchMessage}
                 {:else if selectedRunning}
-                  <Square size={16} fill="currentColor" /> Stop
+                  <Square size={16} fill="currentColor" /> {$t("common.stop")}
                 {:else}
-                  <Play size={18} fill="currentColor" /> Play
+                  <Play size={18} fill="currentColor" /> {$t("common.play")}
                 {/if}
               </button>
 
@@ -1822,19 +1827,17 @@ onkeydown={(e) => e.stopPropagation()}
                 <button
                   type="button"
                   class="side-updates"
-                  title="Update every mod with a newer release"
+                  title={$t("library.updatesTitle")}
                   disabled={actionBusy}
                   onclick={() => void updateAllSelected()}
                 >
                   <ArrowUpCircle size={14} />
                   <span class="side-updates-text">
-                    {$updateCounts[selected.path]?.count}
                     {$updateCounts[selected.path]?.count === 1
-                      ? "mod has"
-                      : "mods have"}
-                    updates
+                      ? $t("library.modHasUpdate")
+                      : $t("library.modsHaveUpdates", { n: $updateCounts[selected.path]?.count ?? 0 })}
                   </span>
-                  <strong>Update all</strong>
+                  <strong>{$t("library.updateAll")}</strong>
                 </button>
               {/if}
 
@@ -1844,31 +1847,31 @@ onkeydown={(e) => e.stopPropagation()}
                 <button
                   type="button"
                   class="side-secondary manage"
-                  title="Mods, backups and health for this pack"
-                  aria-label="Manage instance"
+                  title={$t("library.modsBackupsHealth")}
+                  aria-label={$t("library.manageInstance")}
                   onclick={() => (manageTarget = selected)}
                 >
-                  <SlidersHorizontal size={15} /> Manage…
+                  <SlidersHorizontal size={15} /> {$t("library.manageEllipsis")}
                 </button>
                 <button
                   type="button"
                   class="side-secondary"
-                  title="Open this pack in the IDE"
-                  aria-label="Open in IDE"
+                  title={$t("library.openIdeAria")}
+                  aria-label={$t("library.openInIde")}
                   disabled={actionBusy}
                   onclick={() => runAction("open-ide", selected)}
                 >
-                  <Package size={15} /> Open in IDE
+                  <Package size={15} /> {$t("library.openInIde")}
                 </button>
                 <button
                   type="button"
                   class="side-secondary"
-                  title="Open the instance folder"
-                  aria-label="Open folder"
+                  title={$t("library.openFolderAria")}
+                  aria-label={$t("library.openFolder")}
                   disabled={actionBusy}
                   onclick={() => void runAction("folder", selected)}
                 >
-                  <Folder size={15} /> Folder
+                  <Folder size={15} /> {$t("library.folder")}
                 </button>
               </div>
 
@@ -1877,8 +1880,8 @@ onkeydown={(e) => e.stopPropagation()}
                   <button
                     type="button"
                     class="side-icon-btn"
-                    title="Export"
-                    aria-label="Export"
+                    title={$t("common.export")}
+                    aria-label={$t("common.export")}
                     disabled={actionBusy}
                     onclick={(e) => { e.stopPropagation(); (exportMenuOpen = !exportMenuOpen);  }}
                   >
@@ -1902,8 +1905,8 @@ onkeydown={(e) => e.stopPropagation()}
                   <button
                     type="button"
                     class="side-icon-btn"
-                    title="More"
-                    aria-label="More actions"
+                    title={$t("common.more")}
+                    aria-label={$t("library.moreActions")}
                     onclick={(e) => { e.stopPropagation(); (moreMenuOpen = !moreMenuOpen); }}
                   >
                     <Settings size={16} />
@@ -1911,7 +1914,7 @@ onkeydown={(e) => e.stopPropagation()}
                   {#if moreMenuOpen}
                     <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; manageTarget = selected; }}>
-                        <SlidersHorizontal size={14} /> Manage…
+                        <SlidersHorizontal size={14} /> {$t("library.manageEllipsis")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; renameTarget = selected; }}>
                         <Pencil size={14} /> Rename…
@@ -1954,28 +1957,28 @@ onkeydown={(e) => e.stopPropagation()}
 
             <div class="side-meta-grid">
               <div class="side-meta-item">
-                <span class="side-meta-label">Play time</span>
+                <span class="side-meta-label">{$t("library.playTime")}</span>
                 <span class="side-meta-value">{formatPlaytime(projectStats[selected.path]?.playtime ?? 0)}</span>
               </div>
               <div class="side-meta-item">
-                <span class="side-meta-label">Last played</span>
+                <span class="side-meta-label">{$t("library.lastPlayed")}</span>
                 <span class="side-meta-value">{formatLastLaunch(projectStats[selected.path]?.lastLaunch ?? null)}</span>
               </div>
               <div class="side-meta-item">
-                <span class="side-meta-label">Java</span>
+                <span class="side-meta-label">{$t("library.java")}</span>
                 <span class="side-meta-value">{javaLabel(selected.info.javaPath)}</span>
               </div>
               <div class="side-meta-item">
-                <span class="side-meta-label">Memory</span>
+                <span class="side-meta-label">{$t("library.memory")}</span>
                 <span class="side-meta-value">{memoryLabel(selected.info.memoryMb)}</span>
               </div>
             </div>
             <div class="side-notes">
-              <label class="side-notes-label" for="side-notes-input">Notes</label>
+              <label class="side-notes-label" for="side-notes-input">{$t("library.notes")}</label>
               <textarea
                 id="side-notes-input"
                 class="side-notes-input"
-                placeholder="Reminders, TODOs, server IPs… (saved automatically)"
+                placeholder={$t("library.notesPlaceholder")}
                 bind:value={notesDraft}
                 oninput={() => saveNote()}
                 rows={3}
@@ -1989,7 +1992,7 @@ onkeydown={(e) => e.stopPropagation()}
                 aria-expanded={!contentCollapsed}
                 onclick={toggleContentCollapsed}
               >
-                <span class="side-content-title">Content</span>
+                <span class="side-content-title">{$t("library.content")}</span>
                 <span class="side-content-hint">mods · packs · shaders · servers</span>
                 <ChevronDown size={14} class={!contentCollapsed ? "flipped" : ""} />
               </button>
@@ -2006,7 +2009,7 @@ onkeydown={(e) => e.stopPropagation()}
           </div>
         {/key}
       {:else}
-        <div class="side-empty" in:fade={{ duration: prefersReducedMotion() ? 0 : 160 }}>Select an instance</div>
+        <div class="side-empty" in:fade={{ duration: prefersReducedMotion() ? 0 : 160 }}>{$t("library.selectInstance")}</div>
       {/if}
     </aside>
   </div>
@@ -2052,7 +2055,7 @@ onkeydown={(e) => e.stopPropagation()}
       <Package size={14} /> Open IDE
     </button>
     <button type="button" role="menuitem" onclick={() => { ctxMenu = null; manageTarget = menuProject; }}>
-      <SlidersHorizontal size={14} /> Manage…
+      <SlidersHorizontal size={14} /> {$t("library.manageEllipsis")}
     </button>
     <button type="button" role="menuitem" onclick={() => { ctxMenu = null; renameTarget = menuProject; }}>
       <Pencil size={14} /> Rename…
@@ -2110,7 +2113,7 @@ onkeydown={(e) => e.stopPropagation()}
 
 {#if renameTarget}
   <PromptDialog
-    title="Rename instance"
+    title={$t("library.renameInstance")}
     message={`New display name for "${renameTarget.info.name}". The folder name stays unchanged.`}
     mode="text"
     defaultValue={renameTarget.info.name}
@@ -2122,7 +2125,7 @@ onkeydown={(e) => e.stopPropagation()}
 
 {#if showClonePrompt && cloneTarget}
   <PromptDialog
-    title="Copy instance"
+    title={$t("library.copyInstance")}
     message={`Create a copy of "${cloneTarget.info.name}"`}
     mode="text"
     defaultValue={clonePromptName}
@@ -2137,7 +2140,7 @@ onkeydown={(e) => e.stopPropagation()}
 
 {#if githubImportOpen}
   <PromptDialog
-    title="Import from GitHub"
+    title={$t("library.importGithub")}
     message="Public repo only. Paste owner/repo or a github.com URL. No login needed."
     mode="text"
     defaultValue=""
@@ -2149,7 +2152,7 @@ onkeydown={(e) => e.stopPropagation()}
 
 {#if githubConfirmOpen}
   <ConfirmDialog
-    title="Install GitHub pack"
+    title={$t("library.installGithubPack")}
     message={githubInspectSummary}
     confirmLabel="Install"
     onconfirm={() => void confirmGithubInstall()}
@@ -2175,8 +2178,8 @@ onkeydown={(e) => e.stopPropagation()}
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
     >
-      <h3 id="group-dlg-title">Change Group</h3>
-      <p>Move “{groupTarget.info.name}” into a group.</p>
+      <h3 id="group-dlg-title">{$t("library.groupDialogTitle")}</h3>
+      <p>{$t("library.groupDialogBody", { name: groupTarget.info.name })}</p>
       <div class="group-chips">
         {#each existingGroups as g (g)}
           <button type="button" class="chip" class:active={groupPromptName === g} onclick={() => applyExistingGroup(g)}>
@@ -2184,11 +2187,11 @@ onkeydown={(e) => e.stopPropagation()}
           </button>
         {/each}
       </div>
-      <label class="group-new-label" for="group-new-input">Or type a new name</label>
+      <label class="group-new-label" for="group-new-input">{$t("library.groupOrNew")}</label>
       <input id="group-new-input" bind:value={groupPromptName} onkeydown={(e) => e.key === "Enter" && confirmGroup(groupPromptName)} />
       <div class="group-dlg-actions">
         <button type="button" class="ghost" onclick={() => { showGroupPrompt = false; groupTarget = null; }}>Cancel</button>
-        <button type="button" class="accent" onclick={() => confirmGroup(groupPromptName)}>Apply</button>
+        <button type="button" class="accent" onclick={() => confirmGroup(groupPromptName)}>{$t("common.apply")}</button>
       </div>
     </div>
   </div>
