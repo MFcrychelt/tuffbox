@@ -11473,7 +11473,7 @@ async fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String
                 path: result.path.clone(),
                 file_count: result.file_count,
                 override_count: result.override_count,
-                warnings: result.warnings.clone(),
+                warnings: vec![],
             };
             let _ = append_release_artifact(&path, "packwiz", &mapped);
             results.push(serde_json::json!({
@@ -14143,7 +14143,7 @@ fn rollback_history_file(
     }
     // copy_replacing: the destination may be a dedup-store hardlink — an
     // in-place copy would corrupt every pack sharing that object.
-    tuffbox_core::fs_util::copy_replacing(src, &dst).map_err(|e| e.to_string())?;
+    tuffbox_core::fs_util::copy_replacing(&src, &dst).map_err(|e| e.to_string())?;
     Ok(())
 }
 

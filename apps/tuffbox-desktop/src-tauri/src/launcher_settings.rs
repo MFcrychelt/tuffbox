@@ -107,6 +107,9 @@ fn default_concurrent() -> u32 {
 fn default_memory() -> u32 {
     4096
 }
+fn default_news_show_updates() -> bool {
+    true
+}
 fn default_youtube_inline_player() -> bool {
     true
 }
