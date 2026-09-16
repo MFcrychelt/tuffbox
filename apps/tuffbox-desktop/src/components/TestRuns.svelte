@@ -5,7 +5,7 @@
   import {
     PlayCircle, RefreshCw, TimerReset,
     Square, Stethoscope, Activity,
-    Terminal, Shield,
+    Terminal, Shield, Crosshair,
   } from "@lucide/svelte";
   import { onDestroy, onMount, tick } from "svelte";
   import {
@@ -26,6 +26,18 @@
   import { killWithFeedback, launchWithFeedback } from "../lib/launch";
   import type { TestRunRecord } from "../lib/api";
   import { gb1, peaksFromSamples, pushLoadSample, type LoadSample } from "../lib/testLoad";
+  import {
+    bisectProgress,
+    estimateLaunches,
+    MAX_AUTO_BISECT_LAUNCHES,
+    outcomeFromVerdict,
+    phaseKey,
+    sessionActive,
+    shouldAutoContinue,
+    statusLine,
+    type GroupTestSession,
+    type GroupTestOutcome,
+  } from "../lib/modBisect";
 
   type Profile = {
     id: string;
@@ -127,9 +139,10 @@
   let worlds = $state<{ name: string }[]>([]);
   let quickPlayWorld = $state("");
   // Right-side panel tabs (replaced the three collapsed <details> accordions).
-  type SideTabId = "options" | "matrix" | "history";
+  type SideTabId = "options" | "matrix" | "history" | "bisect";
   const sideTabs: Array<{ id: SideTabId; label: string }> = [
     { id: "options", label: "Options" },
+    { id: "bisect", label: "Find culprit" },
     { id: "matrix", label: "Profile matrix" },
     { id: "history", label: "Profiles & history" },
   ];
@@ -137,6 +150,21 @@
   let matrixIds = $state<Record<string, boolean>>({});
   let matrixRunning = $state(false);
   let matrixStopOnFail = $state(true);
+
+  // ── Automatic mod isolation (binary exclusion via group testing) ──────
+  // The backend (mod_group_test) owns the algorithm: it disables groups,
+  // halves them per outcome and verifies the result. This driver chains
+  // launches: launch → watch verdict → report outcome → next launch, until
+  // the culprit is isolated (or the cap / an inconclusive verdict stops it).
+  let bisect = $state<GroupTestSession | null>(null);
+  let bisectBusy = $state(false);
+  let bisectAuto = $state(true);
+  let bisectRunInFlight = $state(false);
+  let bisectLaunches = $state(0);
+  let bisectLog = $state<string[]>([]);
+  const bisectActive = $derived(sessionActive(bisect));
+  const bisectPhase = $derived(phaseKey(bisect));
+  const bisectStatusText = $derived(statusLine(bisect));
   let matrixSummary = $state<MatrixRow[]>([]);
   let matrixAbort = $state(false);
   let serverDir = $state("");
@@ -651,6 +679,13 @@
     }
     await loadRuns();
     await loadStats();
+    // Automatic isolation: this launch belonged to a bisect step — feed the
+    // verdict back into the group-test session (which prepares the next
+    // mod layout) and chain the next launch when auto mode is on.
+    if (bisectRunInFlight && bisect) {
+      bisectRunInFlight = false;
+      await advanceBisect(verdict);
+    }
   }
 
   async function evaluateLogAndLifecycle() {
@@ -937,7 +972,164 @@
     syncPollingTimer();
   }
 
+  async function refreshBisect() {
+    if (!$projectPath) return;
+    try {
+      bisect = await invoke<GroupTestSession | null>("get_mod_group_test", {
+        path: $projectPath,
+      });
+    } catch {
+      bisect = null;
+    }
+  }
+
+  /** Client profile used for isolation launches (never the server one). */
+  function bisectProfileId(): string {
+    const client = profiles.find((p) => p.id === "client")
+      ?? profiles.find((p) => String(p.side).toLowerCase() !== "server")
+      ?? profiles[0];
+    return client?.id ?? "client";
+  }
+
+  async function startBisect() {
+    if (!$projectPath || bisectBusy || launchBusy) return;
+    bisectBusy = true;
+    error = null;
+    try {
+      bisect = await invoke<GroupTestSession>("start_mod_group_test", {
+        path: $projectPath,
+        suspected: null,
+      });
+      bisectLaunches = 0;
+      bisectLog = [
+        `Suspect pool: ${bisect.pool.length} mods (recently changed + suspected + content mods; protected mods excluded).`,
+        `Estimated launches: ~${estimateLaunches(bisect.pool.length)}. A snapshot was taken — Restore brings everything back.`,
+      ];
+      sideTab = "bisect";
+      if (bisectAuto) await launchBisectStep();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      bisectBusy = false;
+    }
+  }
+
+  async function launchBisectStep() {
+    if (!bisect || !$projectPath) return;
+    bisectLaunches += 1;
+    bisectRunInFlight = true;
+    bisectLog = [
+      ...bisectLog,
+      `Launch ${bisectLaunches} (step ${bisect.step + (bisectPhase === "needCovering" ? 0 : 1)}): ${statusLine(bisect)}`,
+    ].slice(-40);
+    const ok = await beginRun({
+      profile: bisectProfileId(),
+      label: `Find culprit · launch ${bisectLaunches}`,
+      memoryMbOverride: mainRunMb,
+    });
+    if (!ok) {
+      // Launch itself failed — stop the auto loop, keep the session for
+      // manual reporting.
+      bisectRunInFlight = false;
+      bisectAuto = false;
+      bisectLog = [...bisectLog, "Launch failed — automatic isolation paused. Fix the launch error or report the outcome manually."].slice(-40);
+    }
+  }
+
+  /** Called from finalizeActive once a bisect launch reached a verdict. */
+  async function advanceBisect(verdict: Verdict) {
+    if (!bisect || !$projectPath) return;
+    const outcome = outcomeFromVerdict(verdict);
+    if (!outcome) {
+      bisectAuto = false;
+      bisectLog = [
+        ...bisectLog,
+        `Launch ${bisectLaunches}: TIMED OUT — inconclusive. Automatic isolation paused; re-run with a larger timeout or report the outcome manually.`,
+      ].slice(-40);
+      return;
+    }
+    bisectBusy = true;
+    try {
+      bisect = await invoke<GroupTestSession>("report_mod_group_test_outcome", {
+        path: $projectPath,
+        outcome: outcome as GroupTestOutcome,
+      });
+      const key = phaseKey(bisect);
+      if (key === "done") {
+        bisectLog = [
+          ...bisectLog,
+          `Isolated: ${bisect.defectives.join(", ") || "none"}${bisect.verified ? " (verified)" : ""}. Only the culprit mods stay disabled; use Restore to re-enable everything.`,
+        ].slice(-40);
+        return;
+      }
+      if (key === "failed") {
+        bisectAuto = false;
+        bisectLog = [...bisectLog, `Stopped: ${statusLine(bisect)}`].slice(-40);
+        return;
+      }
+      bisectLog = [...bisectLog, `Launch ${bisectLaunches}: ${verdict.toUpperCase()} → ${statusLine(bisect)}`].slice(-40);
+      if (bisectAuto && shouldAutoContinue(bisect, bisectLaunches)) {
+        if ($projectPath && (running || live?.instance)) {
+          try {
+            await killWithFeedback($projectPath);
+          } catch {
+            /* the pass path leaves the game running — best effort */
+          }
+        }
+        await launchBisectStep();
+      } else if (!shouldAutoContinue(bisect, bisectLaunches)) {
+        bisectAuto = false;
+        bisectLog = [
+          ...bisectLog,
+          `Safety cap reached (${MAX_AUTO_BISECT_LAUNCHES} launches) — continue manually or start a new isolation.`,
+        ].slice(-40);
+      }
+    } catch (e) {
+      bisectAuto = false;
+      error = String(e);
+    } finally {
+      bisectBusy = false;
+    }
+  }
+
+  /** Manual override for inconclusive launches. */
+  async function reportBisectManually(outcome: GroupTestOutcome) {
+    if (!$projectPath || !bisect || bisectBusy) return;
+    bisectBusy = true;
+    try {
+      bisect = await invoke<GroupTestSession>("report_mod_group_test_outcome", {
+        path: $projectPath,
+        outcome,
+      });
+      bisectLog = [...bisectLog, `Manual report: ${outcome.toUpperCase()} → ${statusLine(bisect)}`].slice(-40);
+      if (bisectAuto && shouldAutoContinue(bisect, bisectLaunches)) {
+        await launchBisectStep();
+      }
+    } catch (e) {
+      error = String(e);
+    } finally {
+      bisectBusy = false;
+    }
+  }
+
+  async function stopBisectAndRestore() {
+    if (!$projectPath || bisectBusy) return;
+    bisectBusy = true;
+    try {
+      await invoke("cancel_mod_group_test", { path: $projectPath });
+      bisect = null;
+      bisectAuto = true;
+      bisectRunInFlight = false;
+      bisectLog = [...bisectLog, "Cancelled — snapshot restored, all mods re-enabled."].slice(-40);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      bisectBusy = false;
+    }
+  }
+
   onMount(() => {
+    void refreshBisect();
     documentVisible = document.visibilityState === "visible";
     document.addEventListener("visibilitychange", onVisibilityChange);
   });
@@ -1182,6 +1374,110 @@
                       {/each}
                     </tbody>
                   </table>
+                {/if}
+              </div>
+            {:else if sideTab === "bisect"}
+              <div class="grid gap-3.5">
+                <div class="flex items-start gap-2.5">
+                  <Crosshair size={16} class="text-[var(--accent-primary)] shrink-0 mt-0.5" />
+                  <div class="min-w-0">
+                    <strong class="text-[var(--text-primary)]">Find the crashing mod automatically</strong>
+                    <p class="m-0 text-[12px] leading-relaxed text-[var(--text-muted)]">
+                      Binary exclusion: TuffBox disables groups of suspect mods, launches the pack, and reads the
+                      verdict from the game log — halving the group after every launch until the culprit is isolated
+                      and verified. A snapshot is taken first; <em>Restore</em> re-enables everything at any time.
+                    </p>
+                  </div>
+                </div>
+
+                {#if !bisect}
+                  <div class="flex items-center gap-3 flex-wrap">
+                    <button
+                      type="button"
+                      class="primary-action"
+                      onclick={startBisect}
+                      disabled={!$projectPath || bisectBusy || launchBusy}
+                      title="Start automatic isolation with the current suspect pool"
+                    >
+                      <Crosshair size={14} /> Start isolation
+                    </button>
+                    <label class="inline-flex items-center gap-1.5 cursor-pointer text-[12px] text-[var(--text-muted)]">
+                      <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={bisectAuto} />
+                      Launch automatically
+                    </label>
+                  </div>
+                  {#if $projectPath}
+                    <p class="m-0 text-[12px] text-[var(--text-muted)]">
+                      The suspect pool is built from recently changed and suspected mods (protected essentials like
+                      loaders and APIs are never disabled). Everything else stays untouched.
+                    </p>
+                  {:else}
+                    <p class="m-0 text-[12px] text-[var(--text-muted)]">Open a project to start.</p>
+                  {/if}
+                {:else}
+                  <div class="flex flex-col gap-2.5 p-3 rounded-[var(--border-radius-md)] border border-[var(--border-color)] bg-[var(--bg-tertiary)]">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                      <span class="vbadge {bisectPhase === 'done' ? 'pass' : bisectPhase === 'failed' ? 'fail' : bisectRunInFlight || running ? 'started' : 'timedOut'}">
+                        {bisectPhase === "done" ? "isolated" : bisectPhase === "failed" ? "stopped" : bisectRunInFlight || running ? "testing" : "paused"}
+                      </span>
+                      <span class="text-[12px] text-[var(--text-muted)]">
+                        launch {bisectLaunches}/{MAX_AUTO_BISECT_LAUNCHES} · step {bisect.step}
+                      </span>
+                    </div>
+                    <p class="m-0 text-[12.5px] leading-relaxed text-[var(--text-primary)]">{bisectStatusText}</p>
+                    <div class="h-1.5 rounded-full overflow-hidden bg-[var(--bg-elevated)]" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(bisectProgress(bisect) * 100)}>
+                      <div class="h-full rounded-full bg-[var(--accent-primary)] transition-width duration-300" style={`width: ${Math.round(bisectProgress(bisect) * 100)}%`}></div>
+                    </div>
+                    {#if bisect.defectives.length > 0}
+                      <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Culprit{bisect.defectives.length > 1 ? "s" : ""}:</span>
+                        {#each bisect.defectives as id (id)}
+                          <span class="px-2 py-0.5 rounded-full text-[12px] font-semibold border border-[color-mix(in_srgb,var(--accent-danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent-danger)_12%,transparent)] text-[var(--text-primary)]">{id}</span>
+                        {/each}
+                      </div>
+                    {/if}
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <label class="inline-flex items-center gap-1.5 cursor-pointer text-[12px] text-[var(--text-muted)]">
+                        <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={bisectAuto} />
+                        Auto-launch
+                      </label>
+                      <button
+                        type="button"
+                        class="secondary"
+                        onclick={() => void reportBisectManually("healthy")}
+                        disabled={bisectBusy || bisectRunInFlight || running}
+                        title="Use when a verdict was inconclusive (timeout) or you stopped the game yourself"
+                      >Mark healthy</button>
+                      <button
+                        type="button"
+                        class="secondary"
+                        onclick={() => void reportBisectManually("crash")}
+                        disabled={bisectBusy || bisectRunInFlight || running}
+                        title="Report the current group as crashing"
+                      >Mark crashed</button>
+                      <button
+                        type="button"
+                        class="danger"
+                        onclick={stopBisectAndRestore}
+                        disabled={bisectBusy || bisectRunInFlight || running}
+                        title="Cancel isolation and restore the snapshot (all mods re-enabled)"
+                      >Stop · restore all mods</button>
+                    </div>
+                    {#if bisectPhase === "done"}
+                      <p class="m-0 text-[12px] text-[var(--text-muted)]">
+                        Only the culprit mod(s) above are disabled now — test the pack, then keep them disabled or
+                        remove them in Mods. Restore re-enables everything.
+                      </p>
+                    {/if}
+                  </div>
+
+                  {#if bisectLog.length > 0}
+                    <div class="flex flex-col gap-1 max-h-56 overflow-y-auto p-3 rounded-[var(--border-radius-md)] border border-[var(--border-color)] bg-[var(--bg-primary)] font-[family-name:var(--font-mono)] text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
+                      {#each bisectLog as line, i (i)}
+                        <span class="whitespace-pre-wrap">{line}</span>
+                      {/each}
+                    </div>
+                  {/if}
                 {/if}
               </div>
             {:else if sideTab === "history"}
