@@ -75,6 +75,7 @@
   } from "../lib/libraryGroups";
   import { getNote, loadNotes, setNote } from "../lib/libraryNotes";
 import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
+import { get } from "svelte/store";
 import { t } from "../lib/i18n";
   import {
     isValidSortMode,
@@ -177,16 +178,17 @@ import { t } from "../lib/i18n";
 
   /** Short relative "last played" for tiles/rows ("5m ago", "3d ago", date). */
   function lastPlayedShort(iso: string | null): string {
-    if (!iso) return "Never played";
-    const t = new Date(iso).getTime();
-    if (!Number.isFinite(t)) return "Never played";
-    const min = Math.floor((Date.now() - t) / 60000);
-    if (min < 1) return "Just now";
-    if (min < 60) return `${min}m ago`;
+    const L = get(t);
+    if (!iso) return L("library.neverPlayed");
+    const ts = new Date(iso).getTime();
+    if (!Number.isFinite(ts)) return L("library.neverPlayed");
+    const min = Math.floor((Date.now() - ts) / 60000);
+    if (min < 1) return L("library.justNow");
+    if (min < 60) return L("library.minAgo", { n: min });
     const h = Math.floor(min / 60);
-    if (h < 24) return `${h}h ago`;
+    if (h < 24) return L("library.hourAgo", { n: h });
     const d = Math.floor(h / 24);
-    if (d < 7) return `${d}d ago`;
+    if (d < 7) return L("library.dayAgo", { n: d });
     return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
   }
 
@@ -228,17 +230,26 @@ import { t } from "../lib/i18n";
       const res = await api.mods.updateAll(target.path, false);
       const updated = Array.isArray(res.updated) ? res.updated.length : 0;
       const errors = Array.isArray(res.errors) ? res.errors : [];
+      const L = get(t);
       if (errors.length > 0) {
-        toasts.warning(`Updated ${updated}, failed ${errors.length}: ${errors[0]}`);
+        toasts.warning(
+          L("library.toastUpdatePartial", {
+            ok: updated,
+            failed: errors.length,
+            first: errors[0],
+          }),
+        );
+      } else if (updated === 1) {
+        toasts.success(L("library.toastUpdated1"));
       } else if (updated > 0) {
-        toasts.success(`Updated ${updated} ${updated === 1 ? "mod" : "mods"}`);
+        toasts.success(L("library.toastUpdatedN", { n: updated }));
       } else {
-        toasts.success("Nothing to update");
+        toasts.success(L("library.toastNothingToUpdate"));
       }
       // Re-check for real — a partial failure leaves some updates pending.
       void refreshUpdateCount(target.path, true);
     } catch (e) {
-      toasts.error(`Update failed: ${String(e)}`);
+      toasts.error(get(t)("library.toastUpdateFailed", { e: String(e) }));
     } finally {
       actionBusy = false;
     }
@@ -304,7 +315,9 @@ import { t } from "../lib/i18n";
     isProjectLaunching(selectedPath, $launchSessions),
   );
   const selectedLaunchMessage = $derived(
-    selectedPath ? $launchSessions[selectedPath]?.message ?? "Launching…" : "Launching…",
+    selectedPath
+      ? ($launchSessions[selectedPath]?.message ?? get(t)("library.launching"))
+      : get(t)("library.launching"),
   );
   /** Multiplier from the Settings UI-scale (Auto mode derives it from screen size). */
   const sideScale = $derived(($uiScalePercentLive ?? 100) / 100);
@@ -424,17 +437,17 @@ import { t } from "../lib/i18n";
   });
 
   function formatLastLaunch(iso: string | null): string {
-    if (!iso) return "Never";
+    if (!iso) return get(t)("library.never");
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "Never";
+    if (Number.isNaN(d.getTime())) return get(t)("library.never");
     return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   }
 
   /** Expose the configured JRE for the selected pack (path or "Auto"). */
   function javaLabel(javaPath: string | null): string {
-    if (!javaPath) return "Auto";
+    if (!javaPath) return get(t)("library.autoWord");
     const base = javaPath.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? javaPath;
-    return base || "Auto";
+    return base || get(t)("library.autoWord");
   }
 
   function memoryLabel(memoryMb: number): string {
@@ -823,7 +836,7 @@ import { t } from "../lib/i18n";
         "",
       );
       if (!dir) {
-        toasts.error("Instances folder is not set.");
+        toasts.error(get(t)("library.toastFolderNotSet"));
         return;
       }
       await openShell(dir);
@@ -862,7 +875,7 @@ import { t } from "../lib/i18n";
         const sel = next.find((p) => p.path === selectedPath);
         if (sel) projectInfo.set(sel.info);
       }
-      toasts.info("Library refreshed");
+      toasts.info(get(t)("library.toastLibraryRefreshed"));
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -907,7 +920,7 @@ import { t } from "../lib/i18n";
     try {
       const info = await api.transport.github.inspectSource(trimmed);
       if (info.status === "publishing") {
-        toasts.error("This pack is still publishing oversized assets. Try again when the author finishes.");
+        toasts.error(get(t)("library.toastOversized"));
         return;
       }
       githubPendingSource = trimmed;
@@ -961,7 +974,7 @@ import { t } from "../lib/i18n";
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
-        toasts.error("Set an instances folder in Settings first.");
+        toasts.error(get(t)("library.toastSetFolder"));
         return;
       }
       const result: any = await invoke("install_modpack", {
@@ -986,7 +999,9 @@ import { t } from "../lib/i18n";
       const manifestPath = info.manifestPath || path;
       recentProjects.add({ path: manifestPath, info: info as RecentProject["info"] });
       void selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
-      toasts.success(`Imported "${result.name ?? info.name ?? "pack"}"`);
+      toasts.success(
+        get(t)("library.toastImported", { name: result.name ?? info.name ?? "pack" }),
+      );
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -1027,9 +1042,9 @@ import { t } from "../lib/i18n";
           const exported = await api.export.modrinthPack(null, project.path);
           try {
             await copyText(exported.path);
-            toasts.success(`Exported .mrpack — path copied: ${exported.path}`);
+            toasts.success(get(t)("library.toastExportCopied", { path: exported.path }));
           } catch {
-            toasts.success(`Exported .mrpack: ${exported.path}`);
+            toasts.success(get(t)("library.toastExport", { path: exported.path }));
           }
         } catch (e) {
           toasts.error(String(e));
@@ -1043,9 +1058,9 @@ import { t } from "../lib/i18n";
           const exported = await api.export.prismInstance(null, project.path);
           try {
             await copyText(exported.path);
-            toasts.success(`Exported Prism zip — path copied: ${exported.path}`);
+            toasts.success(get(t)("library.toastPrismCopied", { path: exported.path }));
           } catch {
-            toasts.success(`Exported Prism zip: ${exported.path}`);
+            toasts.success(get(t)("library.toastPrism", { path: exported.path }));
           }
         } catch (e) {
           toasts.error(String(e));
@@ -1059,9 +1074,9 @@ import { t } from "../lib/i18n";
           const exported = await api.export.serverPack(null, project.path);
           try {
             await copyText(exported.path);
-            toasts.success(`Exported server pack — path copied: ${exported.path}`);
+            toasts.success(get(t)("library.toastServerCopied", { path: exported.path }));
           } catch {
-            toasts.success(`Exported server pack: ${exported.path}`);
+            toasts.success(get(t)("library.toastServer", { path: exported.path }));
           }
         } catch (e) {
           toasts.error(String(e));
@@ -1078,7 +1093,7 @@ import { t } from "../lib/i18n";
         actionBusy = true;
         try {
           const path = await api.files.createDesktopShortcut(project.path);
-          toasts.success(`Desktop shortcut created — double-click to launch: ${path}`);
+          toasts.success(get(t)("library.toastShortcut", { path }));
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -1092,7 +1107,7 @@ import { t } from "../lib/i18n";
         try {
           const dir = await api.project.getDir(project.path);
           await copyText(dir);
-          toasts.success("Instance folder path copied");
+          toasts.success(get(t)("library.toastPathCopied"));
         } catch (e) {
           toasts.error(String(e));
         }
@@ -1121,17 +1136,22 @@ import { t } from "../lib/i18n";
             ((await api.mods.detectWrongLoader(project.path)) as Array<Record<string, unknown>>) ??
             [];
 
+          const L = get(t);
           const parts: string[] = [];
-          if (downloaded > 0) parts.push(`${downloaded} re-downloaded`);
-          if (failed > 0) parts.push(`${failed} failed`);
-          if (dupes.length > 0) parts.push(`${dupes.length} duplicate group${dupes.length > 1 ? "s" : ""}`);
-          if (wrongLoader.length > 0) parts.push(`${wrongLoader.length} wrong-loader jar${wrongLoader.length > 1 ? "s" : ""}`);
+          if (downloaded > 0) parts.push(L("library.repairRedownloaded", { n: downloaded }));
+          if (failed > 0) parts.push(L("library.repairFailed", { n: failed }));
+          if (dupes.length > 0) parts.push(L("library.repairDupes", { n: dupes.length }));
+          if (wrongLoader.length > 0)
+            parts.push(L("library.repairWrongLoader", { n: wrongLoader.length }));
           if (parts.length === 0) {
-            toasts.success("All mod files present and valid.");
+            toasts.success(get(t)("library.toastRepairOk"));
           } else if (dupes.length === 0 && wrongLoader.length === 0) {
-            toasts.success(`Repair report: ${parts.join(", ")}.`);
+            toasts.success(get(t)("library.toastRepairReport", { parts: parts.join(", ") }));
           } else {
-            toasts.warning(`Repair finished with findings. ${parts.join(" ")}`, 10000);
+            toasts.warning(
+              get(t)("library.toastRepairFindings", { parts: parts.join(" ") }),
+              10000,
+            );
           }
         } catch (e) {
           toasts.error(String(e));
@@ -1146,7 +1166,7 @@ import { t } from "../lib/i18n";
           projectPath.set(selectedPath);
           projectInfo.set($recentProjects[0]?.info ?? null);
         }
-        toasts.info(`Removed "${project.info.name}" from library`);
+        toasts.info(get(t)("library.toastRemoved", { name: project.info.name }));
         break;
       case "delete": {
         const ok = await confirm(`Delete "${project.info.name}" from disk?`, {
@@ -1162,7 +1182,7 @@ import { t } from "../lib/i18n";
             projectPath.set(selectedPath);
             projectInfo.set($recentProjects[0]?.info ?? null);
           }
-          toasts.success(`Deleted "${project.info.name}"`);
+          toasts.success(get(t)("library.toastDeleted", { name: project.info.name }));
         } catch (e) {
           toasts.error(String(e));
         }
@@ -1184,7 +1204,7 @@ import { t } from "../lib/i18n";
       await api.project.setListingIcon(selected, project.path);
       iconRequested.delete(project.path);
       await loadInstanceIcon(project.path);
-      toasts.success(`Icon updated for "${project.info.name}"`);
+      toasts.success(get(t)("library.toastIconUpdated", { name: project.info.name }));
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -1198,7 +1218,7 @@ import { t } from "../lib/i18n";
     try {
       await api.project.clearListingIcon(project.path);
       homeIcons.update((prev) => ({ ...prev, [project.path]: null }));
-      toasts.info(`Icon cleared for "${project.info.name}"`);
+      toasts.info(get(t)("library.toastIconCleared", { name: project.info.name }));
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -1217,7 +1237,7 @@ import { t } from "../lib/i18n";
         manifestPath?: string;
       };
       recentProjects.updateInfo(info.manifestPath || target.path, info);
-      toasts.success(`Renamed to "${applied}"`);
+      toasts.success(get(t)("library.toastRenamed", { name: applied }));
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -1240,7 +1260,7 @@ import { t } from "../lib/i18n";
       const manifestPath = info.manifestPath || clonedPath;
       recentProjects.add({ path: manifestPath, info: info as RecentProject["info"] });
       void selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
-      toasts.success(`Copied to: ${manifestPath}`);
+      toasts.success(get(t)("library.toastCopiedTo", { path: manifestPath }));
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -1302,20 +1322,20 @@ import { t } from "../lib/i18n";
         {#if addMenuOpen}
           <div class="tb-menu" role="menu">
             <button type="button" role="menuitem" onclick={() => { addMenuOpen = false; openAddInstance("blank"); }}>
-              <Plus size={14} /> Create new…
+              <Plus size={14} /> {$t("library.createNew")}
             </button>
             <button type="button" role="menuitem" onclick={importPackFile} disabled={actionBusy}>
-              <FolderOpen size={14} /> Import file (.mrpack / .zip)
+              <FolderOpen size={14} /> {$t("library.importFile")}
             </button>
             <button type="button" role="menuitem" onclick={importInstanceFolder} disabled={actionBusy}>
-              <Folder size={14} /> Import instance folder
+              <Folder size={14} /> {$t("library.importFolder")}
             </button>
             <button type="button" role="menuitem" onclick={importGithubRepo} disabled={actionBusy}>
-              <Link2 size={14} /> Import GitHub repository
+              <Link2 size={14} /> {$t("library.importGithubRepo")}
             </button>
             <div class="menu-sep"></div>
             <button type="button" role="menuitem" onclick={() => { addMenuOpen = false; libraryTabRequest.set("discover"); }}>
-              <Compass size={14} /> Find in catalog
+              <Compass size={14} /> {$t("library.findInCatalog")}
             </button>
           </div>
         {/if}
@@ -1334,11 +1354,11 @@ import { t } from "../lib/i18n";
         {#if foldersMenuOpen}
           <div class="tb-menu" role="menu">
             <button type="button" role="menuitem" onclick={openInstancesFolder}>
-              <FolderOpen size={14} /> Instances folder
+              <FolderOpen size={14} /> {$t("library.instancesFolder")}
             </button>
             {#if selected}
               <button type="button" role="menuitem" onclick={() => { foldersMenuOpen = false; void openSelectedFolder(selected); }}>
-                <Folder size={14} /> Selected instance
+                <Folder size={14} /> {$t("library.selectedInstance")}
               </button>
             {/if}
           </div>
@@ -1890,13 +1910,13 @@ onkeydown={(e) => e.stopPropagation()}
                   {#if exportMenuOpen}
                     <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
                       <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", selected)}>
-                        Export .mrpack
+                        {$t("home.exportMrpack")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => void runAction("export-server", selected)}>
-                        Export server pack
+                        {$t("home.serverPack")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => void runAction("export-prism", selected)}>
-                        Export Prism zip
+                        {$t("library.exportPrism")}
                       </button>
                     </div>
                   {/if}
@@ -1917,37 +1937,37 @@ onkeydown={(e) => e.stopPropagation()}
                         <SlidersHorizontal size={14} /> {$t("library.manageEllipsis")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; renameTarget = selected; }}>
-                        <Pencil size={14} /> Rename…
+                        <Pencil size={14} /> {$t("library.renameEllipsis")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-group", selected); }}>
-                        <Tags size={14} /> Change Group
+                        <Tags size={14} /> {$t("library.changeGroup")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-icon", selected); }} disabled={actionBusy}>
-                        <ImageIcon size={14} /> Change icon…
+                        <ImageIcon size={14} /> {$t("library.changeIcon")}
                       </button>
                       {#if instanceIcons[selected.path]}
                         <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("clear-icon", selected); }} disabled={actionBusy}>
-                          <Eraser size={14} /> Clear icon
+                          <Eraser size={14} /> {$t("library.clearIcon")}
                         </button>
                       {/if}
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy", selected); }}>
-                        <Copy size={14} /> Copy instance
+                        <Copy size={14} /> {$t("library.copyInstance")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("shortcut", selected); }}>
-                        <Link2 size={14} /> Create Shortcut
+                        <Link2 size={14} /> {$t("library.createShortcut")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("repair", selected); }} disabled={actionBusy}>
-                        <Wrench size={14} /> Repair
+                        <Wrench size={14} /> {$t("library.repair")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy-path", selected); }}>
-                        <Copy size={14} /> Copy path
+                        <Copy size={14} /> {$t("library.copyPath")}
                       </button>
                       <div class="menu-sep"></div>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("remove", selected); }}>
-                        <Minus size={14} /> Remove from library
+                        <Minus size={14} /> {$t("library.removeFromLibrary")}
                       </button>
                       <button type="button" role="menuitem" class="danger" onclick={() => { moreMenuOpen = false; void runAction("delete", selected); }}>
-                        <Trash2 size={14} /> Delete from disk
+                        <Trash2 size={14} /> {$t("library.deleteFromDisk")}
                       </button>
                     </div>
                   {/if}
@@ -2046,59 +2066,59 @@ onkeydown={(e) => e.stopPropagation()}
       disabled={actionBusy || isProjectLaunching(menuProject.path, $launchSessions)}
     >
       {#if isProjectRunning(menuProject.path, $runningInstances)}
-        <Square size={14} /> Stop
+        <Square size={14} /> {$t("common.stop")}
       {:else}
-        <Play size={14} /> Play
+        <Play size={14} /> {$t("common.play")}
       {/if}
     </button>
     <button type="button" role="menuitem" onclick={() => runAction("open-ide", menuProject)}>
-      <Package size={14} /> Open IDE
+      <Package size={14} /> {$t("library.openIde")}
     </button>
     <button type="button" role="menuitem" onclick={() => { ctxMenu = null; manageTarget = menuProject; }}>
       <SlidersHorizontal size={14} /> {$t("library.manageEllipsis")}
     </button>
     <button type="button" role="menuitem" onclick={() => { ctxMenu = null; renameTarget = menuProject; }}>
-      <Pencil size={14} /> Rename…
+      <Pencil size={14} /> {$t("library.renameEllipsis")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("change-group", menuProject)}>
-      <Tags size={14} /> Change Group
+      <Tags size={14} /> {$t("library.changeGroup")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("folder", menuProject)}>
-      <Folder size={14} /> Folder
+      <Folder size={14} /> {$t("library.folder")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("change-icon", menuProject)} disabled={actionBusy}>
-      <ImageIcon size={14} /> Change icon…
+      <ImageIcon size={14} /> {$t("library.changeIcon")}
     </button>
     {#if instanceIcons[menuProject.path]}
       <button type="button" role="menuitem" onclick={() => void runAction("clear-icon", menuProject)} disabled={actionBusy}>
-        <Eraser size={14} /> Clear icon
+        <Eraser size={14} /> {$t("library.clearIcon")}
       </button>
     {/if}
     <button type="button" role="menuitem" onclick={() => void runAction("copy", menuProject)}>
-      <Copy size={14} /> Copy
+      <Copy size={14} /> {$t("library.copyInstance")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("shortcut", menuProject)}>
-      <Link2 size={14} /> Create Shortcut
+      <Link2 size={14} /> {$t("library.createShortcut")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", menuProject)} disabled={actionBusy}>
-      <Package size={14} /> Export .mrpack
+      <Package size={14} /> {$t("home.exportMrpack")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("export-server", menuProject)} disabled={actionBusy}>
-      <Server size={14} /> Export server pack
+      <Server size={14} /> {$t("home.serverPack")}
     </button>
     <div class="menu-sep"></div>
     <button type="button" role="menuitem" onclick={() => void runAction("copy-path", menuProject)}>
-      <Copy size={14} /> Copy path
+      <Copy size={14} /> {$t("library.copyPath")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("repair", menuProject)} disabled={actionBusy}>
-      <Wrench size={14} /> Repair
+      <Wrench size={14} /> {$t("library.repair")}
     </button>
     <div class="menu-sep"></div>
     <button type="button" role="menuitem" onclick={() => void runAction("remove", menuProject)}>
-      <Minus size={14} /> Remove from library
+      <Minus size={14} /> {$t("library.removeFromLibrary")}
     </button>
     <button type="button" role="menuitem" class="danger" onclick={() => void runAction("delete", menuProject)}>
-      <Trash2 size={14} /> Delete from disk
+      <Trash2 size={14} /> {$t("library.deleteFromDisk")}
     </button>
   </div>
 {/if}
@@ -2114,10 +2134,10 @@ onkeydown={(e) => e.stopPropagation()}
 {#if renameTarget}
   <PromptDialog
     title={$t("library.renameInstance")}
-    message={`New display name for "${renameTarget.info.name}". The folder name stays unchanged.`}
+    message={$t("library.newNameFor", { name: renameTarget.info.name })}
     mode="text"
     defaultValue={renameTarget.info.name}
-    confirmLabel="Rename"
+    confirmLabel={$t("library.rename")}
     onconfirm={(v) => void confirmRename(v)}
     oncancel={() => (renameTarget = null)}
   />
@@ -2126,10 +2146,10 @@ onkeydown={(e) => e.stopPropagation()}
 {#if showClonePrompt && cloneTarget}
   <PromptDialog
     title={$t("library.copyInstance")}
-    message={`Create a copy of "${cloneTarget.info.name}"`}
+    message={$t("library.copyOf", { name: cloneTarget.info.name })}
     mode="text"
     defaultValue={clonePromptName}
-    confirmLabel="Copy"
+    confirmLabel={$t("common.copy")}
     onconfirm={(v) => confirmClone(v)}
     oncancel={() => {
       showClonePrompt = false;
@@ -2141,10 +2161,10 @@ onkeydown={(e) => e.stopPropagation()}
 {#if githubImportOpen}
   <PromptDialog
     title={$t("library.importGithub")}
-    message="Public repo only. Paste owner/repo or a github.com URL. No login needed."
+    message={$t("library.githubMsg")}
     mode="text"
     defaultValue=""
-    confirmLabel="Preview"
+    confirmLabel={$t("library.preview")}
     onconfirm={(v) => void confirmGithubImport(v)}
     oncancel={() => (githubImportOpen = false)}
   />
@@ -2154,7 +2174,7 @@ onkeydown={(e) => e.stopPropagation()}
   <ConfirmDialog
     title={$t("library.installGithubPack")}
     message={githubInspectSummary}
-    confirmLabel="Install"
+    confirmLabel={$t("manager.install")}
     onconfirm={() => void confirmGithubInstall()}
     oncancel={() => (githubConfirmOpen = false)}
   />
@@ -2190,7 +2210,7 @@ onkeydown={(e) => e.stopPropagation()}
       <label class="group-new-label" for="group-new-input">{$t("library.groupOrNew")}</label>
       <input id="group-new-input" bind:value={groupPromptName} onkeydown={(e) => e.key === "Enter" && confirmGroup(groupPromptName)} />
       <div class="group-dlg-actions">
-        <button type="button" class="ghost" onclick={() => { showGroupPrompt = false; groupTarget = null; }}>Cancel</button>
+        <button type="button" class="ghost" onclick={() => { showGroupPrompt = false; groupTarget = null; }}>{$t("common.cancel")}</button>
         <button type="button" class="accent" onclick={() => confirmGroup(groupPromptName)}>{$t("common.apply")}</button>
       </div>
     </div>

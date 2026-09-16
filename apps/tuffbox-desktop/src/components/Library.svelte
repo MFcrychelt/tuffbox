@@ -35,6 +35,8 @@
   import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
+  import { get } from "svelte/store";
+  import { t } from "../lib/i18n";
   import { Grid, Stack } from "@tuffbox/layout-lib";
 
   let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world" } = $props();
@@ -151,7 +153,7 @@
 
   async function finishImportedPack(result: { path?: string; name?: string; modCount?: number }) {
     const path = result.path;
-    if (!path) throw new Error("Import returned no path");
+    if (!path) throw new Error(get(t)("discover.importNoPath"));
     const info = (await invoke("validate_project", { path })) as {
       name?: string;
       manifestPath?: string;
@@ -183,7 +185,7 @@
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
-        toasts.error("Set an instances folder in Settings first.");
+        toasts.error(get(t)("library.toastSetFolder"));
         return;
       }
       const result: any = await invoke("install_modpack", {
@@ -298,7 +300,7 @@
     const files: DroppedFile[] = [];
     for (const item of items) await walkDropEntry(item, "", files);
     if (files.length === 0) {
-      toasts.error("Nothing importable in the dropped selection.");
+      toasts.error(get(t)("discover.toastNothingImportable"));
       return;
     }
     const first = files[0].rel;
@@ -336,7 +338,9 @@
       offerPath = singleFile ? `${dir}/${singleFile}` : dir;
       offerToken = stage.token;
       offerInspect = await invoke("inspect_import_source", { path: offerPath });
-      offerName = String(offerInspect?.name || rootName || "Imported pack");
+      offerName = String(
+        offerInspect?.name || rootName || get(t)("discover.importFallbackName"),
+      );
       offerOpen = true;
     } catch (err) {
       toasts.error(String(err));
@@ -352,7 +356,7 @@
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
-        toasts.error("Set an instances folder in Settings first.");
+        toasts.error(get(t)("library.toastSetFolder"));
         return;
       }
       const dedup = await askDedupChoice(offerName.trim());
@@ -422,7 +426,7 @@
     try {
       const info = await api.transport.github.inspectSource(trimmed);
       if (info.status === "publishing") {
-        toasts.error("This pack is still publishing oversized assets. Try again when the author finishes.");
+        toasts.error(get(t)("library.toastOversized"));
         return;
       }
       githubPendingSource = trimmed;
@@ -457,7 +461,7 @@
       recentProjects.add({ path: manifestPath, info });
       projectPath.set(manifestPath);
       projectInfo.set(info);
-      toasts.success(`Created "${info.name ?? "pack"}"`);
+      toasts.success(get(t)("discover.toastCreated", { name: info.name ?? "pack" }));
       tab = "yours";
     } catch (err) {
       toasts.error(String(err));
@@ -562,7 +566,7 @@
       const settings = await api.launcher.get();
       await api.launcher.save({ ...settings, instancesPath: selected });
       lastSavedDir = selected;
-      toasts.success("Download folder saved.");
+      toasts.success(get(t)("discover.toastDlSaved"));
     } catch (e) {
       toasts.error(String(e));
     }
@@ -571,7 +575,7 @@
   async function applyDownloadDir() {
     const path = downloadDir.trim();
     if (!path) {
-      toasts.error("Pick a download folder first.");
+      toasts.error(get(t)("discover.toastPickFolder"));
       return;
     }
     try {
@@ -579,7 +583,7 @@
       const settings = await api.launcher.get();
       await api.launcher.save({ ...settings, instancesPath: path });
       lastSavedDir = downloadDir.trim();
-      toasts.success("Download folder saved.");
+      toasts.success(get(t)("discover.toastDlSaved"));
     } catch (e) {
       toasts.error(String(e));
     }
@@ -612,13 +616,13 @@
   async function openModpackExternal(result: DiscoverResult) {
     const url = modpackPageUrl(result);
     if (!url) {
-      toasts.error("No catalog page for this modpack.");
+      toasts.error(get(t)("discover.toastNoPage"));
       return;
     }
     try {
       await openExternal(url);
     } catch (e) {
-      toasts.error(`Could not open link: ${e}`);
+      toasts.error(get(t)("discover.toastOpenFail", { e: String(e) }));
     }
   }
 
@@ -763,7 +767,7 @@
       const targetDir = parent;
       let source: string;
       if (result.provider === "curseforge") {
-        toasts.info(`Resolving CurseForge files for ${result.name}…`);
+        toasts.info(get(t)("discover.toastResolving", { name: result.name }));
         const files = await invoke<Array<{ id: number; fileName?: string }>>(
           "get_curseforge_modpack_files",
           {
@@ -774,7 +778,7 @@
         const fileId = files?.[0]?.id;
         if (fileId == null) throw new Error("No CurseForge files available for this modpack.");
         source = `cf:${result.id}:${fileId}`;
-        toasts.info(`Downloading ${files[0]?.fileName || result.name}…`);
+        toasts.info(get(t)("discover.toastDownloading", { name: files[0]?.fileName || result.name }));
       } else {
         source = await api.modpacks.getModpackUrl(result.id);
       }
@@ -794,9 +798,9 @@
       })) as import("../lib/api").ProjectSummary;
       const manifestPath = info.manifestPath || res.path;
       recentProjects.add({ path: manifestPath, info: info as any });
-      toasts.success(`Added "${result.name}" to ${targetDir}.`);
+      toasts.success(get(t)("discover.toastAdded", { name: result.name, dir: targetDir }));
     } catch (e) {
-      toasts.error(`Could not add ${result.name}: ${e}`);
+      toasts.error(get(t)("discover.toastAddFail", { name: result.name, e: String(e) }));
     } finally {
       const next = new Set(adding);
       next.delete(key);
@@ -814,7 +818,7 @@
       if (link.status === "valid") {
         void confirmGithubImport(link.repo);
       } else {
-        toasts.error(`Install link rejected: "${link.raw}" is not a GitHub owner/repo.`);
+        toasts.error(get(t)("discover.toastLinkRejected", { raw: link.raw }));
       }
     });
   });
@@ -845,26 +849,26 @@
 
   const discoverPlaceholder = $derived(
     discoverProvider === "curseforge"
-      ? "Search CurseForge modpacks…"
+      ? $t("discover.phCurseForge")
       : discoverProvider === "both"
-        ? "Search modpacks…"
-        : "Search Modrinth modpacks…",
+        ? $t("discover.phBoth")
+        : $t("discover.phModrinth"),
   );
 
   /** Observable search outcome: total + per-provider split + echoed query.
    *  QA asserted "did the search actually run" before by counting cards —
    *  now the state is announced in one place (and to screen readers). */
   const discoverStatus = $derived.by(() => {
-    if (loadingDiscover && results.length === 0) return "Searching catalogs…";
+    if (loadingDiscover && results.length === 0) return $t("discover.searching");
     if (results.length === 0) return "";
     const mr = results.filter((r) => (r.provider ?? "modrinth") !== "curseforge").length;
     const cf = results.length - mr;
-    const parts: string[] = [`${results.length} packs`];
+    const parts: string[] = [$t("discover.packsCount", { n: results.length })];
     if (discoverProvider === "both" && mr > 0 && cf > 0) {
       parts.push(`Modrinth ${mr} · CurseForge ${cf}`);
     }
     const q = query.trim();
-    if (q) parts.push(`for “${q}”`);
+    if (q) parts.push($t("discover.forQuery", { q }));
     return parts.join(" · ");
   });
 </script>
@@ -884,7 +888,7 @@
     <div class="drop-overlay" data-testid="library-drop-overlay" aria-hidden="true">
       <div class="drop-overlay-card">
         <Download size={26} />
-        <strong>Drop to import</strong>
+        <strong>{$t("drop.import")}</strong>
         <span>.mrpack · Prism / CurseForge .zip · .rar · .7z · mods / resourcepacks / shaders</span>
       </div>
     </div>
@@ -892,11 +896,11 @@
   {#if dropStaging}
     <div class="drop-overlay" data-testid="library-drop-staging" aria-hidden="true">
       <div class="drop-overlay-card">
-        <strong>Copying dropped files…</strong>
+        <strong>{$t("drop.copying")}</strong>
         <div
           class="drop-progress"
           role="progressbar"
-          aria-label="Copying dropped files"
+          aria-label={$t("drop.copying")}
           aria-valuemin="0"
           aria-valuemax="100"
           aria-valuenow={dropStaging.total
@@ -918,7 +922,7 @@
     <div
       class="tabs"
       role="tablist"
-      aria-label="Library sections"
+      aria-label={$t("library.sections")}
       data-testid="library-tabs"
       onkeydown={onTablistKeydown}
     >
@@ -933,7 +937,7 @@
         onclick={() => switchTab("yours")}
         data-testid="library-tab-yours"
       >
-        <LayoutGrid size={15} /> Your packs
+        <LayoutGrid size={15} /> {$t("library.yourPacks")}
       </button>
       <button
         bind:this={tabDiscoverEl}
@@ -946,7 +950,7 @@
         onclick={() => switchTab("discover")}
         data-testid="library-tab-discover"
       >
-        <Compass size={15} /> Discover
+        <Compass size={15} /> {$t("library.discover")}
       </button>
       <button
         bind:this={tabCreateEl}
@@ -957,10 +961,10 @@
         aria-controls="library-panel-create"
         class:active={tab === "create"}
         onclick={() => switchTab("create")}
-        title="Create a new instance"
+        title={$t("library.createNewTitle")}
         data-testid="library-tab-create"
       >
-        <Plus size={15} /> Create
+        <Plus size={15} /> {$t("library.createTab")}
       </button>
     </div>
   {/snippet}
@@ -981,25 +985,25 @@
         aria-haspopup="menu"
         aria-expanded={importMenuOpen}
         onclick={(e) => { e.stopPropagation(); toggleImportMenu(); }}
-        title="Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance"
+        title={$t("library.importTitle")}
         data-testid="library-import-btn"
       >
         {#if importing}
-          <span class="mini-spinner" aria-hidden="true"></span> Importing…
+          <span class="mini-spinner" aria-hidden="true"></span> {$t("library.importing")}
         {:else}
-          <Download size={15} /> Import
+          <Download size={15} /> {$t("library.importBtn")}
         {/if}
       </button>
       {#if importMenuOpen}
-        <div class="import-menu" role="menu" aria-label="Import sources" data-testid="library-import-menu">
+        <div class="import-menu" role="menu" aria-label={$t("library.importSources")} data-testid="library-import-menu">
           <button type="button" role="menuitem" onclick={importPackFile} data-testid="library-import-file">
-            File (.mrpack / .zip)
+            {$t("library.importFileShort")}
           </button>
           <button type="button" role="menuitem" onclick={importInstanceFolder} data-testid="library-import-folder">
-            Instance folder
+            {$t("library.importFolderShort")}
           </button>
           <button type="button" role="menuitem" onclick={importGithubRepo} data-testid="library-import-github">
-            GitHub repository
+            {$t("library.importGithubShort")}
           </button>
         </div>
       {/if}
@@ -1038,7 +1042,7 @@
       />
     {:else}
     <Stack direction="row" gap="3" wrap class="discover-bar">
-      <div class="provider-toggle" role="group" aria-label="Catalog provider" data-testid="library-provider-toggle">
+      <div class="provider-toggle" role="group" aria-label={$t("discover.provider")} data-testid="library-provider-toggle">
         <button
           type="button"
           class:active={discoverProvider === "modrinth"}
@@ -1055,14 +1059,14 @@
           type="button"
           class:active={discoverProvider === "both"}
           onclick={() => setDiscoverProvider("both")}
-          title="Search both catalogs at once"
+          title={$t("discover.bothTitle")}
           data-testid="library-provider-both"
-        >Both</button>
+        >{$t("discover.both")}</button>
       </div>
       <div class="search">
         <Search size={16} />
         <input
-          aria-label="Search modpacks"
+          aria-label={$t("discover.searchAria")}
           bind:value={query}
           placeholder={discoverPlaceholder}
           onkeydown={(e) => e.key === "Enter" && search()}
@@ -1076,7 +1080,7 @@
         data-testid="library-search-btn"
       >
         {#if loadingDiscover}<span class="mini-spinner" aria-hidden="true"></span>{/if}
-        Search
+        {$t("discover.search")}
       </button>
     </Stack>
 
@@ -1092,19 +1096,19 @@
       data-testid="library-download-form"
     >
       <label for="lib-download-dir">
-        Download to {#if downloadDirDirty}<span class="unsaved">· unsaved</span>{/if}
+        {$t("discover.downloadTo")} {#if downloadDirDirty}<span class="unsaved">{$t("discover.unsaved")}</span>{/if}
       </label>
       <div class="path-row">
         <input
           id="lib-download-dir"
           bind:value={downloadDir}
-          placeholder={defaultDownloadDir || "Choose a folder for modpacks"}
+          placeholder={defaultDownloadDir || $t("discover.folderPh")}
           data-testid="library-download-dir"
         />
-        <button type="button" class="path-btn" onclick={browseDownloadDir} title="Browse" data-testid="library-download-browse">
+        <button type="button" class="path-btn" onclick={browseDownloadDir} title={$t("discover.browseTitle")} data-testid="library-download-browse">
           <FolderOpen size={15} />
         </button>
-        <button type="submit" class="path-btn save" disabled={!downloadDirDirty} data-testid="library-download-save">Save</button>
+        <button type="submit" class="path-btn save" disabled={!downloadDirDirty} data-testid="library-download-save">{$t("common.save")}</button>
       </div>
     </form>
 
@@ -1115,14 +1119,14 @@
     {#if loadingDiscover && results.length === 0}
       <div class="loading-state" data-testid="library-loading" role="status">
         <span class="mini-spinner big" aria-hidden="true"></span>
-        Loading modpacks…
+        {$t("discover.loading")}
       </div>
     {:else if results.length === 0}
       <div class="empty-state" data-testid="library-empty">
         <div class="empty-icon"><Compass size={40} /></div>
-        <h3>No packs found</h3>
+        <h3>{$t("discover.none")}</h3>
         <p>
-          {#if query.trim()}Nothing matches “{query.trim()}”{:else}Try a different search{/if}{#if discoverProvider !== "both"} in {discoverProvider === "curseforge" ? "CurseForge" : "Modrinth"}{/if}.
+          {#if query.trim()}{$t("discover.noMatch", { q: query.trim() })}{:else}{$t("discover.tryOther")}{/if}{#if discoverProvider !== "both"} {$t("discover.inProvider", { p: discoverProvider === "curseforge" ? "CurseForge" : "Modrinth" })}{/if}.
         </p>
       </div>
     {:else}
@@ -1178,7 +1182,7 @@
                   >{result.provider === "curseforge" ? "CF" : "MR"}</span>
                 {/if}
               </div>
-              <span class="pack-meta">{result.author ?? "Unknown author"}</span>
+              <span class="pack-meta">{result.author ?? $t("discover.unknownAuthor")}</span>
               <p class="pack-desc">{result.description}</p>
               <div class="pack-stats">
                 <span><Download size={12} /> {formatCount(result.downloads)}</span>
@@ -1188,14 +1192,14 @@
                 <button
                   type="button"
                   class="pack-page"
-                  title="Open catalog page in TuffBox"
+                  title={$t("discover.openPageTitle")}
                   onclick={(e) => {
                     e.stopPropagation();
                     openCatalogInApp(result);
                   }}
                   data-testid="library-result-page"
                 >
-                  <ExternalLink size={14} /> Page
+                  <ExternalLink size={14} /> {$t("discover.page")}
                 </button>
                 <button
                   class="pack-add"
@@ -1207,9 +1211,9 @@
                   data-testid="library-result-add"
                 >
                   {#if adding.has(key)}
-                    <span class="mini-spinner"></span> Adding…
+                    <span class="mini-spinner"></span> {$t("discover.adding")}
                   {:else}
-                    <Plus size={14} /> Add to TuffBox
+                    <Plus size={14} /> {$t("discover.add")}
                   {/if}
                 </button>
               </div>
@@ -1232,8 +1236,8 @@
       <header class="create-hero">
         <div class="create-hero-top">
           <div>
-            <h2>Start a pack</h2>
-            <p>Blank instance, import a pack file, or browse Modrinth / CurseForge in Discover.</p>
+            <h2>{$t("create.startPack")}</h2>
+            <p>{$t("create.startHint")}</p>
           </div>
           {#if swarmEnabled && (kudosLoading || kudosBalance)}
             <KudosBalanceStrip
@@ -1251,8 +1255,8 @@
         <button type="button" class="create-plus" onclick={openNewPack}>
           <span class="plus-ring"><Plus size={28} strokeWidth={2.25} /></span>
           <div class="create-copy">
-            <strong>Create modpack</strong>
-            <span>Blank · Fabric / Forge / NeoForge / Quilt</span>
+            <strong>{$t("create.createModpack")}</strong>
+            <span>{$t("create.blankHint")}</span>
           </div>
         </button>
         <button
@@ -1263,8 +1267,8 @@
         >
           <span class="plus-ring"><Download size={26} strokeWidth={2.25} /></span>
           <div class="create-copy">
-            <strong>{importing ? "Importing…" : "Import pack"}</strong>
-            <span>.mrpack · zip · Prism · MultiMC · CurseForge</span>
+            <strong>{importing ? $t("library.importing") : $t("create.importPack")}</strong>
+            <span>{$t("create.importHint")}</span>
           </div>
         </button>
         <button
@@ -1274,8 +1278,8 @@
         >
           <span class="plus-ring"><Compass size={26} strokeWidth={2.25} /></span>
           <div class="create-copy">
-            <strong>Browse packs</strong>
-            <span>Modrinth · CurseForge — Library Discover</span>
+            <strong>{$t("create.browsePacks")}</strong>
+            <span>{$t("create.browseHint")}</span>
           </div>
         </button>
       </div>
@@ -1297,7 +1301,7 @@
 
 {#if githubImportOpen}
   <PromptDialog
-    title="Import from GitHub"
+    title={$t("library.importGithub")}
     message="Public repo only. Paste owner/repo or a github.com URL. No login needed."
     mode="text"
     defaultValue=""

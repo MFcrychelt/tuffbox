@@ -668,6 +668,366 @@ const dict: Record<string, Entry> = {
   },
   "settings.classic": { en: "Classic", ru: "Классика" },
   "settings.creeperBox": { en: "Creeper box", ru: "Крипер" },
+
+  // ── Library pane: menus, dialogs, helpers, toasts ──
+  "library.createNew": { en: "Create new…", ru: "Создать…" },
+  "library.importFile": {
+    en: "Import file (.mrpack / .zip)",
+    ru: "Импорт файла (.mrpack / .zip)",
+  },
+  "library.importFolder": { en: "Import instance folder", ru: "Импорт папки сборки" },
+  "library.importGithubRepo": {
+    en: "Import GitHub repository",
+    ru: "Импорт репозитория GitHub",
+  },
+  "library.findInCatalog": { en: "Find in catalog", ru: "Найти в каталоге" },
+  "library.instancesFolder": { en: "Instances folder", ru: "Папка сборок" },
+  "library.selectedInstance": { en: "Selected instance", ru: "Выбранная сборка" },
+  "library.exportPrism": { en: "Export Prism zip", ru: "Экспорт Prism zip" },
+  "library.renameEllipsis": { en: "Rename…", ru: "Переименовать…" },
+  "library.rename": { en: "Rename", ru: "Переименовать" },
+  "library.changeIcon": { en: "Change icon…", ru: "Сменить иконку…" },
+  "library.clearIcon": { en: "Clear icon", ru: "Убрать иконку" },
+  "library.createShortcut": { en: "Create Shortcut", ru: "Создать ярлык" },
+  "library.repair": { en: "Repair", ru: "Починить" },
+  "library.copyPath": { en: "Copy path", ru: "Копировать путь" },
+  "library.removeFromLibrary": { en: "Remove from library", ru: "Убрать из библиотеки" },
+  "library.deleteFromDisk": { en: "Delete from disk", ru: "Удалить с диска" },
+  "library.openIde": { en: "Open IDE", ru: "Открыть IDE" },
+  "library.preview": { en: "Preview", ru: "Превью" },
+  "library.newNameFor": {
+    en: "New display name for \"{name}\". The folder name stays unchanged.",
+    ru: "Новое имя для «{name}». Имя папки не меняется.",
+  },
+  "library.copyOf": { en: "Create a copy of \"{name}\"", ru: "Копия «{name}»" },
+  "library.githubMsg": {
+    en: "Public repo only. Paste owner/repo or a github.com URL. No login needed.",
+    ru: "Только публичные репозитории. Вставьте owner/repo или ссылку github.com. Вход не нужен.",
+  },
+  "library.neverPlayed": { en: "Never played", ru: "Не запускалась" },
+  "library.justNow": { en: "Just now", ru: "Только что" },
+  "library.minAgo": { en: "{n}m ago", ru: "{n} мин назад" },
+  "library.hourAgo": { en: "{n}h ago", ru: "{n} ч назад" },
+  "library.dayAgo": { en: "{n}d ago", ru: "{n} дн назад" },
+  "library.never": { en: "Never", ru: "Никогда" },
+  "library.autoWord": { en: "Auto", ru: "Авто" },
+  "library.launching": { en: "Launching…", ru: "Запуск…" },
+  "library.toastUpdatePartial": {
+    en: "Updated {ok}, failed {failed}: {first}",
+    ru: "Обновлено {ok}, ошибок {failed}: {first}",
+  },
+  "library.toastUpdated1": { en: "Updated 1 mod", ru: "Обновлён 1 мод" },
+  "library.toastUpdatedN": { en: "Updated {n} mods", ru: "Обновлено модов: {n}" },
+  "library.toastNothingToUpdate": { en: "Nothing to update", ru: "Обновлять нечего" },
+  "library.toastUpdateFailed": { en: "Update failed: {e}", ru: "Не удалось обновить: {e}" },
+  "library.toastFolderNotSet": {
+    en: "Instances folder is not set.",
+    ru: "Папка сборок не задана.",
+  },
+  "library.toastLibraryRefreshed": { en: "Library refreshed", ru: "Библиотека обновлена" },
+  "library.toastOversized": {
+    en: "This pack is still publishing oversized assets. Try again when the author finishes.",
+    ru: "Автор ещё загружает крупные файлы этого пака. Повторите позже.",
+  },
+  "library.toastSetFolder": {
+    en: "Set an instances folder in Settings first.",
+    ru: "Сначала задайте папку сборок в настройках.",
+  },
+  "library.toastImported": { en: "Imported \"{name}\"", ru: "Импортировано: «{name}»" },
+  "library.toastExportCopied": {
+    en: "Exported .mrpack — path copied: {path}",
+    ru: "Экспортировано .mrpack — путь скопирован: {path}",
+  },
+  "library.toastExport": { en: "Exported .mrpack: {path}", ru: "Экспортировано .mrpack: {path}" },
+  "library.toastPrismCopied": {
+    en: "Exported Prism zip — path copied: {path}",
+    ru: "Экспортирован Prism zip — путь скопирован: {path}",
+  },
+  "library.toastPrism": {
+    en: "Exported Prism zip: {path}",
+    ru: "Экспортирован Prism zip: {path}",
+  },
+  "library.toastServerCopied": {
+    en: "Exported server pack — path copied: {path}",
+    ru: "Экспортирован сервер-пак — путь скопирован: {path}",
+  },
+  "library.toastServer": {
+    en: "Exported server pack: {path}",
+    ru: "Экспортирован сервер-пак: {path}",
+  },
+  "library.toastShortcut": {
+    en: "Desktop shortcut created — double-click to launch: {path}",
+    ru: "Ярлык на рабочем столе создан — дважды кликните для запуска: {path}",
+  },
+  "library.toastPathCopied": {
+    en: "Instance folder path copied",
+    ru: "Путь к папке сборки скопирован",
+  },
+  "library.repairRedownloaded": { en: "{n} re-downloaded", ru: "Перекачано: {n}" },
+  "library.repairFailed": { en: "{n} failed", ru: "Ошибок: {n}" },
+  "library.repairDupes": { en: "{n} duplicate group(s)", ru: "Групп дублей: {n}" },
+  "library.repairWrongLoader": { en: "{n} wrong-loader jar(s)", ru: "Чужой загрузчик: {n}" },
+  "library.toastRepairOk": {
+    en: "All mod files present and valid.",
+    ru: "Все файлы модов на месте и валидны.",
+  },
+  "library.toastRepairReport": { en: "Repair report: {parts}.", ru: "Отчёт починки: {parts}." },
+  "library.toastRepairFindings": {
+    en: "Repair finished with findings. {parts}",
+    ru: "Починка завершилась с замечаниями. {parts}",
+  },
+  "library.toastRemoved": {
+    en: "Removed \"{name}\" from library",
+    ru: "«{name}» убрана из библиотеки",
+  },
+  "library.toastDeleted": { en: "Deleted \"{name}\"", ru: "«{name}» удалена" },
+  "library.toastIconUpdated": {
+    en: "Icon updated for \"{name}\"",
+    ru: "Иконка «{name}» обновлена",
+  },
+  "library.toastIconCleared": {
+    en: "Icon cleared for \"{name}\"",
+    ru: "Иконка «{name}» убрана",
+  },
+  "library.toastRenamed": { en: "Renamed to \"{name}\"", ru: "Переименовано: «{name}»" },
+  "library.toastCopiedTo": { en: "Copied to: {path}", ru: "Скопировано: {path}" },
+
+  // ── Library tabs / import ──
+  "library.yourPacks": { en: "Your packs", ru: "Ваши сборки" },
+  "library.discover": { en: "Discover", ru: "Обзор" },
+  "library.createTab": { en: "Create", ru: "Создать" },
+  "library.createNewTitle": {
+    en: "Create a new instance",
+    ru: "Создать новую сборку",
+  },
+  "library.importBtn": { en: "Import", ru: "Импорт" },
+  "library.importing": { en: "Importing…", ru: "Импорт…" },
+  "library.importTitle": {
+    en: "Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance",
+    ru: "Импорт .mrpack, .zip или сборки Prism/MultiMC/CurseForge",
+  },
+  "library.importSources": { en: "Import sources", ru: "Источники импорта" },
+  "library.importFileShort": { en: "File (.mrpack / .zip)", ru: "Файл (.mrpack / .zip)" },
+  "library.importFolderShort": { en: "Instance folder", ru: "Папка сборки" },
+  "library.importGithubShort": { en: "GitHub repository", ru: "Репозиторий GitHub" },
+  "library.sections": { en: "Library sections", ru: "Разделы библиотеки" },
+
+  // ── Discover (catalog) ──
+  "discover.provider": { en: "Catalog provider", ru: "Каталог" },
+  "discover.both": { en: "Both", ru: "Оба" },
+  "discover.bothTitle": {
+    en: "Search both catalogs at once",
+    ru: "Искать в обоих каталогах сразу",
+  },
+  "discover.searchAria": { en: "Search modpacks", ru: "Поиск сборок" },
+  "discover.search": { en: "Search", ru: "Искать" },
+  "discover.phModrinth": { en: "Search Modrinth modpacks…", ru: "Поиск на Modrinth…" },
+  "discover.phCurseForge": { en: "Search CurseForge modpacks…", ru: "Поиск на CurseForge…" },
+  "discover.phBoth": { en: "Search modpacks…", ru: "Поиск сборок…" },
+  "discover.searching": { en: "Searching catalogs…", ru: "Ищу в каталогах…" },
+  "discover.packsCount": { en: "{n} packs", ru: "Сборок: {n}" },
+  "discover.forQuery": { en: "for “{q}”", ru: "по запросу «{q}»" },
+  "discover.loading": { en: "Loading modpacks…", ru: "Загружаю сборки…" },
+  "discover.none": { en: "No packs found", ru: "Ничего не найдено" },
+  "discover.noMatch": { en: "Nothing matches “{q}”", ru: "По запросу «{q}» ничего нет" },
+  "discover.tryOther": {
+    en: "Try a different search",
+    ru: "Попробуйте другой запрос",
+  },
+  "discover.inProvider": { en: "in {p}", ru: "в {p}" },
+  "discover.unknownAuthor": { en: "Unknown author", ru: "Автор неизвестен" },
+  "discover.page": { en: "Page", ru: "Страница" },
+  "discover.openPageTitle": {
+    en: "Open catalog page in TuffBox",
+    ru: "Открыть страницу в TuffBox",
+  },
+  "discover.add": { en: "Add to TuffBox", ru: "Добавить в TuffBox" },
+  "discover.adding": { en: "Adding…", ru: "Добавляю…" },
+  "discover.downloadTo": { en: "Download to", ru: "Папка загрузок" },
+  "discover.unsaved": { en: "· unsaved", ru: "· не сохранено" },
+  "discover.folderPh": {
+    en: "Choose a folder for modpacks",
+    ru: "Выберите папку для сборок",
+  },
+  "discover.browseTitle": { en: "Browse", ru: "Обзор" },
+  "discover.toastNothingImportable": {
+    en: "Nothing importable in the dropped selection.",
+    ru: "В выбранных файлах нет того, что можно импортировать.",
+  },
+  "discover.toastCreated": { en: "Created \"{name}\"", ru: "Создано: «{name}»" },
+  "discover.toastDlSaved": {
+    en: "Download folder saved.",
+    ru: "Папка загрузок сохранена.",
+  },
+  "discover.toastPickFolder": {
+    en: "Pick a download folder first.",
+    ru: "Сначала выберите папку загрузок.",
+  },
+  "discover.toastNoPage": {
+    en: "No catalog page for this modpack.",
+    ru: "У этой сборки нет страницы в каталоге.",
+  },
+  "discover.toastOpenFail": {
+    en: "Could not open link: {e}",
+    ru: "Не удалось открыть ссылку: {e}",
+  },
+  "discover.toastResolving": {
+    en: "Resolving CurseForge files for {name}…",
+    ru: "Получаю файлы CurseForge для {name}…",
+  },
+  "discover.toastDownloading": {
+    en: "Downloading {name}…",
+    ru: "Скачиваю {name}…",
+  },
+  "discover.toastAdded": {
+    en: "Added \"{name}\" to {dir}.",
+    ru: "«{name}» добавлена в {dir}.",
+  },
+  "discover.toastAddFail": {
+    en: "Could not add {name}: {e}",
+    ru: "Не удалось добавить {name}: {e}",
+  },
+  "discover.toastLinkRejected": {
+    en: "Install link rejected: \"{raw}\" is not a GitHub owner/repo.",
+    ru: "Ссылка отклонена: «{raw}» — это не GitHub owner/repo.",
+  },
+  "discover.importNoPath": {
+    en: "Import returned no path",
+    ru: "Импорт не вернул путь",
+  },
+  "discover.importFallbackName": { en: "Imported pack", ru: "Импортированный пак" },
+
+  // ── Create tab ──
+  "create.startPack": { en: "Start a pack", ru: "Начните сборку" },
+  "create.startHint": {
+    en: "Blank instance, import a pack file, or browse Modrinth / CurseForge in Discover.",
+    ru: "Чистая сборка, импорт файла или Modrinth / CurseForge в разделе «Обзор».",
+  },
+  "create.createModpack": { en: "Create modpack", ru: "Создать сборку" },
+  "create.blankHint": {
+    en: "Blank · Fabric / Forge / NeoForge / Quilt",
+    ru: "Чистая · Fabric / Forge / NeoForge / Quilt",
+  },
+  "create.importPack": { en: "Import pack", ru: "Импортировать пак" },
+  "create.importHint": {
+    en: ".mrpack · zip · Prism · MultiMC · CurseForge",
+    ru: ".mrpack · zip · Prism · MultiMC · CurseForge",
+  },
+  "create.browsePacks": { en: "Browse packs", ru: "Каталог сборок" },
+  "create.browseHint": {
+    en: "Modrinth · CurseForge — Library Discover",
+    ru: "Modrinth · CurseForge — «Обзор» библиотеки",
+  },
+
+  // ── Drop overlay ──
+  "drop.import": { en: "Drop to import", ru: "Отпустите для импорта" },
+  "drop.copying": { en: "Copying dropped files…", ru: "Копирую файлы…" },
+
+  // ── Instance content (servers) ──
+  "content.title": { en: "Instance content", ru: "Содержимое сборки" },
+  "content.browseCatalog": { en: "Browse the catalog", ru: "Открыть каталог" },
+  "content.browseCatalogTitle": {
+    en: "Browse and install mods in a separate window",
+    ru: "Открыть и установить моды в отдельном окне",
+  },
+  "content.noServers": {
+    en: "No servers yet — add one above to track its status.",
+    ru: "Серверов пока нет — добавьте один выше, чтобы следить за статусом.",
+  },
+  "content.offline": { en: "offline", ru: "офлайн" },
+  "content.serverName": { en: "Server name", ru: "Имя сервера" },
+  "content.serverAddr": { en: "Server address", ru: "Адрес сервера" },
+  "content.namePh": { en: "Name", ru: "Имя" },
+  "content.join": { en: "Join server", ru: "На сервер" },
+  "content.toastAdded": { en: "Server added", ru: "Сервер добавлен" },
+
+  // ── Manager toasts ──
+  "manager.toastBatchFail": {
+    en: "{label}: {n} failed — {first}",
+    ru: "{label}: ошибок {n} — {first}",
+  },
+  "manager.toastBatchDone": { en: "{label}: {n} done", ru: "{label}: готово {n}" },
+  "manager.toastReadFail": {
+    en: "Failed to read mods: {e}",
+    ru: "Не удалось прочитать моды: {e}",
+  },
+  "manager.toastAllUpToDate": {
+    en: "All mods are up to date",
+    ru: "Все моды актуальны",
+  },
+  "manager.toastCheckFail": {
+    en: "Update check failed: {e}",
+    ru: "Проверка обновлений не удалась: {e}",
+  },
+  "manager.toastModUpdated": { en: "{name} updated", ru: "{name} обновлён" },
+  "manager.toastModRemoved": { en: "{name} removed", ru: "{name} убран" },
+  "manager.toastRemoveFail": { en: "Remove failed: {e}", ru: "Не удалось убрать: {e}" },
+  "manager.toastNoVersions": {
+    en: "No alternative versions found for this mod",
+    ru: "Альтернативных версий у этого мода нет",
+  },
+  "manager.toastVersionLookupFail": {
+    en: "Version lookup failed: {e}",
+    ru: "Не удалось получить версии: {e}",
+  },
+  "manager.toastVersionFail": {
+    en: "Version change failed: {e}",
+    ru: "Не удалось сменить версию: {e}",
+  },
+  "manager.toastSynced": {
+    en: "Mods folder synced ({n} entries)",
+    ru: "Папка модов синхронизирована ({n})",
+  },
+  "manager.toastBackupListFail": {
+    en: "Failed to list backups: {e}",
+    ru: "Не удалось получить список бэкапов: {e}",
+  },
+  "manager.toastBackupCreated": {
+    en: "Backup created: {name}",
+    ru: "Бэкап создан: {name}",
+  },
+  "manager.toastBackupFail": { en: "Backup failed: {e}", ru: "Бэкап не удался: {e}" },
+  "manager.toastRestored": { en: "Restored \"{name}\"", ru: "Восстановлено: «{name}»" },
+  "manager.toastRestoreFail": {
+    en: "Restore failed: {e}",
+    ru: "Восстановление не удалось: {e}",
+  },
+  "manager.toastBackupDeleted": { en: "Backup deleted", ru: "Бэкап удалён" },
+  "manager.toastDeleteFail": {
+    en: "Delete failed: {e}",
+    ru: "Удаление не удалось: {e}",
+  },
+  "manager.toastSavesFail": {
+    en: "Failed to read saves: {e}",
+    ru: "Не удалось прочитать сохранения: {e}",
+  },
+  "manager.toastStopFirst": {
+    en: "Stop the instance before joining a world.",
+    ru: "Остановите сборку перед входом в мир.",
+  },
+  "manager.toastLaunchFail": { en: "Launch failed: {e}", ru: "Запуск не удался: {e}" },
+  "manager.toastWorldBackedUp": {
+    en: "World backed up: {file}",
+    ru: "Мир заархивирован: {file}",
+  },
+  "manager.toastWorldDeleted": {
+    en: "World \"{name}\" deleted (backup kept)",
+    ru: "Мир «{name}» удалён (бэкап сохранён)",
+  },
+  "manager.toastShotsFail": {
+    en: "Failed to list screenshots: {e}",
+    ru: "Не удалось получить скриншоты: {e}",
+  },
+  "manager.toastShotDeleted": { en: "Screenshot deleted", ru: "Скриншот удалён" },
+  "manager.toastHealthFail": {
+    en: "Health check failed: {e}",
+    ru: "Проверка состояния не удалась: {e}",
+  },
+  "manager.toastKept": { en: "Kept {name}", ru: "Оставлен {name}" },
+  "manager.toastValidationFail": {
+    en: "Validation failed: {e}",
+    ru: "Проверка не удалась: {e}",
+  },
 };
 
 /** Translate `key` for the active locale, filling `{token}` placeholders. */

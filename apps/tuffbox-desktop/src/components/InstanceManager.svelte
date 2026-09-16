@@ -42,6 +42,7 @@
   import PromptDialog from "./PromptDialog.svelte";
   import { openModsBrowserWindow } from "../lib/modsBrowserWindow";
   import { refreshUpdateCount, setUpdateCount } from "../lib/instanceUpdates";
+  import { get } from "svelte/store";
   import { t } from "../lib/i18n";
   import {
     isProjectLaunching,
@@ -204,8 +205,10 @@
       batchBusy = { label, done: i + 1, total: ids.length };
     }
     batchBusy = null;
-    if (failed > 0) toasts.error(`${label}: ${failed} failed — ${firstError}`);
-    else toasts.success(`${label}: ${ids.length} done`);
+    const L = get(t);
+    if (failed > 0)
+      toasts.error(L("manager.toastBatchFail", { label, n: failed, first: firstError }));
+    else toasts.success(L("manager.toastBatchDone", { label, n: ids.length }));
   }
 
   async function batchEnable() {
@@ -251,7 +254,7 @@
       modsLoadedOnce = true;
       quickFilter = "none";
     } catch (e) {
-      toasts.error(`Failed to read mods: ${String(e)}`);
+      toasts.error(get(t)("manager.toastReadFail", { e: String(e) }));
     } finally {
       modsLoading = false;
     }
@@ -264,9 +267,9 @@
       const list = await api.mods.checkUpdates(path);
       updates = mergeUpdates(list);
       updatesChecked = true;
-      if (updateCountOf(updates) === 0) toasts.success("All mods are up to date");
+      if (updateCountOf(updates) === 0) toasts.success(get(t)("manager.toastAllUpToDate"));
     } catch (e) {
-      toasts.error(`Update check failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastCheckFail", { e: String(e) }));
     } finally {
       checkingUpdates = false;
     }
@@ -283,12 +286,21 @@
       const res = await api.mods.updateAll(path, false);
       const updated = Array.isArray(res.updated) ? res.updated.length : 0;
       const errors = Array.isArray(res.errors) ? res.errors : [];
+      const L = get(t);
       if (errors.length > 0) {
-        toasts.warning(`Updated ${updated}, failed ${errors.length}: ${errors[0]}`);
+        toasts.warning(
+          L("library.toastUpdatePartial", {
+            ok: updated,
+            failed: errors.length,
+            first: errors[0],
+          }),
+        );
+      } else if (updated === 1) {
+        toasts.success(L("library.toastUpdated1"));
       } else if (updated > 0) {
-        toasts.success(`Updated ${updated} ${updated === 1 ? "mod" : "mods"}`);
+        toasts.success(L("library.toastUpdatedN", { n: updated }));
       } else {
-        toasts.success("Nothing to update");
+        toasts.success(L("library.toastNothingToUpdate"));
       }
       updates = {};
       updatesChecked = false;
@@ -300,7 +312,7 @@
       }
       await loadMods(true);
     } catch (e) {
-      toasts.error(`Update failed: ${String(e)}`);
+      toasts.error(get(t)("library.toastUpdateFailed", { e: String(e) }));
     } finally {
       updatingAll = false;
     }
@@ -312,12 +324,12 @@
     rowBusy = mod.id;
     try {
       await api.mods.update(mod.id, path, upd.versionId ?? undefined);
-      toasts.success(`${mod.name} updated`);
+      toasts.success(get(t)("manager.toastModUpdated", { name: mod.name }));
       delete updates[mod.id];
       updates = { ...updates };
       await loadMods(true);
     } catch (e) {
-      toasts.error(`Update failed: ${String(e)}`);
+      toasts.error(get(t)("library.toastUpdateFailed", { e: String(e) }));
     } finally {
       rowBusy = null;
     }
@@ -343,10 +355,10 @@
     rowBusy = mod.id;
     try {
       await api.mods.remove(mod.id, path);
-      toasts.success(`${mod.name} removed`);
+      toasts.success(get(t)("manager.toastModRemoved", { name: mod.name }));
       await loadMods(true);
     } catch (e) {
-      toasts.error(`Remove failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastRemoveFail", { e: String(e) }));
     } finally {
       rowBusy = null;
     }
@@ -360,13 +372,13 @@
       const list = await api.mods.getVersions(mod.id, project.info.minecraftVersion, loaderArg);
       const opts = versionOptions(Array.isArray(list) ? list : [], mod.version);
       if (opts.length === 0) {
-        toasts.error("No alternative versions found for this mod");
+        toasts.error(get(t)("manager.toastNoVersions"));
         versionTarget = null;
         return;
       }
       versionChoices = opts;
     } catch (e) {
-      toasts.error(`Version lookup failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastVersionLookupFail", { e: String(e) }));
       versionTarget = null;
     }
   }
@@ -382,7 +394,7 @@
       toasts.success(`${mod.name} → ${choice.label.split(" · ")[0]}`);
       await loadMods(true);
     } catch (e) {
-      toasts.error(`Version change failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastVersionFail", { e: String(e) }));
     } finally {
       rowBusy = null;
     }
@@ -392,7 +404,9 @@
     overflowOpen = false;
     try {
       const res = await api.mods.syncFolder(path);
-      toasts.success(`Mods folder synced (${Array.isArray(res) ? res.length : 0} entries)`);
+      toasts.success(
+        get(t)("manager.toastSynced", { n: Array.isArray(res) ? res.length : 0 }),
+      );
       await loadMods(true);
     } catch (e) {
       toasts.error(String(e));
@@ -438,7 +452,7 @@
       backups = await api.backups.list(path);
       backupsLoadedOnce = true;
     } catch (e) {
-      toasts.error(`Failed to list backups: ${String(e)}`);
+      toasts.error(get(t)("manager.toastBackupListFail", { e: String(e) }));
     } finally {
       backupsLoading = false;
     }
@@ -449,10 +463,10 @@
     creatingBackup = true;
     try {
       const entry = await api.backups.create(null, path);
-      toasts.success(`Backup created: ${entry.name}`);
+      toasts.success(get(t)("manager.toastBackupCreated", { name: entry.name }));
       await loadBackups(true);
     } catch (e) {
-      toasts.error(`Backup failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastBackupFail", { e: String(e) }));
     } finally {
       creatingBackup = false;
     }
@@ -462,14 +476,14 @@
     confirmRestore = null;
     try {
       await api.backups.restore(entry.id, path);
-      toasts.success(`Restored "${entry.name}"`);
+      toasts.success(get(t)("manager.toastRestored", { name: entry.name }));
       updates = {};
       updatesChecked = false;
       // The restored pack is a different state — re-check its updates.
       void refreshUpdateCount(path, true);
       await Promise.all([loadMods(true), loadBackups(true)]);
     } catch (e) {
-      toasts.error(`Restore failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastRestoreFail", { e: String(e) }));
     }
   }
 
@@ -478,9 +492,9 @@
     try {
       await api.backups.delete(entry.id, path);
       backups = backups.filter((b) => b.id !== entry.id);
-      toasts.success("Backup deleted");
+      toasts.success(get(t)("manager.toastBackupDeleted"));
     } catch (e) {
-      toasts.error(`Delete failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastDeleteFail", { e: String(e) }));
     }
   }
 
@@ -502,7 +516,7 @@
       worldsLoadedOnce = true;
       void loadWorldIcons();
     } catch (e) {
-      toasts.error(`Failed to read saves: ${String(e)}`);
+      toasts.error(get(t)("manager.toastSavesFail", { e: String(e) }));
     } finally {
       worldsLoading = false;
     }
@@ -539,7 +553,7 @@
   async function playWorld(world: WorldRow) {
     if (worldBusy) return;
     if (isProjectRunning(path, $runningInstances) || isProjectLaunching(path, $launchSessions)) {
-      toasts.warning("Stop the instance before joining a world.");
+      toasts.warning(get(t)("manager.toastStopFirst"));
       return;
     }
     worldBusy = world.name;
@@ -551,7 +565,7 @@
         quickPlayValue: world.name,
       });
     } catch (e) {
-      toasts.error(`Launch failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastLaunchFail", { e: String(e) }));
     } finally {
       worldBusy = null;
     }
@@ -561,9 +575,9 @@
     worldBusy = `backup:${world.name}`;
     try {
       const file = await api.worlds.backup(world.name, path);
-      toasts.success(`World backed up: ${file}`);
+      toasts.success(get(t)("manager.toastWorldBackedUp", { file }));
     } catch (e) {
-      toasts.error(`Backup failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastBackupFail", { e: String(e) }));
     } finally {
       worldBusy = null;
     }
@@ -574,11 +588,13 @@
     worldBusy = world.name;
     try {
       await api.worlds.delete(world.name, true, path);
-      toasts.success(`World "${world.displayName || world.name}" deleted (backup kept)`);
+      toasts.success(
+        get(t)("manager.toastWorldDeleted", { name: world.displayName || world.name }),
+      );
       worldIcons = { ...worldIcons, [world.name]: undefined } as Record<string, string>;
       await loadWorlds(true);
     } catch (e) {
-      toasts.error(`Delete failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastDeleteFail", { e: String(e) }));
     } finally {
       worldBusy = null;
     }
@@ -626,7 +642,7 @@
       shots = await api.worlds.listScreenshots(path);
       shotsLoadedOnce = true;
     } catch (e) {
-      toasts.error(`Failed to list screenshots: ${String(e)}`);
+      toasts.error(get(t)("manager.toastShotsFail", { e: String(e) }));
     } finally {
       shotsLoading = false;
     }
@@ -637,9 +653,9 @@
     try {
       await api.worlds.deleteScreenshot(shot.fileName, path);
       shots = shots.filter((s) => s.fileName !== shot.fileName);
-      toasts.success("Screenshot deleted");
+      toasts.success(get(t)("manager.toastShotDeleted"));
     } catch (e) {
-      toasts.error(`Delete failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastDeleteFail", { e: String(e) }));
     }
   }
 
@@ -677,7 +693,7 @@
       health = await api.diagnostics.getPackHealth(path);
       healthLoadedOnce = true;
     } catch (e) {
-      toasts.error(`Health check failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastHealthFail", { e: String(e) }));
     } finally {
       healthLoading = false;
     }
@@ -688,7 +704,7 @@
     keepingDup = modId;
     try {
       await api.mods.keepOneDuplicateModJar(modId, keepFileName, path);
-      toasts.success(`Kept ${keepFileName}`);
+      toasts.success(get(t)("manager.toastKept", { name: keepFileName }));
       health = null;
       healthLoadedOnce = false;
       await Promise.all([loadHealth(true), loadMods(true)]);
@@ -705,7 +721,7 @@
     try {
       validation = await api.project.runValidation(path);
     } catch (e) {
-      toasts.error(`Validation failed: ${String(e)}`);
+      toasts.error(get(t)("manager.toastValidationFail", { e: String(e) }));
     } finally {
       validating = false;
     }
