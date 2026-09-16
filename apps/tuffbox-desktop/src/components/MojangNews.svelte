@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
-  import { ChevronLeft, ChevronRight } from "@lucide/svelte";
+  import { ChevronLeft, ChevronRight, SlidersHorizontal } from "@lucide/svelte";
+  import { api } from "../lib/api";
+  import { launcherSettingsLive, notifyLauncherSettingsChanged } from "../lib/store";
 
   /**
    * Minecraft Java Edition update feed — snapshots & releases only.
@@ -40,6 +42,56 @@
 
   let entries = $state<Card[]>([]);
   let loading = $state(true);
+
+  // ─── feed sources ────────────────────────────────────────────────
+  // The strip header doubles as the feed settings entry point: the player
+  // picks which sources make up the home news feed. Both choices persist
+  // as launcher settings (newsShowUpdates / showYoutubeOnHome) so every
+  // surface (hero strip, YouTube rail, Settings → General) stays in sync.
+  let sourcesOpen = $state(false);
+  let sourcesBusy = $state(false);
+  let updatesOn = $state(true);
+  let youtubeOn = $state(false);
+
+  $effect(() => {
+    const live = $launcherSettingsLive;
+    if (!live) return;
+    updatesOn = live.newsShowUpdates !== false;
+    youtubeOn = live.showYoutubeOnHome === true;
+  });
+
+  async function setSource(patch: { updates?: boolean; youtube?: boolean }) {
+    const prevU = updatesOn;
+    const prevY = youtubeOn;
+    updatesOn = patch.updates ?? prevU;
+    youtubeOn = patch.youtube ?? prevY;
+    sourcesBusy = true;
+    try {
+      const base = $launcherSettingsLive ?? (await api.launcher.get());
+      const saved = await api.launcher.save({
+        ...base,
+        newsShowUpdates: updatesOn,
+        showYoutubeOnHome: youtubeOn,
+      });
+      notifyLauncherSettingsChanged(saved);
+    } catch {
+      // No IPC (browser preview) or save failed — keep the local choice so
+      // the control still works; the next successful save reconciles it.
+    } finally {
+      sourcesBusy = false;
+    }
+  }
+
+  function onSourcesPointerDown(e: MouseEvent) {
+    if (!sourcesOpen) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.(".news-head")) return;
+    sourcesOpen = false;
+  }
+
+  function onSourcesKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && sourcesOpen) sourcesOpen = false;
+  }
 
   const cards = $derived(entries.slice(0, limit));
 
@@ -250,12 +302,62 @@
   {/if}
 {/snippet}
 
-<div class="mojang-news" aria-label="Minecraft Java updates">
+<svelte:window onmousedown={onSourcesPointerDown} onkeydown={onSourcesKeydown} />
+
+<div class="mojang-news" aria-label="News feed">
   <div class="news-head">
     <span class="news-dot" aria-hidden="true"></span>
-    <span class="news-title">Java Updates</span>
+    <span class="news-title">News feed</span>
+    <button
+      type="button"
+      class="news-cog"
+      aria-label="Feed settings — choose news sources"
+      title="Choose what appears in your news feed"
+      aria-expanded={sourcesOpen}
+      aria-haspopup="menu"
+      disabled={sourcesBusy}
+      onclick={() => (sourcesOpen = !sourcesOpen)}
+    >
+      <SlidersHorizontal size={13} />
+    </button>
+    {#if sourcesOpen}
+      <div class="news-sources" role="menu" aria-label="News feed sources">
+        <p class="news-sources-title">Show in the feed</p>
+        <label class="news-source">
+          <input
+            type="checkbox"
+            checked={updatesOn}
+            disabled={sourcesBusy}
+            onchange={() => void setSource({ updates: !updatesOn })}
+          />
+          <span class="news-source-text">
+            <strong>Game updates</strong>
+            <small>New Minecraft snapshots and releases.</small>
+          </span>
+        </label>
+        <label class="news-source">
+          <input
+            type="checkbox"
+            checked={youtubeOn}
+            disabled={sourcesBusy}
+            onchange={() => void setSource({ youtube: !youtubeOn })}
+          />
+          <span class="news-source-text">
+            <strong>Minecraft YouTube</strong>
+            <small>Video strip under this banner on Home.</small>
+          </span>
+        </label>
+      </div>
+    {/if}
   </div>
 
+  {#if !updatesOn}
+    <p class="news-off">
+      Game updates are turned off — open feed settings to choose what you see here.
+    </p>
+  {/if}
+
+  {#if updatesOn}
   <div class="news-nav">
     <button
       type="button"
@@ -327,6 +429,7 @@
       {@render navArrow("right")}
     </button>
   </div>
+  {/if}
 </div>
 
 <style>
@@ -340,6 +443,7 @@
   }
 
   .news-head {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -356,10 +460,112 @@
   }
 
   .news-title {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+    color: var(--hero-fg-muted, rgba(255, 255, 255, 0.72));
+    text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45);
+  }
+
+  /** Feed settings button — same quiet-glass language as the strip. */
+  .news-cog {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.2));
+    border-radius: var(--border-radius-sm);
+    background: color-mix(in srgb, #000 45%, transparent);
+    color: var(--hero-fg-muted, rgba(255, 255, 255, 0.72));
+    cursor: pointer;
+    transition:
+      color var(--motion-fast, 160ms) var(--ease-out, ease),
+      border-color var(--motion-fast, 160ms) var(--ease-out, ease);
+  }
+
+  .news-cog:hover:not(:disabled),
+  .news-cog[aria-expanded="true"] {
+    color: var(--hero-fg, #fff);
+    border-color: color-mix(in srgb, var(--accent-primary, #22c55e) 55%, transparent);
+  }
+
+  .news-cog:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  /** Source picker popover — opaque panel so it reads over any art. */
+  .news-sources {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    z-index: 9;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 264px;
+    max-width: min(320px, 90vw);
+    padding: 10px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
+  }
+
+  .news-sources-title {
+    margin: 0 0 2px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .news-source {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 6px 8px;
+    border-radius: var(--border-radius-sm);
+    cursor: pointer;
+  }
+
+  .news-source:hover {
+    background: var(--bg-hover);
+  }
+
+  .news-source input {
+    accent-color: var(--accent-primary);
+    margin: 2px 0 0;
+    flex-shrink: 0;
+  }
+
+  .news-source-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .news-source-text strong {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .news-source-text small {
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--text-secondary);
+  }
+
+  /** Compact note when the updates source is disabled. */
+  .news-off {
+    margin: 0 0 2px;
+    font-size: 12px;
+    line-height: 1.4;
     color: var(--hero-fg-muted, rgba(255, 255, 255, 0.72));
     text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45);
   }

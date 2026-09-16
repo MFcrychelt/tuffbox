@@ -189,6 +189,7 @@
     defaultMemoryMb: 4096,
     youtubeInlinePlayer: true,
     showYoutubeOnHome: false,
+    newsShowUpdates: true,
     ingameOverlay: true,
     cpuAffinityMode: "off",
     cpuAffinityMask: null,
@@ -1326,7 +1327,8 @@
           <div class="settings-row-text">
             <strong>YouTube feed on home</strong>
             <p>
-              Minecraft YouTube strip on the home screen. Hidden by default — turn it on here.
+              Minecraft YouTube strip on the home screen. Hidden by default — turn it on here
+              or via the feed settings button on the home banner.
             </p>
           </div>
           <div class="settings-row-control">
@@ -1591,13 +1593,17 @@
           </div>
         </label>
         <label>
-          Custom JVM arguments
+          Custom Java arguments
           <textarea
             rows="3"
             bind:value={launcher.javaCustomArgs}
             placeholder="-XX:+UseG1GC …"
             onblur={() => persistLauncher({ javaCustomArgs: launcher.javaCustomArgs?.trim() || null })}
           ></textarea>
+          <small class="auto-tune-msg">
+            Extra options passed to Java when the game starts (garbage collector tuning and
+            similar). Leave empty if unsure — TuffBox already picks sensible defaults.
+          </small>
         </label>
         <label>
           CPU affinity
@@ -1612,8 +1618,8 @@
             </select>
           </div>
           <small class="auto-tune-msg">
-            Pins the game process to fast cores via SetProcessAffinityMask. "Performance cores"
-            needs a P/E hybrid CPU (Intel 12th gen+); AMD X3D users should pick a manual mask.
+            Chooses which CPU cores the game runs on. Leave "Off" if unsure — "Performance
+            cores" only helps on hybrid CPUs (Intel 12th gen+); "Manual mask" is for advanced users.
           </small>
         </label>
         {#if launcher.cpuAffinityMode === "manual"}
@@ -1710,28 +1716,31 @@
           <h3>Launch commands</h3>
         </div>
         <label>
-          Pre-launch hook
+          Run before the game starts
           <input
             bind:value={launcher.preLaunchHook}
-            placeholder="Command before game start"
+            placeholder="Optional command, e.g. a backup script"
             onblur={() => persistLauncher({ preLaunchHook: launcher.preLaunchHook?.trim() || null })}
           />
+          <small class="auto-tune-msg">Optional. Runs once right before Minecraft launches.</small>
         </label>
         <label>
-          Post-exit hook
+          Run after the game closes
           <input
             bind:value={launcher.postExitHook}
-            placeholder="Command after game exits"
+            placeholder="Optional command, e.g. cleanup"
             onblur={() => persistLauncher({ postExitHook: launcher.postExitHook?.trim() || null })}
           />
+          <small class="auto-tune-msg">Optional. Runs once after you quit the game.</small>
         </label>
         <label>
           Wrapper command
           <input
             bind:value={launcher.wrapperCommand}
-            placeholder="e.g. gamemoderun"
+            placeholder="e.g. gamemoderun (Linux)"
             onblur={() => persistLauncher({ wrapperCommand: launcher.wrapperCommand?.trim() || null })}
           />
+          <small class="auto-tune-msg">Optional. Starts the game through this command (advanced).</small>
         </label>
         <div class="row-actions save-row">
           <button
@@ -1851,7 +1860,10 @@
           <Bot size={18} />
           <h3>AI</h3>
         </div>
-        <p class="hint">Local Ollama models or a cloud API. Diagnose / Crash KB live under Advanced.</p>
+        <p class="hint">
+          TuffBox can use AI to explain crashes and suggest fixes. Run it locally with Ollama
+          (private, works offline) or connect a cloud API with a key. Advanced options live below.
+        </p>
         <AiSettingsPanel onsaved={loadIntegrations} />
       </section>
     {/if}
@@ -1999,8 +2011,11 @@
                 disabled={swarmSaving}
                 onchange={toggleSwarmEnabled}
               />
-              Network
+              Join the community network
             </label>
+            <small class="hint flat" style="margin: -6px 0 2px;">
+              Share anonymous crash fixes with other TuffBox players and get their fixes too.
+            </small>
             {#if swarmEnabled}
               <small class="test-ok">
                 {#if swarmSupabaseConfigured}
@@ -2026,8 +2041,11 @@
                   disabled={swarmSaving}
                   onchange={toggleP2pEnabled}
                 />
-                Local P2P
+                Direct player-to-player mode
               </label>
+              <small class="hint flat" style="margin: -6px 0 2px;">
+                Connect straight to other players' launchers instead of going through a server.
+              </small>
               {#if swarmP2pEnabled}
                 <div class="row-actions">
                   <button
@@ -2073,7 +2091,7 @@
                     disabled={swarmSaving}
                     onchange={toggleVolunteerDiagnose}
                   />
-                  Fog volunteer
+                  Help diagnose others' crashes
                 </label>
                 <label class="check-row">
                   <input
@@ -2082,7 +2100,7 @@
                     disabled={swarmSaving}
                     onchange={toggleCreationWorker}
                   />
-                  Creation worker
+                  Lend GPU time to community packs
                 </label>
               {/if}
 
@@ -2127,7 +2145,7 @@
                     disabled={swarmSaving || !swarmP2pEnabled}
                     onchange={toggleP2pRelayServer}
                   />
-                  Circuit Relay (VPS)
+                  Act as a relay (needs a public server)
                 </label>
                 {#if swarmCreationWorker}
                   <label>
@@ -2486,6 +2504,7 @@
 
   .settings-row {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
     gap: 24px;
@@ -2535,6 +2554,7 @@
     align-items: flex-end;
     gap: 10px;
     min-width: min(320px, 100%);
+    max-width: 100%;
   }
 
   .settings-row-stack .settings-row-control {
@@ -2780,7 +2800,8 @@
   .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .save-row { margin-top: 16px; }
   .mini { padding: 5px 8px; font-size: 11px; }
-  .hint { margin: 0 0 12px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+  .hint { margin: 0 0 12px; color: var(--text-muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+  .card code { overflow-wrap: anywhere; word-break: break-word; }
   .check-row {
     display: flex;
     flex-direction: row;

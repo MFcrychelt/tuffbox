@@ -650,7 +650,6 @@
         actionBusy={heroActionBusy}
         overflowOpen={heroOverflowOpen}
         signedIn={$authState.loggedIn}
-        playerName={$authState.profile?.name ?? ""}
         accounts={$authState.accounts}
         accountSkins={accountSkinPaths}
         activeAccountUuid={$authState.activeAccountUuid ?? null}

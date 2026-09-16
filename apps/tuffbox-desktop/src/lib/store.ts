@@ -203,6 +203,8 @@ export interface LauncherSettings {
   youtubeInlinePlayer: boolean;
   /** Show the YouTube feed on the home dashboard. Off by default; enable in Settings. */
   showYoutubeOnHome: boolean;
+  /** Show Minecraft game updates (snapshots & releases) in the home news feed. */
+  newsShowUpdates: boolean;
   /** Inject the in-game overlay bridge (YouTube player + friends/chat) on launch. */
   ingameOverlay: boolean;
   /** CPU affinity for the game process: off | performance | manual. */

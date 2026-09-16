@@ -42,7 +42,6 @@
     actionBusy = false,
     overflowOpen = false,
     signedIn = true,
-    playerName = "",
     accounts = [],
     accountSkins = null,
     activeAccountUuid = null,
@@ -86,7 +85,6 @@
     actionBusy?: boolean;
     overflowOpen?: boolean;
     signedIn?: boolean;
-    playerName?: string;
     /** Saved accounts for the mini-avatar switcher row. */
     accounts?: AccountEntry[];
     /** Cached skin PNG path per account UUID. */
@@ -206,14 +204,6 @@
           <FolderOpen size={14} />
           <span>Folder</span>
         </button>
-        <button type="button" class="glass-seg" onclick={onRename} disabled={actionBusy} title="Rename instance" aria-label="Rename instance">
-          <Pencil size={14} />
-          <span>Rename</span>
-        </button>
-        <button type="button" class="glass-seg" onclick={onClone} disabled={actionBusy} title="Clone instance" aria-label="Clone instance">
-          <Copy size={14} />
-          <span>Clone</span>
-        </button>
         <div class="poster-overflow">
           <button
             type="button"
@@ -222,17 +212,24 @@
             aria-expanded={overflowOpen}
             aria-haspopup="menu"
             disabled={actionBusy}
+            title="Rename, clone, export, repair, delete…"
             onclick={onToggleOverflow}
           >
             <MoreHorizontal size={15} />
           </button>
         </div>
-        {#if playerName}
-          <span class="poster-player" title={`Signed in as ${playerName}`}>{playerName}</span>
-        {/if}
       </div>
       {#if overflowOpen}
         <div class="poster-overflow-menu" role="menu">
+          <button type="button" role="menuitem" disabled={actionBusy} onclick={onRename}>
+            <Pencil size={14} />
+            Rename
+          </button>
+          <button type="button" role="menuitem" disabled={actionBusy} onclick={onClone}>
+            <Copy size={14} />
+            Clone
+          </button>
+          <div class="poster-overflow-sep" role="separator"></div>
           {#if onExportMrpack}
             <button type="button" role="menuitem" disabled={actionBusy} onclick={onExportMrpack}>
               <Package size={14} />
@@ -656,6 +653,12 @@
     cursor: default;
   }
 
+  .poster-overflow-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--border-color);
+  }
+
   .poster-overflow-menu button.danger {
     color: var(--accent-danger, #e5484d);
   }
@@ -717,7 +720,7 @@
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
   }
 
-  /* Build name (left) + Play button (right) sit under the Java Updates strip. */
+  /* Build name (left) + Play button (right) sit under the news feed strip. */
   .poster-title-row {
     display: flex;
     align-items: center;
@@ -886,23 +889,6 @@
     white-space: nowrap;
     animation: poster-in var(--motion-enter, 320ms) var(--ease-spring, ease) both;
     animation-delay: calc(var(--stagger-step, 48ms) * 1);
-  }
-
-  /* Signed-in nick — in the poster toolbar, next to the instance actions. */
-  .poster-player {
-    display: inline-flex;
-    align-items: center;
-    min-width: 0;
-    max-width: 180px;
-    margin-left: 6px;
-    padding-left: 12px;
-    border-left: 1px solid color-mix(in srgb, #fff 16%, transparent);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--hero-fg-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .poster-signin {
