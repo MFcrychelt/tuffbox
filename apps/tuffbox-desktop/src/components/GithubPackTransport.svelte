@@ -360,7 +360,7 @@
   </div>
 
   {#if oauthClientMissing}
-    <p class="m-0 p-2 rounded-lg border border-[rgba(239,68,68,0.35)] text-xs text-[#fecaca]">
+    <p class="m-0 p-2 rounded-lg border border-[rgba(239,68,68,0.35)] text-xs text-[var(--accent-danger)]">
       Device OAuth is unavailable: this build has no GitHub OAuth client ID. Set
       <code class="font-mono text-[11px] text-[var(--text-secondary)]">TUFFBOX_GITHUB_CLIENT_ID</code> when building, or add a GitHub PAT in Settings.
     </p>
@@ -389,7 +389,7 @@
       class:border-[rgba(239,68,68,0.55)]={repoInvalid}
     />
     {#if repoInvalid}
-      <span class="text-[11px] font-normal text-[#fecaca]">Use the owner/repository format, e.g. acme/cool-pack.</span>
+      <span class="text-[11px] font-normal text-[var(--accent-danger)]">Use the owner/repository format, e.g. acme/cool-pack.</span>
     {/if}
   </label>
 
@@ -471,6 +471,6 @@
     <small class="text-[12px] text-[var(--text-muted)]">{preview.fileCount} files · v{preview.packVersion}{preview.hasExternalAssets ? " · large jars via Release assets" : ""}</small>
   {/if}
   {#if message}<p class="m-0 text-xs text-[var(--accent-primary)]">{message}</p>{/if}
-  {#if conflict}<p class="m-0 text-xs text-[#fecaca]">Conflict: {conflict}</p>{/if}
-  {#if error}<p class="m-0 text-xs text-[#fecaca] break-words">{error}</p>{/if}
+  {#if conflict}<p class="m-0 text-xs text-[var(--accent-danger)]">Conflict: {conflict}</p>{/if}
+  {#if error}<p class="m-0 text-xs text-[var(--accent-danger)] break-words">{error}</p>{/if}
 </section>

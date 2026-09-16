@@ -3191,10 +3191,6 @@ onkeydown={(e) => e.stopPropagation()}
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .side-btn.danger:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
-    color: var(--accent-danger);
-  }
   .side-empty {
     padding: 24px 8px;
     text-align: center;

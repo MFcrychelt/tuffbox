@@ -1473,7 +1473,7 @@
     transition: background var(--motion-fast, 160ms) ease, border-color var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
   }
   .sm-btn:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.12);
+    background: color-mix(in srgb, var(--text-primary) 12%, transparent);
     border-color: rgba(255, 255, 255, 0.24);
     color: #fff;
   }
@@ -1483,7 +1483,7 @@
     color: var(--text-secondary);
   }
   .sm-btn.ghost:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.08);
+    background: color-mix(in srgb, var(--text-primary) 8%, transparent);
     color: var(--text-primary);
   }
   .sm-btn:disabled {
@@ -1521,7 +1521,7 @@
     transition: background var(--motion-fast, 160ms) ease, border-color var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease, box-shadow var(--motion-fast, 160ms) ease;
   }
   .cat-chip:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: color-mix(in srgb, var(--text-primary) 12%, transparent);
     border-color: rgba(255, 255, 255, 0.22);
     color: #fff;
   }
@@ -1780,7 +1780,7 @@
   }
   .main-body::-webkit-scrollbar-thumb:hover,
   .md-preview::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.24);
+    background: color-mix(in srgb, var(--text-primary) 24%, transparent);
   }
 
   @media (max-width: 1100px) {

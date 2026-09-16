@@ -6167,7 +6167,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .installed-card:hover {
-    background: rgba(255,255,255,0.03);
+    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
   }
 
   .installed-card.has-update {

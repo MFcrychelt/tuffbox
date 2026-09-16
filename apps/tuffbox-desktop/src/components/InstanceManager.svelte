@@ -1864,7 +1864,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-warning) 16%, transparent);
     color: var(--text-primary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     white-space: nowrap;
     cursor: pointer;
@@ -1892,7 +1892,7 @@
     border-radius: var(--border-radius-sm);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     white-space: nowrap;
     cursor: pointer;

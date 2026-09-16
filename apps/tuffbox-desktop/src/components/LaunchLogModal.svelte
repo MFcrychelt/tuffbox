@@ -447,7 +447,7 @@
 
   .log-file-row:hover,
   .log-file-row.selected {
-    background: rgba(255, 255, 255, 0.06);
+    background: color-mix(in srgb, var(--text-primary) 6%, transparent);
   }
 
   .icon-btn {
@@ -578,6 +578,6 @@
   }
 
   .ghost:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
   }
 </style>
