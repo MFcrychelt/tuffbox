@@ -5943,6 +5943,195 @@ fn store_gc() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "removed": removed, "bytesReclaimed": bytes }))
 }
 
+/// ── Personal YouTube feed (docs: home feed sources) ──────────────────
+///
+/// The default home feed is a curated table. These commands let the player
+/// wire the feed to THEIR YouTube instead: channels they follow are polled
+/// through the public RSS hub (no key, no login) and their latest videos
+/// replace the curated picks. Fetching happens Rust-side: the RSS endpoint
+/// sends no CORS headers, so the webview can't reach it directly.
+
+/// Inner text of the first `<tag …>…</tag>` in `xml` (attributes tolerated
+/// on the opening tag). Minimal parser — the RSS hub format is stable.
+fn yt_xml_tag(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let start = xml.find(&open)?;
+    let after = xml[start..].find('>')? + start + 1;
+    let close = format!("</{tag}>");
+    let end = xml[after..].find(&close)? + after;
+    Some(xml[after..end].trim().to_string())
+}
+
+/// Value of `attr="…"` inside the first `<tag …` occurrence.
+fn yt_xml_attr(xml: &str, tag: &str, attr: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let start = xml.find(&open)?;
+    let seg_end = xml[start..].find('>')? + start;
+    let seg = &xml[start..seg_end];
+    let key = format!("{attr}=\"");
+    let a = seg.find(&key)? + key.len();
+    let b = seg[a..].find('"')? + a;
+    Some(seg[a..b].to_string())
+}
+
+/// Decode the handful of entities YouTube puts in RSS titles.
+fn yt_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+async fn yt_fetch_text(url: &str) -> Result<String, String> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
+    if parsed.scheme() != "https" || parsed.host_str() != Some("www.youtube.com") {
+        return Err("only www.youtube.com is allowed".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(parsed)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TuffBox")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(text)
+}
+
+/// Resolve a user-typed channel reference (UC id, channel URL, @handle,
+/// /c/ or /user/ link) to a channel id by reading the public channel page.
+#[tauri::command(rename_all = "camelCase")]
+async fn youtube_my_feed_lookup(query: String) -> Result<serde_json::Value, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Err("Enter a channel link, @handle, or channel ID.".into());
+    }
+    // Direct channel id.
+    let direct = q
+        .strip_prefix("UC")
+        .filter(|r| r.len() >= 20 && r.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+    if direct.is_some() {
+        let id = q.to_string();
+        let feed = yt_fetch_text(&format!(
+            "https://www.youtube.com/feeds/videos.xml?channel_id={id}"
+        ))
+        .await?;
+        let label = yt_xml_tag(&feed, "title").unwrap_or_else(|| id.clone());
+        return Ok(serde_json::json!({ "channelId": id, "label": yt_unescape(&label) }));
+    }
+    let page_url = if q.starts_with("http") {
+        // URL forms: ?channel_id=…, /channel/UC…, or a handle page.
+        if let Some(id) = q
+            .split("channel_id=")
+            .nth(1)
+            .and_then(|r| r.split('&').next())
+            .filter(|r| r.starts_with("UC") && r.len() > 20)
+        {
+            let feed = yt_fetch_text(&format!(
+                "https://www.youtube.com/feeds/videos.xml?channel_id={id}"
+            ))
+            .await?;
+            let label = yt_xml_tag(&feed, "title").unwrap_or_else(|| id.to_string());
+            return Ok(serde_json::json!({ "channelId": id, "label": yt_unescape(&label) }));
+        }
+        if let Some(id) = q
+            .split("/channel/")
+            .nth(1)
+            .and_then(|r| r.split('/').next())
+            .filter(|r| r.starts_with("UC") && r.len() > 20)
+        {
+            let feed = yt_fetch_text(&format!(
+                "https://www.youtube.com/feeds/videos.xml?channel_id={id}"
+            ))
+            .await?;
+            let label = yt_xml_tag(&feed, "title").unwrap_or_else(|| id.to_string());
+            return Ok(serde_json::json!({ "channelId": id, "label": yt_unescape(&label) }));
+        }
+        q.to_string()
+    } else {
+        // Bare @handle or handle without @.
+        let handle = q.trim_start_matches('@');
+        format!("https://www.youtube.com/@{handle}")
+    };
+
+    // Handle / custom URL: read the channel page and pull the channel id
+    // (the RSS auto-discovery link or the embedded channelId field).
+    let page = yt_fetch_text(&page_url).await?;
+    let id = page
+        .split("channel_id=")
+        .nth(1)
+        .and_then(|r| r.split('&').next())
+        .filter(|r| r.starts_with("UC") && r.len() > 20)
+        .map(|r| r.to_string())
+        .or_else(|| {
+            page.find("\"channelId\":\"UC")
+                .and_then(|i| {
+                    let rest = &page[i + 12..];
+                    rest.find('"').map(|e| rest[..e].to_string())
+                })
+                .filter(|r| r.len() > 20)
+        });
+    let Some(id) = id else {
+        return Err("Couldn't find that channel — paste the channel page link or its UC… ID.".into());
+    };
+    let feed = yt_fetch_text(&format!(
+        "https://www.youtube.com/feeds/videos.xml?channel_id={id}"
+    ))
+    .await?;
+    let label = yt_xml_tag(&feed, "title").unwrap_or_else(|| id.clone());
+    Ok(serde_json::json!({ "channelId": id, "label": yt_unescape(&label) }))
+}
+
+/// Latest videos for the player's channels (YouTube RSS hub, ~15 each).
+#[tauri::command(rename_all = "camelCase")]
+async fn youtube_my_feed_fetch(channel_ids: Vec<String>) -> Result<serde_json::Value, String> {
+    let mut videos: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for id in channel_ids.iter().take(24) {
+        let url = format!("https://www.youtube.com/feeds/videos.xml?channel_id={id}");
+        let feed = match yt_fetch_text(&url).await {
+            Ok(f) => f,
+            Err(e) => {
+                errors.push(format!("{id}: {e}"));
+                continue;
+            }
+        };
+        for entry in feed.split("<entry>").skip(1) {
+            let end = entry.find("</entry>").unwrap_or(entry.len());
+            let seg = &entry[..end];
+            let Some(video_id) = yt_xml_tag(seg, "yt:videoId") else {
+                continue;
+            };
+            let title = yt_unescape(&yt_xml_tag(seg, "title").unwrap_or_default());
+            let published = yt_xml_tag(seg, "published").unwrap_or_default();
+            let channel = yt_unescape(&yt_xml_tag(seg, "name").unwrap_or_default());
+            let thumb = yt_xml_attr(seg, "media:thumbnail", "url");
+            let views = yt_xml_attr(seg, "media:statistics", "views")
+                .and_then(|v| v.parse::<u64>().ok());
+            videos.push(serde_json::json!({
+                "videoId": video_id,
+                "title": title,
+                "thumbnailUrl": thumb,
+                "channelName": channel,
+                "viewCount": views,
+                "publishedAt": published,
+            }));
+            if videos.len() >= 360 {
+                break;
+            }
+        }
+    }
+    Ok(serde_json::json!({ "videos": videos, "errors": errors }))
+}
+
 /// After a pack file was deleted, drop the shared store object too when no
 /// other pack links it — the user's «delete» must free disk space, not just
 /// swap a link for a parked copy. Best-effort on a detached thread: never
@@ -16433,7 +16622,10 @@ async fn get_curseforge_modpack_files(
 /// - `Some(false)` → `.tuffbox-no-dedup` marker: the pack keeps independent
 ///   files (installs never consult or feed the store).
 /// - `None`        → no decision (legacy callers): store behavior unchanged.
-fn apply_import_dedup_choice(instance_dir: &Path, dedup: Option<bool>) -> serde_json::Value {
+pub(crate) fn apply_import_dedup_choice(
+    instance_dir: &Path,
+    dedup: Option<bool>,
+) -> serde_json::Value {
     match dedup {
         Some(true) => {
             let report = tuffbox_core::mod_store::retro_dedup(&[instance_dir]);
@@ -16472,6 +16664,7 @@ async fn install_modpack(
             source,
             target_dir,
             instance_name,
+            dedup,
         )
         .await;
     }
@@ -21637,6 +21830,8 @@ pub fn run() {
             store_gc,
             dedup_project_status,
             dedup_project_set_enabled,
+            youtube_my_feed_lookup,
+            youtube_my_feed_fetch,
             scan_ore_generation,
             detect_duplicate_items,
             generate_unify_config,

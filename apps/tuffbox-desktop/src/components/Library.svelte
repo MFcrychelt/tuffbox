@@ -174,12 +174,11 @@
     const isGithub = /^(gh:|https:\/\/github\.com\/|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$)/.test(source.trim()) && !/\.(mrpack|zip)$/i.test(source.trim());
     if (isGithub) githubInstallActive = true;
     let dedup: boolean | null = true;
-    if (!isGithub) {
-      dedup = await askDedupChoice(source.replace(/\\/g, "/").split("/").pop() ?? "");
-      if (dedup === null) {
-        importing = false;
-        return; // user closed the question — abort the import
-      }
+    dedup = await askDedupChoice(source.replace(/\\/g, "/").split("/").pop() ?? "");
+    if (dedup === null) {
+      importing = false;
+      githubInstallActive = false;
+      return; // user closed the question — abort the import
     }
     try {
       const targetDir = await resolveImportTargetDir();
@@ -779,7 +778,17 @@
       } else {
         source = await api.modpacks.getModpackUrl(result.id);
       }
-      const res: any = await api.modpacks.install(source, targetDir, result.name);
+      const dedup = await askDedupChoice(result.name);
+      if (dedup === null) return; // closed the question — abort
+      const res: any = await api.modpacks.install(source, targetDir, result.name, dedup);
+      const dedupInfo = res?.dedup;
+      if (dedupInfo?.mode === "shared" && (dedupInfo.linked ?? 0) > 0) {
+        const mb = Math.round((dedupInfo.bytesReclaimed ?? 0) / 1e6);
+        toasts.info(
+          `File deduplication on — ${dedupInfo.linked} file(s) shared${mb > 0 ? `, ~${mb} MB saved` : ""}.`,
+          4000,
+        );
+      }
       const info = (await invoke("validate_project", {
         path: res.path,
       })) as import("../lib/api").ProjectSummary;

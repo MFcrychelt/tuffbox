@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DedupAskDialog from "./DedupAskDialog.svelte";
   import { onDestroy, onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
@@ -9,6 +10,21 @@
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import { trapFocus } from "../lib/focusTrap";
   import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
+
+  // Import-time dedup question (docs/17 §4) for pack installs from trends.
+  let dedupAsk = $state<{ resolve: (v: boolean | null) => void; name: string } | null>(null);
+
+  function askDedupChoice(name: string): Promise<boolean | null> {
+    return new Promise((resolve) => {
+      dedupAsk = {
+        resolve: (v) => {
+          dedupAsk = null;
+          resolve(v);
+        },
+        name,
+      };
+    });
+  }
 
   let { swarmEnabled = false, p2pEnabled = false }: { swarmEnabled?: boolean; p2pEnabled?: boolean } =
     $props();
@@ -665,11 +681,22 @@
         } else {
           source = await invoke<string>("get_modrinth_pack_download", { projectId: id });
         }
-        await invoke("install_modpack", {
+        const dedup = await askDedupChoice(catalogViewResult.name);
+        if (dedup === null) return; // closed the question — abort
+        const res: any = await invoke("install_modpack", {
           source,
           targetDir,
           instanceName: catalogViewResult.name,
+          dedup,
         });
+        const dedupInfo = res?.dedup;
+        if (dedupInfo?.mode === "shared" && (dedupInfo.linked ?? 0) > 0) {
+          const mb = Math.round((dedupInfo.bytesReclaimed ?? 0) / 1e6);
+          toasts.info(
+            `File deduplication on — ${dedupInfo.linked} file(s) shared${mb > 0 ? `, ~${mb} MB saved` : ""}.`,
+            4000,
+          );
+        }
         toasts.success(`Installed pack ${catalogViewResult.name}`);
         catalogViewResult = null;
         return;
@@ -738,6 +765,13 @@
     }
   }
 </script>
+
+<DedupAskDialog
+  open={!!dedupAsk}
+  packName={dedupAsk?.name ?? ""}
+  onanswer={(v) => dedupAsk?.resolve(v)}
+  oncancel={() => dedupAsk?.resolve(null)}
+/>
 
 <div class="creation">
   <div class="creation-head">

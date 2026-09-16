@@ -13,6 +13,13 @@
   } from "@lucide/svelte";
   import { supabase } from "../lib/supabaseAuth";
   import { launcherSettingsLive, openYoutubePlayer, openYoutubeQueue } from "../lib/store";
+  import {
+    youtubeMyFeed,
+    addMyFeedChannel,
+    removeMyFeedChannel,
+    setMyFeedEnabled,
+    fetchMyFeedVideos,
+  } from "../lib/youtubeMyFeed";
   import HomeYoutubePlacementToggle from "./HomeYoutubePlacementToggle.svelte";
 
   type FeedVideo = {
@@ -57,6 +64,16 @@
   /** YouTube-like downward mosaic; only meaningful when expanded. Persist separately. */
   let fullView = $state(false);
   let feedRequested = $state(false);
+  // ── "More" menu + personal feed settings (docs: home feed sources) ──
+  let moreOpen = $state(false);
+  let feedSettingsOpen = $state(false);
+  let channelQuery = $state("");
+  let channelBusy = $state(false);
+  let channelError = $state("");
+
+  const myFeedActive = $derived(
+    $youtubeMyFeed.enabled && $youtubeMyFeed.channels.length > 0,
+  );
 
   const usePagedFeed = $derived(variant === "rail" || fullView);
   const poolLimit = $derived(usePagedFeed ? FEED_POOL_RAIL : FEED_LIMIT_ROW);
@@ -245,6 +262,30 @@
     feedRequested = true;
     loading = true;
     loadError = "";
+    // Personal feed (docs: home feed sources): latest videos from the
+    // channels the player follows — their YouTube, not the curated table.
+    if (myFeedActive) {
+      try {
+        const videos = await fetchMyFeedVideos();
+        videoPool = videos.slice(0, poolLimit);
+        visibleCount = usePagedFeed
+          ? Math.min(pageSize, videoPool.length)
+          : videoPool.length;
+        if (videoPool.length === 0) {
+          loadError =
+            $youtubeMyFeed.channels.length > 0
+              ? "No videos fetched from your channels yet — check the links in feed settings."
+              : "";
+        }
+      } catch (e) {
+        videoPool = [];
+        visibleCount = pageSize;
+        loadError = String(e);
+      } finally {
+        loading = false;
+      }
+      return;
+    }
     try {
       const lang = userLang();
       // Prefer native + English; also pull a wider pool so "foreign" slots aren't empty.
@@ -323,6 +364,51 @@
     };
   }
 
+  // Reload when the personal-feed config changes (channels added/removed,
+  // mode switched) — but not on the first render (mount/toggle handle that).
+  let lastMyFeedSig = "";
+  $effect(() => {
+    const cfg = $youtubeMyFeed;
+    const sig = `${cfg.enabled}:${cfg.channels.map((c) => c.id).join(",")}`;
+    const isFirstRun = lastMyFeedSig === "";
+    lastMyFeedSig = sig;
+    if (!isFirstRun && feedRequested) void loadFeed();
+  });
+
+  async function onAddChannel() {
+    if (channelBusy) return;
+    channelBusy = true;
+    channelError = "";
+    try {
+      const res = await addMyFeedChannel(channelQuery);
+      if (res.ok) {
+        channelQuery = "";
+      } else {
+        channelError = res.error ?? "Couldn't add that channel.";
+      }
+    } finally {
+      channelBusy = false;
+    }
+  }
+
+  function onMorePointerDown(e: MouseEvent) {
+    if (!moreOpen && !feedSettingsOpen) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.(".yt-more-wrap") || t?.closest?.(".my-feed-panel")) return;
+    moreOpen = false;
+    feedSettingsOpen = false;
+  }
+
+  function onMoreKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      if (moreOpen) {
+        moreOpen = false;
+      } else if (feedSettingsOpen) {
+        feedSettingsOpen = false;
+      }
+    }
+  }
+
   function toggleExpanded() {
     expanded = !expanded;
     try {
@@ -385,6 +471,8 @@
   }
 </script>
 
+<svelte:window onmousedown={onMorePointerDown} onkeydown={onMoreKeydown} />
+
 <section
   class="youtube-feed"
   class:rail={variant === "rail"}
@@ -402,6 +490,11 @@
     >
       <Youtube size={18} />
       <h2>Minecraft on YouTube</h2>
+      {#if myFeedActive}
+        <span class="my-feed-badge" title="Latest videos from the channels you follow">
+          your channels
+        </span>
+      {/if}
       <span class="chevron" aria-hidden="true">
         {#if expanded}
           <ChevronsUp size={18} />
@@ -428,17 +521,119 @@
         <span>Full height</span>
       {/if}
     </button>
-    <button
-      type="button"
-      class="yt-more-btn"
-      onclick={openYoutubeQueue}
-      title="Open the YouTube player and queue"
-      aria-label="Open the YouTube player and queue"
-    >
-      <MoreHorizontal size={16} />
-      <span>More</span>
-    </button>
+    <div class="yt-more-wrap">
+      <button
+        type="button"
+        class="yt-more-btn"
+        aria-haspopup="menu"
+        aria-expanded={moreOpen}
+        title="Player, queue and feed settings"
+        onclick={() => (moreOpen = !moreOpen)}
+      >
+        <MoreHorizontal size={16} />
+        <span>More</span>
+      </button>
+      {#if moreOpen}
+        <div class="yt-more-menu" role="menu" aria-label="YouTube feed menu">
+          <button
+            type="button"
+            role="menuitem"
+            onclick={() => {
+              moreOpen = false;
+              openYoutubeQueue();
+            }}
+          >
+            Player &amp; queue
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onclick={() => {
+              moreOpen = false;
+              feedSettingsOpen = !feedSettingsOpen;
+            }}
+          >
+            Feed settings…
+          </button>
+        </div>
+      {/if}
+    </div>
   </div>
+
+  {#if feedSettingsOpen}
+    <div class="my-feed-panel">
+      <p class="my-feed-title">Feed source</p>
+      <div class="my-feed-modes" role="radiogroup" aria-label="Feed source">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={myFeedActive}
+          class="my-feed-mode"
+          class:active={myFeedActive}
+          onclick={() => setMyFeedEnabled(true)}
+          disabled={$youtubeMyFeed.channels.length === 0}
+          title={$youtubeMyFeed.channels.length === 0
+            ? "Add at least one channel first"
+            : "Latest videos from the channels you follow"}
+        >
+          My channels
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!myFeedActive}
+          class="my-feed-mode"
+          class:active={!myFeedActive}
+          onclick={() => setMyFeedEnabled(false)}
+        >
+          Default (curated)
+        </button>
+      </div>
+
+      <div class="my-feed-add">
+        <input
+          bind:value={channelQuery}
+          placeholder="Channel link, @handle, or UC… ID"
+          disabled={channelBusy}
+          onkeydown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void onAddChannel();
+            }
+          }}
+        />
+        <button type="button" class="my-feed-add-btn" onclick={() => void onAddChannel()} disabled={channelBusy}>
+          {channelBusy ? "Adding…" : "Add"}
+        </button>
+      </div>
+      {#if channelError}
+        <p class="my-feed-error">{channelError}</p>
+      {/if}
+
+      {#if $youtubeMyFeed.channels.length > 0}
+        <ul class="my-feed-channels">
+          {#each $youtubeMyFeed.channels as ch (ch.id)}
+            <li>
+              <span class="my-feed-ch-label" title={ch.id}>{ch.label}</span>
+              <button
+                type="button"
+                class="my-feed-ch-remove"
+                aria-label={`Remove ${ch.label}`}
+                onclick={() => removeMyFeedChannel(ch.id)}
+              >
+                ×
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <p class="my-feed-hint">
+        With “My channels” on, the feed shows the latest videos from the channels you follow —
+        your YouTube, not our picks. Nothing is uploaded; the launcher only reads public
+        channel feeds.
+      </p>
+    </div>
+  {/if}
   {#if expanded}
     {#if loading}
       <div class="feed-row home-skel-stagger" aria-hidden="true" onwheel={onFeedWheel}>
@@ -595,6 +790,199 @@
 
   .full-view-btn :global(svg) {
     color: inherit;
+  }
+
+  .yt-more-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .yt-more-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 12;
+    min-width: 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
+  }
+
+  .yt-more-menu button {
+    padding: 8px 10px;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .yt-more-menu button:hover {
+    background: var(--bg-hover);
+  }
+
+  .my-feed-badge {
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    color: var(--accent-primary);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .my-feed-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 10px 0 4px;
+    padding: 14px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+  }
+
+  .my-feed-title {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .my-feed-modes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .my-feed-mode {
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .my-feed-mode:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+  }
+
+  .my-feed-mode.active {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 1px var(--accent-primary);
+  }
+
+  .my-feed-mode:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .my-feed-add {
+    display: flex;
+    gap: 8px;
+  }
+
+  .my-feed-add input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .my-feed-add-btn {
+    flex-shrink: 0;
+    padding: 8px 14px;
+    border-radius: var(--border-radius-sm);
+    border: none;
+    background: var(--accent-primary);
+    color: var(--on-accent, #000);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .my-feed-add-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .my-feed-error {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--accent-danger, #ef4444);
+  }
+
+  .my-feed-channels {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 180px;
+    overflow-y: auto;
+  }
+
+  .my-feed-channels li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-tertiary);
+  }
+
+  .my-feed-ch-label {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .my-feed-ch-remove {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .my-feed-ch-remove:hover {
+    background: color-mix(in srgb, var(--accent-danger, #ef4444) 14%, transparent);
+    color: var(--accent-danger, #ef4444);
+  }
+
+  .my-feed-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
   }
 
   .yt-more-btn {

@@ -366,6 +366,21 @@ Unix удалял свежезаписанные объекты (nlink==1) не�
   - `Some(false)` → маркер `.tuffbox-no-dedup`;
   - `None`        → прежнее поведение (совместимость, CreationTrends).
 
+### 4.4a Аудит всех pack-импортов (2026-09-16, доп. 2)
+
+Проверены ВСЕ пути, создающие новый пак (не только Prism):
+
+| Путь | Вопрос о дедупе |
+|---|---|
+| AddInstanceModal (файл .mrpack/zip) | чипы на странице импорта ✓ |
+| Library / LibraryInstancesPane: файл, папка, drop | DedupAskDialog ✓ |
+| Library → Discover «Add to library» (api.modpacks.install) | DedupAskDialog ✓ (добавлено) |
+| CreationTrends (уставка модпака из трендов) | DedupAskDialog ✓ (добавлено) |
+| GitHub-пак (вкл. deep links tuffbox://install) | DedupAskDialog ✓ (добавлено; раньше делегировал в github_pack_install мимо dedup — теперь `dedup` пробрасывается и применяется к `final_instance_dir`) |
+| Шаблоны (save_as_template) | не нужен — только метаданные |
+| Optimize-паки / пресеты / одиночные моды | не нужен — ставятся в существующий пак, подчиняются его маркеру |
+| `import_project` / `import_curseforge_project` (legacy-команды) | UI не использует; поведение по умолчанию |
+
 ### 4.5 Полное удаление файла (2026-09-16, доп.)
 
 «Пользователь удалил файл, других пользователей нет → место на диске

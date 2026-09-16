@@ -2849,12 +2849,37 @@ export const api = {
   // ── Modpack library (remote browse + import) ─────────────────────
   modpacks: {
     getModpackUrl(projectId: string) { return cmd<string>("get_modrinth_pack_download", { projectId }); },
-    install(url: string, targetDir: string, instanceName: string) {
-      return cmd<{ path: string; download?: Record<string, unknown> }>("install_modpack", {
+    install(url: string, targetDir: string, instanceName: string, dedup?: boolean | null) {
+      return cmd<{
+        path: string;
+        download?: Record<string, unknown>;
+        dedup?: Record<string, unknown>;
+      }>("install_modpack", {
         source: url,
         targetDir,
         instanceName,
+        dedup: dedup ?? null,
       });
+    },
+  },
+
+  // ── Personal YouTube feed (own channels via the RSS hub) ──────────
+  youtubeMyFeed: {
+    lookup(query: string) {
+      return cmd<{ channelId: string; label: string }>("youtube_my_feed_lookup", { query });
+    },
+    fetch(channelIds: string[]) {
+      return cmd<{
+        videos: {
+          videoId: string;
+          title: string;
+          thumbnailUrl: string | null;
+          channelName: string | null;
+          viewCount: number | null;
+          publishedAt: string | null;
+        }[];
+        errors: string[];
+      }>("youtube_my_feed_fetch", { channelIds });
     },
   },
 

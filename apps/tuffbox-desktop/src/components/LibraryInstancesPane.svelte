@@ -797,12 +797,11 @@
     const isGithub = /^(gh:|https:\/\/github\.com\/|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$)/.test(source.trim()) && !/\.(mrpack|zip)$/i.test(source.trim());
     if (isGithub) githubInstallActive = true;
     let dedup: boolean | null = true;
-    if (!isGithub) {
-      dedup = await askDedupChoice(source.replace(/\\/g, "/").split("/").pop() ?? "");
-      if (dedup === null) {
-        actionBusy = false;
-        return; // user closed the question — abort the import
-      }
+    dedup = await askDedupChoice(source.replace(/\\/g, "/").split("/").pop() ?? "");
+    if (dedup === null) {
+      actionBusy = false;
+      githubInstallActive = false;
+      return; // user closed the question — abort the import
     }
     try {
       const targetDir = await resolveImportTargetDir();
