@@ -31,6 +31,7 @@ collapse; this component always renders expanded. -->
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { launchWithFeedback } from "../lib/launch";
+  import { openModsBrowserWindow, type BrowserContentType } from "../lib/modsBrowserWindow";
 
   type Tab = "mods" | "resourcepacks" | "shaderpacks" | "servers";
   type PingResult = {
@@ -212,6 +213,12 @@ collapse; this component always renders expanded. -->
     window.dispatchEvent(new CustomEvent("tuffbox:open-library"));
   }
 
+  /** Standalone content browser window; Discover tab as the fallback. */
+  async function addContent(type: BrowserContentType) {
+    if (await openModsBrowserWindow(projectPath, type)) return;
+    openCatalog();
+  }
+
   async function addServer() {
     if (!newServerName.trim() || !newServerAddress.trim()) return;
     busyKey = "add-server";
@@ -370,6 +377,9 @@ collapse; this component always renders expanded. -->
               <SlidersHorizontal size={12} /> Manage
             </button>
           {/if}
+          <button type="button" class="mini-btn primary" title="Browse and install mods in a separate window" onclick={() => void addContent("mod")}>
+            <Plus size={12} /> Add mods
+          </button>
           <button type="button" class="mini-btn" title="Open instance folder" onclick={() => void openFolder()}>
             <FolderOpen size={12} /> Folder
           </button>
@@ -379,7 +389,11 @@ collapse; this component always renders expanded. -->
       {#if packs.length === 0}
         <div class="empty">
           No {tab === "shaderpacks" ? "shaders" : "resource packs"} yet.
-          <button type="button" class="link" onclick={openCatalog}>Browse the catalog</button>
+          <button
+            type="button"
+            class="link"
+            onclick={() => void addContent(tab === "shaderpacks" ? "shader" : "resourcepack")}
+          >Browse the catalog</button>
         </div>
       {:else}
         <ul class="rows">
