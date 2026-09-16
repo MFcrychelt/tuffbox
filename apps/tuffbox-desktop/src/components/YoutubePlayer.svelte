@@ -4,6 +4,7 @@
   import { open } from "@tauri-apps/plugin-shell";
   import { X, ExternalLink, PictureInPicture2, Maximize2, GripVertical } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
+  import { suggestYouTubeModalWidth, YOUTUBE_MODAL_MIN_WIDTH } from "../lib/youtubeSizing";
 
   let {
     videoId,
@@ -275,6 +276,7 @@
 
   function toModal() {
     mode = "modal";
+    refreshModalWidth();
     closing = false;
     backdropOut = false;
     dialogOut = false;
@@ -401,10 +403,23 @@
     if (mode === "mini") {
       miniW = clampMiniW(miniW);
       clampMiniPos();
+    } else {
+      refreshModalWidth();
     }
   }
 
+  // Screen-aware modal width (Settings "Interface scale" compatible: the
+  // html zoom changes the CSS-px viewport, which this measures directly).
+  let modalWidth = $state(YOUTUBE_MODAL_MIN_WIDTH);
+
+  function refreshModalWidth() {
+    const vw = document.documentElement?.clientWidth || window.innerWidth || 0;
+    const vh = document.documentElement?.clientHeight || window.innerHeight || 0;
+    modalWidth = suggestYouTubeModalWidth(vw, vh);
+  }
+
   onMount(() => {
+    refreshModalWidth();
     void playOpenAnimation();
   });
 
@@ -447,6 +462,7 @@
     role="dialog"
     aria-modal={mode === "modal" ? "true" : "false"}
     aria-label={title || "YouTube player"}
+    style={`--yp-modal-w: ${modalWidth}px;`}
     use:trapFocus={{ onEscape: close, enabled: mode === "modal" }}
   >
     <div
@@ -623,7 +639,10 @@
   }
 
   .yp-dialog {
-    width: min(1400px, calc(100vw - 32px));
+    /* Screen-aware width (see lib/youtubeSizing.ts): floor at the legacy
+       1400px cap, grow toward the viewport on larger screens; the CSS clamps
+       remain the hard bounds. */
+    width: min(var(--yp-modal-w, 1400px), calc(100vw - 32px));
     max-height: calc(100vh - 24px);
     margin: auto;
     display: flex;

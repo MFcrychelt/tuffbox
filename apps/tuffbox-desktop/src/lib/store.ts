@@ -8,6 +8,8 @@ export {
   getFixPreference,
   setFixPreference,
 } from "./fixPreferences";
+// Screen-aware YouTube modal sizing — video counterpart of suggestUiScalePercent.
+export { suggestYouTubeModalWidth, YOUTUBE_MODAL_MIN_WIDTH } from "./youtubeSizing";
 
 export interface ProjectInfo {
   id: string;
