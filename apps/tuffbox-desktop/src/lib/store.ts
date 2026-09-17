@@ -8,6 +8,8 @@ export {
   getFixPreference,
   setFixPreference,
 } from "./fixPreferences";
+// Screen-aware YouTube modal sizing — video counterpart of suggestUiScalePercent.
+export { suggestYouTubeModalWidth, YOUTUBE_MODAL_MIN_WIDTH } from "./youtubeSizing";
 
 export interface ProjectInfo {
   id: string;
@@ -215,6 +217,8 @@ export interface LauncherSettings {
   gpuPreference: "auto" | "discrete" | "integrated";
   /** Hide IDE bottom workflow rail until cursor hits the window bottom edge. */
   autoHideWorkflowRail: boolean;
+  /** Hide the IDE top panel (status / next-step / health strip). */
+  hideIdeNextBar: boolean;
   /** Left nav: full labels | icons (button toggle) | autoHide (left-edge hover). */
   sidebarMode: SidebarMode;
   /** Interface zoom percent (75–150). */
@@ -733,7 +737,8 @@ export function removeRunning(
     error?: LaunchErrorInfo;
   },
 ) {
-  runningInstances.update((list) => list.filter((r) => r.id !== id));
+  const key = normalizeInstancePath(id);
+  runningInstances.update((list) => list.filter((r) => normalizeInstancePath(r.id) !== key));
   markLaunchExited(id, opts);
 }
 
@@ -945,6 +950,9 @@ export const questDirty = writable(false);
 
 /** Live mirror of launcherSettings.autoHideWorkflowRail for IDE rail. */
 export const autoHideWorkflowRail = writable(false);
+
+/** Live mirror of launcherSettings.hideIdeNextBar for the IDE top panel. */
+export const hideIdeNextBar = writable(false);
 
 /** Live mirror of launcherSettings.sidebarMode. */
 export const sidebarMode = writable<SidebarMode>("full");

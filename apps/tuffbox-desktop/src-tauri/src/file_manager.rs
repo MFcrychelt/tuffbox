@@ -13,7 +13,11 @@
 //! - macOS:   `open` (Finder)
 //! - Linux:   xdg-open, falling back to known file managers
 
-use std::process::{Command, Stdio};
+use std::process::Command;
+// Only the unix fallback branch pipes Stdio; a plain global import is
+// "unused" on Windows/macOS builds (each branch is cfg-compiled).
+#[cfg(all(unix, not(target_os = "macos")))]
+use std::process::Stdio;
 
 /// Open a directory in the OS file manager. On Windows the directory itself
 /// is opened (pass `select_path` to reveal/select a file or folder inside

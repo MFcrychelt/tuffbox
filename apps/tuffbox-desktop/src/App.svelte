@@ -15,7 +15,7 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, authState, youtubeQueueOpen, theme, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, hideIdeNextBar, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, authState, youtubeQueueOpen, theme, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import YoutubeQueueWindow from "./components/YoutubeQueueWindow.svelte";
   import { api } from "./lib/api";
@@ -345,6 +345,7 @@
         theme.set((s.theme === "light" ? "tuffbox-light" : s.theme) as ThemeId);
       }
       autoHideWorkflowRail.set(!!s.autoHideWorkflowRail);
+      hideIdeNextBar.set(!!s.hideIdeNextBar);
       sidebarMode.set(normalizeSidebarMode(s.sidebarMode));
       const applied = applyUiScaleFromSettings(launcherSnapshot);
       launcherSnapshot = { ...launcherSnapshot, uiScalePercent: applied };

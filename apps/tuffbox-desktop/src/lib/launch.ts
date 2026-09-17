@@ -28,6 +28,8 @@ import {
   authState,
   loginModalOpen,
   openLauncherSettings,
+  isLaunching,
+  launchProgress,
 } from "./store";
 import { shareCrashLogWithFeedback } from "./mclogs";
 import { reportSoftVerifyCrash } from "./softVerify";
@@ -46,33 +48,6 @@ export type LaunchPhase =
   | "stopping"
   | "exited"
   | "failed";
-
-export interface LaunchFeedbackOptions {
-  onStarted?: (result: LaunchResult) => void;
-  showSuccess?: boolean;
-  openLog?: boolean;
-  /** Manifest path for the log modal (for example, a staged server dir). */
-  logPath?: string | null;
-  logTitle?: string | null;
-}
-
-// ─── Shared launch state machine ─────────────────────────────────────
-//
-// The backend exposes an explicit lifecycle through Tauri events so every Play
-// button in the app can render the same accurate state instead of each keeping
-// its own local `launching` flag that is reset the instant `invoke` returns
-// (BUG_REPORT Bug 2). Phases flow:
-//
-//   (user clicks Play)
-//     → "preparing"   (launchWithFeedback starts the invoke)
-//     → "resolving_java" / "downloading"  (optional, from `launch-phase` events)
-//     → "starting"    (JVM spawn begins)
-//     → "running"     (`process-started` / `launch-phase` running)
-//     → "exited"      (`process-exited` / `launch-crashed`)
-//
-// A path is considered "launching" for phases preparing…starting and stays that
-// way until the backend confirms `running` or the run ends — never reset by the
-// return of the invoke alone.
 
 export interface LaunchParams {
   path: string;
@@ -135,18 +110,10 @@ export const launchStates = writable<Record<string, LaunchPhaseState>>({});
  */
 export const launchingPath = writable<string | null>(null);
 
-/**
- * Shared "is any instance launching?" store. Driven by the same lifecycle
- * events that update `launchingPath`. Components can subscribe to this instead
- * of maintaining their own `launching` flag.
- */
-export const isLaunching = writable(false);
-
-/**
- * Shared launch progress state — used by the progress bar / detailed status
- * messages in the header bar. Driven by `launch-phase` events from the backend.
- */
-export const launchProgress = writable<{ phase: string; message: string; percent: number | null } | null>(null);
+// `isLaunching` and `launchProgress` live in store.ts as the single shared
+// source (components subscribe there). This module only writes progress and
+// reads the derived busy flag — it must not keep private duplicates; they used
+// to diverge and left the header progress bar dead.
 
 /**
  * The last LaunchParams passed to `launchWithFeedback`. Retained so the
@@ -215,14 +182,12 @@ export function setLaunchError(path: string, error: LaunchErrorInfo): void {
 function markRunning(path: string): void {
   setLaunchPhase(path, "running", "Running");
   launchingPath.update((p) => (p === path ? null : p));
-  if (get(launchingPath) === null) isLaunching.set(false);
 }
 
 /** Mark a run as exited — clears the launching flag for this path. */
 function markExited(path: string): void {
   setLaunchPhase(path, "exited", "Exited");
   launchingPath.update((p) => (p === path ? null : p));
-  if (get(launchingPath) === null) isLaunching.set(false);
 }
 
 // Retryable error categories — mirrors `LaunchErrorKind::retryable` on the Rust
@@ -422,8 +387,44 @@ export async function launchWithFeedback(
           },
           {
             label: "Play offline",
+            // Bypass the auth guard — a plain recursive call would hit the
+            // same not-signed-in branch and warn forever instead of playing.
             run: () => {
-              void launchWithFeedback(params, options);
+              void attemptLaunch(params, options, true);
+            },
+          },
+        ],
+      );
+      return null;
+    }
+  }
+  return attemptLaunch(params, options, false);
+}
+
+/** Guarded body of launchWithFeedback; `skipAuthCheck` implements the
+ * user-confirmed offline launch. */
+async function attemptLaunch(
+  params: LaunchParams,
+  options: LaunchFeedbackOptions | undefined,
+  skipAuthCheck: boolean,
+): Promise<LaunchResult | null> {
+  const profile = params.profile ?? "client";
+  if (!skipAuthCheck && profile !== "server") {
+    const auth = get(authState);
+    if (!auth.loggedIn || !auth.profile) {
+      // Lost sign-in between the guard and here — surface the same warning.
+      toasts.warning(
+        "Sign in to play with your Minecraft account, or continue offline.",
+        12000,
+        [
+          {
+            label: "Sign in",
+            run: () => loginModalOpen.set(true),
+          },
+          {
+            label: "Play offline",
+            run: () => {
+              void attemptLaunch(params, options, true);
             },
           },
         ],
@@ -442,8 +443,8 @@ export async function launchWithFeedback(
   const showLog = options?.openLog !== false;
   if (showLog) openLaunchLog(options?.logPath ?? params.path, options?.logTitle ?? null);
   // Enter the pre-run launch phase. Kept until process-started / exit events.
+  // (isLaunching derives from launchSessions — beginLaunchSession flipped it.)
   launchingPath.set(params.path);
-  isLaunching.set(true);
   setLaunchPhase(params.path, "preparing", "Preparing…");
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -489,7 +490,6 @@ export async function launchWithFeedback(
     failLaunchSession(params.path, info);
     setLaunchError(params.path, info);
     launchingPath.update((p) => (p === params.path ? null : p));
-    if (get(launchingPath) === null) isLaunching.set(false);
     showLaunchError(info, () => void launchWithFeedback(params, options), { path: params.path });
     if (showLog) openLaunchLog(options?.logPath ?? params.path, options?.logTitle ?? null);
     return null;
@@ -712,7 +712,6 @@ export function registerLaunchCrashListener(): Promise<UnlistenFn> {
         failLaunchSession(path, crash.error);
         setLaunchError(path, crash.error);
         launchingPath.update((p) => (p === path ? null : p));
-        if (get(launchingPath) === null) isLaunching.set(false);
         void reportSoftVerifyCrash(path);
         // Keep the live log modal open on the crashed session.
         openLaunchLog(path);
@@ -775,7 +774,6 @@ export function registerProcessListeners(): Promise<UnlistenFn[]> {
           else {
             setLaunchPhase(lifecycle.id, mapped, lifecycle.message ?? null);
             launchingPath.set(lifecycle.id);
-            isLaunching.set(true);
           }
         }
       }),

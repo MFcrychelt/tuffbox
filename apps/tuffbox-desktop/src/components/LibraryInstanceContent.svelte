@@ -18,6 +18,7 @@ collapse; this component always renders expanded. -->
     ExternalLink,
     Play,
     Search,
+    SlidersHorizontal,
     Users,
   } from "@lucide/svelte";
   import { api, type ContentPackEntry, type McServerEntry } from "../lib/api";
@@ -29,7 +30,10 @@ collapse; this component always renders expanded. -->
     runningInstances,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
+  import { get } from "svelte/store";
+  import { t } from "../lib/i18n";
   import { launchWithFeedback } from "../lib/launch";
+  import { openModsBrowserWindow, type BrowserContentType } from "../lib/modsBrowserWindow";
 
   type Tab = "mods" | "resourcepacks" | "shaderpacks" | "servers";
   type PingResult = {
@@ -44,9 +48,12 @@ collapse; this component always renders expanded. -->
   const {
     projectPath,
     onOpenMods,
+    onManage,
   }: {
     projectPath: string;
     onOpenMods: () => void;
+    /** Opens the Prism-style instance manager (mods / backups / health). */
+    onManage?: () => void;
   } = $props();
 
   const TAB_KEY = "tuffbox-instance-home-tab";
@@ -208,6 +215,12 @@ collapse; this component always renders expanded. -->
     window.dispatchEvent(new CustomEvent("tuffbox:open-library"));
   }
 
+  /** Standalone content browser window; Discover tab as the fallback. */
+  async function addContent(type: BrowserContentType) {
+    if (await openModsBrowserWindow(projectPath, type)) return;
+    openCatalog();
+  }
+
   async function addServer() {
     if (!newServerName.trim() || !newServerAddress.trim()) return;
     busyKey = "add-server";
@@ -215,7 +228,7 @@ collapse; this component always renders expanded. -->
       servers = await api.servers.add(newServerName.trim(), newServerAddress.trim(), projectPath);
       newServerName = "";
       newServerAddress = "";
-      toasts.success("Server added");
+      toasts.success(get(t)("content.toastAdded"));
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -290,7 +303,7 @@ collapse; this component always renders expanded. -->
 </script>
 
 <div class="lib-content">
-  <div class="tabs" role="tablist" aria-label="Instance content">
+  <div class="tabs" role="tablist" aria-label={$t("content.title")}>
     <button
       type="button"
       role="tab"
@@ -333,7 +346,7 @@ collapse; this component always renders expanded. -->
       type="button"
       class="mini-btn icon"
       title="Refresh"
-      aria-label="Refresh"
+      aria-label={$t("common.refresh")}
       disabled={loading}
       onclick={() => void load({ force: true })}
     >
@@ -361,6 +374,14 @@ collapse; this component always renders expanded. -->
           <button type="button" class="mini-btn primary" onclick={onOpenMods}>
             <ExternalLink size={12} /> Open Mods
           </button>
+          {#if onManage}
+            <button type="button" class="mini-btn primary" onclick={onManage}>
+              <SlidersHorizontal size={12} /> Manage
+            </button>
+          {/if}
+          <button type="button" class="mini-btn primary" title={$t("content.browseCatalogTitle")} onclick={() => void addContent("mod")}>
+            <Plus size={12} /> Add mods
+          </button>
           <button type="button" class="mini-btn" title="Open instance folder" onclick={() => void openFolder()}>
             <FolderOpen size={12} /> Folder
           </button>
@@ -370,7 +391,11 @@ collapse; this component always renders expanded. -->
       {#if packs.length === 0}
         <div class="empty">
           No {tab === "shaderpacks" ? "shaders" : "resource packs"} yet.
-          <button type="button" class="link" onclick={openCatalog}>Browse the catalog</button>
+          <button
+            type="button"
+            class="link"
+            onclick={() => void addContent(tab === "shaderpacks" ? "shader" : "resourcepack")}
+          >{$t("content.browseCatalog")}</button>
         </div>
       {:else}
         <ul class="rows">
@@ -393,7 +418,7 @@ collapse; this component always renders expanded. -->
         </ul>
       {/if}
       <div class="panel-foot">
-        <button type="button" class="mini-btn" title="Open folder" onclick={() => void openFolder()}>
+        <button type="button" class="mini-btn" title={$t("library.openFolder")} onclick={() => void openFolder()}>
           <FolderOpen size={12} /> Folder
         </button>
       </div>
@@ -407,15 +432,15 @@ collapse; this component always renders expanded. -->
       >
         <input
           type="text"
-          placeholder="Name"
-          aria-label="Server name"
+          placeholder={$t("content.namePh")}
+          aria-label={$t("content.serverName")}
           bind:value={newServerName}
           maxlength={64}
         />
         <input
           type="text"
           placeholder="play.example.com"
-          aria-label="Server address"
+          aria-label={$t("content.serverAddr")}
           bind:value={newServerAddress}
           maxlength={128}
         />
@@ -428,7 +453,7 @@ collapse; this component always renders expanded. -->
         </button>
       </form>
       {#if servers.length === 0}
-        <div class="empty">No servers yet — add one above to track its status.</div>
+        <div class="empty">{$t("content.noServers")}</div>
       {:else}
         <ul class="rows servers">
           {#each sortedServers as srv (srv.address)}
@@ -452,13 +477,13 @@ collapse; this component always renders expanded. -->
                   <Users size={12} /> {ping.playersOnline}/{ping.playersMax}
                 </span>
               {:else if ping && !ping.online}
-                <span class="players off">offline</span>
+                <span class="players off">{$t("content.offline")}</span>
               {/if}
               <span class="srv-actions">
                 <button
                   type="button"
                   class="mini-btn primary"
-                  title="Join server"
+                  title={$t("content.join")}
                   disabled={projectLaunching || projectRunning || busyKey === `join:${srv.address}`}
                   onclick={() => void joinServer(srv.address)}
                 >
@@ -477,7 +502,7 @@ collapse; this component always renders expanded. -->
                 <button
                   type="button"
                   class="mini-btn icon danger"
-                  title="Delete"
+                  title={$t("common.delete")}
                   aria-label={`Delete ${srv.name}`}
                   disabled={busyKey === srv.address}
                   onclick={() => void removeServer(srv.address)}

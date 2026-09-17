@@ -12,6 +12,7 @@
   import type { PresenceSettings, LauncherSettings, SidebarMode, UiScaleMode } from "../lib/store";
   import {
     autoHideWorkflowRail,
+    hideIdeNextBar,
     sidebarMode,
     normalizeSidebarMode,
     applyUiScaleFromSettings,
@@ -34,6 +35,7 @@
   } from "../lib/themes";
   import AiSettingsPanel from "./AiSettingsPanel.svelte";
   import ThemePicker from "./ThemePicker.svelte";
+  import { t } from "../lib/i18n";
   import JavaPickerModal from "./JavaPickerModal.svelte";
   import { copyText } from "../lib/clipboard";
 
@@ -195,6 +197,7 @@
     cpuAffinityMask: null,
     gpuPreference: "auto",
     autoHideWorkflowRail: false,
+    hideIdeNextBar: false,
     sidebarMode: "full",
     uiScalePercent: 100,
     uiScaleMode: "auto",
@@ -367,6 +370,7 @@
       applyPotatoPc(reducedMotion);
       localStorage.setItem("tuffbox-reduced-motion", reducedMotion ? "1" : "0");
       autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
+      hideIdeNextBar.set(!!launcher.hideIdeNextBar);
       sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
       const applied = applyUiScaleFromSettings(launcher);
       launcher = { ...launcher, uiScalePercent: applied };
@@ -446,6 +450,9 @@
       if (partial && "autoHideWorkflowRail" in partial) {
         autoHideWorkflowRail.set(!!next.autoHideWorkflowRail);
       }
+      if (partial && "hideIdeNextBar" in partial) {
+        hideIdeNextBar.set(!!next.hideIdeNextBar);
+      }
       if (partial && "sidebarMode" in partial) {
         sidebarMode.set(normalizeSidebarMode(next.sidebarMode));
       }
@@ -465,6 +472,9 @@
       }
       if (partial && "autoHideWorkflowRail" in partial) {
         autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
+      }
+      if (partial && "hideIdeNextBar" in partial) {
+        hideIdeNextBar.set(!!launcher.hideIdeNextBar);
       }
       if (partial && "sidebarMode" in partial) {
         sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
@@ -1179,23 +1189,23 @@
 </script>
 
 <div class="settings fade-slide-in">
-  <nav class="tabs" aria-label="Settings sections">
-    {#each tabs as t (t.id)}
-      {@const Icon = t.icon}
+  <nav class="tabs" aria-label={$t("settings.sections")}>
+    {#each tabs as tabDef (tabDef.id)}
+      {@const Icon = tabDef.icon}
       <button
         type="button"
         class="tab press-effect"
-        class:active={tab === t.id}
-        onclick={() => (tab = t.id)}
+        class:active={tab === tabDef.id}
+        onclick={() => (tab = tabDef.id)}
       >
         <Icon size={16} />
-        {t.label}
+        {$t(`settings.tab.${tabDef.id}`)}
       </button>
     {/each}
   </nav>
 
   {#if tab === "launcher"}
-    <nav class="launcher-subnav" aria-label="Launcher settings">
+    <nav class="launcher-subnav" aria-label={$t("settings.subnav")}>
       {#each launcherSubs as s (s.id)}
         <button
           type="button"
@@ -1206,7 +1216,7 @@
             if (s.id === "storage") void loadStoreStats();
           }}
         >
-          {s.label}
+          {$t(`settings.sub.${s.id}`)}
         </button>
       {/each}
     </nav>
@@ -1220,18 +1230,18 @@
       <section class="card card-wide">
         <div class="card-title">
           <Palette size={18} />
-          <h3>Appearance</h3>
+          <h3>{$t("settings.appearance")}</h3>
         </div>
         <div class="field">
-          <span class="field-label">Theme</span>
+          <span class="field-label">{$t("settings.theme")}</span>
           <ThemePicker value={$theme} onChange={onThemeChange} />
-          <p class="hint">Hover a swatch to preview — click to save.</p>
+          <p class="hint">{$t("settings.themeHint")}</p>
         </div>
         <label class="check-row">
           <input type="checkbox" checked={reducedMotion} onchange={toggleReducedMotion} />
-          Potato PC mode (reduce motion / animations)
+          {$t("settings.potato")}
         </label>
-        <p class="hint">Disables CSS animations and transitions for weaker machines.</p>
+        <p class="hint">{$t("settings.potatoHint")}</p>
 
         <label class="check-row" style="margin-top: 14px;">
           <input
@@ -1242,11 +1252,9 @@
               applyGlassEffects(glassEffects);
             }}
           />
-          Glass transparency
+          {$t("settings.glass")}
         </label>
-        <p class="hint">
-          See-through cards, sidebar and header with backdrop blur over the theme background — works with every theme. Off by default.
-        </p>
+        <p class="hint">{$t("settings.glassHint")}</p>
 
         <label class="check-row" style="margin-top: 14px;">
           <input
@@ -1255,9 +1263,9 @@
             disabled={launcherSaving}
             onchange={(e) => void persistLauncher({ roundedCorners: e.currentTarget.checked })}
           />
-          Rounded corners
+          {$t("settings.rounded")}
         </label>
-        <p class="hint">Round edges on panels, cards, modals, and chrome — works with every theme.</p>
+        <p class="hint">{$t("settings.roundedHint")}</p>
 
         <label class="check-row" style="margin-top: 14px;">
           <input
@@ -1266,21 +1274,22 @@
             disabled={launcherSaving}
             onchange={(e) => void persistLauncher({ homeBackdrop: e.currentTarget.checked })}
           />
-          Home backdrop
+          {$t("settings.backdrop")}
         </label>
-        <p class="hint">Polished stone backdrop panel behind the home dashboard (home only).</p>
+        <p class="hint">{$t("settings.backdropHint")}</p>
 
         <div class="settings-row" style="margin-top: 18px;">
           <div class="settings-row-text">
-            <strong>Interface scale</strong>
+            <strong>{$t("settings.uiScale")}</strong>
             <p>
-              Zoom the whole UI — buttons, sidebar, Content mod cards, dialogs.
-              <strong>Auto</strong> picks a size from your screen and window; pick a percent to lock it.
+              {$t("settings.uiScaleDescA")}
+              <strong>{$t("settings.auto")}</strong>
+              {$t("settings.uiScaleDescB")}
             </p>
             <p class="hint" style="margin-top: 6px;">
-              Suggested for this screen: {suggestUiScalePercent()}%
+              {$t("settings.suggestedScale", { n: suggestUiScalePercent() })}
               {#if resolveUiScaleMode(launcher) === "auto"}
-                · following window size
+                {$t("settings.followingWindow")}
               {/if}
             </p>
           </div>
@@ -1294,9 +1303,9 @@
                 onclick={() => void persistLauncher({ uiScaleMode: "auto" as UiScaleMode })}
               >
                 {#if resolveUiScaleMode(launcher) === "auto"}
-                  Auto · {normalizeUiScalePercent(launcher.uiScalePercent)}%
+                  {$t("settings.auto")} · {normalizeUiScalePercent(launcher.uiScalePercent)}%
                 {:else}
-                  Auto
+                  {$t("settings.auto")}
                 {/if}
               </button>
               {#each UI_SCALE_STEPS as pct (pct)}
@@ -1320,16 +1329,13 @@
       <section class="card card-wide">
         <div class="card-title">
           <Settings2 size={18} />
-          <h3>General</h3>
+          <h3>{$t("settings.general")}</h3>
         </div>
 
         <div class="settings-row">
           <div class="settings-row-text">
-            <strong>YouTube feed on home</strong>
-            <p>
-              Minecraft YouTube strip on the home screen. Hidden by default — turn it on here
-              or via the feed settings button on the home banner.
-            </p>
+            <strong>{$t("settings.ytFeed")}</strong>
+            <p>{$t("settings.ytFeedDesc")}</p>
           </div>
           <div class="settings-row-control">
             <div class="chip-row tight">
@@ -1340,7 +1346,7 @@
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ showYoutubeOnHome: true })}
               >
-                Shown
+                {$t("settings.shown")}
               </button>
               <button
                 type="button"
@@ -1349,7 +1355,7 @@
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ showYoutubeOnHome: false })}
               >
-                Hidden
+                {$t("settings.hidden")}
               </button>
             </div>
           </div>
@@ -1358,11 +1364,8 @@
         {#if launcher.showYoutubeOnHome}
         <div class="settings-row">
           <div class="settings-row-text">
-            <strong>YouTube player</strong>
-            <p>
-              Litube-style in-app player loads a privacy embed only after you click a thumbnail.
-              Preview-only keeps static images and opens videos in the system browser.
-            </p>
+            <strong>{$t("settings.ytPlayer")}</strong>
+            <p>{$t("settings.ytPlayerDesc")}</p>
           </div>
           <div class="settings-row-control">
             <div class="chip-row tight">
@@ -1373,7 +1376,7 @@
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ youtubeInlinePlayer: true })}
               >
-                In-app player
+                {$t("settings.inAppPlayer")}
               </button>
               <button
                 type="button"
@@ -1382,7 +1385,7 @@
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ youtubeInlinePlayer: false })}
               >
-                Preview only
+                {$t("settings.previewOnly")}
               </button>
             </div>
           </div>
@@ -1391,10 +1394,10 @@
 
         <div class="settings-row">
           <div class="settings-row-text">
-            <strong>In-game overlay</strong>
+            <strong>{$t("settings.overlay")}</strong>
             <p>
-              F8 fullscreen overlay (OpenGL hook) — any MC version / loader. Friends, chat,
-              YouTube feed via launcher IPC. Place <code>mpv-2.dll</code> next to the hook for video.
+              {$t("settings.overlayDescA")} <code>mpv-2.dll</code>
+              {$t("settings.overlayDescB")}
             </p>
           </div>
           <div class="settings-row-control">
@@ -1406,7 +1409,7 @@
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ ingameOverlay: true })}
               >
-                Enabled
+                {$t("settings.enabled")}
               </button>
               <button
                 type="button"
@@ -1415,7 +1418,7 @@
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ ingameOverlay: false })}
               >
-                Disabled
+                {$t("settings.disabled")}
               </button>
             </div>
           </div>
@@ -1423,11 +1426,8 @@
 
         <div class="settings-row">
           <div class="settings-row-text">
-            <strong>Dynamic bottom panel</strong>
-            <p>
-              Hide the IDE workflow rail (Content, Setup, …). Move the cursor to the bottom edge of
-              the window to slide it out quickly; it hides again when you leave.
-            </p>
+            <strong>{$t("settings.dynPanel")}</strong>
+            <p>{$t("settings.dynPanelDesc")}</p>
           </div>
           <div class="settings-row-control">
             <div class="chip-row tight">
@@ -1438,7 +1438,7 @@
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ autoHideWorkflowRail: true })}
               >
-                Auto-hide
+                {$t("settings.autoHide")}
               </button>
               <button
                 type="button"
@@ -1447,7 +1447,7 @@
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ autoHideWorkflowRail: false })}
               >
-                Always visible
+                {$t("settings.alwaysVisible")}
               </button>
             </div>
           </div>
@@ -1455,8 +1455,37 @@
 
         <div class="settings-row">
           <div class="settings-row-text">
-            <strong>Concurrent downloads</strong>
-            <p>How many files to fetch in parallel when installing mods or updating the instance.</p>
+            <strong>{$t("settings.idePanel")}</strong>
+            <p>{$t("settings.idePanelDesc")}</p>
+          </div>
+          <div class="settings-row-control">
+            <div class="chip-row tight">
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.hideIdeNextBar === true}
+                disabled={launcherSaving}
+                onclick={() => void persistLauncher({ hideIdeNextBar: true })}
+              >
+                {$t("settings.hidden")}
+              </button>
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.hideIdeNextBar !== true}
+                disabled={launcherSaving}
+                onclick={() => void persistLauncher({ hideIdeNextBar: false })}
+              >
+                {$t("settings.alwaysVisible")}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <strong>{$t("settings.concDownloads")}</strong>
+            <p>{$t("settings.concDownloadsDesc")}</p>
           </div>
           <div class="settings-row-control">
             <select
@@ -1464,7 +1493,7 @@
               value={String(launcher.concurrentDownloads)}
               onchange={onConcurrentChange}
               disabled={launcherSaving}
-              aria-label="Concurrent downloads"
+              aria-label={$t("settings.concDownloads")}
             >
               {#each concurrentSelectOptions as n (n)}
                 <option value={String(n)}>{n}</option>
@@ -1475,25 +1504,25 @@
 
         <div class="settings-row" class:settings-row-stack={resMode === "custom"}>
           <div class="settings-row-text">
-            <strong>Game resolution</strong>
-            <p>Window size passed to Minecraft on launch. Leave Default to use the game’s own setting.</p>
+            <strong>{$t("settings.resolution")}</strong>
+            <p>{$t("settings.resolutionDesc")}</p>
           </div>
           <div class="settings-row-control">
             <div class="chip-row tight">
-              <button type="button" class="chip press-effect" class:active={resMode === "default"} disabled={launcherSaving} onclick={() => applyResolution("default")}>Default</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "default"} disabled={launcherSaving} onclick={() => applyResolution("default")}>{$t("settings.default")}</button>
               <button type="button" class="chip press-effect" class:active={resMode === "854x480"} disabled={launcherSaving} onclick={() => applyResolution("854x480")}>854×480</button>
               <button type="button" class="chip press-effect" class:active={resMode === "1280x720"} disabled={launcherSaving} onclick={() => applyResolution("1280x720")}>720p</button>
               <button type="button" class="chip press-effect" class:active={resMode === "1920x1080"} disabled={launcherSaving} onclick={() => applyResolution("1920x1080")}>1080p</button>
-              <button type="button" class="chip press-effect" class:active={resMode === "custom"} disabled={launcherSaving} onclick={() => (resMode = "custom")}>Custom</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "custom"} disabled={launcherSaving} onclick={() => (resMode = "custom")}>{$t("settings.custom")}</button>
             </div>
             {#if resMode === "custom"}
               <div class="res-custom">
                 <label class="field-inline">
-                  Width
+                  {$t("settings.width")}
                   <input type="number" min="640" max="7680" step="1" bind:value={customW} />
                 </label>
                 <label class="field-inline">
-                  Height
+                  {$t("settings.height")}
                   <input type="number" min="480" max="4320" step="1" bind:value={customH} />
                 </label>
                 <button type="button" class="secondary" onclick={() => applyResolution("custom")} disabled={launcherSaving}>
@@ -1506,8 +1535,8 @@
 
         <div class="settings-row settings-row-stack">
           <div class="settings-row-text">
-            <strong>Discord Rich Presence</strong>
-            <p>Show what you’re playing in Discord while Minecraft is running. Needs an Application Client ID from the Discord Developer Portal.</p>
+            <strong>{$t("settings.discord")}</strong>
+            <p>{$t("settings.discordDesc")}</p>
           </div>
           <div class="settings-row-control discord-block">
             {#if discordError}<div class="notice error compact"><AlertTriangle size={14} /> {discordError}</div>{/if}
@@ -1519,45 +1548,46 @@
                 disabled={discordSaving}
                 onchange={onDiscordToggle}
               />
-              Enable Rich Presence
+              {$t("settings.enableRpc")}
             </label>
             <label class="field-inline">
-              Application Client ID
+              {$t("settings.clientId")}
               <div class="path-row">
                 <input
                   bind:value={discordClientId}
-                  placeholder="Application ID from Discord Developer Portal"
+                  placeholder={$t("settings.clientIdPlaceholder")}
                   autocomplete="off"
                   disabled={discordSaving}
                   oninput={() => (discordDirty = true)}
                 />
-                <button type="button" class="ghost mini" onclick={openDiscordPortal} title="Open Discord Developer Portal">
-                  <ExternalLink size={14} /> Portal
+                <button type="button" class="ghost mini" onclick={openDiscordPortal} title={$t("settings.portalTitle")}>
+                  <ExternalLink size={14} /> {$t("settings.portal")}
                 </button>
               </div>
             </label>
             <div class="row-actions">
               <button type="button" onclick={savePresence} disabled={discordSaving || !discordDirty}>
                 {#if discordSaving}
-                  <Loader2 size={14} class="spin" /> Saving…
+                  <Loader2 size={14} class="spin" /> {$t("settings.saving")}
                 {:else}
-                  <MessageCircle size={14} /> Save presence
+                  <MessageCircle size={14} /> {$t("settings.savePresence")}
                 {/if}
               </button>
             </div>
-            <p class="hint flat">Optional: upload a large image asset named <code>tuffbox</code> in the Discord app for a richer status card.</p>
+            <p class="hint flat">{$t("settings.discordHintA")} <code>tuffbox</code> {$t("settings.discordHintB")}</p>
           </div>
         </div>
 
         <div class="settings-row settings-row-stack">
           <div class="settings-row-text">
-            <strong>Keyboard shortcuts</strong>
-            <p>Built-in hotkeys for navigating TuffBox.</p>
+            <strong>{$t("settings.shortcuts")}</strong>
+            <p>{$t("settings.shortcutsDesc")}</p>
           </div>
           <div class="settings-row-control">
             <button type="button" class="ghost" onclick={() => (shortcutsOpen = !shortcutsOpen)}>
               <Command size={14} />
-              {shortcutsOpen ? "Hide" : "Show"} shortcuts ({shortcuts.length})
+              {$t(shortcutsOpen ? "settings.hide" : "settings.show")}
+              {$t("settings.shortcutsWord")} ({shortcuts.length})
             </button>
             {#if shortcutsOpen}
               <div class="shortcut-list">
@@ -1579,52 +1609,46 @@
       <section class="card card-wide">
         <div class="card-title">
           <Coffee size={18} />
-          <h3>Java</h3>
+          <h3>{$t("settings.java")}</h3>
         </div>
         <label>
-          Default Java path
+          {$t("settings.defaultJavaPath")}
           <div class="path-row">
             <input
               readonly
-              value={launcher.defaultJavaPath ?? "Auto-detect"}
-              title={launcher.defaultJavaPath ?? "Auto-detect"}
+              value={launcher.defaultJavaPath ?? $t("settings.autoDetect")}
+              title={launcher.defaultJavaPath ?? $t("settings.autoDetect")}
             />
-            <button type="button" class="secondary" onclick={() => (showJavaPicker = true)}>Browse…</button>
+            <button type="button" class="secondary" onclick={() => (showJavaPicker = true)}>{$t("settings.browse")}</button>
           </div>
         </label>
         <label>
-          Custom Java arguments
+          {$t("settings.customArgs")}
           <textarea
             rows="3"
             bind:value={launcher.javaCustomArgs}
             placeholder="-XX:+UseG1GC …"
             onblur={() => persistLauncher({ javaCustomArgs: launcher.javaCustomArgs?.trim() || null })}
           ></textarea>
-          <small class="auto-tune-msg">
-            Extra options passed to Java when the game starts (garbage collector tuning and
-            similar). Leave empty if unsure — TuffBox already picks sensible defaults.
-          </small>
+          <small class="auto-tune-msg">{$t("settings.customArgsHint")}</small>
         </label>
         <label>
-          CPU affinity
+          {$t("settings.cpuAffinity")}
           <div class="path-row">
             <select
               bind:value={launcher.cpuAffinityMode}
               onchange={() => persistLauncher({ cpuAffinityMode: launcher.cpuAffinityMode })}
             >
-              <option value="off">Off (let Windows decide)</option>
-              <option value="performance">Performance cores (hybrid CPUs)</option>
-              <option value="manual">Manual mask</option>
+              <option value="off">{$t("settings.affinityOff")}</option>
+              <option value="performance">{$t("settings.affinityPerf")}</option>
+              <option value="manual">{$t("settings.affinityManual")}</option>
             </select>
           </div>
-          <small class="auto-tune-msg">
-            Chooses which CPU cores the game runs on. Leave "Off" if unsure — "Performance
-            cores" only helps on hybrid CPUs (Intel 12th gen+); "Manual mask" is for advanced users.
-          </small>
+          <small class="auto-tune-msg">{$t("settings.affinityHint")}</small>
         </label>
         {#if launcher.cpuAffinityMode === "manual"}
           <label>
-            Affinity mask (hex)
+            {$t("settings.affinityMask")}
             <input
               bind:value={launcher.cpuAffinityMask}
               placeholder="0xFF0"
@@ -1634,24 +1658,24 @@
           </label>
         {/if}
         <label>
-          GPU
+          {$t("settings.gpu")}
           <div class="path-row">
             <select
               bind:value={launcher.gpuPreference}
               onchange={() => persistLauncher({ gpuPreference: launcher.gpuPreference })}
             >
-              <option value="auto">Auto (discrete when available)</option>
-              <option value="discrete">Discrete GPU</option>
-              <option value="integrated">Integrated GPU</option>
+              <option value="auto">{$t("settings.gpuAuto")}</option>
+              <option value="discrete">{$t("settings.gpuDiscrete")}</option>
+              <option value="integrated">{$t("settings.gpuIntegrated")}</option>
             </select>
             <button
               type="button"
               class="secondary"
               disabled={gpusLoading}
-              title="Re-detect GPUs"
+              title={$t("settings.redetectGpus")}
               onclick={() => void loadGpus()}
             >
-              {gpusLoading ? "Detecting…" : "Detect"}
+              {gpusLoading ? $t("settings.detecting") : $t("settings.detect")}
             </button>
           </div>
           <small class="auto-tune-msg">
@@ -1667,7 +1691,7 @@
           </small>
         </label>
         <label>
-          Default memory (MB)
+          {$t("settings.memory")}
           <div class="path-row">
             <input
               type="number"
@@ -1683,10 +1707,10 @@
               type="button"
               class="secondary"
               disabled={autoTuneBusy}
-              title="Pick heap size from total RAM and mod count"
+              title={$t("settings.autoTuneTitle")}
               onclick={() => applyAutoTune()}
             >
-              {autoTuneBusy ? "Measuring…" : "Auto"}
+              {autoTuneBusy ? $t("settings.measuring") : $t("settings.auto")}
             </button>
           </div>
           {#if autoTuneMsg}
@@ -1703,7 +1727,7 @@
                 defaultMemoryMb: Math.max(512, Number(launcher.defaultMemoryMb) || 4096),
               })}
           >
-            {launcherSaving ? "Saving…" : "Save Java settings"}
+            {launcherSaving ? $t("settings.saving") : $t("settings.saveJava")}
           </button>
         </div>
       </section>
@@ -1713,34 +1737,34 @@
       <section class="card card-wide">
         <div class="card-title">
           <Terminal size={18} />
-          <h3>Launch commands</h3>
+          <h3>{$t("settings.launchCommands")}</h3>
         </div>
         <label>
-          Run before the game starts
+          {$t("settings.preLaunch")}
           <input
             bind:value={launcher.preLaunchHook}
-            placeholder="Optional command, e.g. a backup script"
+            placeholder={$t("settings.preLaunchPlaceholder")}
             onblur={() => persistLauncher({ preLaunchHook: launcher.preLaunchHook?.trim() || null })}
           />
-          <small class="auto-tune-msg">Optional. Runs once right before Minecraft launches.</small>
+          <small class="auto-tune-msg">{$t("settings.preLaunchHint")}</small>
         </label>
         <label>
-          Run after the game closes
+          {$t("settings.postExit")}
           <input
             bind:value={launcher.postExitHook}
-            placeholder="Optional command, e.g. cleanup"
+            placeholder={$t("settings.postExitPlaceholder")}
             onblur={() => persistLauncher({ postExitHook: launcher.postExitHook?.trim() || null })}
           />
-          <small class="auto-tune-msg">Optional. Runs once after you quit the game.</small>
+          <small class="auto-tune-msg">{$t("settings.postExitHint")}</small>
         </label>
         <label>
-          Wrapper command
+          {$t("settings.wrapper")}
           <input
             bind:value={launcher.wrapperCommand}
-            placeholder="e.g. gamemoderun (Linux)"
+            placeholder={$t("settings.wrapperPlaceholder")}
             onblur={() => persistLauncher({ wrapperCommand: launcher.wrapperCommand?.trim() || null })}
           />
-          <small class="auto-tune-msg">Optional. Starts the game through this command (advanced).</small>
+          <small class="auto-tune-msg">{$t("settings.wrapperHint")}</small>
         </label>
         <div class="row-actions save-row">
           <button
@@ -1763,22 +1787,21 @@
       <section class="card card-wide">
         <div class="card-title">
           <HardDrive size={18} />
-          <h3>Runtime path</h3>
+          <h3>{$t("settings.runtimePath")}</h3>
         </div>
         <p class="hint">
-          Move the shared runtime (libraries, assets, Java) to another disk to free space on the system drive.
-          Default: <code>{defaultRuntimePath || "…"}</code>
+          {$t("settings.runtimeHint")} <code>{defaultRuntimePath || "…"}</code>
         </p>
         <label>
-          Runtime directory
+          {$t("settings.runtimeDir")}
           <div class="path-row">
             <input bind:value={runtimeDraft} placeholder={defaultRuntimePath || "Runtime path"} />
-            <button type="button" class="secondary" onclick={browseRuntime}>Browse…</button>
+            <button type="button" class="secondary" onclick={browseRuntime}>{$t("settings.browse")}</button>
           </div>
         </label>
         <div class="row-actions">
           <button type="button" onclick={applyRuntimePath} disabled={launcherSaving}>
-            {launcherSaving ? "Saving…" : "Apply path"}
+            {launcherSaving ? $t("settings.saving") : $t("settings.applyPath")}
           </button>
           <button
             type="button"
@@ -1789,7 +1812,7 @@
               void applyRuntimePath();
             }}
           >
-            Reset to default
+            {$t("settings.resetDefault")}
           </button>
         </div>
       </section>
@@ -1797,22 +1820,21 @@
       <section class="card card-wide">
         <div class="card-title">
           <HardDrive size={18} />
-          <h3>Modpacks / instances folder</h3>
+          <h3>{$t("settings.instancesFolder")}</h3>
         </div>
         <p class="hint">
-          Where Discover and Add Instance download modpacks by default.
-          Default: <code>{defaultInstancesPath || "…"}</code>
+          {$t("settings.instancesHint")} <code>{defaultInstancesPath || "…"}</code>
         </p>
         <label>
-          Download directory
+          {$t("settings.downloadDir")}
           <div class="path-row">
             <input bind:value={instancesDraft} placeholder={defaultInstancesPath || "Instances path"} />
-            <button type="button" class="secondary" onclick={browseInstances}>Browse…</button>
+            <button type="button" class="secondary" onclick={browseInstances}>{$t("settings.browse")}</button>
           </div>
         </label>
         <div class="row-actions">
           <button type="button" onclick={applyInstancesPath} disabled={launcherSaving}>
-            {launcherSaving ? "Saving…" : "Apply path"}
+            {launcherSaving ? $t("settings.saving") : $t("settings.applyPath")}
           </button>
           <button
             type="button"
@@ -1823,7 +1845,7 @@
               void applyInstancesPath();
             }}
           >
-            Reset to default
+            {$t("settings.resetDefault")}
           </button>
         </div>
       </section>
@@ -1833,19 +1855,21 @@
       <section class="card card-wide">
         <div class="card-title">
           <HardDrive size={18} />
-          <h3>Dedup store</h3>
+          <h3>{$t("settings.dedupStore")}</h3>
         </div>
         <p class="hint">
-          TuffBox stores identical mod jars, resourcepacks, shaderpacks, libraries and
-          game files once on disk and hard-links them into every project that uses them.
-          {storeObjectCount ?? "…"} shared file(s), {storeBytes == null ? "…" : formatBytes(storeBytes)} on disk.
+          {$t("settings.dedupDesc")}
+          {$t("settings.dedupCounts", {
+            n: storeObjectCount ?? "…",
+            size: storeBytes == null ? "…" : formatBytes(storeBytes),
+          })}
         </p>
         <div class="row-actions">
           <button type="button" onclick={runRetroDedup} disabled={storeBusy}>
-            {storeBusy ? "Working…" : "Deduplicate existing projects"}
+            {storeBusy ? $t("settings.working") : $t("settings.dedupRun")}
           </button>
           <button type="button" class="ghost" onclick={runStoreGc} disabled={storeBusy}>
-            Clean unused store files
+            {$t("settings.dedupClean")}
           </button>
         </div>
         {#if storeMsg}
@@ -1858,12 +1882,9 @@
       <section class="card card-wide">
         <div class="card-title">
           <Bot size={18} />
-          <h3>AI</h3>
+          <h3>{$t("settings.ai")}</h3>
         </div>
-        <p class="hint">
-          TuffBox can use AI to explain crashes and suggest fixes. Run it locally with Ollama
-          (private, works offline) or connect a cloud API with a key. Advanced options live below.
-        </p>
+        <p class="hint">{$t("settings.aiDesc")}</p>
         <AiSettingsPanel onsaved={loadIntegrations} />
       </section>
     {/if}
@@ -1872,11 +1893,11 @@
       <section class="card card-wide">
         <div class="card-title">
           <Plug size={18} />
-          <h3>Integrations</h3>
+          <h3>{$t("settings.integrations")}</h3>
         </div>
 
         {#if integrationsLoading}
-          <div class="inline-status"><Loader2 size={14} class="spin" /> Loading integration status…</div>
+          <div class="inline-status"><Loader2 size={14} class="spin" /> {$t("settings.loadingIntegrations")}</div>
         {/if}
         {#if integrationsError}<div class="notice error"><AlertTriangle size={14} /> {integrationsError}</div>{/if}
         {#if integrationsMessage}<div class="notice success"><CheckCircle2 size={14} /> {integrationsMessage}</div>{/if}
@@ -1888,27 +1909,27 @@
               <span class:ok={githubTokenSet}>{statusLabel(githubTokenSet)}</span>
             </div>
             <label>
-              Default repository (owner/name)
+              {$t("settings.defaultRepo")}
               <input bind:value={githubRepository} placeholder="owner/repository" autocomplete="off" />
             </label>
             <label>
-              <KeyRound size={12} /> Personal access token
+              <KeyRound size={12} /> {$t("settings.pat")}
               <input
                 type="password"
                 bind:value={githubTokenDraft}
-                placeholder={githubTokenSet ? "•••••••• (enter new to replace)" : "ghp_…"}
+                placeholder={githubTokenSet ? $t("settings.tokenPlaceholder") : "ghp_…"}
                 autocomplete="new-password"
               />
             </label>
             <div class="row-actions">
               <button class="secondary mini" onclick={() => saveSecret("github", githubTokenDraft)} disabled={!!savingSecret || !githubTokenDraft.trim()}>
-                {savingSecret === "github" ? "Saving…" : "Save token"}
+                {savingSecret === "github" ? $t("settings.saving") : $t("settings.saveToken")}
               </button>
               <button class="ghost mini" onclick={() => clearSecret("github")} disabled={!githubTokenSet || !!clearingSecret}>
-                {clearingSecret === "github" ? "Clearing…" : "Clear"}
+                {clearingSecret === "github" ? $t("settings.clearing") : $t("settings.clear")}
               </button>
               <button class="ghost mini" onclick={() => testProvider("github")} disabled={!githubTokenSet || !!testingProvider}>
-                {testingProvider === "github" ? "Testing…" : "Test"}
+                {testingProvider === "github" ? $t("settings.testing") : $t("settings.test")}
               </button>
             </div>
             {#if testResults.github}<small class="test-ok">{testResults.github}</small>{/if}
@@ -1920,23 +1941,23 @@
               <span class:ok={modrinthTokenSet}>{statusLabel(modrinthTokenSet)}</span>
             </div>
             <label>
-              <KeyRound size={12} /> API token
+              <KeyRound size={12} /> {$t("settings.apiToken")}
               <input
                 type="password"
                 bind:value={modrinthTokenDraft}
-                placeholder={modrinthTokenSet ? "•••••••• (enter new to replace)" : "Token"}
+                placeholder={modrinthTokenSet ? $t("settings.tokenPlaceholder") : "Token"}
                 autocomplete="new-password"
               />
             </label>
             <div class="row-actions">
               <button class="secondary mini" onclick={() => saveSecret("modrinth", modrinthTokenDraft)} disabled={!!savingSecret || !modrinthTokenDraft.trim()}>
-                {savingSecret === "modrinth" ? "Saving…" : "Save token"}
+                {savingSecret === "modrinth" ? $t("settings.saving") : $t("settings.saveToken")}
               </button>
               <button class="ghost mini" onclick={() => clearSecret("modrinth")} disabled={!modrinthTokenSet || !!clearingSecret}>
-                {clearingSecret === "modrinth" ? "Clearing…" : "Clear"}
+                {clearingSecret === "modrinth" ? $t("settings.clearing") : $t("settings.clear")}
               </button>
               <button class="ghost mini" onclick={() => testProvider("modrinth")} disabled={!modrinthTokenSet || !!testingProvider}>
-                {testingProvider === "modrinth" ? "Testing…" : "Test"}
+                {testingProvider === "modrinth" ? $t("settings.testing") : $t("settings.test")}
               </button>
             </div>
             {#if testResults.modrinth}<small class="test-ok">{testResults.modrinth}</small>{/if}
@@ -1948,23 +1969,23 @@
               <span class:ok={curseforgeTokenSet}>{statusLabel(curseforgeTokenSet)}</span>
             </div>
             <label>
-              <KeyRound size={12} /> API token
+              <KeyRound size={12} /> {$t("settings.apiToken")}
               <input
                 type="password"
                 bind:value={curseforgeTokenDraft}
-                placeholder={curseforgeTokenSet ? "•••••••• (enter new to replace)" : "Token"}
+                placeholder={curseforgeTokenSet ? $t("settings.tokenPlaceholder") : "Token"}
                 autocomplete="new-password"
               />
             </label>
             <div class="row-actions">
               <button class="secondary mini" onclick={() => saveSecret("curseforge", curseforgeTokenDraft)} disabled={!!savingSecret || !curseforgeTokenDraft.trim()}>
-                {savingSecret === "curseforge" ? "Saving…" : "Save token"}
+                {savingSecret === "curseforge" ? $t("settings.saving") : $t("settings.saveToken")}
               </button>
               <button class="ghost mini" onclick={() => clearSecret("curseforge")} disabled={!curseforgeTokenSet || !!clearingSecret}>
-                {clearingSecret === "curseforge" ? "Clearing…" : "Clear"}
+                {clearingSecret === "curseforge" ? $t("settings.clearing") : $t("settings.clear")}
               </button>
               <button class="ghost mini" onclick={() => testProvider("curseforge")} disabled={!curseforgeTokenSet || !!testingProvider}>
-                {testingProvider === "curseforge" ? "Testing…" : "Test"}
+                {testingProvider === "curseforge" ? $t("settings.testing") : $t("settings.test")}
               </button>
             </div>
             {#if testResults.curseforge}<small class="test-ok">{testResults.curseforge}</small>{/if}
@@ -2076,7 +2097,7 @@
                     {#each swarmP2pListenAddrs as addr (addr)}
                       <div class="row-actions p2p-addr-row">
                         <code class="p2p-addr">{addr}</code>
-                        <button type="button" class="ghost mini" onclick={() => copyP2pListenAddr(addr)}>Copy</button>
+                        <button type="button" class="ghost mini" onclick={() => copyP2pListenAddr(addr)}>{$t("common.copy")}</button>
                       </div>
                     {/each}
                     {#if swarmP2pCopyMsg}
@@ -2225,9 +2246,9 @@
 
         <div class="row-actions save-row">
           <button onclick={saveIntegrationSettings} disabled={savingSettings || integrationsLoading}>
-            {savingSettings ? "Saving…" : "Save settings"}
+            {savingSettings ? $t("settings.saving") : $t("settings.saveSettings")}
           </button>
-          <button class="ghost" onclick={loadIntegrations} disabled={integrationsLoading}>Reload status</button>
+          <button class="ghost" onclick={loadIntegrations} disabled={integrationsLoading}>{$t("settings.reloadStatus")}</button>
         </div>
       </section>
     {/if}
@@ -2236,10 +2257,10 @@
       <section class="card card-wide">
         <div class="card-title">
           <Info size={18} />
-          <h3>About</h3>
+          <h3>{$t("settings.about")}</h3>
         </div>
         <button class="ghost" onclick={async () => { await loadAppVersion(); await checkUpdate(); }} disabled={updateLoading}>
-          {updateLoading ? "Checking…" : "Check for updates"}
+          {updateLoading ? $t("settings.checking") : $t("manager.checkUpdates")}
         </button>
         {#if updateError}
           <div class="update-info error"><AlertTriangle size={14} /> {updateError}</div>
@@ -2247,12 +2268,12 @@
         {#if updateCheck}
           <div class="update-info">
             {#if updateCheck.updateAvailable}
-              <span class="update-avail">Update available: {updateCheck.latestVersion}</span>
+              <span class="update-avail">{$t("settings.updateAvailable", { v: updateCheck.latestVersion })}</span>
               {#if updateCheck.releaseUrl}
-                <button class="ghost mini" onclick={openReleaseUrl}>Open release</button>
+                <button class="ghost mini" onclick={openReleaseUrl}>{$t("settings.openRelease")}</button>
               {/if}
             {:else}
-              <span class="update-ok">Up to date ({updateCheck.currentVersion})</span>
+              <span class="update-ok">{$t("settings.upToDate", { v: updateCheck.currentVersion })}</span>
             {/if}
           </div>
         {/if}
@@ -2263,9 +2284,9 @@
             <div class="logo-big">T</div>
           {/if}
           <div>
-            <h4>TuffBox IDE</h4>
-            <p>Developer harness for Minecraft modpacks.</p>
-            <span class="version">Version {appVersion || "…"}</span>
+            <h4>{$t("settings.tuffboxIde")}</h4>
+            <p>{$t("settings.aboutDesc")}</p>
+            <span class="version">{$t("settings.version", { v: appVersion || "…" })}</span>
           </div>
         </div>
       </section>
@@ -2273,10 +2294,10 @@
       <section class="card card-wide">
         <div class="card-title">
           <Palette size={18} />
-          <h3>App icon</h3>
+          <h3>{$t("settings.appIcon")}</h3>
         </div>
-        <p class="hint">Shown on the left rail and on this About page.</p>
-        <div class="brand-icon-picker" role="radiogroup" aria-label="App icon">
+        <p class="hint">{$t("settings.iconHint")}</p>
+        <div class="brand-icon-picker" role="radiogroup" aria-label={$t("settings.appIcon")}>
           <button
             type="button"
             class="brand-icon-option"
@@ -2286,7 +2307,7 @@
             onclick={() => selectBrandIcon("classic")}
           >
             <span class="brand-icon-preview brand-icon-classic" aria-hidden="true">T</span>
-            <span class="brand-icon-label">Classic</span>
+            <span class="brand-icon-label">{$t("settings.classic")}</span>
           </button>
           <button
             type="button"
@@ -2302,7 +2323,7 @@
               alt=""
               draggable="false"
             />
-            <span class="brand-icon-label">Creeper box</span>
+            <span class="brand-icon-label">{$t("settings.creeperBox")}</span>
           </button>
         </div>
       </section>

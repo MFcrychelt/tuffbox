@@ -1028,6 +1028,9 @@ export interface ModInfo {
   clientSide?: string | null;
   serverSide?: string | null;
   contentType?: string;
+  /** Present since list_mods started reporting manifest status. */
+  disabled?: boolean;
+  status?: string[];
 }
 
 export interface SearchResult {
@@ -1178,6 +1181,16 @@ export interface WorldBackupEntry {
   sizeFormatted: string;
   /** Unix epoch seconds (file mtime). */
   createdAt: number;
+}
+
+export interface ScreenshotEntry {
+  fileName: string;
+  /** Absolute path — render via convertFileSrc (asset protocol). */
+  path: string;
+  sizeBytes: number;
+  sizeFormatted: string;
+  /** Unix epoch milliseconds (file mtime). */
+  modifiedMs: number;
 }
 
 export interface ContentPackEntry {
@@ -2122,6 +2135,11 @@ export const api = {
     },
     readIcon(worldName: string, p?: string) {
       return cmd<string | null>("read_world_icon", { ...pathArg(p), worldName });
+    },
+    /** Instance screenshots (newest first) for the manager grid. */
+    listScreenshots(p?: string) { return cmd<ScreenshotEntry[]>("list_screenshots", pathArg(p)); },
+    deleteScreenshot(fileName: string, p?: string) {
+      return cmd<void>("delete_screenshot", { ...pathArg(p), fileName });
     },
     /** Open bundled Querz MCA Selector for this world (File → Open Recent). No download. */
     openMcaSelector(worldName: string, p?: string) {
@@ -3070,6 +3088,8 @@ export const api = {
     },
     deleteProject(p?: string) { return cmd<void>("delete_project", pathArg(p)); },
     cloneProject(newName: string, p?: string) { return cmd<string>("clone_project", { ...pathArg(p), newName }); },
+    /** Renames the instance (manifest display name; folder path is unchanged). */
+    rename(newName: string, p?: string) { return cmd<string>("rename_project", { ...pathArg(p), newName }); },
     createDesktopShortcut(p?: string) {
       return cmd<string>("create_project_desktop_shortcut", pathArg(p));
     },

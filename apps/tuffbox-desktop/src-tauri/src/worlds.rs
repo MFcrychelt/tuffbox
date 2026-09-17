@@ -433,3 +433,79 @@ pub(crate) fn read_world_icon(
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     Ok(Some(format!("data:image/png;base64,{encoded}")))
 }
+
+// ── Screenshots ──────────────────────────────────────────────────
+
+fn screenshots_dir(project_dir: &Path) -> PathBuf {
+    project_dir.join("screenshots")
+}
+
+fn validate_screenshot_file(name: &str) -> Result<(), String> {
+    let ok = (name.ends_with(".png") || name.ends_with(".jpg") || name.ends_with(".jpeg"))
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ' | '(' | ')'));
+    if !ok {
+        return Err("invalid screenshot file name".into());
+    }
+    Ok(())
+}
+
+/// Lists the instance's screenshots (newest first) for the manager grid.
+/// Names are returned with absolute paths so the frontend can render them
+/// through the asset protocol (convertFileSrc) without re-reading bytes.
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn list_screenshots(path: String) -> Result<Vec<serde_json::Value>, String> {
+    let project_dir = manifest_parent(&path)?;
+    let dir = screenshots_dir(&project_dir);
+    if !dir.is_dir() {
+        return Ok(vec![]);
+    }
+    let mut shots = Vec::new();
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let p = entry.path();
+        if !p.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let lower = file_name.to_lowercase();
+        if !(lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")) {
+            continue;
+        }
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let modified_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let size_bytes = meta.len();
+        shots.push(serde_json::json!({
+            "fileName": file_name,
+            "path": p.to_string_lossy(),
+            "sizeBytes": size_bytes,
+            "sizeFormatted": format_size(size_bytes),
+            "modifiedMs": modified_ms,
+        }));
+    }
+    shots.sort_by_key(|s| std::cmp::Reverse(s["modifiedMs"].as_u64().unwrap_or(0)));
+    Ok(shots)
+}
+
+/// Deletes one screenshot from the instance's screenshots folder.
+/// The file name is validated (image extension, no separators) so the
+/// join cannot escape the screenshots directory.
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn delete_screenshot(path: String, file_name: String) -> Result<(), String> {
+    validate_screenshot_file(&file_name)?;
+    let project_dir = manifest_parent(&path)?;
+    let target = screenshots_dir(&project_dir).join(&file_name);
+    if !target.is_file() {
+        return Err("screenshot not found".into());
+    }
+    std::fs::remove_file(&target).map_err(|e| e.to_string())
+}

@@ -202,6 +202,34 @@ fn update_project_brief(path: String, brief: PackBrief) -> Result<(), String> {
     save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())
 }
 
+/// Renames an instance in place (manifest `project.name`). The folder path is
+/// the identity everywhere (recents, groups, running processes), so only the
+/// display name changes. Keeps the storefront listing name in sync when it
+/// matched the old display name. Returns the applied (trimmed) name.
+#[tauri::command(rename_all = "camelCase")]
+fn rename_project(path: String, new_name: String) -> Result<String, String> {
+    let new_name = new_name.trim().to_string();
+    if new_name.is_empty() {
+        return Err("Instance name cannot be empty".into());
+    }
+    if new_name.len() > 80 {
+        return Err("Instance name is too long (max 80 characters)".into());
+    }
+    let manifest_path = resolve_manifest_path(&path)?;
+    auto_snapshot(&manifest_path, "rename-project").map_err(|e| e.to_string())?;
+    let mut manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let old_name = manifest.project.name.clone();
+    manifest.project.name = new_name.clone();
+    if let Some(listing) = manifest.listing.as_mut() {
+        if listing.name.trim().is_empty() || listing.name == old_name {
+            listing.name = new_name.clone();
+        }
+    }
+    save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+    Ok(new_name)
+}
+
 #[tauri::command]
 fn list_profiles(path: String) -> Result<Vec<ProfileSummary>, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -7635,7 +7663,7 @@ async fn build_ai_crash_context(
         .unwrap_or(0);
     let similar_case_count = ai_ctx.similar_cases.len();
     let fingerprint_key = ai_ctx.fingerprint_key.clone();
-    let mut ui_ctx = ai_ctx;
+    let ui_ctx = ai_ctx;
 
     Ok(serde_json::json!({
         "context": ui_ctx,
@@ -7751,7 +7779,9 @@ async fn analyze_crash_with_ai_inner(
     let mut speculative_used = false;
     let mut speculative_draft_model: Option<String> = None;
     let mut fallback_notes: Vec<String> = Vec::new();
-    let mut cascade_stage = String::new();
+    // Assigned by every arm of the plan cascade below before its first read,
+    // so it is declared without an initializer.
+    let mut cascade_stage: String;
     let mut cascade_tried: Vec<String> = vec!["l1".into()];
 
     emit_diagnose_cascade(&app, "l1_searching");
@@ -12323,7 +12353,7 @@ fn diagnose_timing(
     eprintln!("[diagnose] phase={phase} elapsed_ms={elapsed_ms} cache_hit={cache_hit}");
 }
 
-fn diagnose_finish(app: &tauri::AppHandle, ok: bool, detail: &str) {
+fn diagnose_finish(_app: &tauri::AppHandle, ok: bool, detail: &str) {
     if ok {
         tuffbox_core::task_progress::succeed(DIAGNOSE_TASK_ID, Some(detail.to_string()));
     } else {
@@ -18314,7 +18344,7 @@ async fn retry_failed_mod_downloads(
 #[tauri::command(rename_all = "camelCase")]
 #[allow(deprecated)]
 fn open_project_folder(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     path: String,
     subdir: Option<String>,
 ) -> Result<(), String> {
@@ -21530,6 +21560,7 @@ pub fn run() {
             resolve_project_path,
             get_project_brief,
             update_project_brief,
+            rename_project,
             listing_api::get_project_listing,
             listing_api::update_project_listing,
             listing_api::set_project_listing_icon,
@@ -21753,6 +21784,8 @@ pub fn run() {
             worlds::list_world_backups,
             worlds::delete_world_backup,
             worlds::read_world_icon,
+            worlds::list_screenshots,
+            worlds::delete_screenshot,
             mca_selector::open_mca_selector,
             list_content_packs,
             set_content_pack_enabled,

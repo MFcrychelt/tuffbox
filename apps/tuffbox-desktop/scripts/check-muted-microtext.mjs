@@ -32,7 +32,7 @@ const ALLOWLIST = [
 ];
 
 const SIZE_RE = /text-\[(1[01](?:\.\d+)?px)\]|text-\[(\d(?:\.\d+)?px)\]/g;
-const CSS_SIZE_RE = /font-size:\s*(1[01](?:\.\d+)?|\d(?:\.\d+)?)px/g;
+const CSS_SIZE_RE = /font-size:\s*(1[01](?:\.\d+)?|\d(?:\.\d+)?)px|\bfont:\s*(1[01](?:\.\d+)?|\d(?:\.\d+)?)px\b/g;
 const COLOR_RE =
   /text-muted|text-\[var\(--text-muted\)\]|text-\[color:var\(--text-muted\)\]|color:\s*var\(--text-muted\)|text-neutral-[345]00|#94a3b8|#9ca3af|rgba?\(148,\s*163,\s*184/g;
 
@@ -83,7 +83,7 @@ function scanFile(path) {
     let r;
     while ((r = ruleRe.exec(css))) {
       const body = r[2];
-      const sizeMatch = [...body.matchAll(CSS_SIZE_RE)].map((x) => parseFloat(x[1]));
+      const sizeMatch = [...body.matchAll(CSS_SIZE_RE)].map((x) => parseFloat(x[1] ?? x[2]));
       const hasSmall = sizeMatch.some((s) => s < 12);
       if (hasSmall && COLOR_RE.test(body)) {
         COLOR_RE.lastIndex = 0;
@@ -102,7 +102,7 @@ function scanFile(path) {
   const styleAttrRe = /style="[^"]*"/g;
   while ((m = styleAttrRe.exec(text))) {
     const attr = m[0];
-    const sizes = [...attr.matchAll(CSS_SIZE_RE)].map((x) => parseFloat(x[1]));
+    const sizes = [...attr.matchAll(CSS_SIZE_RE)].map((x) => parseFloat(x[1] ?? x[2]));
     if (sizes.some((s) => s < 12) && COLOR_RE.test(attr)) {
       COLOR_RE.lastIndex = 0;
       violations.push({

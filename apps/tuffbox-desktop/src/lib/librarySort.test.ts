@@ -47,6 +47,15 @@ describe("matchesInstanceFilter", () => {
   it("rejects non-matching queries", () => {
     expect(matchesInstanceFilter(p, "origins")).toBe(false);
   });
+
+  it("matches group names when provided", () => {
+    const pack = { path: "/p", info: { name: "Sky Industrial", minecraftVersion: "1.20.1", loaderKind: "fabric" } } as never;
+    expect(matchesInstanceFilter(pack, "serve", "My Servers")).toBe(true);
+    expect(matchesInstanceFilter(pack, "servers", "My Servers")).toBe(true);
+    expect(matchesInstanceFilter(pack, "creative", "My Servers")).toBe(false);
+    // without a group the same query only checks instance fields
+    expect(matchesInstanceFilter(pack, "serve")).toBe(false);
+  });
 });
 
 describe("sortInstances", () => {

@@ -624,6 +624,26 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
+  /**
+   * Capture-phase guard: while a card version menu is open, keyboard events
+   * inside it must not reach the card's own handlers (Enter/Space toggle card
+   * focus) — swallow them, and close the menu on Escape.
+   */
+  function onWindowKeydownCapture(e: KeyboardEvent) {
+    if (!versionMenuModId) return;
+    const target = e.target as HTMLElement | null;
+    if (!target?.closest("[data-version-menu]")) return;
+    if (e.key === "Escape") closeVersionMenu();
+    e.stopPropagation();
+  }
+
+  function onWindowKeydown(e: KeyboardEvent) {
+    onAddModalKeydown(e);
+    if (e.key === "Escape" && versionMenuModId && !versionMenuSwitching) {
+      closeVersionMenu();
+    }
+  }
+
   function toggleAccordion(key: string) {
     accordionOpen = { ...accordionOpen, [key]: !accordionOpen[key] };
   }
@@ -924,22 +944,29 @@ import { trapFocus } from "../lib/focusTrap";
     compatibleMinecraft?: boolean;
     compatibleLoader?: boolean;
   };
-  let versionPickerMod = $state<ModRow | null>(null);
+  // Inline version dropdown: opens directly on the installed-mod card, no modal.
+  let versionMenuModId = $state<string | null>(null);
   let availableVersions = $state<ModVersion[]>([]);
-  let versionPickerLoading = $state(false);
-  let versionPickerError = $state<string | null>(null);
-  let versionPickerChanging = $state(false);
-  let versionPickerQuery = $state("");
-  let hideIncompatible = $state(true);
-  let selectedVersion = $state<ModVersion | null>(null);
-  let versionPickerMc = $state("");
-  let versionPickerLoader = $state("");
+  let versionMenuLoading = $state(false);
+  let versionMenuError = $state<string | null>(null);
+  let versionMenuSwitching = $state(false);
+  let versionMenuQuery = $state("");
+  let versionMenuHideIncompatible = $state(true);
+  let versionMenuDropUp = $state(false);
+  let versionMenuMc = $state("");
+  let versionMenuLoader = $state("");
+  /** Non-reactive cache keyed by `projectId|mc|loader` so reopening a menu is instant. */
+  const versionCache = new Map<string, ModVersion[]>();
 
-  const versionPickerFiltered = $derived(availableVersions.filter((v) => {
-    if (hideIncompatible && v.compatible === false && v.versionNumber !== versionPickerMod?.version) {
+  const versionMenuMod = $derived(
+    versionMenuModId ? mods.find((m) => m.id === versionMenuModId) ?? null : null
+  );
+
+  const versionMenuFiltered = $derived(availableVersions.filter((v) => {
+    if (versionMenuHideIncompatible && v.compatible === false && v.versionNumber !== versionMenuMod?.version) {
       return false;
     }
-    const q = versionPickerQuery.trim().toLowerCase();
+    const q = versionMenuQuery.trim().toLowerCase();
     if (!q) return true;
     return (
       v.versionNumber.toLowerCase().includes(q) ||
@@ -950,71 +977,105 @@ import { trapFocus } from "../lib/focusTrap";
     );
   }));
 
-  const compatibleVersionCount = $derived(availableVersions.filter((v) => v.compatible !== false).length);
+  function closeVersionMenu() {
+    versionMenuModId = null;
+    availableVersions = [];
+    versionMenuError = null;
+    versionMenuQuery = "";
+  }
 
-  async function openVersionPicker(mod: ModRow) {
-    if (!$projectPath) return;
+  /** Open the dropdown upwards when there is no room below the trigger. */
+  function shouldDropUp(anchor: HTMLElement | null): boolean {
+    if (!anchor || typeof window === "undefined") return false;
+    const rect = anchor.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom;
+    const above = rect.top;
+    return below < 300 && above > below;
+  }
+
+  async function openVersionMenu(mod: ModRow, anchor: HTMLElement | null = null) {
+    if (!$projectPath || versionMenuSwitching) return;
     if (!mod.projectId) {
       toasts.error("Cannot change version: missing Modrinth project ID");
       return;
     }
-    versionPickerMod = mod;
-    versionPickerLoading = true;
-    versionPickerError = null;
-    availableVersions = [];
-    selectedVersion = null;
-    versionPickerQuery = "";
-    hideIncompatible = true;
+    if (versionMenuModId === mod.id) {
+      closeVersionMenu();
+      return;
+    }
+    versionMenuModId = mod.id;
+    versionMenuLoading = true;
+    versionMenuError = null;
+    versionMenuQuery = "";
+    versionMenuHideIncompatible = true;
+    versionMenuDropUp = shouldDropUp(anchor);
+    if (!anchor) {
+      // Opened from outside the card (e.g. ModInspector): reveal the card first.
+      document
+        .querySelector(`[data-mod-id="${CSS.escape(mod.id)}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    }
     try {
       const info: any = $projectInfo ?? await invoke("validate_project", { path: $projectPath });
-      versionPickerMc = info.minecraftVersion ?? "";
-      versionPickerLoader = (info.loaderKind ?? "").toLowerCase();
-      availableVersions = await invoke("get_mod_versions", {
-        modId: mod.projectId,
-        minecraftVersion: versionPickerMc,
-        loader: versionPickerLoader || null,
-      });
-      selectedVersion =
-        availableVersions.find((v) => v.versionNumber === mod.version) ??
-        availableVersions.find((v) => v.compatible !== false) ??
-        availableVersions[0] ??
-        null;
+      versionMenuMc = info.minecraftVersion ?? "";
+      versionMenuLoader = (info.loaderKind ?? "").toLowerCase();
+      const cacheKey = `${mod.projectId}|${versionMenuMc}|${versionMenuLoader}`;
+      const cached = versionCache.get(cacheKey);
+      if (cached) {
+        availableVersions = cached;
+      } else {
+        availableVersions = await invoke("get_mod_versions", {
+          modId: mod.projectId,
+          minecraftVersion: versionMenuMc,
+          loader: versionMenuLoader || null,
+        });
+        versionCache.set(cacheKey, availableVersions);
+      }
     } catch (e) {
-      versionPickerError = String(e);
+      versionMenuError = String(e);
     } finally {
-      versionPickerLoading = false;
+      versionMenuLoading = false;
     }
   }
 
-  async function changeVersion(versionId: string) {
-    if (!$projectPath || !versionPickerMod) return;
-    const target = availableVersions.find((v) => v.id === versionId);
-    if (target && target.compatible === false) {
+  async function switchVersion(mod: ModRow, version: ModVersion) {
+    if (!$projectPath || versionMenuSwitching) return;
+    if (version.versionNumber === mod.version) {
+      closeVersionMenu();
+      return;
+    }
+    if (version.compatible === false) {
       const ok = confirm(
-        `Version ${target.versionNumber} is not marked compatible with ${versionPickerLoader} ${versionPickerMc}. Install anyway?`
+        `Version ${version.versionNumber} is not marked compatible with ${versionMenuLoader} ${versionMenuMc}. Install anyway?`
       );
       if (!ok) return;
     }
-    versionPickerChanging = true;
-    versionPickerError = null;
-    const targetModId = versionPickerMod.id;
-    openDownloadOverlay(`Switching ${versionPickerMod.name}`);
+    versionMenuSwitching = true;
+    versionMenuError = null;
+    const targetModId = mod.id;
+    openDownloadOverlay(`Switching ${mod.name}`);
     try {
       await invoke("change_mod_version", {
         path: $projectPath,
-        modId: versionPickerMod.id,
-        newVersionId: versionId,
+        modId: mod.id,
+        newVersionId: version.id,
       });
-      versionPickerMod = null;
-      availableVersions = [];
-      selectedVersion = null;
+      closeVersionMenu();
       await refreshSingleMod(targetModId);
     } catch (e) {
-      versionPickerError = String(e);
+      versionMenuError = String(e);
       downloadDone = true;
+      toasts.error(`Failed to switch ${mod.name}: ${String(e)}`);
     } finally {
-      versionPickerChanging = false;
+      versionMenuSwitching = false;
     }
+  }
+
+  function onWindowPointerdown(e: PointerEvent) {
+    if (!versionMenuModId) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("[data-version-menu]")) return;
+    closeVersionMenu();
   }
 
   // --- Post-bulk-install dependency resolution ---
@@ -1210,6 +1271,7 @@ import { trapFocus } from "../lib/focusTrap";
     e.preventDefault();
     e.stopPropagation();
     clearFocusedMod();
+    closeVersionMenu();
     if (!selectionMode) {
       selectionMode = true;
       selectedModIds = { [mod.id]: true };
@@ -2971,7 +3033,7 @@ import { trapFocus } from "../lib/focusTrap";
 
 </script>
 
-<svelte:window onkeydown={onAddModalKeydown} />
+<svelte:window onkeydown={onWindowKeydown} onkeydowncapture={onWindowKeydownCapture} onpointerdown={onWindowPointerdown} />
 
 <div class="mods fade-slide-in">
   <div class="mods-chrome">
@@ -3580,12 +3642,108 @@ import { trapFocus } from "../lib/focusTrap";
               {/if}
             </div>
             <div class="installed-meta">
-              <span
-                class="version"
-                title={mod.fileName
-                  ? `${mod.fileName}${mod.disabled && !String(mod.fileName).endsWith(".disabled") ? ".disabled" : ""}`
-                  : undefined}
-              >{mod.version}</span>
+              {#if canChangeVersion(mod) && !selectionMode}
+                <div class="version-switch" data-version-menu>
+                  <button
+                    type="button"
+                    class="version-trigger"
+                    class:menu-open={versionMenuModId === mod.id}
+                    onclick={(e) => { e.stopPropagation(); void openVersionMenu(mod, e.currentTarget); }}
+                    disabled={mutating || versionMenuSwitching}
+                    aria-haspopup="listbox"
+                    aria-expanded={versionMenuModId === mod.id}
+                    title={`Change version (current: ${mod.version})`}
+                  >
+                    <span class="version">{mod.version}</span>
+                    {#if versionMenuSwitching && versionMenuModId === mod.id}
+                      <Loader2 size={12} class="spin version-caret" />
+                    {:else}
+                      <ChevronDown size={12} class="version-caret" />
+                    {/if}
+                  </button>
+                  {#if versionMenuModId === mod.id}
+                    <div
+                      class="version-menu"
+                      class:drop-up={versionMenuDropUp}
+                      role="dialog"
+                      aria-label={`Versions of ${mod.name}`}
+                    >
+                      <div class="version-menu-toolbar">
+                        <div class="version-menu-search">
+                          <Search size={13} />
+                          <input
+                            bind:value={versionMenuQuery}
+                            placeholder="Filter versions…"
+                            aria-label="Filter versions"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          class="version-menu-toggle"
+                          class:active={!versionMenuHideIncompatible}
+                          title="Show versions for other Minecraft versions / loaders"
+                          onclick={(e) => { e.stopPropagation(); versionMenuHideIncompatible = !versionMenuHideIncompatible; }}
+                        >
+                          {versionMenuHideIncompatible ? "Show all" : "Hide incompatible"}
+                        </button>
+                      </div>
+                      {#if versionMenuError}
+                        <div class="version-menu-error">{versionMenuError}</div>
+                      {/if}
+                      {#if versionMenuLoading}
+                        <div class="version-menu-empty">
+                          <Loader2 size={14} class="spin" /> Loading versions…
+                        </div>
+                      {:else}
+                        <div class="version-menu-list" role="listbox" aria-label="Available versions">
+                          {#each versionMenuFiltered as v (v.id)}
+                            <button
+                              type="button"
+                              class="version-menu-row"
+                              class:current={v.versionNumber === mod.version}
+                              class:incompatible={v.compatible === false}
+                              role="option"
+                              aria-selected={v.versionNumber === mod.version}
+                              disabled={versionMenuSwitching}
+                              title={v.changelog ? stripHtml(v.changelog).slice(0, 240) : `Switch to ${v.versionNumber}`}
+                              onclick={(e) => { e.stopPropagation(); void switchVersion(mod, v); }}
+                            >
+                              <span class="version-menu-row-main">
+                                <span class="version-menu-row-title">
+                                  <span class="channel-dot channel-{v.versionType ?? 'release'}" title={v.versionType ?? "release"}></span>
+                                  <strong>{v.versionNumber}</strong>
+                                  {#if v.compatible === false}
+                                    <span class="incompat-badge" title="Not for {versionMenuLoader} {versionMenuMc}"><AlertTriangle size={12} /></span>
+                                  {/if}
+                                </span>
+                                <span class="version-menu-row-meta">
+                                  {(v.versionType ?? "release")} · {v.loaders.join(", ")} · MC {v.gameVersions.slice(0, 3).join(", ")}{#if v.gameVersions.length > 3}…{/if}{#if v.datePublished} · {formatDate(v.datePublished)}{/if}
+                                </span>
+                              </span>
+                              {#if v.versionNumber === mod.version}
+                                <span class="current-badge">Current</span>
+                              {/if}
+                            </button>
+                          {:else}
+                            <div class="version-menu-empty">
+                              {availableVersions.length === 0
+                                ? "No versions found for this mod on Modrinth."
+                                : "No versions match this filter."}
+                            </div>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {:else}
+                <span
+                  class="version"
+                  title={mod.fileName
+                    ? `${mod.fileName}${mod.disabled && !String(mod.fileName).endsWith(".disabled") ? ".disabled" : ""}`
+                    : undefined}
+                >{mod.version}</span>
+              {/if}
             </div>
           </div>
           <div class="installed-tags" aria-label="Mod labels">
@@ -3623,7 +3781,7 @@ import { trapFocus } from "../lib/focusTrap";
                 <PowerOff size={16} />
               {/if}
             </button>
-            <button class="icon-btn" onclick={(e) => { e.stopPropagation(); openVersionPicker(mod); } } disabled={mutating || !canChangeVersion(mod) || selectionMode} title="Change version">
+            <button class="icon-btn" class:active={versionMenuModId === mod.id} onclick={(e) => { e.stopPropagation(); void openVersionMenu(mod, e.currentTarget); } } disabled={mutating || !canChangeVersion(mod) || selectionMode} title="Change version">
               <ArrowUpDown size={16} />
             </button>
             <span class="update-action-slot">
@@ -3673,7 +3831,7 @@ import { trapFocus } from "../lib/focusTrap";
         onclose={clearFocusedMod}
         onopenlink={(url) => void openExternalUrl(url)}
         ontoggleDisabled={(m) => void toggleDisabled(m as ModRow)}
-        onopenversions={(m) => void openVersionPicker(m as ModRow)}
+        onopenversions={(m) => void openVersionMenu(m as ModRow)}
       />
     {/key}
   {/if}
@@ -4687,143 +4845,6 @@ import { trapFocus } from "../lib/focusTrap";
             oninstall={() => { if (catalogViewResult) void startInstallPlan(catalogViewResult); }}
             onopenexternal={() => { if (catalogViewResult) void openProjectPage(catalogViewResult); }}
           />
-        </div>
-      {/if}
-    </div>
-  </div>
-{/if}
-
-<!-- Version picker modal — Modrinth-style: search, filter compatible, channel + confirm -->
-{#if versionPickerMod}
-  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (versionPickerMod = null)} onkeydown={() => {}}>
-    <div class="modal version-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (versionPickerMod = null) }}>
-      <div class="modal-header">
-        <div>
-          <h2>Change version: {versionPickerMod.name}</h2>
-          <p>
-            Current: <code>{versionPickerMod.version}</code>
-            · target <strong>{versionPickerLoader || "loader"}</strong>
-            <strong>{versionPickerMc || "Minecraft"}</strong>
-            · {compatibleVersionCount} compatible
-          </p>
-        </div>
-        <button class="icon-btn" onclick={() => (versionPickerMod = null)} aria-label="Close"><X size={18} /></button>
-      </div>
-      {#if versionPickerError}<div class="error compact">{versionPickerError}</div>{/if}
-      {#if versionPickerLoading}
-        <div class="loading compact"><Loader2 size={20} class="spin" /> Loading versions...</div>
-      {:else if availableVersions.length === 0}
-        <EmptyState icon={Package} compact={true} title="No versions found" description="No versions found for this mod on Modrinth." />
-      {:else}
-        <div class="version-toolbar">
-          <div class="search wide">
-            <span class="search-glyph"><Search size={16} /></span>
-            <input bind:value={versionPickerQuery} placeholder="Search version, channel, MC…" />
-          </div>
-          <button
-            class="secondary mini"
-            class:active={!hideIncompatible}
-            onclick={() => (hideIncompatible = !hideIncompatible)}
-            title="Show versions for other Minecraft versions / loaders"
-          >
-            {hideIncompatible ? "Show all" : "Hide incompatible"}
-          </button>
-        </div>
-        <div class="version-picker-body">
-          <div class="version-list" role="listbox">
-            {#each versionPickerFiltered as v (v.id)}
-              <button
-                class="version-row"
-                class:current={v.versionNumber === versionPickerMod?.version}
-                class:selected={selectedVersion?.id === v.id}
-                class:incompatible={v.compatible === false}
-                role="option"
-                aria-selected={selectedVersion?.id === v.id}
-                onclick={() => (selectedVersion = v)}
-                disabled={versionPickerChanging}
-              >
-                <div class="version-main">
-                  <div class="version-title-row">
-                    <span class="channel-dot channel-{v.versionType ?? 'release'}" title={v.versionType ?? "release"}></span>
-                    <strong>{v.versionNumber}</strong>
-                    {#if v.compatible === false}
-                      <span class="incompat-badge" title="Not for {versionPickerLoader} {versionPickerMc}"><AlertTriangle size={12} /></span>
-                    {/if}
-                  </div>
-                  {#if v.name && v.name !== v.versionNumber}
-                    <span class="version-name">{v.name}</span>
-                  {/if}
-                  <span class="version-loaders">
-                    {(v.versionType ?? "release")} · {v.loaders.join(", ")} · MC {v.gameVersions.slice(0, 4).join(", ")}{#if v.gameVersions.length > 4}…{/if}{#if v.datePublished} · {formatDate(v.datePublished)}{/if}
-                  </span>
-                </div>
-                {#if v.versionNumber === versionPickerMod?.version}
-                  <span class="current-badge">Current</span>
-                {:else if selectedVersion?.id === v.id}
-                  <span class="install-badge">Selected</span>
-                {/if}
-              </button>
-            {:else}
-              <EmptyState icon={Package} compact={true} title="No matching versions" description="No versions match this filter." />
-            {/each}
-            {#if selectedVersion}
-              <div class="version-switch-footer">
-                <button
-                  class="primary block"
-                  onclick={() => selectedVersion && changeVersion(selectedVersion.id)}
-                  disabled={versionPickerChanging || selectedVersion.versionNumber === versionPickerMod?.version}
-                >
-                  {#if versionPickerChanging}
-                    <Loader2 size={16} class="spin" /> Switching...
-                  {:else if selectedVersion.versionNumber === versionPickerMod?.version}
-                    Already installed
-                  {:else}
-                    <Download size={16} /> Switch to {selectedVersion.versionNumber}
-                  {/if}
-                </button>
-              </div>
-            {/if}
-          </div>
-          <div class="version-detail">
-            {#if selectedVersion}
-              <div class="version-detail-header">
-                <strong>{selectedVersion.versionNumber}</strong>
-                <span class="channel-pill channel-{selectedVersion.versionType ?? 'release'}">{selectedVersion.versionType ?? "release"}</span>
-              </div>
-              <p class="muted">
-                {selectedVersion.loaders.join(", ")} · MC {selectedVersion.gameVersions.join(", ")}
-                {#if selectedVersion.datePublished} · {formatDate(selectedVersion.datePublished)}{/if}
-              </p>
-              {#if selectedVersion.compatible === false}
-                <div class="notice warn compact">
-                  This build is not listed for {versionPickerLoader} {versionPickerMc}.
-                </div>
-              {/if}
-              <div class="version-changelog-full">
-                {#if selectedVersion.changelog}
-                  {stripHtml(selectedVersion.changelog).slice(0, 1200)}{stripHtml(selectedVersion.changelog).length > 1200 ? "…" : ""}
-                {:else}
-                  <span class="muted">No changelog for this version.</span>
-                {/if}
-              </div>
-              <div class="version-detail-actions">
-                <button
-                  onclick={() => selectedVersion && changeVersion(selectedVersion.id)}
-                  disabled={versionPickerChanging || selectedVersion.versionNumber === versionPickerMod?.version}
-                >
-                  {#if versionPickerChanging}
-                    <Loader2 size={16} class="spin" /> Switching...
-                  {:else if selectedVersion.versionNumber === versionPickerMod?.version}
-                    Already installed
-                  {:else}
-                    <Download size={16} /> Switch to this version
-                  {/if}
-                </button>
-              </div>
-            {:else}
-              <EmptyState icon={Package} compact={true} title="Select a version" description="Select a version to preview its changelog." />
-            {/if}
-          </div>
         </div>
       {/if}
     </div>
@@ -6146,7 +6167,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .installed-card:hover {
-    background: rgba(255,255,255,0.03);
+    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
   }
 
   .installed-card.has-update {
@@ -6157,8 +6178,16 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .installed-card.disabled {
-    opacity: 0.72;
     border-style: dashed;
+  }
+  /* Dim the CONTENT, not the card: the card is a glass surface
+     (backdrop-filter under "Glass transparency"), and toggling opacity on a
+     backdrop-filter element re-groups its backdrop layer — WebView2 then
+     paints a square sampling artifact over the launcher background on every
+     enable/disable. Child elements carry no backdrop-filter, so opacity here
+     is compositor-safe while looking the same. */
+  .installed-card.disabled :is(.mod-icon, .installed-main, .installed-tags, .card-actions) {
+    opacity: 0.72;
   }
 
   .installed-card.selected,
@@ -7395,16 +7424,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .pagination-btn:disabled { opacity: 0.4; cursor: default; }
   .pagination-btn:not(:disabled):hover { border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
-
-  .version-switch-footer {
-    position: sticky;
-    bottom: 0;
-    padding: 10px 12px;
-    background: var(--bg-secondary);
-    border-top: 1px solid var(--border-color);
-  }
-  .primary.block,
-  button.primary.block {
+  .primary.block {
     width: 100%;
     justify-content: center;
   }
@@ -7970,82 +7990,217 @@ import { trapFocus } from "../lib/focusTrap";
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
 
-  .version-modal { max-width: min(920px, 94vw); width: 920px; }
-  .version-toolbar {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    margin-bottom: 12px;
+  /* --- Inline version dropdown (per-card version switching) --- */
+  .version-switch {
+    position: relative;
+    display: inline-flex;
+    min-width: 0;
+    max-width: 100%;
   }
-  .version-toolbar .search { flex: 1; }
-  .version-toolbar .secondary.mini.active {
+
+  .version-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    padding: 3px 8px;
+    margin: -3px -8px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+
+  .version-trigger:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    color: var(--text-primary);
+  }
+
+  .version-trigger:disabled { cursor: default; }
+
+  .version-trigger .version {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .version-caret { flex-shrink: 0; opacity: 0.7; transition: transform 0.15s ease; }
+  .version-trigger.menu-open .version-caret { transform: rotate(180deg); }
+
+  .icon-btn.active {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  }
+
+  .version-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 70;
+    width: min(360px, calc(100vw - 40px));
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
+    background: var(--bg-elevated, var(--bg-secondary));
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  }
+
+  .version-menu.drop-up { top: auto; bottom: calc(100% + 6px); }
+
+  .version-menu-toolbar { display: flex; gap: 8px; align-items: center; }
+
+  .version-menu-search {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+  }
+
+  .version-menu-search input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 12px;
+    outline: none;
+  }
+
+  .version-menu-toggle {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 9px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .version-menu-toggle:hover { color: var(--text-primary); }
+
+  .version-menu-toggle.active {
     border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
     color: var(--accent-primary);
   }
-  .version-picker-body {
-    display: grid;
-    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-    gap: 14px;
-    min-height: 360px;
-    max-height: min(70vh, 560px);
+
+  .version-menu-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow-y: auto;
+    max-height: min(300px, 38vh);
+    overscroll-behavior: contain;
   }
-  .version-list {
-    display: grid;
-    gap: 6px;
-    overflow: auto;
-    padding: 4px 2px 8px 0;
-    align-content: start;
+
+  .version-menu-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 9px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    text-align: left;
+    cursor: pointer;
   }
-  .version-row {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 10px 12px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color);
-    background: var(--bg-tertiary); color: var(--text-secondary); text-align: left;
-    width: 100%; transform: none;
-  }
-  .version-row:hover, .version-row.current, .version-row.selected {
+
+  .version-menu-row:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
-  .version-row.incompatible { opacity: 0.78; }
-  .version-row:disabled { opacity: .5; cursor: wait; }
-  .version-main { display: grid; gap: 3px; min-width: 0; flex: 1; }
-  .version-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .version-title-row strong { color: var(--text-primary); }
-  .version-name { color: var(--text-secondary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .version-loaders { color: var(--text-muted); font-size: 12px; }
+
+  .version-menu-row.current {
+    cursor: default;
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
+  }
+
+  .version-menu-row.incompatible { opacity: 0.78; }
+  .version-menu-row:disabled { opacity: 0.55; cursor: wait; }
+
+  .version-menu-row-main {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .version-menu-row-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .version-menu-row-title strong {
+    color: var(--text-primary);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .version-menu-row-meta {
+    color: var(--text-muted);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .version-menu-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 14px 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+  }
+
+  .version-menu-error {
+    padding: 7px 9px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    background: rgba(239, 68, 68, 0.08);
+    color: #fecaca;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
   .channel-dot {
-    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
     background: var(--accent-primary);
   }
   .channel-dot.channel-beta { background: #3b82f6; }
   .channel-dot.channel-alpha { background: #f59e0b; }
-  .channel-pill {
-    font-size: 11px; font-weight: 700; text-transform: capitalize;
-    padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-color);
-  }
-  .channel-pill.channel-release { color: #86efac; border-color: rgba(34,197,94,.35); }
-  .channel-pill.channel-beta { color: #93c5fd; border-color: rgba(59,130,246,.35); }
-  .channel-pill.channel-alpha { color: #fcd34d; border-color: rgba(245,158,11,.35); }
-  .incompat-badge { color: #fbbf24; display: inline-flex; }
-  .version-detail {
-    display: flex; flex-direction: column; gap: 8px;
-    padding: 12px 14px; border-radius: 14px; border: 1px solid var(--border-color);
-    background: var(--bg-secondary); min-height: 0; overflow: hidden;
-  }
-  .version-detail-header { display: flex; align-items: center; gap: 10px; }
-  .version-detail-header strong { font-size: 18px; color: var(--text-primary); }
-  .version-changelog-full {
-    flex: 1; overflow: auto; white-space: pre-wrap; font-size: 13px;
-    line-height: 1.45; color: var(--text-secondary); padding-right: 4px;
-  }
-  .version-detail-actions { display: flex; justify-content: flex-end; padding-top: 8px; }
+  .incompat-badge { color: #fbbf24; display: inline-flex; flex-shrink: 0; }
   .current-badge { font-size: 11px; font-weight: 800; color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 15%, transparent); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
-  .install-badge { font-size: 11px; font-weight: 700; color: var(--accent-secondary); background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
-
-  @media (max-width: 820px) {
-    .version-picker-body { grid-template-columns: 1fr; max-height: none; }
-    .version-list { max-height: 240px; }
-  }
 
   .dep-dialog { max-width: 520px; }
   .dep-dialog-actions { display: grid; gap: 14px; padding: 8px 0 18px; }

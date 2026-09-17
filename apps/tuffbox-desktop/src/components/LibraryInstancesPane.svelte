@@ -20,7 +20,10 @@
     ChevronDown,
     ChevronRight,
     Package,
+  ArrowUpCircle,
+  Pencil,
     Wrench,
+  SlidersHorizontal,
     Minus,
     ImageIcon,
     Eraser,
@@ -28,6 +31,8 @@
     X,
     Compass,
     Server,
+    LayoutGrid,
+    List,
   } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
@@ -68,6 +73,10 @@
     folderFromDrop,
     type GroupMap,
   } from "../lib/libraryGroups";
+  import { getNote, loadNotes, setNote } from "../lib/libraryNotes";
+import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
+import { get } from "svelte/store";
+import { t } from "../lib/i18n";
   import {
     isValidSortMode,
     matchesInstanceFilter,
@@ -77,6 +86,7 @@
   import { portal } from "../lib/portal";
   import PromptDialog from "./PromptDialog.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import InstanceManager from "./InstanceManager.svelte";
   import GithubPackInstallProgress from "./GithubPackInstallProgress.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
   import LibraryInstanceContent from "./LibraryInstanceContent.svelte";
@@ -146,9 +156,104 @@
   let projectStats = $state<Record<string, { playtime: number; lastLaunch: string | null }>>({});
   let refreshing = $state(false);
 
+  /** Grid (cover tiles) vs list (dense rows); persisted. */
+  const VIEW_KEY = "tuffbox.library.view";
+  let viewMode = $state<"grid" | "list">(
+    ((): "grid" | "list" => {
+      try {
+        return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "grid";
+      } catch {
+        return "grid";
+      }
+    })(),
+  );
+  function setViewMode(m: "grid" | "list") {
+    viewMode = m;
+    try {
+      localStorage.setItem(VIEW_KEY, m);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Short relative "last played" for tiles/rows ("5m ago", "3d ago", date). */
+  function lastPlayedShort(iso: string | null): string {
+    const L = get(t);
+    if (!iso) return L("library.neverPlayed");
+    const ts = new Date(iso).getTime();
+    if (!Number.isFinite(ts)) return L("library.neverPlayed");
+    const min = Math.floor((Date.now() - ts) / 60000);
+    if (min < 1) return L("library.justNow");
+    if (min < 60) return L("library.minAgo", { n: min });
+    const h = Math.floor(min / 60);
+    if (h < 24) return L("library.hourAgo", { n: h });
+    const d = Math.floor(h / 24);
+    if (d < 7) return L("library.dayAgo", { n: d });
+    return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  }
+
   let showClonePrompt = $state(false);
   let cloneTarget = $state<RecentProject | null>(null);
   let clonePromptName = $state("");
+  /** Prism-style instance manager dialog target (mods / backups / health). */
+  let manageTarget = $state<RecentProject | null>(null);
+  /** Rename prompt target (manifest display name; folder path unchanged). */
+  let renameTarget = $state<RecentProject | null>(null);
+  /** Per-instance notes (Prism-style), autosaved to localStorage. */
+  let notesDraft = $state("");
+  // Reload the draft when the selection changes. localStorage is read
+  // non-reactively on purpose: re-tracking a notes state object would reset
+  // the draft on every autosave (and trim trailing spaces while typing).
+  $effect(() => {
+    const p = selectedPath;
+    notesDraft = p ? getNote(loadNotes(), p) : "";
+  });
+
+  function saveNote() {
+    if (!selectedPath) return;
+    setNote(loadNotes(), selectedPath, notesDraft);
+  }
+
+  // ── Update center: badge refresh + one-click Update all ──
+  $effect(() => {
+    const p = selectedPath;
+    if (!p) return;
+    // Lazily refresh when the cached counter is missing or stale (6h window).
+    void refreshUpdateCount(p);
+  });
+
+  async function updateAllSelected() {
+    const target = selected;
+    if (!target || actionBusy) return;
+    actionBusy = true;
+    try {
+      const res = await api.mods.updateAll(target.path, false);
+      const updated = Array.isArray(res.updated) ? res.updated.length : 0;
+      const errors = Array.isArray(res.errors) ? res.errors : [];
+      const L = get(t);
+      if (errors.length > 0) {
+        toasts.warning(
+          L("library.toastUpdatePartial", {
+            ok: updated,
+            failed: errors.length,
+            first: errors[0],
+          }),
+        );
+      } else if (updated === 1) {
+        toasts.success(L("library.toastUpdated1"));
+      } else if (updated > 0) {
+        toasts.success(L("library.toastUpdatedN", { n: updated }));
+      } else {
+        toasts.success(L("library.toastNothingToUpdate"));
+      }
+      // Re-check for real — a partial failure leaves some updates pending.
+      void refreshUpdateCount(target.path, true);
+    } catch (e) {
+      toasts.error(get(t)("library.toastUpdateFailed", { e: String(e) }));
+    } finally {
+      actionBusy = false;
+    }
+  }
 
   let showGroupPrompt = $state(false);
   let groupTarget = $state<RecentProject | null>(null);
@@ -210,7 +315,9 @@
     isProjectLaunching(selectedPath, $launchSessions),
   );
   const selectedLaunchMessage = $derived(
-    selectedPath ? $launchSessions[selectedPath]?.message ?? "Launching…" : "Launching…",
+    selectedPath
+      ? ($launchSessions[selectedPath]?.message ?? get(t)("library.launching"))
+      : get(t)("library.launching"),
   );
   /** Multiplier from the Settings UI-scale (Auto mode derives it from screen size). */
   const sideScale = $derived(($uiScalePercentLive ?? 100) / 100);
@@ -233,7 +340,7 @@
     const byGroup = new Map<string, RecentProject[]>();
     let total = 0;
     for (const p of $recentProjects) {
-      if (!matchesInstanceFilter(p, instanceFilter)) continue;
+      if (!matchesInstanceFilter(p, instanceFilter, getGroup(groupMap, p.path))) continue;
       total++;
       const g = getGroup(groupMap, p.path);
       const list = byGroup.get(g) ?? [];
@@ -330,17 +437,17 @@
   });
 
   function formatLastLaunch(iso: string | null): string {
-    if (!iso) return "Never";
+    if (!iso) return get(t)("library.never");
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "Never";
+    if (Number.isNaN(d.getTime())) return get(t)("library.never");
     return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   }
 
   /** Expose the configured JRE for the selected pack (path or "Auto"). */
   function javaLabel(javaPath: string | null): string {
-    if (!javaPath) return "Auto";
+    if (!javaPath) return get(t)("library.autoWord");
     const base = javaPath.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? javaPath;
-    return base || "Auto";
+    return base || get(t)("library.autoWord");
   }
 
   function memoryLabel(memoryMb: number): string {
@@ -488,7 +595,9 @@
 
     // Prefer rect hit-testing over elementFromPoint — CSS `zoom` on `.app-shell`
     // can desync the latter from the visual cursor in Chromium/Electron.
-    const tiles = document.querySelectorAll<HTMLElement>(".prism-lib .inst-tile[data-path]");
+    const tiles = document.querySelectorAll<HTMLElement>(
+      ".prism-lib .inst-tile[data-path], .prism-lib .inst-row[data-path]",
+    );
     for (const tile of tiles) {
       const r = tile.getBoundingClientRect();
       if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
@@ -544,6 +653,65 @@
       toasts.success(
         name === DEFAULT_GROUP ? "Removed from folder" : `Moved into “${name}”`,
       );
+    }
+  }
+
+  // ── Roving keyboard focus across tiles/rows (↑↓←→ / Home / End) ──
+  function focusableItems(): HTMLElement[] {
+    return Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".prism-lib .inst-tile[data-path], .prism-lib .inst-row[data-path]",
+      ),
+    ).filter((el) => el.offsetParent !== null);
+  }
+
+  function onTileKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      const path = (e.currentTarget as HTMLElement).dataset.path;
+      const project = path ? $recentProjects.find((p) => p.path === path) : null;
+      if (project) selectInstance(project);
+      return;
+    }
+    const keys = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown", "Home", "End"];
+    if (!keys.includes(e.key)) return;
+    const items = focusableItems();
+    const idx = items.indexOf(e.currentTarget as HTMLElement);
+    if (idx < 0) return;
+    // Group items into visual rows by offsetTop (shared offsetParent, so the
+    // CSS zoom on .app-shell does not matter). Left/Right step within the
+    // flat order; Up/Down keep the column position across rows.
+    const rows: number[][] = [];
+    let top: number | null = null;
+    for (let i = 0; i < items.length; i++) {
+      const t = items[i].offsetTop;
+      if (t !== top) {
+        rows.push([i]);
+        top = t;
+      } else {
+        rows[rows.length - 1].push(i);
+      }
+    }
+    let rowIdx = 0;
+    let colIdx = 0;
+    for (let r = 0; r < rows.length; r++) {
+      const c = rows[r].indexOf(idx);
+      if (c >= 0) {
+        rowIdx = r;
+        colIdx = c;
+        break;
+      }
+    }
+    let target = -1;
+    if (e.key === "ArrowRight") target = Math.min(items.length - 1, idx + 1);
+    else if (e.key === "ArrowLeft") target = Math.max(0, idx - 1);
+    else if (e.key === "Home") target = 0;
+    else if (e.key === "End") target = items.length - 1;
+    else if (e.key === "ArrowDown") target = rows[rowIdx + 1]?.[colIdx] ?? idx;
+    else if (e.key === "ArrowUp") target = rows[rowIdx - 1]?.[Math.min(colIdx, rows[rowIdx - 1].length - 1)] ?? idx;
+    if (target >= 0 && target !== idx) {
+      e.preventDefault();
+      items[target].focus();
     }
   }
 
@@ -668,7 +836,7 @@
         "",
       );
       if (!dir) {
-        toasts.error("Instances folder is not set.");
+        toasts.error(get(t)("library.toastFolderNotSet"));
         return;
       }
       await openShell(dir);
@@ -707,7 +875,7 @@
         const sel = next.find((p) => p.path === selectedPath);
         if (sel) projectInfo.set(sel.info);
       }
-      toasts.info("Library refreshed");
+      toasts.info(get(t)("library.toastLibraryRefreshed"));
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -752,7 +920,7 @@
     try {
       const info = await api.transport.github.inspectSource(trimmed);
       if (info.status === "publishing") {
-        toasts.error("This pack is still publishing oversized assets. Try again when the author finishes.");
+        toasts.error(get(t)("library.toastOversized"));
         return;
       }
       githubPendingSource = trimmed;
@@ -806,7 +974,7 @@
     try {
       const targetDir = await resolveImportTargetDir();
       if (!targetDir) {
-        toasts.error("Set an instances folder in Settings first.");
+        toasts.error(get(t)("library.toastSetFolder"));
         return;
       }
       const result: any = await invoke("install_modpack", {
@@ -831,7 +999,9 @@
       const manifestPath = info.manifestPath || path;
       recentProjects.add({ path: manifestPath, info: info as RecentProject["info"] });
       void selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
-      toasts.success(`Imported "${result.name ?? info.name ?? "pack"}"`);
+      toasts.success(
+        get(t)("library.toastImported", { name: result.name ?? info.name ?? "pack" }),
+      );
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -872,9 +1042,9 @@
           const exported = await api.export.modrinthPack(null, project.path);
           try {
             await copyText(exported.path);
-            toasts.success(`Exported .mrpack — path copied: ${exported.path}`);
+            toasts.success(get(t)("library.toastExportCopied", { path: exported.path }));
           } catch {
-            toasts.success(`Exported .mrpack: ${exported.path}`);
+            toasts.success(get(t)("library.toastExport", { path: exported.path }));
           }
         } catch (e) {
           toasts.error(String(e));
@@ -888,9 +1058,9 @@
           const exported = await api.export.prismInstance(null, project.path);
           try {
             await copyText(exported.path);
-            toasts.success(`Exported Prism zip — path copied: ${exported.path}`);
+            toasts.success(get(t)("library.toastPrismCopied", { path: exported.path }));
           } catch {
-            toasts.success(`Exported Prism zip: ${exported.path}`);
+            toasts.success(get(t)("library.toastPrism", { path: exported.path }));
           }
         } catch (e) {
           toasts.error(String(e));
@@ -904,9 +1074,9 @@
           const exported = await api.export.serverPack(null, project.path);
           try {
             await copyText(exported.path);
-            toasts.success(`Exported server pack — path copied: ${exported.path}`);
+            toasts.success(get(t)("library.toastServerCopied", { path: exported.path }));
           } catch {
-            toasts.success(`Exported server pack: ${exported.path}`);
+            toasts.success(get(t)("library.toastServer", { path: exported.path }));
           }
         } catch (e) {
           toasts.error(String(e));
@@ -923,7 +1093,7 @@
         actionBusy = true;
         try {
           const path = await api.files.createDesktopShortcut(project.path);
-          toasts.success(`Desktop shortcut created — double-click to launch: ${path}`);
+          toasts.success(get(t)("library.toastShortcut", { path }));
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -937,7 +1107,7 @@
         try {
           const dir = await api.project.getDir(project.path);
           await copyText(dir);
-          toasts.success("Instance folder path copied");
+          toasts.success(get(t)("library.toastPathCopied"));
         } catch (e) {
           toasts.error(String(e));
         }
@@ -966,17 +1136,22 @@
             ((await api.mods.detectWrongLoader(project.path)) as Array<Record<string, unknown>>) ??
             [];
 
+          const L = get(t);
           const parts: string[] = [];
-          if (downloaded > 0) parts.push(`${downloaded} re-downloaded`);
-          if (failed > 0) parts.push(`${failed} failed`);
-          if (dupes.length > 0) parts.push(`${dupes.length} duplicate group${dupes.length > 1 ? "s" : ""}`);
-          if (wrongLoader.length > 0) parts.push(`${wrongLoader.length} wrong-loader jar${wrongLoader.length > 1 ? "s" : ""}`);
+          if (downloaded > 0) parts.push(L("library.repairRedownloaded", { n: downloaded }));
+          if (failed > 0) parts.push(L("library.repairFailed", { n: failed }));
+          if (dupes.length > 0) parts.push(L("library.repairDupes", { n: dupes.length }));
+          if (wrongLoader.length > 0)
+            parts.push(L("library.repairWrongLoader", { n: wrongLoader.length }));
           if (parts.length === 0) {
-            toasts.success("All mod files present and valid.");
+            toasts.success(get(t)("library.toastRepairOk"));
           } else if (dupes.length === 0 && wrongLoader.length === 0) {
-            toasts.success(`Repair report: ${parts.join(", ")}.`);
+            toasts.success(get(t)("library.toastRepairReport", { parts: parts.join(", ") }));
           } else {
-            toasts.warning(`Repair finished with findings. ${parts.join(" ")}`, 10000);
+            toasts.warning(
+              get(t)("library.toastRepairFindings", { parts: parts.join(" ") }),
+              10000,
+            );
           }
         } catch (e) {
           toasts.error(String(e));
@@ -991,7 +1166,7 @@
           projectPath.set(selectedPath);
           projectInfo.set($recentProjects[0]?.info ?? null);
         }
-        toasts.info(`Removed "${project.info.name}" from library`);
+        toasts.info(get(t)("library.toastRemoved", { name: project.info.name }));
         break;
       case "delete": {
         const ok = await confirm(`Delete "${project.info.name}" from disk?`, {
@@ -1007,7 +1182,7 @@
             projectPath.set(selectedPath);
             projectInfo.set($recentProjects[0]?.info ?? null);
           }
-          toasts.success(`Deleted "${project.info.name}"`);
+          toasts.success(get(t)("library.toastDeleted", { name: project.info.name }));
         } catch (e) {
           toasts.error(String(e));
         }
@@ -1029,7 +1204,7 @@
       await api.project.setListingIcon(selected, project.path);
       iconRequested.delete(project.path);
       await loadInstanceIcon(project.path);
-      toasts.success(`Icon updated for "${project.info.name}"`);
+      toasts.success(get(t)("library.toastIconUpdated", { name: project.info.name }));
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -1043,7 +1218,26 @@
     try {
       await api.project.clearListingIcon(project.path);
       homeIcons.update((prev) => ({ ...prev, [project.path]: null }));
-      toasts.info(`Icon cleared for "${project.info.name}"`);
+      toasts.info(get(t)("library.toastIconCleared", { name: project.info.name }));
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function confirmRename(newName: string) {
+    const target = renameTarget;
+    renameTarget = null;
+    if (!target || !newName.trim()) return;
+    actionBusy = true;
+    try {
+      const applied = await api.files.rename(newName.trim(), target.path);
+      const info = (await api.project.validate(target.path)) as RecentProject["info"] & {
+        manifestPath?: string;
+      };
+      recentProjects.updateInfo(info.manifestPath || target.path, info);
+      toasts.success(get(t)("library.toastRenamed", { name: applied }));
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -1066,7 +1260,7 @@
       const manifestPath = info.manifestPath || clonedPath;
       recentProjects.add({ path: manifestPath, info: info as RecentProject["info"] });
       void selectInstance({ path: manifestPath, info: info as RecentProject["info"] });
-      toasts.success(`Copied to: ${manifestPath}`);
+      toasts.success(get(t)("library.toastCopiedTo", { path: manifestPath }));
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -1118,30 +1312,30 @@
         <button
           type="button"
           class="tb-btn primary"
-          title="Add an instance to the library"
+          title={$t("library.addInstanceTitle")}
           onclick={(e) => { e.stopPropagation(); (addMenuOpen = !addMenuOpen);  }}
         >
           <Plus size={16} />
-          <span>Add Instance</span>
+          <span>{$t("library.addInstance")}</span>
           <ChevronDown size={14} />
         </button>
         {#if addMenuOpen}
           <div class="tb-menu" role="menu">
             <button type="button" role="menuitem" onclick={() => { addMenuOpen = false; openAddInstance("blank"); }}>
-              <Plus size={14} /> Create new…
+              <Plus size={14} /> {$t("library.createNew")}
             </button>
             <button type="button" role="menuitem" onclick={importPackFile} disabled={actionBusy}>
-              <FolderOpen size={14} /> Import file (.mrpack / .zip)
+              <FolderOpen size={14} /> {$t("library.importFile")}
             </button>
             <button type="button" role="menuitem" onclick={importInstanceFolder} disabled={actionBusy}>
-              <Folder size={14} /> Import instance folder
+              <Folder size={14} /> {$t("library.importFolder")}
             </button>
             <button type="button" role="menuitem" onclick={importGithubRepo} disabled={actionBusy}>
-              <Link2 size={14} /> Import GitHub repository
+              <Link2 size={14} /> {$t("library.importGithubRepo")}
             </button>
             <div class="menu-sep"></div>
             <button type="button" role="menuitem" onclick={() => { addMenuOpen = false; libraryTabRequest.set("discover"); }}>
-              <Compass size={14} /> Find in catalog
+              <Compass size={14} /> {$t("library.findInCatalog")}
             </button>
           </div>
         {/if}
@@ -1151,20 +1345,20 @@
         <button
           type="button"
           class="tb-btn"
-          title="Folders"
+          title={$t("library.folders")}
           onclick={(e) => { e.stopPropagation(); (foldersMenuOpen = !foldersMenuOpen);  }}
         >
           <Folder size={16} />
-          <span>Folders</span>
+          <span>{$t("library.folders")}</span>
         </button>
         {#if foldersMenuOpen}
           <div class="tb-menu" role="menu">
             <button type="button" role="menuitem" onclick={openInstancesFolder}>
-              <FolderOpen size={14} /> Instances folder
+              <FolderOpen size={14} /> {$t("library.instancesFolder")}
             </button>
             {#if selected}
               <button type="button" role="menuitem" onclick={() => { foldersMenuOpen = false; void openSelectedFolder(selected); }}>
-                <Folder size={14} /> Selected instance
+                <Folder size={14} /> {$t("library.selectedInstance")}
               </button>
             {/if}
           </div>
@@ -1176,31 +1370,31 @@
       <button
         type="button"
         class="tb-btn"
-        title="Refresh"
+        title={$t("common.refresh")}
         disabled={refreshing}
         onclick={() => void refreshAll()}
       >
         <span class:spinning={refreshing}><RefreshCw size={16} /></span>
-        <span>Update</span>
+        <span>{$t("library.update")}</span>
       </button>
       <button
         type="button"
         class="tb-btn"
-        title="Help"
+        title={$t("common.help")}
         onclick={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
       >
         <HelpCircle size={16} />
-        <span>Help</span>
+        <span>{$t("common.help")}</span>
       </button>
-      <button type="button" class="tb-btn" title="Settings" onclick={() => (currentView = "settings")}>
+      <button type="button" class="tb-btn" title={$t("common.settings")} onclick={() => (currentView = "settings")}>
         <Settings size={16} />
-        <span>Settings</span>
+        <span>{$t("common.settings")}</span>
       </button>
       {#if $authState.loggedIn && $authState.profile}
         <button
           type="button"
           class="tb-account"
-          title="Account"
+          title={$t("library.account")}
           onclick={() => (currentView = "me")}
         >
           <HeadAvatar skinSrc={$skinPath} size={28} alt={$authState.profile.name} />
@@ -1224,7 +1418,7 @@
     <div class="prism-grid-pane">
       <div class="lib-page-head">
         <div class="lib-page-title">
-          <h2 class="lib-title">Library</h2>
+          <h2 class="lib-title">{$t("library.title")}</h2>
           {#if $recentProjects.length > 0}
             <span class="lib-title-count">{visibleCount} of {$recentProjects.length}</span>
           {/if}
@@ -1234,8 +1428,8 @@
             <Search size={15} class="tb-search-icon" />
             <input
               type="text"
-              placeholder="Filter instances…"
-              aria-label="Filter instances"
+              placeholder={$t("library.filterPlaceholder")}
+              aria-label={$t("library.filterAria")}
               spellcheck="false"
               bind:value={instanceFilter}
             />
@@ -1243,7 +1437,7 @@
               <button
                 type="button"
                 class="tb-search-clear"
-                aria-label="Clear filter"
+                aria-label={$t("library.clearFilter")}
                 onclick={() => (instanceFilter = "")}
               >
                 <X size={13} />
@@ -1252,29 +1446,53 @@
           </div>
           <select
             class="tb-sort"
-            aria-label="Sort instances"
+            aria-label={$t("library.sort")}
             title="Sort instances"
             value={sortMode}
             onchange={(e) => setSortMode((e.currentTarget as HTMLSelectElement).value as SortMode)}
           >
-            <option value="recent">Last played</option>
-            <option value="name">Name</option>
-            <option value="playtime">Most played</option>
+            <option value="recent">{$t("library.sortRecent")}</option>
+            <option value="name">{$t("library.sortName")}</option>
+            <option value="playtime">{$t("library.sortPlaytime")}</option>
           </select>
+          <div class="view-toggle" role="group" aria-label={$t("library.layout")}>
+            <button
+              type="button"
+              class="view-btn"
+              class:active={viewMode === "grid"}
+              title="Grid view"
+              aria-label={$t("library.gridView")}
+              aria-pressed={viewMode === "grid"}
+              onclick={() => setViewMode("grid")}
+            >
+              <LayoutGrid size={15} />
+            </button>
+            <button
+              type="button"
+              class="view-btn"
+              class:active={viewMode === "list"}
+              title="List view"
+              aria-label={$t("library.listView")}
+              aria-pressed={viewMode === "list"}
+              onclick={() => setViewMode("list")}
+            >
+              <List size={15} />
+            </button>
+          </div>
         </div>
       </div>
       {#if $recentProjects.length === 0}
         <div class="empty-state">
-          <h3>No instances yet</h3>
-          <p>Create or import a pack to build your library.</p>
+          <h3>{$t("library.emptyTitle")}</h3>
+          <p>{$t("library.emptyBody")}</p>
           <button type="button" class="empty-cta" onclick={() => openAddInstance("blank")}>
             <Plus size={16} /> Add Instance
           </button>
         </div>
       {:else if visibleCount === 0}
         <div class="empty-state">
-          <h3>No matches</h3>
-          <p>Nothing matches “{instanceFilter}”. Try another name, version or loader.</p>
+          <h3>{$t("library.noMatchesTitle")}</h3>
+          <p>{$t("library.noMatchesBody", { filter: instanceFilter })}</p>
           <button type="button" class="empty-cta" onclick={() => (instanceFilter = "")}>
             <X size={16} /> Clear filter
           </button>
@@ -1283,6 +1501,241 @@
         <p class="drag-hint" class:visible={dragging}>
           Drop on another instance to make a folder
         </p>
+{#snippet instanceTile(project: RecentProject)}
+  {@const tileRunning = isProjectRunning(project.path, $runningInstances)}
+  {@const tileLaunching = isProjectLaunching(project.path, $launchSessions)}
+    <div
+      class="inst-tile"
+      class:selected={selectedPath === project.path}
+      class:running={tileRunning}
+      class:dragging={dragSource?.path === project.path}
+      class:drop-target={dropTargetPath === project.path}
+      class:holding={holdingPath === project.path && !dragging}
+      data-path={project.path}
+      role="button"
+      tabindex="0"
+      aria-label={`${project.info.name}. Hold and drag onto another instance to create a folder`}
+      in:tileIntro
+      onclick={() => onTileClick(project)}
+      ondblclick={() => !dragging && void launchInstance(project)}
+      onkeydown={onTileKeydown}
+      oncontextmenu={(e) => openCtxMenu(e, project)}
+      onpointerdown={(e) => onTilePointerDown(e, project)}
+      onpointermove={onTilePointerMove}
+      onpointerup={onTilePointerUp}
+      onpointercancel={onTilePointerCancel}
+    >
+      <div class="hold-ring" aria-hidden="true"></div>
+      <div
+        class="inst-icon"
+        class:has-image={!!instanceIcons[project.path]}
+        class:folder-preview={dropTargetPath === project.path}
+        style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}
+      >
+        {#if instanceIcons[project.path]}
+          <img
+            class="inst-icon-img"
+            src={instanceIcons[project.path]!}
+            alt=""
+            draggable="false"
+          />
+        {:else if dropTargetPath === project.path && dragSource}
+          <span class="folder-stack" aria-hidden="true">
+            <span class="stack-a">{dragSource.info.name[0]?.toUpperCase()}</span>
+            <span class="stack-b">{project.info.name[0]?.toUpperCase()}</span>
+          </span>
+        {:else}
+          {project.info.name[0]?.toUpperCase() ?? "?"}
+        {/if}
+        {#if ($updateCounts[project.path]?.count ?? 0) > 0}
+          <span
+            class="tile-upd"
+            title={$t("library.updatesBadgeTitle", { n: $updateCounts[project.path]?.count ?? 0 })}
+          >
+            {($updateCounts[project.path]?.count ?? 0) > 9
+              ? "9+"
+              : $updateCounts[project.path]?.count}
+          </span>
+        {/if}
+        {#if !dragging && !dropTargetPath}
+          <!-- Home-card-style delayed hover reveal; buttons stop
+               propagation so they never start a tile drag/hold,
+               re-select or double-launch. -->
+          <span class="tile-actions">
+            <button
+              type="button"
+              class="tile-play"
+              class:stop={tileRunning}
+              disabled={tileLaunching}
+              title={tileRunning ? $t("common.stop") : $t("common.play")}
+              aria-label={tileRunning
+                ? $t("library.stopAria", { name: project.info.name })
+                : $t("library.playAria", { name: project.info.name })}
+              onpointerdown={(e) => e.stopPropagation()}
+              onclick={(e) => { e.stopPropagation(); void launchInstance(project); }}
+              ondblclick={(e) => e.stopPropagation()}
+              onkeydown={(e) => e.stopPropagation()}
+            >
+              {#if tileLaunching}
+                <span class="mini-spinner"></span>
+              {:else if tileRunning}
+                <Square size={12} fill="currentColor" /> Stop
+              {:else}
+                <Play size={13} fill="currentColor" /> Play
+              {/if}
+            </button>
+            <span class="tile-acts">
+              <button
+                type="button"
+                class="tile-act"
+                title={$t("library.openInIde")}
+                aria-label={`Open ${project.info.name} in IDE`}
+                onpointerdown={(e) => e.stopPropagation()}
+                onclick={(e) => { e.stopPropagation(); openInIde(project); }}
+                ondblclick={(e) => e.stopPropagation()}
+                onkeydown={(e) => e.stopPropagation()}
+              >
+                <Package size={14} />
+              </button>
+              <button
+                type="button"
+                class="tile-act"
+                title={$t("library.openFolder")}
+                aria-label={`Open ${project.info.name} folder`}
+                onpointerdown={(e) => e.stopPropagation()}
+                onclick={(e) => { e.stopPropagation(); void runAction("folder", project); }}
+                ondblclick={(e) => e.stopPropagation()}
+                onkeydown={(e) => e.stopPropagation()}
+              >
+                <Folder size={14} />
+              </button>
+            </span>
+          </span>
+        {/if}
+      </div>
+      <span
+        class="inst-name"
+        title={project.info.name}
+      >{project.info.name}</span>
+      <span class="inst-version" title={`${project.info.minecraftVersion} · ${project.info.loaderKind}`}>
+        {project.info.minecraftVersion} · {project.info.loaderKind}
+      </span>
+      <span class="inst-last" title={formatLastLaunch(projectStats[project.path]?.lastLaunch ?? null)}>
+        {lastPlayedShort(projectStats[project.path]?.lastLaunch ?? null)}
+      </span>
+    </div>
+{/snippet}
+
+{#snippet instanceRow(project: RecentProject)}
+  {@const rowRunning = isProjectRunning(project.path, $runningInstances)}
+  {@const rowLaunching = isProjectLaunching(project.path, $launchSessions)}
+  {@const stats = projectStats[project.path]}
+  <div
+    class="inst-row"
+    class:selected={selectedPath === project.path}
+    class:running={rowRunning}
+    class:dragging={dragSource?.path === project.path}
+    class:drop-target={dropTargetPath === project.path}
+    data-path={project.path}
+    role="button"
+    tabindex="0"
+    aria-label={project.info.name}
+    in:tileIntro
+    onclick={() => onTileClick(project)}
+    ondblclick={() => !dragging && void launchInstance(project)}
+    onkeydown={onTileKeydown}
+    oncontextmenu={(e) => openCtxMenu(e, project)}
+    onpointerdown={(e) => onTilePointerDown(e, project)}
+    onpointermove={onTilePointerMove}
+    onpointerup={onTilePointerUp}
+    onpointercancel={onTilePointerCancel}
+  >
+    <div
+      class="row-icon"
+      class:has-image={!!instanceIcons[project.path]}
+      style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}
+    >
+      {#if instanceIcons[project.path]}
+<img class="inst-icon-img" src={instanceIcons[project.path]!} alt="" draggable="false" />
+      {:else}
+{project.info.name[0]?.toUpperCase() ?? "?"}
+      {/if}
+      {#if rowRunning}
+<span class="row-running-dot" aria-hidden="true"></span>
+      {/if}
+    </div>
+    <div class="row-main">
+      <span class="row-name" title={project.info.name}>
+        {project.info.name}
+        {#if ($updateCounts[project.path]?.count ?? 0) > 0}
+          <span class="row-upd" title={$t("library.updatesBadgeTitle", { n: $updateCounts[project.path]?.count ?? 0 })}>
+            ↑ {$updateCounts[project.path]?.count > 9 ? "9+" : $updateCounts[project.path]?.count}
+          </span>
+        {/if}
+      </span>
+      <span class="row-sub" title={`${project.info.minecraftVersion} · ${project.info.loaderKind}`}>
+{project.info.minecraftVersion} · {project.info.loaderKind}
+      </span>
+    </div>
+    <div class="row-stats" aria-label={$t("library.playStats")}>
+      <span class="row-stat" title={$t("library.lastPlayed")}>
+{lastPlayedShort(stats?.lastLaunch ?? null)}
+      </span>
+      <span class="row-stat" title={$t("library.playtime")}>
+{formatPlaytime(stats?.playtime ?? 0)} played
+      </span>
+    </div>
+    <div class="row-actions">
+      <button
+type="button"
+class="row-play"
+class:stop={rowRunning}
+disabled={rowLaunching}
+title={rowRunning ? $t("common.stop") : $t("common.play")}
+aria-label={rowRunning
+      ? $t("library.stopAria", { name: project.info.name })
+      : $t("library.playAria", { name: project.info.name })}
+onpointerdown={(e) => e.stopPropagation()}
+onclick={(e) => { e.stopPropagation(); void launchInstance(project); }}
+ondblclick={(e) => e.stopPropagation()}
+onkeydown={(e) => e.stopPropagation()}
+      >
+{#if rowLaunching}
+  <span class="mini-spinner"></span>
+{:else if rowRunning}
+  <Square size={12} fill="currentColor" /> Stop
+{:else}
+  <Play size={13} fill="currentColor" /> Play
+{/if}
+      </button>
+      <button
+type="button"
+class="row-act"
+title={$t("library.openInIde")}
+aria-label={`Open ${project.info.name} in IDE`}
+onpointerdown={(e) => e.stopPropagation()}
+onclick={(e) => { e.stopPropagation(); openInIde(project); }}
+ondblclick={(e) => e.stopPropagation()}
+onkeydown={(e) => e.stopPropagation()}
+      >
+<Package size={15} />
+      </button>
+      <button
+type="button"
+class="row-act"
+title={$t("library.openFolder")}
+aria-label={`Open ${project.info.name} folder`}
+onpointerdown={(e) => e.stopPropagation()}
+onclick={(e) => { e.stopPropagation(); void runAction("folder", project); }}
+ondblclick={(e) => e.stopPropagation()}
+onkeydown={(e) => e.stopPropagation()}
+      >
+<Folder size={15} />
+      </button>
+    </div>
+  </div>
+{/snippet}
+
         {#each grouped.groups as group (group.name)}
           <section class="inst-group">
             <button
@@ -1302,67 +1755,19 @@
               <span class="group-count">{group.projects.length}</span>
             </button>
             {#if !group.collapsed}
-              <div class="inst-grid" transition:groupBodyIntro>
-                {#each group.projects as project (project.path)}
-                  <div
-                    class="inst-tile"
-                    class:selected={selectedPath === project.path}
-                    class:running={isProjectRunning(project.path, $runningInstances)}
-                    class:dragging={dragSource?.path === project.path}
-                    class:drop-target={dropTargetPath === project.path}
-                    class:holding={holdingPath === project.path && !dragging}
-                    data-path={project.path}
-                    role="button"
-                    tabindex="0"
-                    aria-label={`${project.info.name}. Hold and drag onto another instance to create a folder`}
-                    in:tileIntro
-                    onclick={() => onTileClick(project)}
-                    ondblclick={() => !dragging && void launchInstance(project)}
-                    onkeydown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        selectInstance(project);
-                      }
-                    }}
-                    oncontextmenu={(e) => openCtxMenu(e, project)}
-                    onpointerdown={(e) => onTilePointerDown(e, project)}
-                    onpointermove={onTilePointerMove}
-                    onpointerup={onTilePointerUp}
-                    onpointercancel={onTilePointerCancel}
-                  >
-                    <div class="hold-ring" aria-hidden="true"></div>
-                    <div
-                      class="inst-icon"
-                      class:has-image={!!instanceIcons[project.path]}
-                      class:folder-preview={dropTargetPath === project.path}
-                      style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}
-                    >
-                      {#if instanceIcons[project.path]}
-                        <img
-                          class="inst-icon-img"
-                          src={instanceIcons[project.path]!}
-                          alt=""
-                          draggable="false"
-                        />
-                      {:else if dropTargetPath === project.path && dragSource}
-                        <span class="folder-stack" aria-hidden="true">
-                          <span class="stack-a">{dragSource.info.name[0]?.toUpperCase()}</span>
-                          <span class="stack-b">{project.info.name[0]?.toUpperCase()}</span>
-                        </span>
-                      {:else}
-                        {project.info.name[0]?.toUpperCase() ?? "?"}
-                      {/if}
-                    </div>
-                    <span
-                      class="inst-name"
-                      title={project.info.name}
-                    >{project.info.name}</span>
-                    <span class="inst-version" title={`${project.info.minecraftVersion} · ${project.info.loaderKind}`}>
-                      {project.info.minecraftVersion} · {project.info.loaderKind}
-                    </span>
-                  </div>
-                {/each}
-              </div>
+              {#if viewMode === "grid"}
+                <div class="inst-grid" transition:groupBodyIntro>
+                  {#each group.projects as project (project.path)}
+                    {@render instanceTile(project)}
+                  {/each}
+                </div>
+              {:else}
+                <div class="inst-rows" transition:groupBodyIntro>
+                  {#each group.projects as project (project.path)}
+                    {@render instanceRow(project)}
+                  {/each}
+                </div>
+              {/if}
             {/if}
           </section>
         {/each}
@@ -1411,6 +1816,15 @@
               <div class="side-meta">
                 {selected.info.minecraftVersion} · {selected.info.loaderKind}
               </div>
+              <button
+                type="button"
+                class="side-group-chip"
+                title={$t("library.changeGroup")}
+                onclick={() => void runAction("change-group", selected)}
+              >
+                <Tags size={12} />
+                <span class="side-group-name">{getGroup(groupMap, selected.path)}</span>
+              </button>
             </div>
 
             <div class="side-actions">
@@ -1423,39 +1837,71 @@
                 {#if selectedLaunching}
                   <span class="mini-spinner"></span> {selectedLaunchMessage}
                 {:else if selectedRunning}
-                  <Square size={16} fill="currentColor" /> Stop
+                  <Square size={16} fill="currentColor" /> {$t("common.stop")}
                 {:else}
-                  <Play size={18} fill="currentColor" /> Play
+                  <Play size={18} fill="currentColor" /> {$t("common.play")}
                 {/if}
               </button>
 
-              <div class="side-icon-row">
+              {#if ($updateCounts[selected.path]?.count ?? 0) > 0}
                 <button
                   type="button"
-                  class="side-icon-btn"
-                  title="Open in IDE"
-                  aria-label="Open in IDE"
+                  class="side-updates"
+                  title={$t("library.updatesTitle")}
+                  disabled={actionBusy}
+                  onclick={() => void updateAllSelected()}
+                >
+                  <ArrowUpCircle size={14} />
+                  <span class="side-updates-text">
+                    {$updateCounts[selected.path]?.count === 1
+                      ? $t("library.modHasUpdate")
+                      : $t("library.modsHaveUpdates", { n: $updateCounts[selected.path]?.count ?? 0 })}
+                  </span>
+                  <strong>{$t("library.updateAll")}</strong>
+                </button>
+              {/if}
+
+              <!-- Labeled secondaries: the two most common destinations after
+                   Play, promoted out of the icon row for discoverability. -->
+              <div class="side-secondary-row">
+                <button
+                  type="button"
+                  class="side-secondary manage"
+                  title={$t("library.modsBackupsHealth")}
+                  aria-label={$t("library.manageInstance")}
+                  onclick={() => (manageTarget = selected)}
+                >
+                  <SlidersHorizontal size={15} /> {$t("library.manageEllipsis")}
+                </button>
+                <button
+                  type="button"
+                  class="side-secondary"
+                  title={$t("library.openIdeAria")}
+                  aria-label={$t("library.openInIde")}
                   disabled={actionBusy}
                   onclick={() => runAction("open-ide", selected)}
                 >
-                  <Package size={16} />
+                  <Package size={15} /> {$t("library.openInIde")}
                 </button>
                 <button
                   type="button"
-                  class="side-icon-btn"
-                  title="Open folder"
-                  aria-label="Open folder"
+                  class="side-secondary"
+                  title={$t("library.openFolderAria")}
+                  aria-label={$t("library.openFolder")}
                   disabled={actionBusy}
                   onclick={() => void runAction("folder", selected)}
                 >
-                  <Folder size={16} />
+                  <Folder size={15} /> {$t("library.folder")}
                 </button>
+              </div>
+
+              <div class="side-icon-row">
                 <div class="tb-export-wrap">
                   <button
                     type="button"
                     class="side-icon-btn"
-                    title="Export"
-                    aria-label="Export"
+                    title={$t("common.export")}
+                    aria-label={$t("common.export")}
                     disabled={actionBusy}
                     onclick={(e) => { e.stopPropagation(); (exportMenuOpen = !exportMenuOpen);  }}
                   >
@@ -1464,13 +1910,13 @@
                   {#if exportMenuOpen}
                     <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
                       <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", selected)}>
-                        Export .mrpack
+                        {$t("home.exportMrpack")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => void runAction("export-server", selected)}>
-                        Export server pack
+                        {$t("home.serverPack")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => void runAction("export-prism", selected)}>
-                        Export Prism zip
+                        {$t("library.exportPrism")}
                       </button>
                     </div>
                   {/if}
@@ -1479,43 +1925,49 @@
                   <button
                     type="button"
                     class="side-icon-btn"
-                    title="More"
-                    aria-label="More actions"
+                    title={$t("common.more")}
+                    aria-label={$t("library.moreActions")}
                     onclick={(e) => { e.stopPropagation(); (moreMenuOpen = !moreMenuOpen); }}
                   >
                     <Settings size={16} />
                   </button>
                   {#if moreMenuOpen}
                     <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; manageTarget = selected; }}>
+                        <SlidersHorizontal size={14} /> {$t("library.manageEllipsis")}
+                      </button>
+                      <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; renameTarget = selected; }}>
+                        <Pencil size={14} /> {$t("library.renameEllipsis")}
+                      </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-group", selected); }}>
-                        <Tags size={14} /> Change Group
+                        <Tags size={14} /> {$t("library.changeGroup")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("change-icon", selected); }} disabled={actionBusy}>
-                        <ImageIcon size={14} /> Change icon…
+                        <ImageIcon size={14} /> {$t("library.changeIcon")}
                       </button>
                       {#if instanceIcons[selected.path]}
                         <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("clear-icon", selected); }} disabled={actionBusy}>
-                          <Eraser size={14} /> Clear icon
+                          <Eraser size={14} /> {$t("library.clearIcon")}
                         </button>
                       {/if}
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy", selected); }}>
-                        <Copy size={14} /> Copy instance
+                        <Copy size={14} /> {$t("library.copyInstance")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("shortcut", selected); }}>
-                        <Link2 size={14} /> Create Shortcut
+                        <Link2 size={14} /> {$t("library.createShortcut")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("repair", selected); }} disabled={actionBusy}>
-                        <Wrench size={14} /> Repair
+                        <Wrench size={14} /> {$t("library.repair")}
                       </button>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("copy-path", selected); }}>
-                        <Copy size={14} /> Copy path
+                        <Copy size={14} /> {$t("library.copyPath")}
                       </button>
                       <div class="menu-sep"></div>
                       <button type="button" role="menuitem" onclick={() => { moreMenuOpen = false; void runAction("remove", selected); }}>
-                        <Minus size={14} /> Remove from library
+                        <Minus size={14} /> {$t("library.removeFromLibrary")}
                       </button>
                       <button type="button" role="menuitem" class="danger" onclick={() => { moreMenuOpen = false; void runAction("delete", selected); }}>
-                        <Trash2 size={14} /> Delete from disk
+                        <Trash2 size={14} /> {$t("library.deleteFromDisk")}
                       </button>
                     </div>
                   {/if}
@@ -1525,21 +1977,33 @@
 
             <div class="side-meta-grid">
               <div class="side-meta-item">
-                <span class="side-meta-label">Play time</span>
+                <span class="side-meta-label">{$t("library.playTime")}</span>
                 <span class="side-meta-value">{formatPlaytime(projectStats[selected.path]?.playtime ?? 0)}</span>
               </div>
               <div class="side-meta-item">
-                <span class="side-meta-label">Last played</span>
+                <span class="side-meta-label">{$t("library.lastPlayed")}</span>
                 <span class="side-meta-value">{formatLastLaunch(projectStats[selected.path]?.lastLaunch ?? null)}</span>
               </div>
               <div class="side-meta-item">
-                <span class="side-meta-label">Java</span>
+                <span class="side-meta-label">{$t("library.java")}</span>
                 <span class="side-meta-value">{javaLabel(selected.info.javaPath)}</span>
               </div>
               <div class="side-meta-item">
-                <span class="side-meta-label">Memory</span>
+                <span class="side-meta-label">{$t("library.memory")}</span>
                 <span class="side-meta-value">{memoryLabel(selected.info.memoryMb)}</span>
               </div>
+            </div>
+            <div class="side-notes">
+              <label class="side-notes-label" for="side-notes-input">{$t("library.notes")}</label>
+              <textarea
+                id="side-notes-input"
+                class="side-notes-input"
+                placeholder={$t("library.notesPlaceholder")}
+                bind:value={notesDraft}
+                oninput={() => saveNote()}
+                rows={3}
+                spellcheck="false"
+              ></textarea>
             </div>
             <div class="side-content">
               <button
@@ -1548,7 +2012,7 @@
                 aria-expanded={!contentCollapsed}
                 onclick={toggleContentCollapsed}
               >
-                <span class="side-content-title">Content</span>
+                <span class="side-content-title">{$t("library.content")}</span>
                 <span class="side-content-hint">mods · packs · shaders · servers</span>
                 <ChevronDown size={14} class={!contentCollapsed ? "flipped" : ""} />
               </button>
@@ -1557,6 +2021,7 @@
                   <LibraryInstanceContent
                     projectPath={selected.path}
                     onOpenMods={() => openInIde(selected)}
+                    onManage={() => (manageTarget = selected)}
                   />
                 </div>
               {/if}
@@ -1564,7 +2029,7 @@
           </div>
         {/key}
       {:else}
-        <div class="side-empty" in:fade={{ duration: prefersReducedMotion() ? 0 : 160 }}>Select an instance</div>
+        <div class="side-empty" in:fade={{ duration: prefersReducedMotion() ? 0 : 160 }}>{$t("library.selectInstance")}</div>
       {/if}
     </aside>
   </div>
@@ -1601,64 +2066,90 @@
       disabled={actionBusy || isProjectLaunching(menuProject.path, $launchSessions)}
     >
       {#if isProjectRunning(menuProject.path, $runningInstances)}
-        <Square size={14} /> Stop
+        <Square size={14} /> {$t("common.stop")}
       {:else}
-        <Play size={14} /> Play
+        <Play size={14} /> {$t("common.play")}
       {/if}
     </button>
     <button type="button" role="menuitem" onclick={() => runAction("open-ide", menuProject)}>
-      <Package size={14} /> Open IDE
+      <Package size={14} /> {$t("library.openIde")}
+    </button>
+    <button type="button" role="menuitem" onclick={() => { ctxMenu = null; manageTarget = menuProject; }}>
+      <SlidersHorizontal size={14} /> {$t("library.manageEllipsis")}
+    </button>
+    <button type="button" role="menuitem" onclick={() => { ctxMenu = null; renameTarget = menuProject; }}>
+      <Pencil size={14} /> {$t("library.renameEllipsis")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("change-group", menuProject)}>
-      <Tags size={14} /> Change Group
+      <Tags size={14} /> {$t("library.changeGroup")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("folder", menuProject)}>
-      <Folder size={14} /> Folder
+      <Folder size={14} /> {$t("library.folder")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("change-icon", menuProject)} disabled={actionBusy}>
-      <ImageIcon size={14} /> Change icon…
+      <ImageIcon size={14} /> {$t("library.changeIcon")}
     </button>
     {#if instanceIcons[menuProject.path]}
       <button type="button" role="menuitem" onclick={() => void runAction("clear-icon", menuProject)} disabled={actionBusy}>
-        <Eraser size={14} /> Clear icon
+        <Eraser size={14} /> {$t("library.clearIcon")}
       </button>
     {/if}
     <button type="button" role="menuitem" onclick={() => void runAction("copy", menuProject)}>
-      <Copy size={14} /> Copy
+      <Copy size={14} /> {$t("library.copyInstance")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("shortcut", menuProject)}>
-      <Link2 size={14} /> Create Shortcut
+      <Link2 size={14} /> {$t("library.createShortcut")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", menuProject)} disabled={actionBusy}>
-      <Package size={14} /> Export .mrpack
+      <Package size={14} /> {$t("home.exportMrpack")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("export-server", menuProject)} disabled={actionBusy}>
-      <Server size={14} /> Export server pack
+      <Server size={14} /> {$t("home.serverPack")}
     </button>
     <div class="menu-sep"></div>
     <button type="button" role="menuitem" onclick={() => void runAction("copy-path", menuProject)}>
-      <Copy size={14} /> Copy path
+      <Copy size={14} /> {$t("library.copyPath")}
     </button>
     <button type="button" role="menuitem" onclick={() => void runAction("repair", menuProject)} disabled={actionBusy}>
-      <Wrench size={14} /> Repair
+      <Wrench size={14} /> {$t("library.repair")}
     </button>
     <div class="menu-sep"></div>
     <button type="button" role="menuitem" onclick={() => void runAction("remove", menuProject)}>
-      <Minus size={14} /> Remove from library
+      <Minus size={14} /> {$t("library.removeFromLibrary")}
     </button>
     <button type="button" role="menuitem" class="danger" onclick={() => void runAction("delete", menuProject)}>
-      <Trash2 size={14} /> Delete from disk
+      <Trash2 size={14} /> {$t("library.deleteFromDisk")}
     </button>
   </div>
 {/if}
 
+{#if manageTarget}
+  <InstanceManager
+    project={manageTarget}
+    onclose={() => (manageTarget = null)}
+    onBrowseMods={() => libraryTabRequest.set("discover")}
+  />
+{/if}
+
+{#if renameTarget}
+  <PromptDialog
+    title={$t("library.renameInstance")}
+    message={$t("library.newNameFor", { name: renameTarget.info.name })}
+    mode="text"
+    defaultValue={renameTarget.info.name}
+    confirmLabel={$t("library.rename")}
+    onconfirm={(v) => void confirmRename(v)}
+    oncancel={() => (renameTarget = null)}
+  />
+{/if}
+
 {#if showClonePrompt && cloneTarget}
   <PromptDialog
-    title="Copy instance"
-    message={`Create a copy of "${cloneTarget.info.name}"`}
+    title={$t("library.copyInstance")}
+    message={$t("library.copyOf", { name: cloneTarget.info.name })}
     mode="text"
     defaultValue={clonePromptName}
-    confirmLabel="Copy"
+    confirmLabel={$t("common.copy")}
     onconfirm={(v) => confirmClone(v)}
     oncancel={() => {
       showClonePrompt = false;
@@ -1669,11 +2160,11 @@
 
 {#if githubImportOpen}
   <PromptDialog
-    title="Import from GitHub"
-    message="Public repo only. Paste owner/repo or a github.com URL. No login needed."
+    title={$t("library.importGithub")}
+    message={$t("library.githubMsg")}
     mode="text"
     defaultValue=""
-    confirmLabel="Preview"
+    confirmLabel={$t("library.preview")}
     onconfirm={(v) => void confirmGithubImport(v)}
     oncancel={() => (githubImportOpen = false)}
   />
@@ -1681,9 +2172,9 @@
 
 {#if githubConfirmOpen}
   <ConfirmDialog
-    title="Install GitHub pack"
+    title={$t("library.installGithubPack")}
     message={githubInspectSummary}
-    confirmLabel="Install"
+    confirmLabel={$t("manager.install")}
     onconfirm={() => void confirmGithubInstall()}
     oncancel={() => (githubConfirmOpen = false)}
   />
@@ -1707,8 +2198,8 @@
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
     >
-      <h3 id="group-dlg-title">Change Group</h3>
-      <p>Move “{groupTarget.info.name}” into a group.</p>
+      <h3 id="group-dlg-title">{$t("library.groupDialogTitle")}</h3>
+      <p>{$t("library.groupDialogBody", { name: groupTarget.info.name })}</p>
       <div class="group-chips">
         {#each existingGroups as g (g)}
           <button type="button" class="chip" class:active={groupPromptName === g} onclick={() => applyExistingGroup(g)}>
@@ -1716,11 +2207,11 @@
           </button>
         {/each}
       </div>
-      <label class="group-new-label" for="group-new-input">Or type a new name</label>
+      <label class="group-new-label" for="group-new-input">{$t("library.groupOrNew")}</label>
       <input id="group-new-input" bind:value={groupPromptName} onkeydown={(e) => e.key === "Enter" && confirmGroup(groupPromptName)} />
       <div class="group-dlg-actions">
-        <button type="button" class="ghost" onclick={() => { showGroupPrompt = false; groupTarget = null; }}>Cancel</button>
-        <button type="button" class="accent" onclick={() => confirmGroup(groupPromptName)}>Apply</button>
+        <button type="button" class="ghost" onclick={() => { showGroupPrompt = false; groupTarget = null; }}>{$t("common.cancel")}</button>
+        <button type="button" class="accent" onclick={() => confirmGroup(groupPromptName)}>{$t("common.apply")}</button>
       </div>
     </div>
   </div>
@@ -1966,7 +2457,8 @@
     cursor: grabbing;
     user-select: none;
   }
-  .prism-body.is-dragging .inst-tile {
+  .prism-body.is-dragging .inst-tile,
+  .prism-body.is-dragging .inst-row {
     cursor: grabbing;
   }
   @media (max-width: 720px) {
@@ -2145,7 +2637,8 @@
     opacity: 0.28;
     filter: saturate(0.7);
   }
-  .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+  .drag-mode .inst-tile:not(.dragging):not(.drop-target),
+  .drag-mode .inst-row:not(.dragging):not(.drop-target) {
     opacity: 0.7;
   }
   .inst-tile.drop-target {
@@ -2253,6 +2746,298 @@
   }
   .folder-stack .stack-a { top: 10px; left: 10px; }
   .folder-stack .stack-b { bottom: 10px; right: 10px; }
+
+  /* ── Tile hover quick actions (home-card parity) ──────────────────
+     Scrim + Play / IDE / Folder revealed on hover or keyboard focus with
+     the same calm delayed reveal the home shelf uses. Buttons stop event
+     propagation in markup so they never start a tile drag/hold. */
+  .tile-actions {
+    position: absolute;
+    inset: auto 0 0 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 16px 6px 6px;
+    border-radius: 0 0 var(--border-radius-sm) var(--border-radius-sm);
+    background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.62) 78%);
+    opacity: 0;
+    transform: translateY(4px);
+    pointer-events: none;
+    transition:
+      opacity var(--motion-fast, 160ms) var(--ease-out),
+      transform var(--motion-fast, 160ms) var(--ease-out);
+    transition-delay: var(--motion-hover-delay, 70ms);
+  }
+  .inst-tile:hover .tile-actions,
+  .inst-tile:focus-within .tile-actions {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+    transition-delay: var(--motion-hover-delay, 70ms);
+  }
+  /* Hidden while a drag/hold/folder-drop is in progress on the tile. */
+  .inst-tile.holding .tile-actions,
+  .inst-tile.dragging .tile-actions,
+  .inst-tile.drop-target .tile-actions,
+  .drag-mode .inst-tile .tile-actions {
+    opacity: 0;
+    pointer-events: none;
+    transition-delay: 0ms;
+  }
+  :global(.potato-pc) .tile-actions {
+    transition: none;
+  }
+  .tile-play {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 999px;
+    background: var(--accent-primary);
+    color: var(--on-accent, #fff);
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+    transform: none;
+  }
+  .tile-play.stop {
+    background: var(--accent-danger, #ef4444);
+  }
+  .tile-play:disabled {
+    cursor: wait;
+    opacity: 0.85;
+  }
+  .tile-play:hover {
+    filter: brightness(1.08);
+  }
+  .tile-acts {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .tile-act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+    transform: none;
+  }
+  .tile-act:hover {
+    background: rgba(0, 0, 0, 0.78);
+  }
+
+  /* Last-played line under the version — makes recency glanceable. */
+  .inst-last {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── List view: dense rows, same selection/hover language as tiles ── */
+  .inst-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .inst-row {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) auto auto;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    cursor: pointer;
+    outline: none;
+    position: relative;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out),
+      box-shadow var(--motion-fast) var(--ease-out);
+  }
+  .inst-row:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+    background: var(--bg-tertiary);
+  }
+  .inst-row.selected {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-secondary));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  }
+  .inst-row.selected .row-name {
+    color: var(--accent-primary);
+  }
+  .inst-row.drop-target {
+    background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
+  }
+  .inst-row.dragging {
+    opacity: 0.28;
+  }
+  .inst-row:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 70%, transparent);
+    outline-offset: 1px;
+  }
+  .row-icon {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--border-radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 19px;
+    font-weight: 900;
+    color: #fff;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .row-icon .inst-icon-img {
+    border-radius: 0;
+  }
+  .row-running-dot {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    border: 2px solid var(--bg-primary);
+  }
+  .row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .row-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-stats {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .row-stat {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .row-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .row-play {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 11px;
+    border: none;
+    border-radius: 999px;
+    background: var(--accent-primary);
+    color: var(--on-accent, #fff);
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    transform: none;
+  }
+  .row-play.stop {
+    background: var(--accent-danger, #ef4444);
+  }
+  .row-play:disabled {
+    cursor: wait;
+    opacity: 0.85;
+  }
+  .row-play:hover {
+    filter: brightness(1.08);
+  }
+  .row-act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transform: none;
+  }
+  .row-act:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    color: var(--text-primary);
+  }
+
+  /* Grid ⇄ list segmented toggle in the filter bar. */
+  .view-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+  }
+  .view-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transform: none;
+  }
+  .view-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+  .view-btn.active {
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    color: var(--accent-primary);
+  }
+
   .inst-name {
     font-size: 13px;
     font-weight: 700;
@@ -2362,6 +3147,195 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+  /* Labeled secondaries under Play — IDE + folder, the two most common
+     destinations, promoted out of the 32px icon row. */
+  .side-secondary-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .side-secondary.manage {
+    grid-column: 1 / -1;
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
+    color: var(--accent-primary);
+  }
+  .side-secondary.manage:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-hover));
+    color: var(--accent-primary);
+  }
+  .side-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 9px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    transform: none;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out);
+  }
+  .side-secondary:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .side-secondary:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  /* Update-center: amber count chip on the tile icon + row badge + side CTA. */
+  .tile-upd {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--accent-warning);
+    color: #1a1a1a;
+    font-size: 12px;
+    font-weight: 800;
+    pointer-events: none;
+  }
+  .row-upd {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    padding: 0 6px;
+    height: 16px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-warning) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 45%, transparent);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 800;
+    vertical-align: middle;
+  }
+  .side-updates {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 11px;
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 45%, var(--border-color));
+    border-radius: var(--border-radius-sm);
+    background: color-mix(in srgb, var(--accent-warning) 10%, transparent);
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    transform: none;
+    text-align: left;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out);
+  }
+  .side-updates:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-warning) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-warning) 65%, var(--border-color));
+  }
+  .side-updates:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
+  .side-updates :global(svg) {
+    color: var(--accent-warning);
+    flex-shrink: 0;
+  }
+  .side-updates-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .side-updates strong {
+    color: var(--accent-warning);
+    white-space: nowrap;
+  }
+
+  /* Prism-style per-instance notes — autosaving, keyed by instance path. */
+  .side-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .side-notes-label {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .side-notes-input {
+    width: 100%;
+    min-height: 58px;
+    max-height: 130px;
+    padding: 7px 9px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1.45;
+    resize: vertical;
+    outline: none;
+  }
+  .side-notes-input:focus {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+  }
+  .side-notes-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  /* Group chip under the side hero — shows where the pack lives and opens
+     the change-group prompt on click. */
+  .side-group-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    margin-top: 8px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    color: var(--accent-primary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transform: none;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out);
+  }
+  .side-group-chip:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  }
+  .side-group-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .side-btn {
     display: inline-flex;
@@ -2475,10 +3449,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .side-btn.danger:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
-    color: var(--accent-danger);
   }
   .side-empty {
     padding: 24px 8px;
@@ -2741,7 +3711,8 @@
     transform: none !important;
     filter: none !important;
   }
-  :global(.potato-pc) .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+  :global(.potato-pc) .drag-mode .inst-tile:not(.dragging):not(.drop-target),
+  :global(.potato-pc) .drag-mode .inst-row:not(.dragging):not(.drop-target) {
     opacity: 1;
   }
 

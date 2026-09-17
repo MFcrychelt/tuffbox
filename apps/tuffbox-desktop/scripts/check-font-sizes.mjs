@@ -28,6 +28,9 @@ const srcRoot = path.join(appRoot, "src");
 const FLOOR_PX = 11;
 const PIXEL_FONT_FLOOR_PX = 10;
 const SIZE_RE = /font-size:\s*([\d.]+)(px|rem|em)/g;
+/** CSS `font:` shorthand — `font: 10.5px ui-monospace, monospace;` used to
+ * slip past this check because only the longhand was scanned. */
+const FONT_SHORTHAND_RE = /\bfont:\s*([\d.]+)(px|rem)\b/g;
 /** Tailwind arbitrary size utilities in markup (text-[10px], text-[0.65rem]). */
 const TW_SIZE_RE = /text-\[([\d.]+)(px|rem)\]/g;
 const REM_PX = 16;
@@ -86,6 +89,7 @@ for (const file of files) {
     const line = lines[lineNo];
     for (const [re, kind] of [
       [SIZE_RE, "font-size"],
+      [FONT_SHORTHAND_RE, "font shorthand"],
       [TW_SIZE_RE, "text-[…] utility"],
     ]) {
       re.lastIndex = 0;

@@ -89,6 +89,10 @@ ECC и engram комплементарны: engram — для явных арх�
 
 Шрифты приложения: **Inter Variable** (UI) и **JetBrains Mono Variable** (код/логи/пути) — self-hosted через `@fontsource-variable/*`, объявления в `src/styles/fonts.css` (только latin/cyrillic сабсеты ради бюджета стартового CSS). Не хардкодь monospace-стеки — используй `var(--font-mono, …)`.
 
+## Desktop UI — glass-поверхности и compositing (CI-enforced)
+
+`scripts/check-glass-compositing.mjs` (в `lint:perf`) запрещает менять **compositing-состояние самой glass-поверхности** — элемента, рисующегося через `backdrop-filter` (карточки `.tb-card`/`.card`/`.panel` при «Glass transparency», rail/header/modal, `.glass-panel`, blur-правила в компонентах). `opacity < 1`, `will-change`, `filter`, `mix-blend-mode`, `mask`/`clip-path` на таком элементе заставляют WebView2 перегруппировывать backdrop-слой → **квадратный артефакт искажения фона** (баг 2026-09: вкл/выкл мода на Content переключал `.installed-card.disabled { opacity: 0.72 }` на blur-карточке). Правильно: приглушать/анимировать **дочерние** элементы, не саму поверхность. Исключения скрипта (задокументированы в его шапке): транзиентный feedback контролов (`:hover/:active/:disabled` на button/input/select/textarea), точный `opacity: 0` (скрытые элементы), entrance-анимации и `transform`. Точечное подавление — `/* glass-compositing: ignore(<причина>) */` внутри правила, причина обязательна.
+
 ## Desktop — Tauri-команды с тяжёлым I/O: только async + spawn_blocking
 
 В `apps/tuffbox-desktop/src-tauri` **синхронные** `#[tauri::command]` выполняются на **главном потоке** приложения. Пока sync-команда ходит по диску, событийный цикл стоит: доставка ВСЕХ IPC-ответов зависает, и UI бесконечно крутит спиннеры (так Diagnose «вечно анализировал», хотя async-команды рядом уже имели таймауты/watchdog).

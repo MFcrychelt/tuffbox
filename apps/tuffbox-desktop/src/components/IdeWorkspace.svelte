@@ -17,6 +17,9 @@
     ScrollText,
     Circle,
     Map as MapIcon,
+    Plus,
+    RotateCcw,
+    X,
   } from "@lucide/svelte";
   import {
     projectPath,
@@ -47,6 +50,7 @@
   import ReleaseRoom from "./ReleaseRoom.svelte";
   import GithubPackUpdateBanner from "./GithubPackUpdateBanner.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import { portal } from "../lib/portal";
   import BriefEditor from "./BriefEditor.svelte";
   import IdeNextBar from "./IdeNextBar.svelte";
 
@@ -199,6 +203,63 @@
     },
   ];
 
+  // ── Closable tabs: the rail hides stages on request; navigation onto a
+  // hidden stage reopens it automatically. Persisted per app, not per project.
+  const HIDDEN_STAGES_KEY = "tuffbox.ide.hiddenStages";
+
+  function loadHiddenStages(): Set<StageId> {
+    try {
+      const raw = localStorage.getItem(HIDDEN_STAGES_KEY);
+      const list: unknown = raw ? JSON.parse(raw) : [];
+      const valid = Array.isArray(list)
+        ? (list as unknown[]).filter((id): id is StageId =>
+            stages.some((s) => s.id === id),
+          )
+        : [];
+      // At least one tab must stay visible — reset a corrupt "all hidden" state.
+      if (valid.length >= stages.length) return new Set();
+      return new Set(valid);
+    } catch {
+      return new Set();
+    }
+  }
+
+  let hiddenStages = $state<Set<StageId>>(loadHiddenStages());
+  $effect(() => {
+    try {
+      localStorage.setItem(HIDDEN_STAGES_KEY, JSON.stringify([...hiddenStages]));
+    } catch {
+      /* ignore quota / private mode */
+    }
+  });
+
+  const visibleStages = $derived(stages.filter((s) => !hiddenStages.has(s.id)));
+
+  function closeStage(id: StageId) {
+    if (hiddenStages.size >= stages.length - 1) return; // keep one tab visible
+    const next = new Set(hiddenStages);
+    next.add(id);
+    hiddenStages = next;
+    if (activeStage === id) {
+      // Jump to the nearest still-visible neighbour (dirty-leave guards run
+      // inside goToStage, so unsaved Tune/Brief/Quests edits stay protected).
+      const order = stages.filter((s) => !next.has(s.id));
+      const after = order.find((s) => stages.findIndex((x) => x.id === s.id) > stages.findIndex((x) => x.id === id));
+      goToStage((after ?? order[0]).id);
+    }
+  }
+
+  function reopenStage(id: StageId) {
+    if (!hiddenStages.has(id)) return;
+    const next = new Set(hiddenStages);
+    next.delete(id);
+    hiddenStages = next;
+  }
+
+  function reopenAllStages() {
+    hiddenStages = new Set();
+  }
+
   /** Stage chords when IDE focused (avoid App Ctrl+1… Home shortcuts). */
   const STAGE_CHORD: Record<string, StageId> = {
     "1": "content",
@@ -219,13 +280,24 @@
   let leaveKind = $state<"tune" | "brief" | "quests">("tune");
 
   function goAdjacentStage(dir: -1 | 1) {
-    const index = stages.findIndex((s) => s.id === activeStage);
-    if (index < 0) return;
-    const next = stages[index + dir];
+    const visible = visibleStages;
+    if (visible.length === 0) return;
+    const index = visible.findIndex((s) => s.id === activeStage);
+    if (index < 0) {
+      goToStage(visible[0].id);
+      return;
+    }
+    const next = visible[index + dir];
     if (next) goToStage(next.id);
   }
 
   function goToStage(id: StageId) {
+    if (hiddenStages.has(id)) {
+      // Navigating onto a closed tab (chord, IdeNextBar, library links) reopens it.
+      const next = new Set(hiddenStages);
+      next.delete(id);
+      hiddenStages = next;
+    }
     if (id === activeStage) return;
     if (activeStage === "configs" && $tuneDirty) {
       leaveKind = "tune";
@@ -268,6 +340,60 @@
     leaveConfirmOpen = false;
     pendingStage = null;
   }
+
+  // ── Rail tab context menus (right-click: close / reopen) ──
+  /** Menu anchored at the pointer; `stageId` set → per-tab menu, null → rail menu. */
+  let tabMenu = $state<{ x: number; y: number; stageId: StageId | null } | null>(null);
+
+  const MENU_W = 220;
+  const MENU_H = 260;
+  function menuPosition(e: MouseEvent): { x: number; y: number } {
+    const pad = 8;
+    let x = e.clientX;
+    let y = e.clientY;
+    if (x + MENU_W > window.innerWidth - pad) x = window.innerWidth - MENU_W - pad;
+    // The rail hugs the bottom edge — open the menu upward from the click.
+    if (y + MENU_H > window.innerHeight - pad) y = window.innerHeight - MENU_H - pad;
+    return { x: Math.max(pad, x), y: Math.max(pad, y) };
+  }
+
+  function openTabMenu(e: MouseEvent, id: StageId) {
+    e.preventDefault();
+    e.stopPropagation();
+    const { x, y } = menuPosition(e);
+    tabMenu = { x, y, stageId: id };
+  }
+
+  function openRailMenu(e: MouseEvent) {
+    if ((e.target as HTMLElement | null)?.closest?.(".stage-tab, .stage-add")) return;
+    e.preventDefault();
+    const { x, y } = menuPosition(e);
+    tabMenu = { x, y, stageId: null };
+  }
+
+  function closeTabMenu() {
+    tabMenu = null;
+  }
+
+  $effect(() => {
+    function onGlobalPointerDown(e: MouseEvent) {
+      if (!tabMenu) return;
+      if ((e.target as HTMLElement | null)?.closest?.(".ide-ctx-menu")) return;
+      tabMenu = null;
+    }
+    function onGlobalKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && tabMenu) {
+        e.stopPropagation();
+        tabMenu = null;
+      }
+    }
+    window.addEventListener("pointerdown", onGlobalPointerDown, true);
+    window.addEventListener("keydown", onGlobalKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onGlobalPointerDown, true);
+      window.removeEventListener("keydown", onGlobalKey, true);
+    };
+  });
 
   $effect(() => {
     ideActiveStage.set(activeStage);
@@ -517,8 +643,9 @@
     onmouseleave={() => scheduleHideRail()}
     onfocusin={revealRail}
     onfocusout={onRailFocusOut}
+    oncontextmenu={openRailMenu}
   >
-    {#each stages as stage (stage.id)}
+    {#each visibleStages as stage (stage.id)}
       {@const StageIcon = stage.icon}
       <button
         class="stage-tab"
@@ -528,6 +655,7 @@
           if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
           scheduleHideRail(320);
         }}
+        oncontextmenu={(e) => openTabMenu(e, stage.id)}
         title={stage.goal}
         aria-current={activeStage === stage.id ? "step" : undefined}
       >
@@ -541,8 +669,80 @@
         </span>
       </button>
     {/each}
+    {#if hiddenStages.size > 0}
+      <button
+        class="stage-add"
+        title="Reopen closed tabs"
+        aria-label={`Reopen closed tabs (${hiddenStages.size})`}
+        onclick={(e) => {
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          tabMenu = {
+            x: Math.max(8, Math.min(rect.left, window.innerWidth - MENU_W - 8)),
+            y: Math.max(8, rect.top - MENU_H),
+            stageId: null,
+          };
+        }}
+      >
+        <Plus size={16} />
+      </button>
+    {/if}
   </nav>
 </div>
+
+{#if tabMenu}
+  <div
+    class="ide-ctx-menu"
+    use:portal
+    style={`position:fixed; left:${tabMenu.x}px; top:${tabMenu.y}px; z-index:10000`}
+    role="menu"
+  >
+    {#if tabMenu.stageId}
+      {@const menuStage = stages.find((s) => s.id === tabMenu?.stageId)}
+      {#if menuStage}
+        {@const MenuIcon = menuStage.icon}
+        <button
+          type="button"
+          role="menuitem"
+          class="danger"
+          disabled={visibleStages.length <= 1}
+          title={visibleStages.length <= 1 ? "At least one tab stays open" : `Hide ${menuStage.label} from the rail`}
+          onclick={() => {
+            const id = menuStage.id;
+            closeTabMenu();
+            closeStage(id);
+          }}
+        >
+          <X size={14} /> Close {menuStage.label}
+        </button>
+      {/if}
+    {/if}
+    {#if hiddenStages.size > 0}
+      {#if tabMenu.stageId}
+        <div class="menu-sep"></div>
+      {/if}
+      <div class="menu-title">Reopen</div>
+      {#each stages.filter((s) => hiddenStages.has(s.id)) as hidden (hidden.id)}
+        {@const HiddenIcon = hidden.icon}
+        <button
+          type="button"
+          role="menuitem"
+          onclick={() => {
+            closeTabMenu();
+            reopenStage(hidden.id);
+          }}
+        >
+          <HiddenIcon size={14} /> {hidden.label}
+        </button>
+      {/each}
+      <div class="menu-sep"></div>
+      <button type="button" role="menuitem" onclick={() => { closeTabMenu(); reopenAllStages(); }}>
+        <RotateCcw size={14} /> Reopen all
+      </button>
+    {:else if !tabMenu.stageId}
+      <div class="menu-empty">No closed tabs</div>
+    {/if}
+  </div>
+{/if}
 
 {#if leaveConfirmOpen}
   <ConfirmDialog
@@ -786,6 +986,88 @@
     color: var(--text-muted);
   }
 
+  /* "+" reopen pill at the rail end — visible while tabs are closed. */
+  .stage-add {
+    flex: 0 0 auto;
+    align-self: center;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    margin-left: 2px;
+    padding: 0;
+    border: 1px dashed color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--accent-primary);
+    cursor: pointer;
+    transform: none;
+  }
+  .stage-add:hover {
+    background: var(--bg-tertiary);
+    border-style: solid;
+  }
+
+  /* Right-click menu for the rail tabs (opens upward, clamped). */
+  .ide-ctx-menu {
+    display: flex;
+    flex-direction: column;
+    min-width: 210px;
+    max-height: min(320px, 46vh);
+    overflow-y: auto;
+    padding: 4px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-primary);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.4);
+  }
+  .ide-ctx-menu button[role="menuitem"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 9px;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+    transform: none;
+  }
+  .ide-ctx-menu button[role="menuitem"]:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .ide-ctx-menu button[role="menuitem"]:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .ide-ctx-menu button[role="menuitem"].danger {
+    color: var(--accent-danger);
+  }
+  .ide-ctx-menu .menu-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--border-color);
+  }
+  .ide-ctx-menu .menu-title {
+    padding: 3px 9px 4px;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .ide-ctx-menu .menu-empty {
+    padding: 7px 9px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
   .stage-text {
     display: flex;
     flex-direction: column;
@@ -818,61 +1100,6 @@
   .skeleton-page p {
     color: var(--text-muted);
   }
-
-
-  .page-header {
-    display: flex;
-    justify-content: space-between;
-    gap: 16px;
-    align-items: flex-start;
-  }
-
-  .inline-error,
-  .inline-success {
-    margin-top: 12px;
-    padding: 10px 12px;
-    border-radius: var(--border-radius-md);
-    border: 1px solid var(--border-color);
-  }
-
-  .inline-error {
-    color: var(--accent-danger);
-    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
-    border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent);
-  }
-
-  .inline-success {
-    color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
-  }
-
-  .brief-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
-    margin-top: 18px;
-  }
-
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    color: var(--text-secondary);
-    font-weight: 700;
-  }
-
-  textarea {
-    min-height: 120px;
-    resize: vertical;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-    padding: 12px;
-    font-family: inherit;
-  }
-
 
   @media (max-width: 1100px) {
     .stage-content {
