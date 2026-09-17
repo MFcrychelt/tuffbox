@@ -332,7 +332,7 @@
 
   .inspector-name {
     margin: 0;
-    font-size: 1.15rem;
+    font-size: 15px;
     font-weight: 700;
     line-height: 1.25;
     color: var(--text-primary);
@@ -341,7 +341,7 @@
 
   .inspector-authors {
     margin: 0;
-    font-size: 0.82rem;
+    font-size: 12.5px;
     line-height: 1.35;
     color: var(--text-muted);
   }
@@ -365,13 +365,13 @@
     align-items: center;
     gap: 8px;
     color: var(--text-secondary);
-    font-size: 0.85rem;
+    font-size: 13px;
     padding: 8px 0;
   }
 
   .inspector-error {
     margin: 0;
-    font-size: 0.78rem;
+    font-size: 12px;
     color: var(--accent-danger, #f87171);
     line-height: 1.4;
   }
@@ -384,7 +384,7 @@
 
   .inspector-description {
     margin: 0;
-    font-size: 0.9rem;
+    font-size: 13px;
     line-height: 1.65;
     color: var(--text-secondary);
     white-space: pre-wrap;
@@ -401,7 +401,7 @@
   .fact-badge {
     display: inline-flex;
     align-items: center;
-    font-size: 0.72rem;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.02em;
     padding: 3px 8px;
@@ -425,7 +425,7 @@
   }
 
   .inspector-action {
-    font-size: 0.82rem;
+    font-size: 12.5px;
     font-weight: 600;
     padding: 6px 12px;
     border-radius: var(--border-radius-sm);
@@ -449,7 +449,7 @@
     background: color-mix(in srgb, var(--accent-secondary) 4%, transparent);
   }
   .recommended-label {
-    font-size: 0.72rem;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -457,7 +457,7 @@
   }
   .recommended p {
     margin: 4px 0 0;
-    font-size: 0.85rem;
+    font-size: 13px;
     line-height: 1.5;
     color: var(--text-secondary);
   }
@@ -471,7 +471,7 @@
   }
 
   .links-label {
-    font-size: 0.82rem;
+    font-size: 12.5px;
     color: var(--text-muted);
   }
 
@@ -479,7 +479,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 0.85rem;
+    font-size: 13px;
     font-weight: 600;
     color: var(--accent-primary);
     text-decoration: none;
@@ -504,7 +504,7 @@
   .license-badge {
     display: inline-flex;
     align-items: center;
-    font-size: 0.72rem;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.02em;
     padding: 3px 8px;
@@ -516,7 +516,7 @@
 
   .license-muted,
   .meta-muted {
-    font-size: 0.72rem;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
