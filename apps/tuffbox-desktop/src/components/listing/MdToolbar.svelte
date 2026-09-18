@@ -146,8 +146,8 @@
     display: inline-flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px;
-    padding: 4px 8px;
+    gap: 6px;
+    padding: 6px 10px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
@@ -159,15 +159,15 @@
   .toolbar-group {
     display: inline-flex;
     align-items: center;
-    gap: 2px;
+    gap: 4px;
   }
 
   .divider {
     display: inline-block;
     width: 1px;
-    height: 16px;
+    height: 22px;
     background: var(--border-color);
-    margin: 0 3px;
+    margin: 0 4px;
     flex-shrink: 0;
   }
 
@@ -175,20 +175,26 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: none;
-    background: transparent;
-    color: var(--text-secondary);
+    width: 36px;
+    height: 34px;
+    border: 1px solid transparent;
+    background: color-mix(in srgb, var(--bg-elevated) 64%, transparent);
+    color: var(--text-primary);
     border-radius: var(--border-radius-sm);
     cursor: pointer;
-    font-size: 11px;
-    font-weight: 700;
+    font-size: 12.5px;
+    font-weight: 800;
     transition: background var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease, transform var(--motion-fast, 160ms) ease;
   }
   .md-btn:hover {
     background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--text-primary);
+  }
+  .md-btn :global(svg) {
+    width: 17px;
+    height: 17px;
+    stroke-width: 2.35;
   }
   .md-btn:active {
     background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
@@ -197,7 +203,7 @@
 
   .font-code {
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 11px;
-    letter-spacing: -0.5px;
+    font-size: 12px;
+    letter-spacing: -0.35px;
   }
 </style>

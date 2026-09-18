@@ -500,41 +500,40 @@
 <div class="settings-page">
   <!-- Sticky Header: pins title and save action at the top -->
   <header class="page-header sticky-header">
-    <div class="ph-text">
-      <div class="ph-title-row">
-        {#if showBack}
-          <button type="button" class="sm-btn ghost" onclick={onBack}>
-            <ArrowLeft size={16} /> Back
-          </button>
-        {/if}
-        <h1 class="page-title">Setup & Runtime Settings</h1>
-        <span
-          class="sync-pill"
-          class:unsaved={dirty}
-          title={dirty ? "You have unsaved changes" : "All changes saved to project"}
-        >
-          <span class="sync-dot" class:on={!dirty}></span>
-          {dirty ? "Unsaved changes" : "Saved"}
-        </span>
+    <div class="header-inner">
+      <div class="ph-text">
+        <div class="ph-title-row">
+          {#if showBack}
+            <button type="button" class="sm-btn ghost" onclick={onBack}>
+              <ArrowLeft size={16} /> Back
+            </button>
+          {/if}
+          <h1 class="page-title">Setup & Runtime Settings</h1>
+          <span
+            class="sync-pill"
+            class:unsaved={dirty}
+            title={dirty ? "You have unsaved changes" : "All changes saved to project"}
+          >
+            <span class="sync-dot" class:on={!dirty}></span>
+            {dirty ? "Unsaved changes" : "Saved"}
+          </span>
+        </div>
       </div>
-      <p class="ph-sub">
-        Configure Minecraft engine, mod loader, Java runtime, RAM allocation, and launch arguments.
-      </p>
-    </div>
-    <div class="header-actions">
-      {#if showBack}
-        <button type="button" class="sm-btn" onclick={onBack}>Cancel</button>
-      {/if}
-      <button
-        type="button"
-        class="primary-btn"
-        onclick={save}
-        disabled={saving || !$projectPath}
-        title="Save project settings (Ctrl+S)"
-      >
-        <Save size={15} />
-        {saving ? "Saving…" : "Save changes"}
-      </button>
+      <div class="header-actions">
+        {#if showBack}
+          <button type="button" class="sm-btn" onclick={onBack}>Cancel</button>
+        {/if}
+        <button
+          type="button"
+          class="primary-btn"
+          onclick={save}
+          disabled={saving || !$projectPath}
+          title="Save project settings (Ctrl+S)"
+        >
+          <Save size={15} />
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </div>
     </div>
   </header>
 
@@ -544,21 +543,21 @@
     </div>
   {:else}
     <div class="main-scroll-body">
-      {#if loading}
-        <div class="loading-bar">
-          <RefreshCw size={15} class="spin" />
-          <span>Fetching versions and instance metadata…</span>
-        </div>
-      {/if}
-
-      {#if error}
-        <div class="inline-error">{error}</div>
-      {/if}
-      {#if successMessage}
-        <div class="inline-success">{successMessage}</div>
-      {/if}
-
       <div class="setup-container">
+        {#if loading}
+          <div class="loading-bar">
+            <RefreshCw size={15} class="spin" />
+            <span>Fetching versions and instance metadata…</span>
+          </div>
+        {/if}
+
+        {#if error}
+          <div class="inline-error">{error}</div>
+        {/if}
+        {#if successMessage}
+          <div class="inline-success">{successMessage}</div>
+        {/if}
+
         <!-- ── Card 1: Game & Mod Loader ───────────────────────── -->
         <section class="panel glass-card">
           <div class="card-head-row">
@@ -568,8 +567,6 @@
             </div>
             <span class="card-hint-tag">Core Engine</span>
           </div>
-          <p class="card-desc">Select the target Minecraft version and loader ecosystem for this instance.</p>
-
           <div class="form-grid-3">
             <div class="field">
               <label for="mc-version" class="fl-label">Minecraft version</label>
@@ -580,7 +577,6 @@
                   </option>
                 {/each}
               </select>
-              <span class="field-hint">Base game version</span>
             </div>
 
             <div class="field">
@@ -590,7 +586,6 @@
                   <option value={l.id}>{l.label}</option>
                 {/each}
               </select>
-              <span class="field-hint">Ecosystem runtime</span>
             </div>
 
             <div class="field">
@@ -604,7 +599,6 @@
                   {/each}
                 </select>
               {/if}
-              <span class="field-hint">Build / Release tag</span>
             </div>
           </div>
         </section>
@@ -620,8 +614,6 @@
               <span class="java-badge">{javaVersion}</span>
             {/if}
           </div>
-          <p class="card-desc">Java runtime used to spawn the Minecraft client and server processes.</p>
-
           <div class="field">
             <label for="java-path" class="fl-label">Java executable path</label>
             <div class="flex-input-row">
@@ -655,9 +647,6 @@
                 </button>
               {/if}
             </div>
-            <p class="field-hint">
-              Minecraft 1.20.5+ requires Java 21; 1.18–1.20.4 requires Java 17; 1.16 and below requires Java 8.
-            </p>
           </div>
         </section>
 
@@ -673,10 +662,6 @@
               <span class="mem-sub">({memory} MB)</span>
             </div>
           </div>
-          <p class="card-desc">
-            Maximum heap memory (`-Xmx`) allocated to the game process during launch.
-          </p>
-
           <!-- Slider + Direct input side-by-side -->
           <div class="memory-control-row">
             <div class="slider-wrap">
@@ -691,9 +676,9 @@
                 aria-label="Memory slider"
               />
               <div class="slider-bounds">
-                <span>1 GB (1024 MB)</span>
+                <span>1 GB</span>
                 <span>8 GB</span>
-                <span>16 GB (16384 MB)</span>
+                <span>16 GB</span>
               </div>
             </div>
 
@@ -735,14 +720,14 @@
           <div class="recommendation-box">
             <Sparkles size={14} class="rec-icon" />
             <span>
-              <strong>Recommended:</strong> 4 GB to 6 GB for light-to-medium packs, 6 GB to 8 GB for heavy quest/tech modpacks. Allocating over 10 GB may increase GC latency unless using modern garbage collectors.
+              <strong>Recommended:</strong> 4–8 GB for most packs.
             </span>
           </div>
           {#if heapRec}
             <div class="recommendation-box mt-2">
               <Sparkles size={14} class="rec-icon" />
               <span>
-                <strong>Auto for this pack:</strong> {formatMemory(heapRec.memoryMb)} ({heapRec.memoryMb} MB) — {heapRec.modCount} mods, base {formatMemory(heapRec.baseMb)} + categories {formatMemory(heapRec.categoryMb)}.
+                <strong>Auto:</strong> {formatMemory(heapRec.memoryMb)} for {heapRec.modCount} mods.
               </span>
               <button
                 type="button"
@@ -771,10 +756,6 @@
               </button>
             </div>
           </div>
-          <p class="card-desc">
-            Custom Java Virtual Machine flags passed to the Minecraft runtime on launch.
-          </p>
-
           <div class="field">
             <textarea
               bind:value={jvmArgs}
@@ -805,7 +786,6 @@
                       <Check size={13} class="check-icon" />
                     {/if}
                   </div>
-                  <small>{preset.desc}</small>
                 </button>
               {/each}
             </div>
@@ -828,7 +808,6 @@
                   <Check size={13} class="check-icon" />
                 {/if}
               </div>
-              <small>{jvmRec.note} Leave the field empty to apply this automatically at launch.</small>
             </button>
           {/if}
         </section>
@@ -843,8 +822,6 @@
                 <h3>Player Identity</h3>
               </div>
             </div>
-            <p class="card-desc">Username used for offline test launches.</p>
-
             <div class="field">
               <label for="player-name" class="fl-label">Offline test player name</label>
               <input
@@ -854,9 +831,6 @@
                 placeholder="Player"
                 maxlength={16}
               />
-              <p class="field-hint">
-                TuffBox derives a stable offline UUID from this name (vanilla algorithm), keeping your inventory and quest progress consistent across test launches.
-              </p>
             </div>
           </section>
 
@@ -875,16 +849,12 @@
                 {/if}
               </span>
             </div>
-            <p class="card-desc">
-              Synchronize keybinds, audio, and video settings across all instances of the same Minecraft version.
-            </p>
-
             <div class="options-actions-block">
               <div class="options-status-text">
                 {#if optionsManaged}
-                  <span>Syncing with version group: <code>{optionsGroup || mcVersion}</code></span>
+                  <span>Shared group: <code>{optionsGroup || mcVersion}</code></span>
                 {:else}
-                  <span>This instance has its own isolated <code>options.txt</code>.</span>
+                  <span>Independent <code>options.txt</code></span>
                 {/if}
               </div>
 
@@ -937,24 +907,12 @@
                 {/if}
               </span>
             </div>
-            <p class="card-desc">
-              Identical mods, resource packs and shaders are stored once on disk and shared
-              between your packs — nothing is deleted, and every pack still sees its own
-              complete file list.
-            </p>
-
             <div class="options-actions-block">
               <div class="options-status-text">
                 {#if dedupEnabled}
-                  <span>
-                    This pack shares identical jars/zips with other packs through the TuffBox
-                    store (read-only, verified by checksum).
-                  </span>
+                  <span>Shared file store enabled.</span>
                 {:else}
-                  <span>
-                    This pack keeps fully independent copies of every file. Uses more disk
-                    space, but the pack is 100% self-contained.
-                  </span>
+                  <span>Independent file copies.</span>
                 {/if}
               </div>
 
@@ -982,10 +940,6 @@
                   </button>
                 {/if}
               </div>
-              <p class="card-desc" style="margin: 2px 0 0;">
-                You can flip this at any time — turning it off copies shared files back into
-                the pack, turning it on links them again.
-              </p>
             </div>
           </section>
         </div>
@@ -997,7 +951,6 @@
               <Database size={16} />
               <span>Project schema & metadata</span>
             </div>
-            <span class="summary-hint">View manifest version & migration status</span>
           </summary>
 
           <div class="advanced-body">
@@ -1059,12 +1012,13 @@
 
 <style>
   .settings-page {
+    --setup-page-x: 20px;
     height: 100%;
     min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    padding: 0 20px 20px;
+    padding: 0 var(--setup-page-x) 20px;
     box-sizing: border-box;
     width: 100%;
     background: rgba(0, 0, 0, 0.08);
@@ -1076,8 +1030,10 @@
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-gutter: stable;
+    padding-top: 10px;
     padding-right: 4px;
     padding-bottom: 28px;
+    box-sizing: border-box;
   }
 
   /* Centered, balanced container: eliminates awkward bottom dead space */
@@ -1095,18 +1051,28 @@
     position: sticky;
     top: 0;
     z-index: 20;
+    width: calc(100% + (var(--setup-page-x) * 2));
+    box-sizing: border-box;
+    flex-shrink: 0;
+    padding: 14px var(--setup-page-x);
+    margin: 0 calc(-1 * var(--setup-page-x)) 4px;
+    background: color-mix(in srgb, var(--bg-primary, #ffffff) 85%, transparent);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+  }
+
+  .header-inner {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0 4px;
+    box-sizing: border-box;
     display: flex;
     justify-content: space-between;
     gap: 16px;
     align-items: center;
     flex-wrap: wrap;
-    flex-shrink: 0;
-    padding: 14px 4px 14px;
-    margin-bottom: 4px;
-    background: color-mix(in srgb, var(--bg-primary, #ffffff) 85%, transparent);
-    -webkit-backdrop-filter: blur(16px);
-    backdrop-filter: blur(16px);
-    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
   }
 
   .ph-text {
@@ -1124,19 +1090,11 @@
   }
 
   .page-title {
-    font-size: 19px;
+    font-size: 21px;
     font-weight: 800;
     color: var(--text-primary);
     line-height: 1.2;
     margin: 0;
-  }
-
-  .ph-sub {
-    margin: 0;
-    color: var(--text-secondary);
-    max-width: 76ch;
-    font-size: 12.5px;
-    line-height: 1.4;
   }
 
   .header-actions {
@@ -1153,7 +1111,7 @@
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     box-shadow: var(--shadow-sm);
-    padding: 20px 22px;
+    padding: 22px 24px;
   }
 
   .card-head-row {
@@ -1161,7 +1119,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 4px;
+    margin-bottom: 14px;
     flex-wrap: wrap;
   }
 
@@ -1174,7 +1132,7 @@
 
   .card-head-title h3 {
     margin: 0;
-    font-size: 15px;
+    font-size: 17px;
     font-weight: 700;
     color: var(--text-primary);
   }
@@ -1184,19 +1142,12 @@
   }
 
   .card-hint-tag {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-muted);
     padding: 2px 8px;
     border-radius: 999px;
     background: var(--bg-tertiary);
-  }
-
-  .card-desc {
-    font-size: 12.5px;
-    color: var(--text-secondary);
-    margin: 0 0 16px 0;
-    line-height: 1.45;
   }
 
   /* Form Grids */
@@ -1214,7 +1165,7 @@
   }
 
   .fl-label {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-primary);
   }
@@ -1226,9 +1177,9 @@
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
     color: var(--text-primary);
-    padding: 9px 12px;
+    padding: 11px 13px;
     font-family: inherit;
-    font-size: 13.5px;
+    font-size: 14.5px;
     transition: border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
   }
 
@@ -1246,14 +1197,6 @@
     background: var(--bg-tertiary);
   }
 
-  .field-hint {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    margin: 2px 0 0;
-    line-height: 1.45;
-  }
-
   .flex-input-row {
     display: flex;
     gap: 8px;
@@ -1266,7 +1209,7 @@
   }
 
   .java-badge {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
     padding: 3px 10px;
     border-radius: var(--border-radius-sm);
@@ -1282,13 +1225,13 @@
     gap: 6px;
   }
   .mem-highlight {
-    font-size: 19px;
+    font-size: 21px;
     font-weight: 800;
     color: var(--accent-primary);
     font-variant-numeric: tabular-nums;
   }
   .mem-sub {
-    font-size: 12px;
+    font-size: 13.5px;
     color: var(--text-secondary);
     font-weight: 600;
   }
@@ -1319,8 +1262,8 @@
   .slider-bounds {
     display: flex;
     justify-content: space-between;
-    font-size: 11.5px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 700;
     color: var(--text-secondary);
   }
 
@@ -1330,7 +1273,7 @@
     gap: 4px;
   }
   .manual-label {
-    font-size: 12px;
+    font-size: 13.5px;
     font-weight: 700;
     color: var(--text-primary);
   }
@@ -1345,7 +1288,7 @@
     font-weight: 700;
   }
   .unit {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-secondary);
   }
@@ -1358,7 +1301,7 @@
     flex-wrap: wrap;
   }
   .presets-label {
-    font-size: 12px;
+    font-size: 13.5px;
     font-weight: 700;
     color: var(--text-primary);
   }
@@ -1368,13 +1311,13 @@
     gap: 6px;
   }
   .preset-chip {
-    padding: 4px 11px;
+    padding: 6px 12px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated);
     color: var(--text-primary);
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 13.5px;
+    font-weight: 700;
     cursor: pointer;
     transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease;
   }
@@ -1397,7 +1340,7 @@
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent);
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: 13.5px;
     line-height: 1.45;
   }
 
@@ -1409,7 +1352,7 @@
   }
   .jvm-textarea {
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 12.5px;
+    font-size: 14px;
     line-height: 1.6;
     white-space: pre;
     overflow-x: auto;
@@ -1432,7 +1375,7 @@
     flex-direction: column;
     gap: 3px;
     text-align: left;
-    padding: 9px 12px;
+    padding: 11px 14px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated);
@@ -1452,21 +1395,15 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 700;
   }
-  .jvm-preset-card small {
-    font-size: 11px;
-    color: var(--text-secondary);
-    line-height: 1.3;
-  }
-
   /* Shared options */
   .options-badge {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 11.5px;
+    font-size: 12.5px;
     font-weight: 700;
     padding: 3px 9px;
     border-radius: 999px;
@@ -1485,7 +1422,7 @@
     gap: 12px;
   }
   .options-status-text {
-    font-size: 12.5px;
+    font-size: 14px;
     color: var(--text-secondary);
     line-height: 1.45;
   }
@@ -1508,19 +1445,13 @@
     align-items: center;
     justify-content: space-between;
     list-style: none;
-    font-size: 13.5px;
+    font-size: 14.5px;
     font-weight: 700;
     color: var(--text-primary);
   }
   .advanced-summary::-webkit-details-marker {
     display: none;
-  }
-  .summary-hint {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
-  }
-  .advanced-body {
+  }  .advanced-body {
     margin-top: 14px;
     padding-top: 14px;
     border-top: 1px solid var(--border-color);
@@ -1532,12 +1463,12 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 13px;
+    font-size: 14px;
     color: var(--text-primary);
   }
   .schema-row code {
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--accent-primary);
   }
@@ -1550,14 +1481,14 @@
     background: color-mix(in srgb, var(--accent-warning) 10%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent);
     color: var(--accent-warning);
-    font-size: 12.5px;
+    font-size: 13.5px;
   }
   .schema-ok {
     display: flex;
     align-items: center;
     gap: 6px;
     color: var(--accent-primary);
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 600;
   }
 
@@ -1566,13 +1497,13 @@
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    height: 36px;
-    padding: 0 18px;
+    height: 38px;
+    padding: 0 20px;
     border: none;
     border-radius: var(--border-radius-md);
     background: linear-gradient(180deg, #10b981, #059669);
     color: #fff;
-    font-size: 13px;
+    font-size: 13.5px;
     font-weight: 700;
     cursor: pointer;
     box-shadow: 0 0 14px rgba(16, 185, 129, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.22);
@@ -1591,13 +1522,13 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    height: 32px;
-    padding: 0 12px;
+    height: 36px;
+    padding: 0 14px;
     border-radius: var(--border-radius-sm);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
     background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
     color: var(--accent-primary);
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 700;
     cursor: pointer;
     transition: background var(--motion-fast) ease;
@@ -1619,10 +1550,10 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    height: 32px;
-    padding: 0 12px;
+    height: 34px;
+    padding: 0 13px;
     border-radius: var(--border-radius-sm);
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 600;
     cursor: pointer;
     transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
@@ -1646,7 +1577,7 @@
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 11.5px;
+    font-size: 12.5px;
     font-weight: 600;
   }
   .sync-pill.unsaved {
@@ -1681,7 +1612,7 @@
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 12.5px;
+    font-size: 13.5px;
     margin-bottom: 12px;
   }
 
@@ -1689,7 +1620,7 @@
   .inline-success {
     padding: 10px 14px;
     border-radius: var(--border-radius-md);
-    font-size: 13px;
+    font-size: 13.5px;
     font-weight: 600;
     margin-bottom: 12px;
   }
@@ -1705,6 +1636,10 @@
   }
 
   .empty-wrap {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    box-sizing: border-box;
     padding: 40px 20px;
   }
 
