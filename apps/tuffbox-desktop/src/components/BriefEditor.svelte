@@ -712,32 +712,34 @@
 <div class="brief-editor" onpaste={handlePaste}>
   <!-- Sticky header: stays accessible while scrolling long descriptions & galleries -->
   <header class="page-header sticky-header">
-    <div class="ph-text">
-      <div class="ph-title-row">
-        <h2 class="text-lg font-bold text-[color:var(--text-primary)] leading-tight">Storefront listing</h2>
-        <span
-          class="sync-pill"
-          class:unsaved={dirty}
-          title={dirty ? "You have unsaved changes (auto-saves in a moment)" : "All changes saved to project"}
-        >
-          <span class="sync-dot" class:on={!dirty}></span>
-          {dirty ? "Unsaved changes" : "Synced"}
-        </span>
+    <div class="header-inner">
+      <div class="ph-text">
+        <div class="ph-title-row">
+          <h2 class="text-lg font-bold text-[color:var(--text-primary)] leading-tight">Storefront listing</h2>
+          <span
+            class="sync-pill"
+            class:unsaved={dirty}
+            title={dirty ? "You have unsaved changes (auto-saves in a moment)" : "All changes saved to project"}
+          >
+            <span class="sync-dot" class:on={!dirty}></span>
+            {dirty ? "Unsaved changes" : "Synced"}
+          </span>
+        </div>
+        <p class="ph-sub">
+          The public modpack card shown on Modrinth & CurseForge — preview updates live as you type.
+        </p>
       </div>
-      <p class="ph-sub">
-        The public modpack card shown on Modrinth & CurseForge — preview updates live as you type.
-      </p>
-    </div>
-    <div class="header-actions">
-      <button
-        type="button"
-        class="primary-btn"
-        onclick={saveAll}
-        disabled={!$projectPath || saving || nameEmpty}
-        title="Save listing changes (Ctrl+S)"
-      >
-        <Save size={15} /> {saving ? "Saving…" : "Save"}
-      </button>
+      <div class="header-actions">
+        <button
+          type="button"
+          class="primary-btn"
+          onclick={saveAll}
+          disabled={!$projectPath || saving || nameEmpty}
+          title="Save listing changes (Ctrl+S)"
+        >
+          <Save size={15} /> {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
     </div>
   </header>
 
@@ -747,11 +749,12 @@
     <div class="empty">Loading listing…</div>
   {:else}
     <div class="main-body">
-      {#if error}<div class="inline-error">{error}</div>{/if}
-      {#if message}<div class="inline-success">{message}</div>{/if}
+      <div class="brief-content">
+        {#if error}<div class="inline-error">{error}</div>{/if}
+        {#if message}<div class="inline-success">{message}</div>{/if}
 
-      <!-- Top adaptive 2-column grid: Identity (Left) + Live Preview (Right) -->
-      <div class="brief-top-grid">
+        <!-- Top adaptive 2-column grid: Identity (Left) + Live Preview (Right) -->
+        <div class="brief-top-grid">
         <!-- Identity block -->
         <section class="panel glass-card p-5">
           <div class="panel-section-head">
@@ -1105,6 +1108,7 @@
           </div>
         </details>
       </div>
+      </div>
     </div>
   {/if}
 </div>
@@ -1121,12 +1125,14 @@
 
 <style>
   .brief-editor {
+    --brief-page-max: 1600px;
+    --brief-page-x: 20px;
     height: 100%;
     min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    padding: 0 20px 20px;
+    padding: 0 var(--brief-page-x) 20px;
     box-sizing: border-box;
     max-width: 100%;
     width: 100%;
@@ -1140,13 +1146,24 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 16px;
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-gutter: stable;
     font-size: 13px;
+    padding-top: 10px;
     padding-right: 4px;
     padding-bottom: 24px;
+  }
+
+  .brief-content {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+    box-sizing: border-box;
   }
 
   /* Sticky top header */
@@ -1154,18 +1171,28 @@
     position: sticky;
     top: 0;
     z-index: 20;
+    width: calc(100% + (var(--brief-page-x) * 2));
+    box-sizing: border-box;
+    flex-shrink: 0;
+    padding: 14px var(--brief-page-x);
+    margin: 0 calc(-1 * var(--brief-page-x)) 2px;
+    background: color-mix(in srgb, var(--bg-primary, #0c0e12) 80%, transparent);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+  }
+
+  .header-inner {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0 4px;
+    box-sizing: border-box;
     display: flex;
     justify-content: space-between;
     gap: 16px;
     align-items: center;
     flex-wrap: wrap;
-    flex-shrink: 0;
-    padding: 14px 4px 14px;
-    margin-bottom: 2px;
-    background: color-mix(in srgb, var(--bg-primary, #0c0e12) 80%, transparent);
-    -webkit-backdrop-filter: blur(16px);
-    backdrop-filter: blur(16px);
-    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
   }
 
   .ph-text {
@@ -1638,29 +1665,58 @@
 
   .md-split {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-auto-rows: minmax(0, 1fr);
+    align-items: stretch;
     gap: 12px;
     min-height: 0;
   }
   .md-split.edit-only,
   .md-split.preview-only {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .cm-wrap {
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     overflow: hidden;
+    min-width: 0;
     min-height: 0;
     height: 100%;
+    background: var(--bg-elevated);
+    display: flex;
+    flex-direction: column;
+  }
+  /* svelte-codemirror-editor renders an extra middle wrapper:
+     .cm-wrap > .codemirror-wrapper > .cm-editor. Pin every layer to the split
+     pane height so the editor doesn't collapse to a few lines while the
+     preview pane fills the remaining canvas. */
+  .cm-wrap :global(.codemirror-wrapper) {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
   .cm-wrap :global(.cm-editor) {
+    flex: 1 1 auto;
+    min-height: 0;
     height: 100%;
+    width: 100%;
   }
   .cm-wrap :global(.cm-scroller) {
+    min-height: 0;
+    height: 100%;
+    overflow: auto;
     font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 13.5px;
     line-height: 1.6;
+  }
+  .cm-wrap :global(.cm-content),
+  .cm-wrap :global(.cm-gutters) {
+    min-height: 100%;
   }
 
   .md-preview {
@@ -1742,6 +1798,10 @@
     color: var(--text-muted);
   }
   .empty {
+    width: 100%;
+    max-width: var(--brief-page-max);
+    margin: 0 auto;
+    box-sizing: border-box;
     padding: 28px;
     color: var(--text-secondary);
     font-size: 14px;
