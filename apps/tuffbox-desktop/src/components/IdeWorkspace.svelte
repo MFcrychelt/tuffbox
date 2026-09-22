@@ -941,9 +941,9 @@
     display: flex;
     flex-wrap: wrap;
     align-items: stretch;
-    gap: 4px;
+    gap: 8px;
     min-width: 0;
-    padding: 8px 12px;
+    padding: 10px 12px;
     overflow: visible;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
@@ -1061,9 +1061,9 @@
     .stage-chord {
       top: 2px;
       right: 4px;
-      font-size: 8px;
-      min-width: 12px;
-      height: 12px;
+      font-size: 11px;
+      min-width: 14px;
+      height: 14px;
     }
   }
 
