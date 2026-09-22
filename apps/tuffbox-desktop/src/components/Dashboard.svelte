@@ -1016,7 +1016,7 @@
   .action-btn {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 14px;
     border-radius: var(--border-radius-md);
     background: var(--bg-secondary);

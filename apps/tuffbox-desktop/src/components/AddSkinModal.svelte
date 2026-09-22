@@ -454,7 +454,7 @@
   .field-label-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .help-btn {
@@ -589,7 +589,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 0;
     border: none;
     background: transparent;
@@ -655,7 +655,7 @@
   }
 
   .cape-name {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     text-align: center;
     line-height: 1.2;

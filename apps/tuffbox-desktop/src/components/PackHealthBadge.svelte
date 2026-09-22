@@ -107,8 +107,8 @@
   .health-badge {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
+    gap: 8px;
+    padding: 4px 12px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);

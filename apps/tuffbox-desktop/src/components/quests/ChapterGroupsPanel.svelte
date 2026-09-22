@@ -97,7 +97,7 @@
   }
   .group-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .group-row input {

@@ -88,7 +88,7 @@
     align-items: center;
     padding: 4px 10px;
     font: inherit;
-    font-size: 11px;
+    font-size: 12px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-secondary);

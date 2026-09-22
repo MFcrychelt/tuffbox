@@ -218,7 +218,7 @@
   .left {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
     position: relative;
   }
@@ -226,13 +226,13 @@
   .title-swap {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .breadcrumb {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-muted);
   }

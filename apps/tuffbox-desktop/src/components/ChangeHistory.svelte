@@ -1294,9 +1294,10 @@
     color: var(--text-secondary);
     font-size: 13px;
   }
-  .mini { padding: 4px 8px; font-size: 11px; }
+  .mini { padding: 4px 8px; font-size: 12px; }
   .tracking-controls { flex-wrap: wrap; gap: 8px; margin-bottom: 14px; padding: 10px; border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); background: rgba(255,255,255,.018); }
-  .tracking-controls label { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); font-size: 12px; }
+  .tracking-controls label { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
+  .tracking-controls label small { font-size: 12px; color: var(--text-muted); }
   .tracking-controls input { width: auto; }
   .tracking-controls small { color: var(--text-muted); }
   .empty { color: var(--text-muted); padding: 80px; text-align: center; }
@@ -1308,12 +1309,12 @@
   .timeline-item { position: relative; margin-bottom: 10px; }
   .timeline-item::before { content: ""; position: absolute; left: -15px; top: 23px; width: 15px; height: 2px; background: color-mix(in srgb, var(--accent-primary) 50%, transparent); }
   .timeline-item::after { content: ""; position: absolute; left: -19px; top: 18px; width: 10px; height: 10px; border-radius: 50%; background: var(--bg-secondary); border: 2px solid var(--accent-primary); }
-  .file-strip { width: 100%; min-height: 54px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid transparent; border-radius: var(--border-radius-md); padding: 10px 12px; transform: none; }
+  .file-strip { width: 100%; min-height: 54px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; text-align: left; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid transparent; border-radius: var(--border-radius-md); padding: 10px 12px; transform: none; }
   .file-strip:hover, .file-strip.selected { border-color: color-mix(in srgb, var(--accent-primary) 34%, transparent); background: color-mix(in srgb, var(--accent-primary) 7%, transparent); }
   .file-title { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
   .file-strip small { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 12px; }
   .actor-pill, .outcome-badge, .method-badge, .plan-source-badge {
-    display: inline-block; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em;
+    display: inline-block; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em;
     padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border-color); margin-right: 6px;
   }
   .actor-pill.launcher { color: var(--accent-secondary); border-color: color-mix(in srgb, var(--accent-secondary) 35%, transparent); }
@@ -1378,7 +1379,7 @@
   .preview-header p, .eyebrow { color: var(--text-muted); font-size: 12px; }
   .eyebrow { color: var(--accent-primary); text-transform: uppercase; letter-spacing: .1em; font-weight: 900; }
   .crash-fix-badge, .crash-resolved-badge, .drift-badge {
-    display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+    display: inline-flex; align-items: center; gap: 8px; margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 12px;
   }
   .crash-fix-badge { background: color-mix(in srgb, var(--accent-warning) 15%, transparent); color: var(--accent-warning); border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent); }
   .crash-resolved-badge { background: color-mix(in srgb, var(--accent-primary) 15%, transparent); color: var(--accent-primary); border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent); }

@@ -2352,7 +2352,7 @@
   .tabs {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     margin-bottom: 18px;
     padding-bottom: 12px;
     border-bottom: 1px solid var(--border-color);
@@ -2387,7 +2387,7 @@
   .launcher-subnav {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     margin: -6px 0 16px;
   }
 
@@ -2462,7 +2462,7 @@
   label {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     font-size: 13px;
     color: var(--text-secondary);
     font-weight: 600;
@@ -2592,7 +2592,7 @@
   .field-inline {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     margin-bottom: 0;
     width: 100%;
     font-size: 12px;
@@ -2616,7 +2616,7 @@
   .row-actions button {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
   }
 
   .chip {
@@ -2752,10 +2752,10 @@
   .ghost {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
   }
 
-  .shortcut-list { display: grid; gap: 4px; margin-top: 4px; width: 100%; }
+  .shortcut-list { display: grid; gap: 8px; margin-top: 4px; width: 100%; }
   .shortcut-row { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-radius: 6px; background: var(--bg-tertiary); }
   .shortcut-row kbd {
     display: inline-block;
@@ -2763,7 +2763,7 @@
     white-space: nowrap;
     vertical-align: baseline;
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 6px;
     border-radius: 4px;
     background: var(--bg-elevated);
@@ -2818,9 +2818,9 @@
   .provider-head strong { color: var(--text-primary); }
   .provider-head span { font-size: 12px; color: var(--text-muted); font-weight: 700; }
   .provider-head span.ok { color: var(--accent-primary); }
-  .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .save-row { margin-top: 16px; }
-  .mini { padding: 5px 8px; font-size: 11px; }
+  .mini { padding: 5px 8px; font-size: 12px; }
   .hint { margin: 0 0 12px; color: var(--text-muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
   .card code { overflow-wrap: anywhere; word-break: break-word; }
   .check-row {
@@ -2848,17 +2848,17 @@
   .chip-row.scale-chips {
     margin-bottom: 0;
     justify-content: flex-end;
-    gap: 6px;
+    gap: 8px;
   }
   .chip-row.scale-chips .chip {
     padding: 6px 11px;
-    font-size: 11px;
+    font-size: 12px;
   }
-  .test-ok { color: var(--accent-primary); font-size: 11px; }
-  .p2p-listen-addrs { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+  .test-ok { color: var(--accent-primary); font-size: 12px; }
+  .p2p-listen-addrs { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
   .p2p-addr-row { align-items: flex-start; }
   .p2p-addr {
-    font-size: 11px;
+    font-size: 12px;
     word-break: break-all;
     flex: 1;
     min-width: 0;

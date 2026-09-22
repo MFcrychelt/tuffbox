@@ -303,7 +303,7 @@
     font-size: 12px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .dx-class-card.warn {
     border-color: rgba(251, 191, 36, 0.45);

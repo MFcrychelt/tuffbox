@@ -956,7 +956,7 @@
   .presets-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     white-space: nowrap;
   }
 
@@ -981,7 +981,7 @@
   }
   .mode-tabs {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     margin: 0 0 12px;
     flex-shrink: 0;
   }
@@ -990,7 +990,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 10px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
@@ -1004,7 +1004,7 @@
     background: color-mix(in srgb, var(--accent, #6ee7b7) 12%, var(--bg-tertiary));
   }
   .mode-tabs .hint {
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     opacity: 0.7;
   }
@@ -1067,7 +1067,7 @@
   .opt-list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     max-height: 220px;
     overflow: auto;
   }
@@ -1088,7 +1088,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
   .opt-meta-col strong {
     font-size: 13px;

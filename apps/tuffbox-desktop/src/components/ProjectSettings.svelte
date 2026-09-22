@@ -1082,7 +1082,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   .ph-title-row {
@@ -1226,7 +1226,7 @@
   .memory-live-badge {
     display: flex;
     align-items: baseline;
-    gap: 6px;
+    gap: 8px;
   }
   .mem-highlight {
     font-size: 21px;
@@ -1251,7 +1251,7 @@
   .slider-wrap {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .range-slider {
@@ -1274,7 +1274,7 @@
   .memory-manual-box {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   .manual-label {
     font-size: 14px;
@@ -1284,7 +1284,7 @@
   .manual-input-wrap {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .number-input {
     width: 110px;
@@ -1378,7 +1378,7 @@
   .jvm-preset-card {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 8px;
     text-align: left;
     padding: 11px 14px;
     border-radius: var(--border-radius-md);
@@ -1407,7 +1407,7 @@
   .options-badge {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 13px;
     font-weight: 700;
     padding: 4px 10px;

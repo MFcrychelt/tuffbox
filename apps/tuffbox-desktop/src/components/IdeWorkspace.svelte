@@ -34,24 +34,57 @@
     pushIdeRecent,
   } from "../lib/store";
   import { onDestroy, onMount } from "svelte";
-  import ProjectSettings from "./ProjectSettings.svelte";
-  import Mods from "./Mods.svelte";
-  import Graph from "./Graph.svelte";
-  import ConfigEditor from "./ConfigEditor.svelte";
-  import Diagnostics from "./Diagnostics.svelte";
-  import Snapshots from "./Snapshots.svelte";
-  import TestRuns from "./TestRuns.svelte";
-  import ChangeHistory from "./ChangeHistory.svelte";
-  import OreGenVisualizer from "./OreGenVisualizer.svelte";
-  import World from "./World.svelte";
-  import RecipeBrowser from "./RecipeBrowser.svelte";
-  import QuestEditor from "./QuestEditor.svelte";
-  import ExportBuilder from "./ExportBuilder.svelte";
-  import ReleaseRoom from "./ReleaseRoom.svelte";
+  import type { Component } from "svelte";
+  // Stage canvases load on demand — mounting the workspace must not parse the
+  // whole production suite (Mods/Quests/Graph/…) at once; each stage arrives
+  // when first opened (mirrors App.svelte VIEW_LOADERS).
+  const STAGE_LOADERS: Record<StageId, () => Promise<{ default: Component }>> = {
+    brief: () => import("./BriefEditor.svelte"),
+    setup: () => import("./ProjectSettings.svelte"),
+    content: () => import("./Mods.svelte"),
+    quests: () => import("./QuestEditor.svelte"),
+    recipes: () => import("./RecipeBrowser.svelte"),
+    "world-map": () => import("./World.svelte"),
+    "ore-gen": () => import("./OreGenVisualizer.svelte"),
+    resolve: () => import("./Graph.svelte"),
+    configs: () => import("./ConfigEditor.svelte"),
+    history: () => import("./ChangeHistory.svelte"),
+    test: () => import("./TestRuns.svelte"),
+    diagnose: () => import("./Diagnostics.svelte"),
+    snapshots: () => import("./Snapshots.svelte"),
+    export: () => import("./ExportBuilder.svelte"),
+    release: () => import("./ReleaseRoom.svelte"),
+  };
+  const stageCache = new Map<StageId, Component>();
+  let stageComp = $state<Component | null>(null);
+  let stageCompFor = $state<StageId | null>(null);
+  let stageLoadError = $state<string | null>(null);
+
+  async function mountStage(id: StageId) {
+    const cached = stageCache.get(id);
+    if (cached) {
+      stageComp = cached;
+      stageCompFor = id;
+      stageLoadError = null;
+      return;
+    }
+    stageComp = null;
+    stageCompFor = id;
+    stageLoadError = null;
+    try {
+      const mod = await STAGE_LOADERS[id]();
+      stageCache.set(id, mod.default);
+      if (stageCompFor === id) stageComp = mod.default;
+    } catch (e) {
+      if (stageCompFor === id) stageLoadError = String(e);
+    }
+  }
+  $effect(() => {
+    void mountStage(activeStage);
+  });
   import GithubPackUpdateBanner from "./GithubPackUpdateBanner.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import { portal } from "../lib/portal";
-  import BriefEditor from "./BriefEditor.svelte";
   import IdeNextBar from "./IdeNextBar.svelte";
 
   type StageId =
@@ -287,6 +320,17 @@
 
   let activeStage = $state<StageId>("content");
   let leaveConfirmOpen = $state(false);
+  // Expose for browser preview / e2e — set synchronously so puppeteer can call immediately after navigation
+  if (typeof window !== "undefined") {
+    (window as any).__setIdeStage = (s: string) => goToStage(s as StageId);
+    (window as any).__getIdeStage = () => activeStage;
+  }
+  $effect(() => {
+    if (typeof window !== "undefined") {
+      (window as any).__setIdeStage = (s: string) => goToStage(s as StageId);
+      (window as any).__getIdeStage = () => activeStage;
+    }
+  });
   let pendingStage = $state<StageId | null>(null);
   let leaveKind = $state<"tune" | "brief" | "quests">("tune");
 
@@ -597,43 +641,28 @@
       {#if $projectPath}
         <GithubPackUpdateBanner />
       {/if}
-      {#if activeStage === "brief"}
-        <BriefEditor />
-      {:else if activeStage === "setup"}
-        {#if $projectPath}
-          <ProjectSettings showBack={false} stayAfterSave={true} />
+      {#if activeStage === "setup" && !$projectPath}
+        <div class="skeleton-page">
+          <h2>No project opened</h2>
+          <p>Go to Home, create or open an instance, then return to the IDE workflow.</p>
+        </div>
+      {:else if stageComp && stageCompFor === activeStage}
+        {#if activeStage === "setup"}
+          {@const StageView = stageComp}
+          <StageView showBack={false} stayAfterSave={true} />
         {:else}
-          <div class="skeleton-page">
-            <h2>No project opened</h2>
-            <p>Go to Home, create or open an instance, then return to the IDE workflow.</p>
-          </div>
+          {@const StageView = stageComp}
+          <StageView />
         {/if}
-      {:else if activeStage === "quests"}
-        <QuestEditor />
-      {:else if activeStage === "recipes"}
-        <RecipeBrowser />
-      {:else if activeStage === "world-map"}
-        <World />
-      {:else if activeStage === "ore-gen"}
-        <OreGenVisualizer />
-      {:else if activeStage === "content"}
-        <Mods />
-      {:else if activeStage === "resolve"}
-        <Graph />
-      {:else if activeStage === "configs"}
-        <ConfigEditor />
-      {:else if activeStage === "history"}
-        <ChangeHistory />
-      {:else if activeStage === "test"}
-        <TestRuns />
-      {:else if activeStage === "diagnose"}
-        <Diagnostics />
-      {:else if activeStage === "snapshots"}
-        <Snapshots />
-      {:else if activeStage === "export"}
-        <ExportBuilder />
-      {:else if activeStage === "release"}
-        <ReleaseRoom />
+      {:else if stageLoadError}
+        <div class="skeleton-page">
+          <h2>Stage failed to load</h2>
+          <p>{stageLoadError}</p>
+        </div>
+      {:else}
+        <div class="skeleton-page">
+          <p>Loading…</p>
+        </div>
       {/if}
     </div>
   </section>
@@ -1040,7 +1069,7 @@
     background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent);
     color: var(--accent-primary);
-    font: 700 9px/1 var(--font-mono, monospace);
+    font: 700 12px/1 var(--font-mono, monospace);
     opacity: 0;
     transform: scale(0.9);
     transition:
@@ -1061,7 +1090,7 @@
     .stage-chord {
       top: 2px;
       right: 4px;
-      font-size: 11px;
+      font-size: 12px;
       min-width: 14px;
       height: 14px;
     }
@@ -1206,12 +1235,12 @@
 
     .stage-tab {
       flex-direction: column;
-      gap: 4px;
+      gap: 8px;
       padding-inline: 6px;
     }
 
     .stage-text small {
-      font-size: 11px;
+      font-size: 12px;
     }
   }
 </style>

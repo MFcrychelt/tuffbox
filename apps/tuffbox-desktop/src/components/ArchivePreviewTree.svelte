@@ -15,7 +15,7 @@
 <section class="grid gap-3 rounded-xl border border-white/[0.08] bg-white/[0.025] p-4" aria-labelledby="archive-preview-heading">
   <div class="flex items-start justify-between gap-3">
     <div><div class="flex items-center gap-2"><FileArchive size={17} class="text-emerald-300" /><h2 id="archive-preview-heading" class="m-0 text-sm font-semibold text-neutral-100">Archive manifest preview</h2></div><p class="mt-1 text-xs text-[var(--text-secondary)]">Everything that will be included in the export.</p></div>
-    <span class="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-200">{entryCount || modFiles.length + configCount + 2} entries</span>
+    <span class="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[12px] text-emerald-200">{entryCount || modFiles.length + configCount + 2} entries</span>
   </div>
   <div class="rounded-lg border border-white/[0.07] bg-black/20 p-2 font-mono text-xs">
     <button type="button" class="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-neutral-200 hover:bg-white/[0.05]" onclick={() => toggle('root')}>{#if open.has('root')}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}<FileArchive size={14} class="text-emerald-300" /> {outputName}</button>

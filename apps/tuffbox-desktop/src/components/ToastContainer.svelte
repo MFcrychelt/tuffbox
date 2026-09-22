@@ -129,7 +129,7 @@
     color: var(--text-primary);
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
   }
   .ta.copy:hover {
     background: color-mix(in srgb, var(--tc) 25%, var(--bg-hover));

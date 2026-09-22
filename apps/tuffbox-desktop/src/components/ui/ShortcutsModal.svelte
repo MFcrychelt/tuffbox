@@ -144,7 +144,7 @@
     margin-bottom: 0;
   }
   .section h3 {
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--ftbq-accent-teal, #3db8a8);
@@ -153,7 +153,7 @@
   }
   .shortcut-list {
     display: grid;
-    gap: 6px;
+    gap: 8px;
   }
   .shortcut-row {
     display: flex;
@@ -169,7 +169,7 @@
   .keys {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
   }
   kbd {
     line-height: 1.4;
@@ -177,7 +177,7 @@
     vertical-align: baseline;
     display: inline-block;
     padding: 3px 8px;
-    font-size: 11px;
+    font-size: 12px;
     font-family: var(--font-mono, ui-monospace, monospace);
     background: var(--ftbq-bg, #1a1a1e);
     border: 1px solid var(--ftbq-border, #3a3a42);

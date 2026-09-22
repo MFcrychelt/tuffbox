@@ -134,6 +134,13 @@
   }
 
   let currentView = $state<View>("dashboard");
+  // Expose for browser preview / e2e — lets puppeteer jump to any view without clicking.
+  $effect(() => {
+    if (typeof window !== "undefined") {
+      (window as any).__setView = (v: View) => { currentView = v; };
+      (window as any).__getView = () => currentView;
+    }
+  });
   $effect(() => {
     void ensureViewLoaded(currentView);
   });

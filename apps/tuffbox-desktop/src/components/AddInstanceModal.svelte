@@ -710,7 +710,7 @@
     color: rgba(255, 255, 255, 0.8);
   }
   .tabs {
-    display: flex; gap: 6px; padding: 12px 20px 8px;
+    display: flex; gap: 8px; padding: 12px 20px 8px;
   }
   .tabs button {
     background: transparent; border: 1px solid transparent; color: var(--text-muted);
@@ -726,7 +726,7 @@
     display: flex; justify-content: flex-end; gap: 10px;
     padding: 12px 20px 18px; border-top: 1px solid var(--border-color);
   }
-  .field { display: grid; gap: 6px; }
+  .field { display: grid; gap: 8px; }
   .field.grow { flex: 1; min-width: 0; }
   .field label, .field-label, .label-ish { font-size: 12px; color: var(--text-muted); font-weight: 600; }
   .hint { margin: 6px 0 0; font-size: 12px; line-height: 1.4; color: var(--text-secondary); }
@@ -843,7 +843,7 @@
   .mem-presets {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     margin-top: 8px;
   }
   .mem-preset {
@@ -852,7 +852,7 @@
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     cursor: pointer;
   }
@@ -927,8 +927,8 @@
     cursor: pointer;
   }
   .opt-check input { width: auto; accent-color: var(--accent-primary); }
-  .loader-empty-actions { display: grid; gap: 6px; margin-top: 6px; }
-  .loader-empty-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .loader-empty-actions { display: grid; gap: 8px; margin-top: 6px; }
+  .loader-empty-btns { display: flex; gap: 8px; flex-wrap: wrap; }
   .ghost.mini {
     padding: 5px 10px; font-size: 12px; border-radius: 999px;
     border: 1px solid var(--border-color); background: transparent;
@@ -937,9 +937,9 @@
   .ghost.mini:hover { color: var(--accent-primary); border-color: var(--accent-primary); }
   .field-loader { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
   .template-btn { align-self: flex-start; }
-  .template-list { display: grid; gap: 6px; }
+  .template-list { display: grid; gap: 8px; }
   .template-row {
-    display: grid; text-align: left; gap: 2px; padding: 10px 12px;
+    display: grid; text-align: left; gap: 8px; padding: 10px 12px;
     border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
   }
   .template-row span { color: var(--text-muted); font-size: 12px; }

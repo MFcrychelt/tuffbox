@@ -74,7 +74,7 @@
     <div class="flex flex-wrap items-center gap-2.5">
       <span class="panel-section-title">Diagnostics & validation</span>
       {#if validationBadge}
-        <span class="text-[11px] font-bold px-2 py-0.5 rounded-full border {
+        <span class="text-[12px] font-bold px-2 py-0.5 rounded-full border {
           validationBadge.ok
             ? "text-[color-mix(in_srgb,var(--accent-primary)_62%,var(--text-primary))] border-[color-mix(in_srgb,var(--accent-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)]"
             : "text-[color-mix(in_srgb,var(--accent-danger)_62%,var(--text-primary))] border-[color-mix(in_srgb,var(--accent-danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-danger)_8%,transparent)]"
@@ -91,14 +91,14 @@
       </span>
     </div>
     <div class="flex flex-wrap items-center gap-4">
-      <label class="inline-flex items-center gap-1.5 cursor-pointer text-[color:var(--text-secondary)] text-[12px]" title="Allow launch even when validation has errors">
+      <label class="inline-flex items-center gap-2 cursor-pointer text-[color:var(--text-secondary)] text-[12px]" title="Allow launch even when validation has errors">
         <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={forceRun} /> Force run
       </label>
-      <label class="inline-flex items-center gap-1.5 cursor-pointer text-[color:var(--text-secondary)] text-[12px]" title="Create a snapshot before the run">
+      <label class="inline-flex items-center gap-2 cursor-pointer text-[color:var(--text-secondary)] text-[12px]" title="Create a snapshot before the run">
         <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={autoSnapshot} />
         <Camera size={13} /> Auto-snapshot
       </label>
-      <label class="inline-flex items-center gap-1.5 cursor-pointer text-[color:var(--text-secondary)] text-[12px]">
+      <label class="inline-flex items-center gap-2 cursor-pointer text-[color:var(--text-secondary)] text-[12px]">
         Timeout
         <input type="number" min="30" max="900" class="w-[72px]" bind:value={timeoutSeconds} />
         s
@@ -177,7 +177,7 @@
     <div class="bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] px-3 py-3">
       <div class="flex items-center justify-between mb-2.5 gap-2">
         <h3 class="flex items-center gap-2 text-[14px] text-[var(--text-primary)] m-0"><Shield size={16} /> Validation</h3>
-        <span class="flex items-center gap-1.5 text-[var(--accent-danger)] font-bold text-[12px]"><XCircle size={14} /> Issues — use Force run to launch</span>
+        <span class="flex items-center gap-2 text-[var(--accent-danger)] font-bold text-[12px]"><XCircle size={14} /> Issues — use Force run to launch</span>
       </div>
       <div class="grid grid-cols-3 gap-2 mb-2">
         <div class="rounded-[var(--border-radius-md)] border px-2 py-2 grid gap-0.5 text-center {
@@ -229,7 +229,7 @@
   .field {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 8px;
     min-width: 0;
   }
   .field-label {
@@ -328,7 +328,7 @@
   .switch-body {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 8px;
   }
   .switch-label {
     font-size: 12px;

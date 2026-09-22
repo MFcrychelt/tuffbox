@@ -597,19 +597,19 @@
     .ready { padding: 9px 10px; border-radius: var(--border-radius-md); color: var(--text-muted); background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
     .ready.ok { color: #34d399; border-color: rgba(16, 185, 129, 0.4); }
     .publish-target { display: grid; gap: 8px; padding: 10px; border-radius: var(--border-radius-md); background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
-  .publish-target > div:first-child { display: grid; gap: 3px; }
-  .target-actions, .export-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .publish-target > div:first-child { display: grid; gap: 8px; }
+  .target-actions, .export-btns { display: flex; gap: 8px; flex-wrap: wrap; }
   .quick-exports { display: grid; gap: 8px; }
   .quick-exports h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
   .publish-target strong { color: var(--text-primary); }
   .publish-target span { color: var(--text-muted); font-size: 12px; }
-  .pub-err { color: #fecaca; font-size: 11px; word-break: break-word; }
-  .pub-ok { color: var(--accent-primary); font-size: 11px; word-break: break-all; }
-  .linkish { background: none; border: none; color: var(--accent-secondary); padding: 0; font-size: 11px; cursor: pointer; text-decoration: underline; }
-  .artifact-row, .muted-box { display: grid; gap: 4px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .pub-err { color: #fecaca; font-size: 12px; word-break: break-word; }
+  .pub-ok { color: var(--accent-primary); font-size: 12px; word-break: break-all; }
+  .linkish { background: none; border: none; color: var(--accent-secondary); padding: 0; font-size: 12px; cursor: pointer; text-decoration: underline; }
+  .artifact-row, .muted-box { display: grid; gap: 8px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .artifact-row strong { color: var(--text-primary); text-transform: uppercase; font-size: 12px; }
   .artifact-row span, .artifact-row small, .muted-box { color: var(--text-muted); font-size: 12px; word-break: break-all; }
-  .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
+  .mini { padding: 5px 8px; font-size: 12px; justify-self: start; }
   .primary-emerald {
     display: inline-flex;
     align-items: center;
@@ -629,7 +629,7 @@
   .primary-emerald:disabled { opacity: 0.5; cursor: default; }
   .release-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .issues { display: grid; gap: 8px; }
-  .issue { display: grid; gap: 4px; padding: 12px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .issue { display: grid; gap: 8px; padding: 12px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .issue.warning { border-color: rgba(245, 158, 11, 0.3); }
   .issue.error { border-color: rgba(239, 68, 68, 0.3); }
   .issue.ok { color: var(--accent-primary); display: flex; align-items: center; gap: 8px; }
@@ -637,7 +637,7 @@
   .github-preview h4 { color: var(--accent-secondary); margin: 0 0 8px; font-size: 14px; }
   .github-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
   .gh-meta { color: var(--text-muted); font-size: 12px; }
-  .gh-body-preview { margin: 0; padding: 12px; border-radius: var(--border-radius-sm); background: #0d0d10; color: #d4d4d8; font-size: 11px; line-height: 1.5; max-height: 300px; overflow: auto; white-space: pre-wrap; font-family: var(--font-mono, ui-monospace, monospace); }
+  .gh-body-preview { margin: 0; padding: 12px; border-radius: var(--border-radius-sm); background: #0d0d10; color: #d4d4d8; font-size: 12px; line-height: 1.5; max-height: 300px; overflow: auto; white-space: pre-wrap; font-family: var(--font-mono, ui-monospace, monospace); }
 
   .issue span { color: var(--text-muted); }
   code { color: var(--text-secondary); font-family: var(--font-mono, ui-monospace, monospace); }

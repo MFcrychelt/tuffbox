@@ -261,7 +261,7 @@
     display: block;
     margin-top: 4px;
     opacity: 0.75;
-    font-size: 11px;
+    font-size: 12px;
   }
   .err {
     color: #f88;

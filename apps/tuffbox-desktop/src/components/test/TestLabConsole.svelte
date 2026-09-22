@@ -125,7 +125,7 @@
   <!-- Console toolbar -->
   <div class="flex items-center justify-between gap-2.5 px-4 py-2.5 border-b border-[color:var(--border-color)] shrink-0 flex-wrap">
     <div class="flex items-center gap-2.5 min-w-0">
-      <span class="flex items-center gap-1.5 text-[12px] font-semibold text-[color:var(--text-primary)]">
+      <span class="flex items-center gap-2 text-[12px] font-semibold text-[color:var(--text-primary)]">
         <Terminal size={13} />
         <span class="font-mono">latest.log</span>
       </span>
@@ -142,8 +142,8 @@
         <span class="console-status"><span class="status-dot off"></span> idle</span>
       {/if}
     </div>
-    <div class="flex items-center gap-1.5 flex-wrap">
-      <label class="flex items-center gap-1.5 text-[color:var(--text-muted)] text-[12px] cursor-pointer" title="Toggle auto-scroll">
+    <div class="flex items-center gap-2 flex-wrap">
+      <label class="flex items-center gap-2 text-[color:var(--text-muted)] text-[12px] cursor-pointer" title="Toggle auto-scroll">
         <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={autoScroll} /> Auto-scroll
       </label>
       {#if log}
@@ -230,7 +230,7 @@
   .console-status {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-muted);
     font-family: var(--font-mono, ui-monospace, monospace);
@@ -259,7 +259,7 @@
   }
   .seg-control {
     display: inline-flex;
-    gap: 2px;
+    gap: 8px;
     padding: 2px;
     border-radius: var(--border-radius-sm);
     background: var(--bg-tertiary);
@@ -329,7 +329,7 @@
     white-space: nowrap;
     vertical-align: baseline;
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 6px;
     border-radius: 6px;
     border: 1px solid var(--border-color);
@@ -342,7 +342,7 @@
     white-space: nowrap;
     vertical-align: baseline;
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 6px;
     border-radius: 6px;
     border: 1px solid var(--border-color);

@@ -1081,7 +1081,7 @@
   .seg {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 4px;
+    gap: 8px;
     padding: 3px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
@@ -1116,7 +1116,7 @@
   .status.warn { border-color: color-mix(in srgb, var(--accent-warning) 40%, transparent); color: var(--accent-warning); }
   .status.bad { border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); color: var(--accent-danger); }
   .status-text { flex: 1; min-width: 0; word-break: break-word; }
-  .status-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .status-actions { display: flex; gap: 8px; flex-shrink: 0; }
   .block {
     display: flex;
     flex-direction: column;
@@ -1133,7 +1133,7 @@
   .model-table {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     overflow: hidden;
@@ -1141,7 +1141,7 @@
   .model-row {
     display: flex;
     align-items: stretch;
-    gap: 4px;
+    gap: 8px;
     background: var(--bg-primary);
     border-bottom: 1px solid var(--border-color);
   }
@@ -1153,7 +1153,7 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 4px;
+    gap: 8px;
     padding: 8px 10px;
     border: none;
     background: transparent;
@@ -1182,12 +1182,12 @@
   .fit[data-fit="tight"] { color: var(--accent-warning); }
   .fit[data-fit="heavy"] { color: var(--accent-danger); }
   .install { display: flex; flex-direction: column; gap: 8px; }
-  .field-row { display: flex; gap: 6px; align-items: center; }
+  .field-row { display: flex; gap: 8px; align-items: center; }
   .field-row input { flex: 1; min-width: 0; }
   .progress {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   .progress .bar {
     height: 4px;
@@ -1202,13 +1202,13 @@
   .suggestions {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .sug {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 2px;
+    gap: 8px;
     padding: 8px 10px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-sm);
@@ -1222,8 +1222,8 @@
     background: rgba(251, 191, 36, 0.08);
   }
   .sug-name { font-size: 12px; font-weight: 700; color: var(--text-primary); }
-  .sug-meta { font-size: 12px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .sug-note { font-size: 11px; color: var(--text-secondary); }
+  .sug-meta { font-size: 12px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .sug-note { font-size: 12px; color: var(--text-secondary); }
   .storage {
     display: flex;
     flex-wrap: wrap;
@@ -1239,14 +1239,14 @@
     white-space: nowrap;
     font-family: var(--font-mono, ui-monospace, monospace);
   }
-  .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; }
   .preset {
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
     border-radius: 999px;
     padding: 5px 10px;
-    font-size: 11px;
+    font-size: 12px;
     cursor: pointer;
   }
   .preset.on {
@@ -1258,11 +1258,11 @@
   label {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-muted);
   }
-  .lab { display: inline-flex; align-items: center; gap: 4px; }
+  .lab { display: inline-flex; align-items: center; gap: 8px; }
   input, select {
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
@@ -1303,7 +1303,7 @@
   button {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     border-radius: var(--border-radius-sm);
     padding: 8px 12px;
     font-size: 12px;
@@ -1349,7 +1349,7 @@
   }
   .notice.error { background: color-mix(in srgb, var(--accent-danger) 12%, transparent); color: var(--accent-danger); }
   .notice.ok { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-primary); }
-  .test-ok { color: var(--accent-primary); font-size: 11px; }
+  .test-ok { color: var(--accent-primary); font-size: 12px; }
   :global(.spin) { animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>

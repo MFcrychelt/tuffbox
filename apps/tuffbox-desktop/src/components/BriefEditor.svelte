@@ -1200,7 +1200,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 8px;
   }
 
   .ph-title-row {
@@ -1243,7 +1243,7 @@
   .panel-section-head {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     margin-bottom: 14px;
   }
   .panel-section-hint {
@@ -1254,7 +1254,7 @@
   .primary-btn {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     height: 36px;
     padding: 0 18px;
     border: none;
@@ -1309,7 +1309,7 @@
   /* Segmented control (platform / editor mode) */
   .seg-control {
     display: inline-flex;
-    gap: 3px;
+    gap: 8px;
     padding: 3px;
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
@@ -1365,7 +1365,7 @@
   .field-label {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     margin-bottom: 12px;
     color: var(--text-primary);
     font-weight: 600;
@@ -1470,7 +1470,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--text-secondary);
   }
   .icon-empty-state span {
@@ -1627,13 +1627,13 @@
   }
   .listing-preview-compact :global(.mr-center),
   .listing-preview-compact :global(.cf-body) {
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
   }
   .listing-preview-compact :global(.mr-actions) {
     flex-direction: row;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .listing-preview-compact :global(.mr-dl-btn.card-dl) {

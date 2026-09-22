@@ -1647,7 +1647,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 8px;
   }
   .im-head-copy h2 {
     margin: 0;
@@ -1684,14 +1684,14 @@
 
   .im-tabs {
     display: flex;
-    gap: 4px;
+    gap: 8px;
     padding: 8px 12px 0;
     border-bottom: 1px solid var(--border-color);
   }
   .im-tabs [role="tab"] {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 12px;
     border: none;
     border-bottom: 2px solid transparent;
@@ -1758,7 +1758,7 @@
   .im-search {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex: 1 1 180px;
     min-width: 150px;
     height: 30px;
@@ -1817,7 +1817,7 @@
   .im-primary {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     height: 30px;
     padding: 0 12px;
     border: none;
@@ -1897,7 +1897,7 @@
 
   .im-chips {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
   }
   .im-chip {
@@ -1909,7 +1909,7 @@
     border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, var(--border-color));
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     color: var(--accent-primary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
   }
   .im-chip.muted {
@@ -1929,7 +1929,7 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   .im-row {
     display: flex;
@@ -1965,7 +1965,7 @@
   .im-row-main {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 8px;
     min-width: 0;
     flex: 1;
   }
@@ -1987,7 +1987,7 @@
   .im-row-actions {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
   }
   .im-state-chip {
@@ -2006,7 +2006,7 @@
   .im-update-badge {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     height: 22px;
     padding: 0 8px;
     border: 1px solid color-mix(in srgb, var(--accent-warning) 55%, transparent);
@@ -2034,7 +2034,7 @@
   .im-mini {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     height: 24px;
     padding: 0 9px;
     border: 1px solid var(--border-color);
@@ -2128,13 +2128,13 @@
   .im-tiles {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 6px;
+    gap: 8px;
   }
   .im-tile {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1px;
+    gap: 8px;
     padding: 8px 4px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
@@ -2215,7 +2215,7 @@
   .chip-btn {
     cursor: pointer;
     font: inherit;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     transform: none;
   }
@@ -2298,7 +2298,7 @@
   .im-batchbar {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
     padding: 7px 10px;
     border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
@@ -2314,7 +2314,7 @@
   .im-batch-status {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     font-size: 12px;
     font-weight: 700;
     color: var(--text-secondary);
@@ -2351,7 +2351,7 @@
   .im-shot {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     margin: 0;
     padding: 6px;
     border: 1px solid var(--border-color);
@@ -2381,7 +2381,7 @@
   .im-shot-cap {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
   }
   .im-shot-name {

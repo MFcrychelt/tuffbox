@@ -1816,14 +1816,36 @@ export async function installBrowserMockIfNeeded(): Promise<boolean> {
       // --- Plugin mocks ---
       default:
         if (cmd.startsWith("plugin:")) {
+          // tracing/log is extremely high-frequency — must not spam console
+          if (cmd.includes("tracing")) return null;
           if (cmd.includes("dialog") && cmd.includes("open")) return null;
           if (cmd.includes("shell") && cmd.includes("open")) return null;
           if (cmd.includes("dialog") && cmd.includes("confirm")) return true;
           if (cmd.includes("dialog") && cmd.includes("message")) return null;
-          console.debug(`[mockIPC] unhandled plugin cmd ${cmd}`, args);
+          // throttle unhandled plugin spam: only log once per cmd
+          try {
+            const k = `__mock_warned_${cmd}`;
+            if (!(globalThis as any)[k]) {
+              (globalThis as any)[k] = true;
+              console.debug(`[mockIPC] unhandled plugin cmd ${cmd}`, args);
+            }
+          } catch {}
           return null;
         }
-        console.warn(`[mockIPC] unhandled cmd ${cmd}`, args);
+        // silent stubs for shell-polling cmds — prevent warn flood
+        if (cmd === "list_background_tasks" || cmd === "set_window_glass" || cmd === "get_crash_fix_banner" || cmd === "get_launch_log") {
+          return cmd.startsWith("list_") ? [] : null;
+        }
+        // throttle unhandled warnings — log once per cmd
+        try {
+          const rk = `__mock_warned_cmd_${cmd}`;
+          if (!(globalThis as any)[rk]) {
+            (globalThis as any)[rk] = true;
+            console.warn(`[mockIPC] unhandled cmd ${cmd}`, args);
+          }
+        } catch {
+          console.warn(`[mockIPC] unhandled cmd ${cmd}`, args);
+        }
         // Heuristic fallback so the UI doesn't crash on missing mocks
         if (cmd.startsWith("list_") || cmd.startsWith("search_") || cmd.startsWith("get_") && cmd.includes("list")) return [];
         if (cmd.startsWith("get_") || cmd.startsWith("list")) return null;
@@ -1846,11 +1868,11 @@ export async function installBrowserMockIfNeeded(): Promise<boolean> {
       el.setAttribute("aria-label", "Browser preview test data");
       el.style.cssText = [
         "position:fixed",
-        "bottom:10px",
-        "right:10px",
+        "bottom:56px",
+        "right:12px",
         "z-index:9999",
-        "padding:6px 10px",
-        "font:600 11px/1.2 var(--font-mono, monospace)",
+        "padding:6px 12px",
+        "font:600 12px/1.4 var(--font-mono, monospace)",
         "letter-spacing:0.02em",
         "color:var(--text-primary)",
         "background:color-mix(in srgb, var(--accent-primary) 16%, var(--bg-primary))",

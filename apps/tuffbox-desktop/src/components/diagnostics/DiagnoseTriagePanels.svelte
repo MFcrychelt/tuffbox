@@ -326,7 +326,7 @@
   .sig-group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     padding: 8px;
     border-radius: var(--border-radius-sm);
     background: var(--bg-primary);
@@ -345,7 +345,7 @@
     display: block;
     width: 100%;
     text-align: left;
-    font-size: 11px;
+    font-size: 12px;
     font-family: var(--font-mono, ui-monospace, monospace);
     padding: 4px 0;
     border: none;
@@ -389,7 +389,7 @@
   .dx-suspects h3 {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     margin: 0 0 8px;
     font-size: 13px;
   }
@@ -406,7 +406,7 @@
   .snap-list li {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     padding: 8px;
     border-radius: var(--border-radius-sm);
     background: var(--bg-primary);
@@ -416,19 +416,19 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
   }
   .suspect-acts {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .bisect-check {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-muted);
     cursor: pointer;
@@ -454,7 +454,7 @@
   }
   .class-finder label {
     display: grid;
-    gap: 4px;
+    gap: 8px;
     font-size: 12px;
   }
   .class-finder input {
@@ -477,7 +477,7 @@
   .crash-tags {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     margin-top: 6px;
   }
   .muted-inline {

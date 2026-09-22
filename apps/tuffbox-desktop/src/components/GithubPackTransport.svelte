@@ -343,7 +343,7 @@
 
   <div class="flex items-center gap-2 flex-wrap">
     <span
-      class="inline-flex items-center gap-1.5 text-xs font-semibold"
+      class="inline-flex items-center gap-2 text-xs font-semibold"
       class:text-[var(--accent-primary)]={authed}
       class:text-[var(--text-muted)]={!authed}
     >
@@ -351,7 +351,7 @@
       {authed ? "Author signed in" : "Author login required"}
     </span>
     <button
-      class="ml-auto inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs font-bold text-[var(--text-secondary)] cursor-pointer transition-colors duration-[160ms] hover:border-[var(--accent-primary)] hover:text-[var(--text-primary)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
+      class="ml-auto inline-flex items-center gap-2 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs font-bold text-[var(--text-secondary)] cursor-pointer transition-colors duration-[160ms] hover:border-[var(--accent-primary)] hover:text-[var(--text-primary)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
       onclick={startLogin}
       disabled={busy || loginStarting || polling}
     >
@@ -362,12 +362,12 @@
   {#if oauthClientMissing}
     <p class="m-0 p-2 rounded-lg border border-[rgba(239,68,68,0.35)] text-xs text-[var(--accent-danger)]">
       Device OAuth is unavailable: this build has no GitHub OAuth client ID. Set
-      <code class="font-mono text-[11px] text-[var(--text-secondary)]">TUFFBOX_GITHUB_CLIENT_ID</code> when building, or add a GitHub PAT in Settings.
+      <code class="font-mono text-[12px] text-[var(--text-secondary)]">TUFFBOX_GITHUB_CLIENT_ID</code> when building, or add a GitHub PAT in Settings.
     </p>
   {/if}
 
   {#if userCode}
-    <p class="m-0 text-xs text-[var(--text-muted)] flex items-center gap-1 flex-wrap">
+    <p class="m-0 text-xs text-[var(--text-muted)] flex items-center gap-2 flex-wrap">
       Open
       <button
         class="bg-transparent border-0 p-0 text-[var(--accent-primary)] text-xs font-semibold cursor-pointer underline underline-offset-2"
@@ -378,7 +378,7 @@
     </p>
   {/if}
 
-  <label class="grid gap-1.5 text-[13px] font-bold text-[var(--text-secondary)]">
+  <label class="grid gap-2 text-[13px] font-bold text-[var(--text-secondary)]">
     Public repository
     <input
       bind:value={repository}
@@ -389,18 +389,18 @@
       class:border-[rgba(239,68,68,0.55)]={repoInvalid}
     />
     {#if repoInvalid}
-      <span class="text-[11px] font-normal text-[var(--accent-danger)]">Use the owner/repository format, e.g. acme/cool-pack.</span>
+      <span class="text-[12px] font-normal text-[var(--accent-danger)]">Use the owner/repository format, e.g. acme/cool-pack.</span>
     {/if}
   </label>
 
   <div class="flex items-center gap-2 flex-wrap">
     <button
-      class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs font-bold text-[var(--text-secondary)] cursor-pointer transition-colors duration-[160ms] hover:border-[var(--accent-primary)] hover:text-[var(--text-primary)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
+      class="inline-flex items-center gap-2 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs font-bold text-[var(--text-secondary)] cursor-pointer transition-colors duration-[160ms] hover:border-[var(--accent-primary)] hover:text-[var(--text-primary)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
       onclick={runPreview}
       disabled={busy || !$projectPath}
     >Preview tree</button>
     <button
-      class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border-0 bg-[var(--accent-primary)] text-xs font-bold text-[#06251a] cursor-pointer transition-colors duration-[160ms] hover:bg-[var(--accent-hover)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
+      class="inline-flex items-center gap-2 h-7 px-2.5 rounded-lg border-0 bg-[var(--accent-primary)] text-xs font-bold text-[#06251a] cursor-pointer transition-colors duration-[160ms] hover:bg-[var(--accent-hover)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
       onclick={publishPack}
       disabled={busy || !authed || !repository.trim() || repoInvalid}
     >
@@ -408,7 +408,7 @@
     </button>
     {#if shareUrl}
       <button
-        class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs text-[var(--text-muted)] cursor-pointer transition-colors duration-[160ms] hover:text-[var(--text-primary)]"
+        class="inline-flex items-center gap-2 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs text-[var(--text-muted)] cursor-pointer transition-colors duration-[160ms] hover:text-[var(--text-primary)]"
         onclick={copyShare}
         title="Copy share message (link + one-click install)"
       >
@@ -419,14 +419,14 @@
         {/if}
       </button>
       <button
-        class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs text-[var(--text-muted)] cursor-pointer transition-colors duration-[160ms] hover:text-[var(--text-primary)]"
+        class="inline-flex items-center gap-2 h-7 px-2.5 rounded-lg border border-[var(--border-color)] bg-transparent text-xs text-[var(--text-muted)] cursor-pointer transition-colors duration-[160ms] hover:text-[var(--text-primary)]"
         onclick={openShare}
       ><Link2 size={12} /> Open share link</button>
     {/if}
   </div>
 
   {#if phase}
-    <div class="grid gap-1.5" aria-live="polite">
+    <div class="grid gap-2" aria-live="polite">
       <div class="flex items-baseline gap-2 flex-wrap text-xs">
         <strong class="text-[var(--text-primary)]">{phaseLabel(phase)}</strong>
         {#if twoPhase === true}
@@ -436,7 +436,7 @@
         {/if}
       </div>
       <ol
-        class="grid gap-1 m-0 p-0 list-none"
+        class="grid gap-2 m-0 p-0 list-none"
         style={`grid-template-columns: repeat(${publishSteps.length}, minmax(0, 1fr));`}
         aria-label="Publish progress"
       >
@@ -444,7 +444,7 @@
           {@const active = phase === step}
           {@const complete = phaseRank(phase) > phaseRank(step as PublishPhase)}
           <li
-            class="px-1.5 py-1 rounded border text-[11px] text-center transition-colors duration-[160ms]"
+            class="px-1.5 py-1 rounded border text-[12px] text-center transition-colors duration-[160ms]"
             class:border-[var(--accent-primary)]={active || complete}
             class:text-[var(--text-primary)]={active}
             class:text-[var(--accent-primary)]={complete && !active}

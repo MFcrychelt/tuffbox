@@ -728,14 +728,14 @@
   .yp-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
   }
 
   .yp-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 6px 10px;
     border-radius: var(--border-radius-md, 8px);
     border: 1px solid var(--border-color);
@@ -829,7 +829,7 @@
 
   .yp-embed-tip-btn {
     padding: 5px 8px;
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .yp-resize {

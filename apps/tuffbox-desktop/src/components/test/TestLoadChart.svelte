@@ -193,7 +193,7 @@
   .legend span {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
   }
   .swatch {

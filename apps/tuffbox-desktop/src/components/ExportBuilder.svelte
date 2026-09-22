@@ -662,7 +662,7 @@
   }
   .notice-body {
     display: grid;
-    gap: 4px;
+    gap: 8px;
   }
   .path-chip {
     display: block;
@@ -674,7 +674,7 @@
   .linkish {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     background: none;
     border: none;
     color: var(--accent-primary);
@@ -759,7 +759,7 @@
     border-radius: 14px;
     padding: 14px;
     display: grid;
-    gap: 4px;
+    gap: 8px;
   }
   .issues {
     display: grid;
@@ -775,7 +775,7 @@
   }
   .issue {
     display: grid;
-    gap: 4px;
+    gap: 8px;
     padding: 12px;
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
@@ -841,7 +841,7 @@
   }
   .batch-results li {
     display: grid;
-    gap: 2px;
+    gap: 8px;
     padding: 10px 12px;
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);

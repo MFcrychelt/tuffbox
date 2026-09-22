@@ -251,7 +251,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     width: 64px;
     padding: 0;
     border: none;
@@ -403,7 +403,7 @@
 
   .slot-name {
     font-family: var(--font-minecraft);
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.3px;
     /* Fit the full nick: no clipping, overflow allowed to spill over the
        narrow 76px slot, centered so it stays balanced. */
@@ -411,7 +411,7 @@
     width: max-content;
     white-space: nowrap;
     text-align: center;
-    line-height: 1.2;
+    line-height: 1.4;
     display: inline-block;
     overflow: visible;
     color: var(--text-secondary);

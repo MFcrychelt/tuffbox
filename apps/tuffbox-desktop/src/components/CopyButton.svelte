@@ -60,7 +60,7 @@
   .copy-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 4px 10px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);

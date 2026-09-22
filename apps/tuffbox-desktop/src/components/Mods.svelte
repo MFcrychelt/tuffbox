@@ -3993,7 +3993,7 @@ import { trapFocus } from "../lib/focusTrap";
       </div>
 
       <div class="modal-tabs-row">
-        <div class="flex flex-wrap gap-1.5 min-w-0">
+        <div class="flex flex-wrap gap-2 min-w-0">
           {#each [
             { id: "mod", label: "Mods" },
             { id: "resourcepack", label: "Resourcepacks" },
@@ -4019,7 +4019,7 @@ import { trapFocus } from "../lib/focusTrap";
             >{listName}</button>
           {/each}
         </div>
-        <div class="flex items-center gap-1 p-[3px] rounded-[10px] border border-[var(--border-color)] bg-[var(--bg-tertiary)] shrink-0" role="group" aria-label="Catalog provider">
+        <div class="flex items-center gap-2 p-[3px] rounded-[10px] border border-[var(--border-color)] bg-[var(--bg-tertiary)] shrink-0" role="group" aria-label="Catalog provider">
           {#each [
             { id: "modrinth", label: "Modrinth" },
             { id: "curseforge", label: "CurseForge" },
@@ -4065,12 +4065,12 @@ import { trapFocus } from "../lib/focusTrap";
               <option value={60}>60</option>
             </select>
           </label>
-          <span class="inline-flex items-center gap-1 text-[var(--text-muted)] text-[12px] whitespace-nowrap" role="group" aria-label="Card size">
+          <span class="inline-flex items-center gap-2 text-[var(--text-muted)] text-[12px] whitespace-nowrap" role="group" aria-label="Card size">
             Size:
             {#each ["S", "M", "L"] as s (s)}
               <button
                 type="button"
-                class="min-w-[28px] h-[28px] px-1.5 inline-flex items-center justify-center rounded-[var(--border-radius-sm)] border text-[11px] font-bold cursor-pointer transition-colors duration-150 {cardSize === s
+                class="min-w-[28px] h-[28px] px-1.5 inline-flex items-center justify-center rounded-[var(--border-radius-sm)] border text-[12px] font-bold cursor-pointer transition-colors duration-150 {cardSize === s
                   ? "border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)] text-[var(--accent-primary)]"
                   : "border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"}"
                 onclick={() => setCardSize(s as CardSize)}
@@ -4121,14 +4121,14 @@ import { trapFocus } from "../lib/focusTrap";
           <section class="rounded-lg transition-colors duration-150 {(accordionOpen.gameVersion) ? "bg-[var(--bg-tertiary)]/60" : ""}">
             <button
               type="button"
-              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[12px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
               onclick={() => toggleAccordion("gameVersion")}
             >
               <span class="flex items-center gap-2"><Layers size={13} class="text-[var(--text-muted)]" /> Game version</span>
               <ChevronDown size={15} class="text-[var(--text-muted)] transition-transform duration-200 {accordionOpen.gameVersion ? "" : "-rotate-90"}" />
             </button>
             {#if accordionOpen.gameVersion}
-              <div class="px-2 pb-2 pt-0.5 flex flex-col gap-1.5">
+              <div class="px-2 pb-2 pt-0.5 flex flex-col gap-2">
                 <div class="search mini">
                   <span class="search-glyph"><Search size={14} /></span>
                   <input bind:value={versionSearch} placeholder="Search version..." />
@@ -4163,7 +4163,7 @@ import { trapFocus } from "../lib/focusTrap";
           <section class="rounded-lg transition-colors duration-150 {(accordionOpen.loader) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={contentFilter !== "mod"}>
             <button
               type="button"
-              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[12px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
               onclick={() => toggleAccordion("loader")}
             >
               <span class="flex items-center gap-2"><Hammer size={13} class="text-[var(--text-muted)]" /> Loader</span>
@@ -4171,7 +4171,7 @@ import { trapFocus } from "../lib/focusTrap";
             </button>
             {#if accordionOpen.loader}
               <div class="px-2 pb-2 pt-0.5">
-                <div class="grid grid-cols-2 gap-1.5">
+                <div class="grid grid-cols-2 gap-2">
                   {#each shownLoaders as loaderName (loaderName)}
                     <button
                       type="button"
@@ -4188,7 +4188,7 @@ import { trapFocus } from "../lib/focusTrap";
                   {/each}
                 </div>
                 {#if loaders.length > 3}
-                  <button type="button" class="mt-1 flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] text-[var(--text-muted)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer" onclick={() => (loaderExpanded = !loaderExpanded)}>
+                  <button type="button" class="mt-1 flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[12px] text-[var(--text-muted)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer" onclick={() => (loaderExpanded = !loaderExpanded)}>
                     {loaderExpanded ? "Show less" : "Show more"}
                     <ChevronDown size={14} class="transition-transform duration-200 {loaderExpanded ? "rotate-180" : ""}" />
                   </button>
@@ -4201,7 +4201,7 @@ import { trapFocus } from "../lib/focusTrap";
           <section class="rounded-lg transition-colors duration-150 {(accordionOpen.category) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={catalogProvider === "curseforge"}>
             <button
               type="button"
-              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[12px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
               onclick={() => toggleAccordion("category")}
             >
               <span class="flex items-center gap-2"><Tag size={13} class="text-[var(--text-muted)]" /> Category</span>
@@ -4244,14 +4244,14 @@ import { trapFocus } from "../lib/focusTrap";
           <section class="rounded-lg transition-colors duration-150 {(accordionOpen.cfCategory) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={catalogProvider !== "curseforge"}>
             <button
               type="button"
-              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[12px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
               onclick={() => toggleAccordion("cfCategory")}
             >
               <span class="flex items-center gap-2"><Tag size={13} class="text-[var(--text-muted)]" /> Category</span>
               <ChevronDown size={15} class="text-[var(--text-muted)] transition-transform duration-200 {accordionOpen.cfCategory ? "" : "-rotate-90"}" />
             </button>
             {#if accordionOpen.cfCategory}
-              <div class="px-2 pb-2 pt-0.5 flex flex-col gap-1.5">
+              <div class="px-2 pb-2 pt-0.5 flex flex-col gap-2">
                 <div class="search mini">
                   <span class="search-glyph"><Search size={14} /></span>
                   <input bind:value={cfCategorySearch} placeholder="Search category..." />
@@ -4288,7 +4288,7 @@ import { trapFocus } from "../lib/focusTrap";
           <section class="rounded-lg transition-colors duration-150 {(accordionOpen.environment) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={catalogProvider === "curseforge" || contentFilter !== "mod"}>
             <button
               type="button"
-              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[12px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
               onclick={() => toggleAccordion("environment")}
             >
               <span class="flex items-center gap-2"><Monitor size={13} class="text-[var(--text-muted)]" /> Environment</span>
@@ -4296,17 +4296,17 @@ import { trapFocus } from "../lib/focusTrap";
             </button>
             {#if accordionOpen.environment}
               <div class="px-2 pb-2 pt-0.5">
-                <div class="grid grid-cols-2 gap-1.5">
+                <div class="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    class="flex items-center justify-center gap-1.5 rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {!filterEnvironment
+                    class="flex items-center justify-center gap-2 rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {!filterEnvironment
                       ? "border-[color-mix(in_srgb,var(--accent-primary)_55%,transparent)] bg-[var(--bg-elevated)] font-semibold text-[var(--text-primary)]"
                       : "border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
                     onclick={() => { filterEnvironment = ""; searchMods(1); }}
                   >Any</button>
                   <button
                     type="button"
-                    class="flex items-center justify-center gap-1.5 rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {filterEnvironment === "client"
+                    class="flex items-center justify-center gap-2 rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {filterEnvironment === "client"
                       ? "border-[color-mix(in_srgb,var(--accent-primary)_55%,transparent)] bg-[var(--bg-elevated)] font-semibold text-[var(--text-primary)]"
                       : "border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
                     onclick={() => { filterEnvironment = "client"; searchMods(1); }}
@@ -4315,7 +4315,7 @@ import { trapFocus } from "../lib/focusTrap";
                   </button>
                   <button
                     type="button"
-                    class="col-span-2 flex items-center justify-center gap-1.5 rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {filterEnvironment === "server"
+                    class="col-span-2 flex items-center justify-center gap-2 rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {filterEnvironment === "server"
                       ? "border-[color-mix(in_srgb,var(--accent-primary)_55%,transparent)] bg-[var(--bg-elevated)] font-semibold text-[var(--text-primary)]"
                       : "border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
                     onclick={() => { filterEnvironment = "server"; searchMods(1); }}
@@ -4331,7 +4331,7 @@ import { trapFocus } from "../lib/focusTrap";
           <section class="rounded-lg transition-colors duration-150 {(accordionOpen.license) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={catalogProvider === "curseforge"}>
             <button
               type="button"
-              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[12px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
               onclick={() => toggleAccordion("license")}
             >
               <span class="flex items-center gap-2"><Scale size={13} class="text-[var(--text-muted)]" /> License</span>
@@ -4339,7 +4339,7 @@ import { trapFocus } from "../lib/focusTrap";
             </button>
             {#if accordionOpen.license}
               <div class="px-2 pb-2 pt-0.5">
-                <div class="grid grid-cols-2 gap-1.5">
+                <div class="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     class="rounded-md border py-1.5 text-[12.5px] transition-all duration-150 cursor-pointer {!filterLicense
@@ -4363,7 +4363,7 @@ import { trapFocus } from "../lib/focusTrap";
           <section class="rounded-lg transition-colors duration-150 {(accordionOpen.cfSort) ? "bg-[var(--bg-tertiary)]/60" : ""}" hidden={catalogProvider !== "curseforge"}>
             <button
               type="button"
-              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[12px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
               onclick={() => toggleAccordion("cfSort")}
             >
               <span class="flex items-center gap-2"><ArrowUpDown size={13} class="text-[var(--text-muted)]" /> Sort</span>
@@ -4422,7 +4422,7 @@ import { trapFocus } from "../lib/focusTrap";
             </div>
           {/snippet}
           {#if viewMode !== "infinite" && !isSavedViewFilter(contentFilter)}
-          <div class="flex items-center gap-1.5 flex-wrap">
+          <div class="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               class="pagination-btn"
@@ -4453,7 +4453,7 @@ import { trapFocus } from "../lib/focusTrap";
               <strong class="text-[var(--accent-primary)] text-[16px]">{selectedResults.length}</strong>
               <span class="text-[var(--text-muted)] ml-1.5 text-[12px]">selected for bulk install</span>
             </div>
-            <div class="flex gap-1.5 flex-wrap justify-end">
+            <div class="flex gap-2 flex-wrap justify-end">
               <button type="button" class="ghost" onclick={selectVisibleResults} disabled={displayedResults.length === 0}>Select visible</button>
               <button type="button" class="ghost" onclick={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
               <button
@@ -4699,7 +4699,7 @@ import { trapFocus } from "../lib/focusTrap";
             {/if}
           {/if}
           {#if viewMode !== "infinite" && totalPages > 1 && !isSavedViewFilter(contentFilter)}
-            <div class="mt-2 mb-1 mx-auto flex items-center justify-center gap-1.5 flex-wrap">
+            <div class="mt-2 mb-1 mx-auto flex items-center justify-center gap-2 flex-wrap">
               <button
                 type="button"
                 class="pagination-btn"
@@ -5297,7 +5297,7 @@ import { trapFocus } from "../lib/focusTrap";
   .trail-links {
     display: inline-flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 8px;
   }
   .conflicts-head h2 {
     display: flex;
@@ -5326,7 +5326,7 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .dup-list li {
     display: flex;
@@ -5367,9 +5367,9 @@ import { trapFocus } from "../lib/focusTrap";
   .content-kicker {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--accent-primary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -5435,13 +5435,13 @@ import { trapFocus } from "../lib/focusTrap";
   .toolbar {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     margin-bottom: 8px;
   }
 
   .content-tabs {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     overflow-x: auto;
     padding-bottom: 2px;
   }
@@ -5450,7 +5450,7 @@ import { trapFocus } from "../lib/focusTrap";
   .content-tabs button {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 7px 14px;
     border-radius: var(--border-radius-md);
     background: var(--bg-secondary);
@@ -5504,7 +5504,7 @@ import { trapFocus } from "../lib/focusTrap";
     overflow: hidden;
     text-overflow: ellipsis;
     margin-left: 6px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     padding: 1px 7px;
     border-radius: 999px;
@@ -5542,7 +5542,7 @@ import { trapFocus } from "../lib/focusTrap";
   .control-actions .action-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     min-height: 38px;
     padding: 0 13px;
     border: 1px solid var(--border-color);
@@ -5581,7 +5581,7 @@ import { trapFocus } from "../lib/focusTrap";
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     background: var(--bg-secondary);
-    gap: 2px;
+    gap: 8px;
   }
 
   .side-segment button {
@@ -5639,7 +5639,7 @@ import { trapFocus } from "../lib/focusTrap";
     border-radius: var(--border-radius-md);
     background: var(--bg-secondary);
     padding: 2px;
-    gap: 2px;
+    gap: 8px;
     flex-shrink: 0;
   }
   .layout-segment button {
@@ -5744,7 +5744,7 @@ import { trapFocus } from "../lib/focusTrap";
   .installed-pane-header .tab-count,
   .installed-pane-header .pane-count {
     margin-left: 6px;
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 700;
     padding: 2px 8px;
     border-radius: 999px;
@@ -5818,7 +5818,7 @@ import { trapFocus } from "../lib/focusTrap";
   .more-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     min-height: 38px;
     padding: 0 13px;
   }
@@ -5848,7 +5848,7 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 4px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .more-item {
@@ -5912,7 +5912,7 @@ import { trapFocus } from "../lib/focusTrap";
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
     min-height: 38px;
     padding: 0 12px;
     border-radius: var(--border-radius-md);
@@ -6012,7 +6012,7 @@ import { trapFocus } from "../lib/focusTrap";
   .ideas-meta {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
   }
   .ideas-meta strong { font-size: 13px; color: var(--text-primary); }
@@ -6132,7 +6132,7 @@ import { trapFocus } from "../lib/focusTrap";
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -6221,7 +6221,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .disabled-badge {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     padding: 2px 6px;
@@ -6629,7 +6629,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .retry-one {
     margin-left: auto;
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 8px !important;
   }
 
@@ -6656,7 +6656,7 @@ import { trapFocus } from "../lib/focusTrap";
   .update-versions {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--text-muted);
     font-size: 12px;
   }
@@ -6703,7 +6703,7 @@ import { trapFocus } from "../lib/focusTrap";
   .result-main {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
   }
 
@@ -7053,7 +7053,7 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     margin: 2px 0 0;
   }
 
@@ -7103,7 +7103,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .sk-icon { grid-area: icon; width: 44px; height: 44px; }
-  .sk-main { grid-area: main; display: flex; flex-direction: column; gap: 7px; padding-top: 3px; }
+  .sk-main { grid-area: main; display: flex; flex-direction: column; gap: 8px; padding-top: 3px; }
   .sk-title { height: 13px; width: 62%; }
   .sk-line { height: 11px; width: 88%; }
   .sk-actions { grid-area: actions; height: 30px; width: 116px; }
@@ -7187,7 +7187,7 @@ import { trapFocus } from "../lib/focusTrap";
     height: 18px;
     padding: 0 5px;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.02em;
     flex-shrink: 0;
@@ -7252,7 +7252,7 @@ import { trapFocus } from "../lib/focusTrap";
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     padding-right: 2px;
     min-width: 0;
   }
@@ -7262,7 +7262,7 @@ import { trapFocus } from "../lib/focusTrap";
     min-height: 0;
     overflow: auto;
     display: grid;
-    gap: 6px;
+    gap: 8px;
     padding-right: 2px;
   }
 
@@ -7307,7 +7307,7 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 8px 10px;
     background: transparent;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: .06em;
@@ -7319,13 +7319,13 @@ import { trapFocus } from "../lib/focusTrap";
 
   .filter-body {
     display: grid;
-    gap: 4px;
+    gap: 8px;
     padding: 2px 8px 8px;
   }
 
   .filter-list {
     display: grid;
-    gap: 3px;
+    gap: 8px;
     max-height: 280px;
     overflow: auto;
   }
@@ -7365,7 +7365,7 @@ import { trapFocus } from "../lib/focusTrap";
     text-align: left;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 7px 9px;
     background: transparent;
     color: var(--text-muted);
@@ -7404,7 +7404,7 @@ import { trapFocus } from "../lib/focusTrap";
   .pagination {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     margin-left: auto;
   }
 
@@ -7438,7 +7438,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .results.card-size-s {
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
-    gap: 6px;
+    gap: 8px;
   }
 
   .results.card-size-l {
@@ -7452,7 +7452,7 @@ import { trapFocus } from "../lib/focusTrap";
     grid-template-columns: 48px minmax(0, 1fr);
     grid-template-areas: "icon main" "icon actions" "footer footer";
     grid-template-rows: auto auto auto;
-    gap: 6px 8px;
+    gap: 8px 8px;
     align-items: start;
     align-content: start;
     height: 100%;
@@ -7492,7 +7492,7 @@ import { trapFocus } from "../lib/focusTrap";
   .results.card-size-s .result-card {
     grid-template-columns: 40px minmax(0, 1fr);
     padding: 6px 8px;
-    gap: 4px 6px;
+    gap: 8px 8px;
   }
 
   .results.card-size-s .result-icon {
@@ -7562,14 +7562,14 @@ import { trapFocus } from "../lib/focusTrap";
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   .result-title {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 4px;
+    gap: 8px;
     min-height: 2.75rem;
     /* Long names must ellipsize inside the card, not push past it. */
     min-width: 0;
@@ -7579,7 +7579,7 @@ import { trapFocus } from "../lib/focusTrap";
   .result-title-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     width: 100%;
     min-width: 0;
   }
@@ -7587,7 +7587,7 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     min-height: 1.25rem;
   }
   .result-name {
@@ -7628,7 +7628,7 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-title-link {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     background: none;
     border: none;
     padding: 0;
@@ -7660,14 +7660,14 @@ import { trapFocus } from "../lib/focusTrap";
   .result-badges {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 8px;
     margin-top: 2px;
     min-height: 1.4rem;
     max-height: 1.4rem;
     overflow: hidden;
   }
   .badge {
-    display: inline-flex; align-items: center; gap: 4px;
+    display: inline-flex; align-items: center; gap: 8px;
     padding: 3px 9px;
     border-radius: 999px;
     background: var(--bg-elevated);
@@ -7681,12 +7681,12 @@ import { trapFocus } from "../lib/focusTrap";
     grid-area: actions;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
     min-height: 32px;
   }
   .download-btn {
-    display: inline-flex; align-items: center; gap: 6px;
+    display: inline-flex; align-items: center; gap: 8px;
     padding: 6px 12px;
     border-radius: var(--border-radius-sm);
     background: var(--accent-primary);
@@ -7701,7 +7701,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .quick-actions {
     display: flex;
-    gap: 4px;
+    gap: 8px;
     align-items: center;
     opacity: 0.55;
     transition: opacity 0.12s;
@@ -7732,7 +7732,7 @@ import { trapFocus } from "../lib/focusTrap";
     min-width: 220px; max-height: 320px; overflow: auto;
     background: var(--bg-elevated); border: 1px solid var(--border-color);
     border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-    padding: 6px; display: flex; flex-direction: column; gap: 2px;
+    padding: 6px; display: flex; flex-direction: column; gap: 8px;
   }
   .save-dropdown-header { padding: 6px 10px; font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .save-dropdown-item {
@@ -7742,7 +7742,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .save-dropdown-item:hover { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   .save-check { width: 16px; text-align: center; color: var(--accent-primary); font-weight: 700; }
-  .save-dropdown-new { display: flex; gap: 4px; padding: 6px 4px 2px; border-top: 1px solid var(--border-color); margin-top: 4px; }
+  .save-dropdown-new { display: flex; gap: 8px; padding: 6px 4px 2px; border-top: 1px solid var(--border-color); margin-top: 4px; }
   .save-dropdown-new input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary); font-size: 12px; }
   .save-dropdown-new button { padding: 6px 10px; border-radius: 6px; background: var(--accent-primary); color: var(--on-accent); border: none; font-size: 12px; font-weight: 600; cursor: pointer; }
   .save-dropdown-new button:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -7757,14 +7757,14 @@ import { trapFocus } from "../lib/focusTrap";
     padding-top: 4px;
     border-top: 1px solid var(--border-color);
   }
-  .result-footer span { display: inline-flex; align-items: center; gap: 5px; }
+  .result-footer span { display: inline-flex; align-items: center; gap: 8px; }
   .result-footer .footer-updated { margin-left: auto; }
   .result-footer :global(svg) { width: 13px; height: 13px; flex-shrink: 0; }
 
   .install-preview {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     margin: 8px 0;
     color: var(--text-muted);
     font-size: 12px;
@@ -7784,7 +7784,7 @@ import { trapFocus } from "../lib/focusTrap";
     width: 100%;
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 8px;
   }
 
   code {
@@ -7813,7 +7813,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .plan-eyebrow {
     color: var(--accent-primary);
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: .1em;
     font-weight: 900;
@@ -7832,7 +7832,7 @@ import { trapFocus } from "../lib/focusTrap";
   .install-plan-panel .dep-entry small { color: var(--text-muted); font-size: 12px; }
   .dep-installed-pill {
     margin-left: auto;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.02em;
     text-transform: uppercase;
@@ -7852,7 +7852,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .install-plan-panel .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); cursor: pointer; }
   .plan-deps { margin-top: 8px; max-height: 80px; overflow: auto; }
-  .conflict-warning { margin-top: 10px; padding: 10px; border: 1px solid rgba(239,68,68,.32); border-radius: var(--border-radius-md); background: rgba(239,68,68,.08); display: grid; gap: 6px; }
+  .conflict-warning { margin-top: 10px; padding: 10px; border: 1px solid rgba(239,68,68,.32); border-radius: var(--border-radius-md); background: rgba(239,68,68,.08); display: grid; gap: 8px; }
   .conflict-warning strong { color: #fecaca; }
   .conflict-warning span { color: var(--text-muted); font-size: 12px; }
   .dep-node { position: relative; display: flex; gap: 8px; align-items: center; margin-left: 14px; padding-left: 14px; color: var(--text-muted); font-size: 12px; }
@@ -7865,11 +7865,11 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-item strong { color: var(--text-primary); font-size: 13px; }
   .plan-item span { color: var(--text-muted); font-size: 13px; text-align: right; }
   .plan-item .side-tag { text-transform: uppercase; font-weight: 700; }
-  .plan-item .mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; }
+  .plan-item .mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
   .plan-deps-section, .plan-conflicts { padding: 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); }
   .plan-deps-section > strong { color: var(--accent-primary); font-size: 13px; display: block; margin-bottom: 8px; }
   .plan-conflicts > strong { color: #fca5a5; font-size: 13px; display: block; margin-bottom: 8px; }
-  .plan-dep-list { display: grid; gap: 4px; }
+  .plan-dep-list { display: grid; gap: 8px; }
   .plan-dep-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg-secondary); }
   .plan-dep-row code { font-size: 12px; }
   .plan-dep-row span { color: var(--text-muted); font-size: 12px; }
@@ -7888,13 +7888,13 @@ import { trapFocus } from "../lib/focusTrap";
 
   .update-confirm-modal { max-width: 600px; }
   .update-confirm-list { display: grid; gap: 8px; max-height: 50vh; overflow: auto; padding: 4px 2px; }
-  .update-confirm-row { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 6px; }
+  .update-confirm-row { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 8px; }
   .update-confirm-row.breaking { border-color: rgba(239,68,68,.5); }
   .update-confirm-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .update-confirm-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
   .update-confirm-vers { color: var(--text-muted); font-size: 12px; }
   .update-confirm-vers strong { color: var(--accent-primary); }
-  .update-confirm-chip { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 2px 6px; border-radius: 999px; }
+  .update-confirm-chip { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 2px 6px; border-radius: 999px; }
   .update-confirm-chip.rename { background: color-mix(in srgb, var(--accent-secondary) 18%, transparent); color: var(--accent-secondary); }
   .update-confirm-chip.loader { background: rgba(251,191,36,.14); color: #fbbf24; }
   .update-confirm-chip.mc { background: rgba(251,191,36,.14); color: #fbbf24; }
@@ -7931,7 +7931,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .recs-list {
     display: grid;
-    gap: 6px;
+    gap: 8px;
     min-height: 0;
     overflow: auto;
     overscroll-behavior: contain;
@@ -7948,13 +7948,13 @@ import { trapFocus } from "../lib/focusTrap";
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
   }
-  .recs-main { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+  .recs-main { display: flex; flex-wrap: wrap; gap: 8px 8px; align-items: center; }
   .recs-main strong { color: var(--text-primary); font-size: 13px; }
   .recs-main span { color: var(--text-muted); font-size: 12px; }
   .recs-meta { opacity: 0.8; }
-  .recs-source { font-size: 11px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
+  .recs-source { font-size: 12px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
   .recs-source.unverified { background: color-mix(in srgb, var(--accent-warning) 14%, transparent); color: var(--accent-warning); }
-  .recs-prio { font-size: 11px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
+  .recs-prio { font-size: 12px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
   .recs-prio.critical { background: rgba(239,68,68,.15); color: #fca5a5; }
   .recs-prio.high { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-primary); }
   .recs-prio.medium { background: rgba(96,165,250,.12); color: #93c5fd; }
@@ -8001,7 +8001,7 @@ import { trapFocus } from "../lib/focusTrap";
   .version-trigger {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     max-width: 100%;
     padding: 3px 8px;
     margin: -3px -8px;
@@ -8063,7 +8063,7 @@ import { trapFocus } from "../lib/focusTrap";
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 5px 8px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
@@ -8083,7 +8083,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .version-menu-toggle {
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     padding: 5px 9px;
     border-radius: var(--border-radius-sm);
@@ -8103,7 +8103,7 @@ import { trapFocus } from "../lib/focusTrap";
   .version-menu-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     overflow-y: auto;
     max-height: min(300px, 38vh);
     overscroll-behavior: contain;
@@ -8140,7 +8140,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .version-menu-row-main {
     display: grid;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
     flex: 1;
   }
@@ -8148,7 +8148,7 @@ import { trapFocus } from "../lib/focusTrap";
   .version-menu-row-title {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     min-width: 0;
   }
 
@@ -8200,12 +8200,12 @@ import { trapFocus } from "../lib/focusTrap";
   .channel-dot.channel-beta { background: #3b82f6; }
   .channel-dot.channel-alpha { background: #f59e0b; }
   .incompat-badge { color: #fbbf24; display: inline-flex; flex-shrink: 0; }
-  .current-badge { font-size: 11px; font-weight: 800; color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 15%, transparent); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
+  .current-badge { font-size: 12px; font-weight: 800; color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 15%, transparent); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
 
   .dep-dialog { max-width: 520px; }
   .dep-dialog-actions { display: grid; gap: 14px; padding: 8px 0 18px; }
   .dep-dialog-actions button {
-    display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: center;
+    display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center;
     width: 100%; padding: 16px 18px; border-radius: 14px; text-align: left; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-primary); transform: none;
   }

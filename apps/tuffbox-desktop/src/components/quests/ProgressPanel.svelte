@@ -155,7 +155,7 @@
   .prog-details summary {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     cursor: pointer;
     padding: 6px 4px;
     font-size: 12px;
@@ -181,12 +181,12 @@
   }
   .prog-modes {
     display: inline-flex;
-    gap: 4px;
+    gap: 8px;
   }
   .prog-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--ftbq-text-muted);
     cursor: pointer;
   }

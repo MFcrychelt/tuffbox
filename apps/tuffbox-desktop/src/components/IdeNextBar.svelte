@@ -32,7 +32,11 @@
     onGoStage?: (stage: string) => void;
   } = $props();
 
-  let refreshing = $state(false);
+  // Plain (non-reactive) re-entrancy guard: this flag is read in the sync
+  // prefix of refreshIssues() which the $effect below calls — if it were
+  // $state, the finally-reset would re-trigger that effect forever and pin
+  // the main thread (the IDE-mount freeze).
+  let refreshing = false;
   const launchSession = $derived($launchSessions[$projectPath ?? ""] ?? null);
   const launching = $derived(isProjectLaunching($projectPath, $launchSessions));
   // launching is derived from the shared launch store so the Play button stays
@@ -283,7 +287,7 @@
   .pill {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     padding: 3px 9px;
     border-radius: 999px;
     font-size: 12px;
@@ -315,7 +319,7 @@
   .next-cta {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 6px 12px;
     border-radius: var(--border-radius-sm);
     border: none;
@@ -328,13 +332,13 @@
   .next-cta:disabled { opacity: 0.6; cursor: not-allowed; }
   .ide-next-actions {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     margin-left: auto;
   }
   .ide-next-actions .ghost {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     padding: 6px 10px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
@@ -362,7 +366,7 @@
     background: color-mix(in srgb, var(--accent-warning, #f59e0b) 12%, transparent);
   }
   .trail-msg { color: var(--text-primary); font-weight: 600; }
-  .trail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .trail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .secondary.mini, .ghost.mini {
     padding: 4px 9px;
     border-radius: var(--border-radius-sm);

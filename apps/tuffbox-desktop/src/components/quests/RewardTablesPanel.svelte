@@ -318,7 +318,7 @@
   .rt-side {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   .rt-side button {
     text-align: left;
@@ -361,7 +361,7 @@
   }
   .rt-edit label {
     display: grid;
-    gap: 3px;
+    gap: 8px;
     font-size: 12px;
     text-transform: uppercase;
     color: var(--ftbq-text-muted);
@@ -386,7 +386,7 @@
   }
   .entry-card {
     display: grid;
-    gap: 6px;
+    gap: 8px;
     padding: 8px;
     border: 1px solid var(--ftbq-border);
     border-radius: 2px;
@@ -395,7 +395,7 @@
   .entry-top {
     display: grid;
     grid-template-columns: 1fr 72px 28px;
-    gap: 4px;
+    gap: 8px;
   }
   .mini,
   .ico,
@@ -403,7 +403,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 4px;
+    gap: 8px;
     border-radius: 2px;
     border: 1px solid var(--ftbq-border);
     background: transparent;

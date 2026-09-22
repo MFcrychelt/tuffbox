@@ -15,7 +15,7 @@
     <div><h2 class="m-0 text-lg font-semibold text-neutral-100">Changelog</h2><p class="mt-1 text-xs text-[var(--text-secondary)]">Keep a concise release story instead of a raw dependency dump.</p></div>
     <div class="flex flex-wrap items-center gap-2">
       <div class="flex rounded-lg border border-white/10 bg-black/20 p-1"><button type="button" class="rounded px-2.5 py-1.5 text-xs {mode === 'edit' ? 'bg-white/10 text-white' : 'text-[var(--text-secondary)]'}" onclick={() => mode = 'edit'}><Pencil size={13}/> Edit</button><button type="button" class="rounded px-2.5 py-1.5 text-xs {mode === 'preview' ? 'bg-white/10 text-white' : 'text-[var(--text-secondary)]'}" onclick={() => mode = 'preview'}><Eye size={13}/> Preview</button></div>
-      <button type="button" class="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-xs text-violet-200 hover:bg-violet-500/20" onclick={onAi} disabled={disabled}><Sparkles size={14}/> Generate with AI / Ollama</button>
+      <button type="button" class="inline-flex items-center gap-2 rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-xs text-violet-200 hover:bg-violet-500/20" onclick={onAi} disabled={disabled}><Sparkles size={14}/> Generate with AI / Ollama</button>
       <button type="button" class="rounded-lg border border-white/10 p-2 text-[var(--text-secondary)] hover:bg-white/10" onclick={onRegenerate} disabled={disabled} title="Regenerate"><RefreshCw size={15}/></button>
     </div>
   </header>

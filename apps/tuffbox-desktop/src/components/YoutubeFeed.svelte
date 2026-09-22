@@ -763,7 +763,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
     height: 32px;
     padding: 0 10px;
@@ -805,7 +805,7 @@
     min-width: 180px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     padding: 6px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
@@ -835,7 +835,7 @@
     border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     white-space: nowrap;
   }
@@ -931,7 +931,7 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     max-height: 180px;
     overflow-y: auto;
   }
@@ -988,7 +988,7 @@
   .yt-more-btn {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     flex-shrink: 0;
     padding: 5px 8px;
     border: 1px solid transparent;
@@ -1213,7 +1213,7 @@
   .rail .video-card {
     flex: 0 0 auto;
     width: 100%;
-    gap: 6px;
+    gap: 8px;
   }
 
   .rail .thumb {
@@ -1231,7 +1231,7 @@
     }
 
     .rail .channel {
-      font-size: 11px;
+      font-size: 12px;
     }
 
     .rail .video-card:hover {
@@ -1344,7 +1344,7 @@
   }
 
   .feed-status-detail {
-    font-size: 11px;
+    font-size: 12px;
     opacity: 0.85;
     word-break: break-word;
   }

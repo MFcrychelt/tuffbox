@@ -189,7 +189,7 @@
   }
   .ch-set label {
     display: grid;
-    gap: 4px;
+    gap: 8px;
     color: var(--text-muted, var(--ftbq-text-muted));
     font-size: 12px;
     letter-spacing: 0;
@@ -223,14 +223,14 @@
   .extra-row {
     display: grid;
     grid-template-columns: 1fr 1fr auto;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
     padding: 0 12px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-secondary, var(--ftbq-text));
   }
   .extra-row code {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-accent-teal);
   }
   .extra-row button {
@@ -251,12 +251,12 @@
   .extra-add {
     display: grid;
     grid-template-columns: 1fr 1fr auto;
-    gap: 6px;
+    gap: 8px;
     padding: 0 12px 12px;
   }
   .extra-add input,
   .extra-add button {
-    font-size: 11px;
+    font-size: 12px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
     color: var(--text-primary, var(--ftbq-text));

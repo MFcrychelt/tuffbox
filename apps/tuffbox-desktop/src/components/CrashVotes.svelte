@@ -824,7 +824,7 @@
   .filters {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
@@ -1018,7 +1018,7 @@
 
   .auth-tabs {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
 
   .auth-form {
@@ -1034,7 +1034,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .auth-form.compact input {
@@ -1064,7 +1064,7 @@
 
   .meta-bits {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex: 1;
     min-width: 0;
     color: var(--text-muted);
@@ -1110,13 +1110,13 @@
   .trust-block {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .trust-head {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-secondary);
   }
@@ -1139,7 +1139,7 @@
     margin-left: auto;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     color: var(--text-muted);
     font-size: 12px;
   }
@@ -1165,7 +1165,7 @@
   .mod-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-muted);
   }
@@ -1255,7 +1255,7 @@
     margin: 0 0 8px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 13px;
     color: var(--text-secondary);
   }
@@ -1282,11 +1282,11 @@
     padding-left: 18px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   .frames code {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-secondary);
     word-break: break-all;
   }
@@ -1298,7 +1298,7 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .mod-list li {
@@ -1312,7 +1312,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     padding: 6px 8px;
     background: var(--bg-elevated);
@@ -1391,7 +1391,7 @@
   .hint {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--accent-warning);
   }

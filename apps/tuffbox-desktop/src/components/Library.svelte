@@ -1397,7 +1397,7 @@
   .header-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 14px;
     border-radius: var(--lib-pill-radius);
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
@@ -1424,7 +1424,7 @@
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
   .import-menu button {
     width: 100%;
@@ -1445,12 +1445,12 @@
 
   .tabs {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
   .tabs button {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 14px;
     border-radius: var(--lib-pill-radius);
     background: var(--bg-secondary);
@@ -1528,7 +1528,7 @@
     padding: 12px 14px 14px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     flex: 1;
   }
   .pack-name {
@@ -1661,7 +1661,7 @@
   .create-copy {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
   }
   .create-plus strong {
@@ -1709,7 +1709,7 @@
   .pack-stats span {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
   }
 
   .pack-actions {
@@ -1722,7 +1722,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
+    gap: 8px;
     padding: 8px 10px;
     border-radius: var(--border-radius-sm);
     font-size: 12px;
@@ -1742,7 +1742,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 12px;
     border-radius: var(--border-radius-sm);
     font-size: 12px;
@@ -1782,7 +1782,7 @@
   }
   .provider-toggle {
     display: inline-flex;
-    gap: 4px;
+    gap: 8px;
     padding: 3px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
@@ -1846,7 +1846,7 @@
 
   .download-path {
     display: grid;
-    gap: 6px;
+    gap: 8px;
     margin: 0 0 18px;
   }
   .download-path label {
@@ -1880,7 +1880,7 @@
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     font-weight: 600;
   }
@@ -1911,7 +1911,7 @@
     height: 18px;
     padding: 0 5px;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.02em;
     flex-shrink: 0;
@@ -2065,7 +2065,7 @@
   .drop-overlay-card {
     display: grid;
     justify-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 26px 34px;
     text-align: center;
     color: var(--text-secondary);

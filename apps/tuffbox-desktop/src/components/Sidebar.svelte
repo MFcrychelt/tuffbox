@@ -472,7 +472,7 @@
   .lang-switch {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     padding: 3px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);

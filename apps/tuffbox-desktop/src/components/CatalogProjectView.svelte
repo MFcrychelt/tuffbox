@@ -561,7 +561,7 @@
   .back, .ghost, .primary {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     height: 34px;
     padding: 0 12px;
     border-radius: var(--border-radius-sm);
@@ -621,7 +621,7 @@
   .hero-icon img { width: 100%; height: 100%; object-fit: cover; }
   .eyebrow { display: flex; gap: 8px; margin-bottom: 4px; }
   .provider, .type {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -634,7 +634,7 @@
   h1 { margin: 0; font-size: 24px; color: var(--text-primary); }
   .author { margin: 4px 0 0; color: var(--text-muted); font-size: 13px; }
   .stats { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
-  .stats span { display: inline-flex; align-items: center; gap: 5px; }
+  .stats span { display: inline-flex; align-items: center; gap: 8px; }
 
   .content-grid {
     display: grid;
@@ -658,7 +658,7 @@
   .panel h3 {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     margin: 0 0 10px;
     font-size: 12px;
     font-weight: 800;
@@ -666,7 +666,7 @@
     letter-spacing: 0.06em;
     color: var(--text-muted);
   }
-  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
   .chip {
     display: inline-block;
     line-height: 1.4;
@@ -679,7 +679,7 @@
     border-radius: 999px;
     background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 12px;
   }
   .kv {
     display: flex;
@@ -735,7 +735,7 @@
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
   }
-  .snippet code { flex: 1; min-width: 0; font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+  .snippet code { flex: 1; min-width: 0; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
 
   .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border-color); }
   .tabs button {
@@ -871,7 +871,7 @@
   .versions small { color: var(--text-muted); font-size: 12px; }
   .badge {
     align-self: center;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     color: var(--accent-warning);
