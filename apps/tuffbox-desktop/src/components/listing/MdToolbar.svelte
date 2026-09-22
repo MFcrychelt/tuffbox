@@ -146,7 +146,7 @@
     display: inline-flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 6px 10px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
@@ -159,7 +159,7 @@
   .toolbar-group {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
   }
 
   .divider {

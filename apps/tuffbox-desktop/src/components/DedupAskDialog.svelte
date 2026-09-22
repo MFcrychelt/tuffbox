@@ -163,7 +163,7 @@
   .dedup-ask-opt-text {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
   }
 

@@ -509,7 +509,7 @@
     z-index: 9;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     min-width: 264px;
     max-width: min(320px, 90vw);
     padding: 10px;
@@ -548,7 +548,7 @@
   .news-source-text {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 8px;
     min-width: 0;
   }
 
@@ -685,7 +685,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
     width: 100%;
     aspect-ratio: 1 / 1;
     overflow: hidden;
@@ -725,7 +725,7 @@
     left: 8px;
     z-index: 1;
     padding: 2px 5px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -751,7 +751,7 @@
   .card-cap {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 8px;
     align-items: flex-start;
     min-height: 68px;
     padding: 8px 10px;
@@ -777,7 +777,7 @@
   .card-version {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 8px;
     width: 100%;
     min-width: 0;
   }
@@ -792,7 +792,7 @@
   }
 
   .card-date {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 400;
     color: rgba(255, 255, 255, 0.64);
     white-space: nowrap;

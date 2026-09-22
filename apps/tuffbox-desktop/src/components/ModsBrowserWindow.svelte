@@ -412,7 +412,7 @@
   }
   .mbw-types {
     display: inline-flex;
-    gap: 2px;
+    gap: 8px;
     padding: 2px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
@@ -507,7 +507,7 @@
   }
   .mbw-views {
     display: inline-flex;
-    gap: 2px;
+    gap: 8px;
     padding: 2px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);

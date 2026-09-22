@@ -532,21 +532,21 @@ collapse; this component always renders expanded. -->
   .lib-content {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
   }
 
   .tabs {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 8px;
     flex-wrap: wrap;
   }
 
   .tabs [role="tab"] {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     padding: 4px 8px;
     font-size: 12px;
     font-weight: 600;
@@ -586,7 +586,7 @@ collapse; this component always renders expanded. -->
   .skel-list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .skel-row {
@@ -629,7 +629,7 @@ collapse; this component always renders expanded. -->
 
   .mods-actions {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
   }
 
@@ -639,7 +639,7 @@ collapse; this component always renders expanded. -->
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   .row {
@@ -664,7 +664,7 @@ collapse; this component always renders expanded. -->
   }
 
   .row-state {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
   }
 
@@ -704,7 +704,7 @@ collapse; this component always renders expanded. -->
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 8px;
   }
 
   .srv-sub {
@@ -718,8 +718,8 @@ collapse; this component always renders expanded. -->
   .players {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 11px;
+    gap: 8px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--success);
     white-space: nowrap;
@@ -733,13 +733,13 @@ collapse; this component always renders expanded. -->
   .srv-actions {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     margin-left: auto;
   }
 
   .add-server {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
     margin-bottom: 8px;
   }
@@ -761,16 +761,16 @@ collapse; this component always renders expanded. -->
 
   .panel-foot {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     margin-top: 8px;
   }
 
   .mini-btn {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text);
     background: var(--surface-raised);

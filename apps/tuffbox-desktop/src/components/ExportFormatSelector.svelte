@@ -52,9 +52,9 @@
           <FormatIcon size={22} />
         </span>
         {#if errors > 0}
-          <span class="inline-flex items-center gap-1 rounded-full border border-red-400/30 bg-red-500/10 px-2 py-1 text-[11px] font-bold text-red-200"><AlertTriangle size={12} /> {errors} error{errors === 1 ? '' : 's'}</span>
+          <span class="inline-flex items-center gap-2 rounded-full border border-red-400/30 bg-red-500/10 px-2 py-1 text-[12px] font-bold text-red-200"><AlertTriangle size={12} /> {errors} error{errors === 1 ? '' : 's'}</span>
         {:else if warnings > 0}
-          <span class="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[11px] font-bold text-amber-200">{warnings} warning{warnings === 1 ? '' : 's'}</span>
+          <span class="inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[12px] font-bold text-amber-200">{warnings} warning{warnings === 1 ? '' : 's'}</span>
         {:else}
           <CheckCircle2 size={16} class="text-emerald-400" aria-label="Ready to export" />
         {/if}

@@ -189,8 +189,8 @@
   .text-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 5px 8px;
+    gap: 8px;
+    padding: 5px 10px;
     border: 0;
     border-radius: var(--border-radius-sm);
     background: transparent;

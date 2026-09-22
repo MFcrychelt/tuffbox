@@ -175,7 +175,7 @@
   :global(.drop-dialog .drop-sub) {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--accent-primary);
     font-size: 12px;
     font-weight: 700;
@@ -192,7 +192,7 @@
     border-radius: var(--border-radius-md);
     padding: 8px 10px;
     display: grid;
-    gap: 2px;
+    gap: 8px;
   }
   .drop-counts strong {
     font-size: 15px;
@@ -214,7 +214,7 @@
   }
   .drop-missing {
     display: grid;
-    gap: 3px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-secondary);
     background: var(--bg-tertiary);

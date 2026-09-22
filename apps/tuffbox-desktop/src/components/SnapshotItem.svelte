@@ -69,13 +69,13 @@
   .snapshot-dot { width: 8px; height: 8px; margin-top: 6px; border-radius: 999px; flex: 0 0 auto; background: var(--accent-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent); }
   .snapshot-dot.auto { background: var(--accent-secondary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-secondary) 16%, transparent); }
   .snapshot-dot.crash { background: var(--accent-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-warning) 16%, transparent); }
-  .snapshot-item-body { min-width: 0; flex: 1; display: grid; gap: 6px; }
+  .snapshot-item-body { min-width: 0; flex: 1; display: grid; gap: 8px; }
   .snapshot-item-title-row { min-width: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
   .snapshot-item-title-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--text-primary); }
   .snapshot-operation { max-width: 130px; flex: 0 0 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px ui-monospace, SFMono-Regular, monospace; color: var(--text-muted); }
   .snapshot-item p { margin: 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
   .snapshot-item-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
-  .snapshot-date, .snapshot-files { display: inline-flex; align-items: center; gap: 4px; }
+  .snapshot-date, .snapshot-files { display: inline-flex; align-items: center; gap: 8px; }
   .kind-tag { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: 999px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
   .kind-tag.auto { color: var(--accent-secondary); border-color: color-mix(in srgb, var(--accent-secondary) 40%, transparent); }
   .kind-tag.manual { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }

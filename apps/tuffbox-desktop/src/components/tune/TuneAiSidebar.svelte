@@ -523,17 +523,17 @@
     gap: 8px;
     flex-shrink: 0;
   }
-  .ai-head-actions { display: flex; gap: 2px; align-items: center; }
+  .ai-head-actions { display: flex; gap: 8px; align-items: center; }
   .ai-title {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 13px;
   }
   .session-pills {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 8px;
     flex-shrink: 0;
   }
   .pill {
@@ -556,7 +556,7 @@
   .chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 8px;
     flex-shrink: 0;
   }
   .chip {
@@ -608,7 +608,7 @@
     font-size: 12px;
     color: var(--text-muted);
     display: grid;
-    gap: 2px;
+    gap: 8px;
   }
   .err { margin: 0; font-size: 12px; color: var(--accent-danger); }
   .research {
@@ -626,16 +626,16 @@
     padding: 0;
     list-style: none;
     display: grid;
-    gap: 4px;
+    gap: 8px;
   }
-  .research li { display: flex; flex-direction: column; gap: 2px; }
-  .research .step { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.8; }
+  .research li { display: flex; flex-direction: column; gap: 8px; }
+  .research .step { font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.8; }
   .research a {
     color: var(--accent-primary);
     text-decoration: none;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     word-break: break-all;
   }
   .research a:hover { text-decoration: underline; }
@@ -650,10 +650,10 @@
     font-size: 12px;
     flex-shrink: 0;
   }
-  .pending .mini { margin-left: auto; padding: 4px 10px; font-size: 11px; }
+  .pending .mini { margin-left: auto; padding: 4px 10px; font-size: 12px; }
   .composer {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
     align-items: flex-end;
   }

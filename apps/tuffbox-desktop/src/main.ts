@@ -7,6 +7,13 @@ import "./styles/textures.css";
 import { applyTheme, readStoredTheme } from "./lib/themes";
 import { installActionFeedback } from "./lib/actionFeedback";
 import { isTauri } from "@tauri-apps/api/core";
+import { installBrowserMockIfNeeded } from "./lib/browserMock";
+
+// Browser preview (e2b.app, vite dev without Tauri) — install full IPC mock
+// synchronously before any component touches `invoke`/`listen`.
+// installBrowserMockIfNeeded is async but its synchronous prelude (mockIPC)
+// runs immediately; we don't need to await the promise for dev preview.
+void installBrowserMockIfNeeded();
 
 applyTheme(readStoredTheme(), false);
 installActionFeedback();

@@ -579,7 +579,7 @@
   .glass-seg {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 12px;
     border: none;
     border-radius: 0;
@@ -628,7 +628,7 @@
     z-index: 8;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .poster-overflow-menu button {
@@ -747,7 +747,7 @@
   .edit-in-btn {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     padding: 10px 16px;
     border-radius: var(--border-radius-lg);
     background: var(--glass-bg);
@@ -869,7 +869,7 @@
   }
 
   .play-pct {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     opacity: 0.85;
     flex-shrink: 0;
@@ -930,7 +930,7 @@
   .storefront-copy {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
   }
 
@@ -1005,7 +1005,7 @@
   .crash-fix-banner-body {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     flex: 1;
     min-width: 140px;
     font-size: 12px;
@@ -1020,7 +1020,7 @@
   .crash-fix-banner-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
   }
 

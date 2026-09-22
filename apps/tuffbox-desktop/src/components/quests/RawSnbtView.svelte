@@ -145,7 +145,7 @@
   .raw-header-text {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
   }
   .raw-title {
@@ -163,7 +163,7 @@
   }
   .raw-actions {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
     flex-wrap: wrap;
     justify-content: flex-end;
@@ -171,7 +171,7 @@
   .raw-find {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 6px 12px;
     border-bottom: 1px solid var(--ftbq-frame);
     background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
@@ -181,7 +181,7 @@
     flex: 1;
     min-width: 0;
     padding: 5px 8px;
-    font-size: 11px;
+    font-size: 12px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
     border-radius: var(--ftbq-radius-control);
@@ -203,7 +203,7 @@
     overflow: auto;
     padding: 12px;
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.5;
     font-family: var(--font-mono, ui-monospace, monospace);
     background: color-mix(in srgb, var(--ftbq-bg) 70%, transparent);
@@ -216,7 +216,7 @@
     border: 1px solid var(--ftbq-frame);
     background: var(--bg-secondary, var(--ftbq-bg-panel));
     color: var(--text-primary, var(--ftbq-text));
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     border-radius: var(--ftbq-radius-control);
     cursor: pointer;
@@ -228,5 +228,5 @@
   }
   .btn:disabled { opacity: 0.45; cursor: default; }
   .btn.ghost { background: transparent; }
-  .btn.small { padding: 3px 7px; font-size: 11px; }
+  .btn.small { padding: 3px 7px; font-size: 12px; }
 </style>

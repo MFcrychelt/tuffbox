@@ -478,7 +478,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
   .hero strong {
     font-size: 13px;
@@ -494,14 +494,14 @@
   }
   .stats {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 14px;
     border-bottom: 1px solid var(--ftbq-border, var(--ftbq-frame));
   }
   .stat {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     font-size: 12px;
     padding: 4px 8px;
     border-radius: 2px;
@@ -522,7 +522,7 @@
   .ok {
     margin: 0;
     padding: 6px 14px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .err {
     color: var(--accent-danger);
@@ -557,7 +557,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--ftbq-accent-teal);
@@ -582,7 +582,7 @@
   }
   .card {
     display: grid;
-    gap: 4px;
+    gap: 8px;
     padding: 8px;
     border: 1px solid var(--ftbq-border, var(--ftbq-frame));
     border-radius: 2px;
@@ -604,10 +604,10 @@
   .card-t {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .card-t code {
-    font-size: 11px;
+    font-size: 12px;
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -621,7 +621,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     padding: 1px 5px;
     border-radius: 2px;
@@ -639,7 +639,7 @@
   }
   .row {
     display: flex;
-    gap: 4px;
+    gap: 8px;
     flex-wrap: wrap;
   }
   .row.gen {
@@ -650,8 +650,8 @@
   .primary {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 11px;
+    gap: 8px;
+    font-size: 12px;
     padding: 4px 8px;
     border-radius: 2px;
     border: 1px solid var(--ftbq-border, var(--ftbq-frame));
@@ -675,11 +675,11 @@
     padding-top: 8px;
     border-top: 1px solid var(--ftbq-border, var(--ftbq-frame));
     display: grid;
-    gap: 6px;
+    gap: 8px;
   }
   .templates label {
     display: grid;
-    gap: 3px;
+    gap: 8px;
     font-size: 12px;
     text-transform: uppercase;
     color: var(--ftbq-text-muted);
@@ -706,7 +706,7 @@
     text-transform: none;
   }
   .hint code {
-    font-size: 11px;
+    font-size: 12px;
   }
   .empty {
     margin: 8px 0;

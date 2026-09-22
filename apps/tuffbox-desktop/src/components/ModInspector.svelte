@@ -327,7 +327,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   .inspector-name {
@@ -395,7 +395,7 @@
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .fact-badge {
@@ -466,7 +466,7 @@
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px 8px;
+    gap: 8px 8px;
     padding-top: 4px;
   }
 
@@ -478,7 +478,7 @@
   .issues-link {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     font-size: 0.85rem;
     font-weight: 600;
     color: var(--accent-primary);

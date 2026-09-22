@@ -542,21 +542,21 @@
     border-radius: var(--border-radius-sm);
     background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
     color: var(--accent-primary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
   }
 
   .qw-header-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
   }
 
   .qw-ge {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 6px 10px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
@@ -708,7 +708,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .qw-now-title {
@@ -748,13 +748,13 @@
   .qw-ghost-btn {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     padding: 4px 8px;
     border: none;
     border-radius: var(--border-radius-sm);
     background: transparent;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     text-transform: none;
     letter-spacing: 0;
@@ -781,7 +781,7 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     padding-right: 4px;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-elevated) transparent;
@@ -817,7 +817,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .qw-qi-title {
@@ -844,7 +844,7 @@
     border-radius: var(--border-radius-sm);
     background: var(--accent-primary);
     color: var(--on-accent, #000);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -853,7 +853,7 @@
   .qw-qi-actions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 8px;
     flex-shrink: 0;
   }
 
@@ -897,7 +897,7 @@
   .qw-field {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .qw-field-label {
@@ -920,14 +920,14 @@
 
   .qw-field-error {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--accent-danger, #ef4444);
   }
 
   .qw-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 12px;
     border-radius: var(--border-radius-sm);
     border: none;
@@ -958,7 +958,7 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     padding-right: 4px;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-elevated) transparent;
@@ -1001,7 +1001,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .qw-res-title {
@@ -1026,7 +1026,7 @@
   .qw-res-actions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 8px;
     flex-shrink: 0;
   }
 

@@ -295,7 +295,7 @@
     color: var(--text-muted);
   }
   .cmd-item-right kbd {
-    font-size: 11px;
+    font-size: 12px;
     padding: 1px 5px;
     border-radius: 4px;
     border: 1px solid var(--border-color);
@@ -315,7 +315,7 @@
     color: var(--text-muted);
   }
   .cmd-footer kbd {
-    font-size: 11px;
+    font-size: 12px;
     padding: 1px 4px;
     border-radius: 3px;
     border: 1px solid var(--border-color);

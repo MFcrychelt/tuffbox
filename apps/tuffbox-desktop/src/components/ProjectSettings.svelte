@@ -1043,20 +1043,23 @@
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 20px;
   }
 
-  /* Sticky top header */
+  /* Sticky top header — fixed: was width:calc(100%+2*pad) + negative margin
+     causing 1px horizontal shift when vertical scrollbar appears (scrollbar-gutter
+     on body is stable but header is outside scroll). Now width:auto with
+     negative margin only, no calc, so no shift and no horizontal scroll. */
   .sticky-header {
     position: sticky;
     top: 0;
     z-index: 20;
-    width: calc(100% + (var(--setup-page-x) * 2));
+    width: auto;
     box-sizing: border-box;
     flex-shrink: 0;
     padding: 14px var(--setup-page-x);
     margin: 0 calc(-1 * var(--setup-page-x)) 4px;
-    background: color-mix(in srgb, var(--bg-primary, #ffffff) 85%, transparent);
+    background: color-mix(in srgb, var(--bg-primary, #ffffff) 88%, transparent);
     -webkit-backdrop-filter: blur(16px);
     backdrop-filter: blur(16px);
     border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
@@ -1070,7 +1073,7 @@
     box-sizing: border-box;
     display: flex;
     justify-content: space-between;
-    gap: 16px;
+    gap: 20px;
     align-items: center;
     flex-wrap: wrap;
   }
@@ -1079,13 +1082,13 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 8px;
   }
 
   .ph-title-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     flex-wrap: wrap;
   }
 
@@ -1100,7 +1103,7 @@
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     margin-left: auto;
     flex-shrink: 0;
   }
@@ -1118,8 +1121,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 14px;
+    gap: 16px;
+    margin-bottom: 16px;
     flex-wrap: wrap;
   }
 
@@ -1142,25 +1145,25 @@
   }
 
   .card-hint-tag {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-muted);
-    padding: 2px 8px;
+    padding: 3px 10px;
     border-radius: 999px;
     background: var(--bg-tertiary);
   }
 
-  /* Form Grids */
+  /* Form Grids — increased gaps for breathability, fixes “малые отступы” */
   .form-grid-3 {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
+    gap: 16px;
   }
 
   .field {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
   }
 
@@ -1199,8 +1202,9 @@
 
   .flex-input-row {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   .java-input {
@@ -1209,9 +1213,9 @@
   }
 
   .java-badge {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
-    padding: 3px 10px;
+    padding: 4px 10px;
     border-radius: var(--border-radius-sm);
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
@@ -1222,7 +1226,7 @@
   .memory-live-badge {
     display: flex;
     align-items: baseline;
-    gap: 6px;
+    gap: 8px;
   }
   .mem-highlight {
     font-size: 21px;
@@ -1231,7 +1235,7 @@
     font-variant-numeric: tabular-nums;
   }
   .mem-sub {
-    font-size: 13.5px;
+    font-size: 14px;
     color: var(--text-secondary);
     font-weight: 600;
   }
@@ -1239,15 +1243,15 @@
   .memory-control-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 180px;
-    gap: 20px;
+    gap: 24px;
     align-items: center;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
   }
 
   .slider-wrap {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .range-slider {
@@ -1262,7 +1266,7 @@
   .slider-bounds {
     display: flex;
     justify-content: space-between;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-secondary);
   }
@@ -1270,17 +1274,17 @@
   .memory-manual-box {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   .manual-label {
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-primary);
   }
   .manual-input-wrap {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .number-input {
     width: 110px;
@@ -1296,27 +1300,27 @@
   .memory-presets-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
+    gap: 12px;
+    margin-bottom: 16px;
     flex-wrap: wrap;
   }
   .presets-label {
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-primary);
   }
   .preset-chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
   }
   .preset-chip {
-    padding: 6px 12px;
+    padding: 8px 14px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated);
     color: var(--text-primary);
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 700;
     cursor: pointer;
     transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease;
@@ -1334,21 +1338,22 @@
   .recommendation-box {
     display: flex;
     align-items: flex-start;
-    gap: 8px;
-    padding: 10px 14px;
+    gap: 10px;
+    padding: 12px 16px;
     border-radius: var(--border-radius-md);
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent);
     color: var(--text-primary);
-    font-size: 13.5px;
-    line-height: 1.45;
+    font-size: 14px;
+    line-height: 1.5;
   }
 
   /* JVM Arguments */
   .jvm-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
+    flex-wrap: wrap;
   }
   .jvm-textarea {
     font-family: var(--font-mono, ui-monospace, monospace);
@@ -1362,18 +1367,18 @@
   .jvm-presets-section {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    margin-top: 6px;
+    gap: 10px;
+    margin-top: 8px;
   }
   .jvm-presets-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
   }
   .jvm-preset-card {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 8px;
     text-align: left;
     padding: 11px 14px;
     border-radius: var(--border-radius-md);
@@ -1395,17 +1400,17 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 700;
   }
   /* Shared options */
   .options-badge {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    font-size: 12.5px;
+    gap: 8px;
+    font-size: 13px;
     font-weight: 700;
-    padding: 3px 9px;
+    padding: 4px 10px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
@@ -1475,20 +1480,20 @@
   .schema-warning {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
+    gap: 10px;
+    padding: 12px 14px;
     border-radius: var(--border-radius-md);
     background: color-mix(in srgb, var(--accent-warning) 10%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent);
     color: var(--accent-warning);
-    font-size: 13.5px;
+    font-size: 14px;
   }
   .schema-ok {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--accent-primary);
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 600;
   }
 
@@ -1496,14 +1501,14 @@
   .primary-btn {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    height: 38px;
+    gap: 8px;
+    height: 40px;
     padding: 0 20px;
     border: none;
     border-radius: var(--border-radius-md);
     background: linear-gradient(180deg, #10b981, #059669);
     color: #fff;
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 700;
     cursor: pointer;
     box-shadow: 0 0 14px rgba(16, 185, 129, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.22);
@@ -1521,14 +1526,14 @@
   .primary-action-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: 36px;
-    padding: 0 14px;
+    gap: 8px;
+    height: 38px;
+    padding: 0 16px;
     border-radius: var(--border-radius-sm);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
     background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
     color: var(--accent-primary);
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 700;
     cursor: pointer;
     transition: background var(--motion-fast) ease;
@@ -1549,11 +1554,11 @@
   .sm-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: 34px;
-    padding: 0 13px;
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
     border-radius: var(--border-radius-sm);
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 600;
     cursor: pointer;
     transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
@@ -1571,13 +1576,13 @@
   .sync-pill {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
+    gap: 8px;
+    padding: 5px 12px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 600;
   }
   .sync-pill.unsaved {
@@ -1600,29 +1605,36 @@
     display: flex;
     justify-content: flex-end;
     align-items: center;
-    gap: 12px;
-    padding-top: 8px;
+    gap: 16px;
+    padding: 16px 0 4px;
+    margin-top: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    position: sticky;
+    bottom: 0;
+    background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+    backdrop-filter: blur(8px);
+    z-index: 5;
   }
 
   .loading-bar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 14px;
+    gap: 10px;
+    padding: 10px 16px;
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 13.5px;
-    margin-bottom: 12px;
+    font-size: 14px;
+    margin-bottom: 14px;
   }
 
   .inline-error,
   .inline-success {
-    padding: 10px 14px;
+    padding: 12px 16px;
     border-radius: var(--border-radius-md);
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 600;
-    margin-bottom: 12px;
+    margin-bottom: 14px;
   }
   .inline-error {
     color: var(--accent-danger);

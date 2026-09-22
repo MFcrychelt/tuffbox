@@ -403,17 +403,17 @@
   .ore-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); background: transparent; color: var(--text-secondary); border: 1px solid transparent; text-align: left; margin-bottom: 4px; transform: none; }
   .ore-row:hover, .ore-row.selected { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .ore-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
-  .ore-detail { display: grid; gap: 2px; flex: 1; min-width: 0; }
+  .ore-detail { display: grid; gap: 8px; flex: 1; min-width: 0; }
   .ore-detail strong { color: var(--text-primary); font-size: 12px; text-transform: capitalize; }
   .ore-detail span { color: var(--text-muted); font-size: 12px; }
-  .ore-tags { display: flex; gap: 4px; flex-shrink: 0; }
-  .ore-conf-tag { font-size: 11px; text-transform: uppercase; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); font-weight: 700; }
+  .ore-tags { display: flex; gap: 8px; flex-shrink: 0; }
+  .ore-conf-tag { font-size: 12px; text-transform: uppercase; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); font-weight: 700; }
   .ore-conf-tag.high { color: var(--accent-primary); }
   .ore-conf-tag.medium { color: #fbbf24; }
   .ore-conf-tag.low { color: var(--text-muted); }
-  .ore-disabled { font-size: 11px; padding: 2px 5px; border-radius: 4px; background: rgba(239,68,68,.15); color: #fca5a5; }
+  .ore-disabled { font-size: 12px; padding: 2px 5px; border-radius: 4px; background: rgba(239,68,68,.15); color: #fca5a5; }
   .ore-unknown { font-size: 12px; padding: 2px 5px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); }
-  .ore-mod-tag { font-size: 11px; padding: 2px 5px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
+  .ore-mod-tag { font-size: 12px; padding: 2px 5px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
   .ore-details { margin-left: 22px; margin-bottom: 6px; padding: 6px 10px; border-radius: 6px; background: var(--bg-tertiary); }
   .ore-details code { font-size: 12px; color: var(--text-muted); word-break: break-all; }
   :global(.spin) { animation: spin 900ms linear infinite; }

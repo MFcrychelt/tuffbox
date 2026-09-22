@@ -279,7 +279,7 @@
 <style>
   .ise {
     display: grid;
-    gap: 6px;
+    gap: 8px;
   }
   .ise-h {
     display: flex;
@@ -301,7 +301,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 11px;
+    font-size: 12px;
     padding: 1px 6px;
     border-radius: 2px;
     background: rgba(61, 184, 168, 0.15);
@@ -310,7 +310,7 @@
   }
   .mode {
     margin-left: auto;
-    font-size: 11px;
+    font-size: 12px;
     background: var(--ftbq-bg);
     border: 1px solid var(--ftbq-border);
     color: inherit;
@@ -320,7 +320,7 @@
   .item-row {
     display: grid;
     grid-template-columns: auto 1fr auto auto;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .item-row input,
@@ -336,7 +336,7 @@
   }
   .field {
     display: grid;
-    gap: 3px;
+    gap: 8px;
     font-size: 12px;
     text-transform: none;
     color: var(--ftbq-text-muted);
@@ -378,7 +378,7 @@
   }
   .kids {
     display: grid;
-    gap: 6px;
+    gap: 8px;
   }
   .extra {
     font-size: 12px;
@@ -389,7 +389,7 @@
   }
   .tag-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     margin: 6px 0;
   }
   textarea {
@@ -400,6 +400,6 @@
   .err {
     margin: 0;
     color: var(--accent-danger);
-    font-size: 11px;
+    font-size: 12px;
   }
 </style>

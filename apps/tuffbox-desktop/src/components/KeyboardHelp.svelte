@@ -93,7 +93,7 @@
   .kh-keys {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
   }
 
   kbd {
@@ -130,7 +130,7 @@
     min-width: 20px;
     height: 20px;
     padding: 0 5px;
-    font-size: 11px;
+    font-size: 12px;
     vertical-align: middle;
   }
 

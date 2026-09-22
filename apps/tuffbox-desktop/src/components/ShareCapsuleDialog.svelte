@@ -402,7 +402,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .sc-risk {
     font-size: 12px;
@@ -463,7 +463,7 @@
   }
   .sc-code {
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 11px;
+    font-size: 12px;
   }
   .sc-actions {
     display: flex;
@@ -475,6 +475,6 @@
   .sc-actions button {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 </style>

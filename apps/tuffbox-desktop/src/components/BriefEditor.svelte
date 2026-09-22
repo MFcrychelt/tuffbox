@@ -1149,9 +1149,9 @@
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-gutter: stable;
-    font-size: 13px;
-    padding-top: 10px;
-    padding-right: 4px;
+    font-size: 14px;
+    padding-top: 12px;
+    padding-right: 6px;
     padding-bottom: 24px;
   }
 
@@ -1166,17 +1166,18 @@
     box-sizing: border-box;
   }
 
-  /* Sticky top header */
+  /* Sticky top header — fixed: was width:calc(100%+2*pad) causing 1px shift
+     when scrollbar appears. Now width:auto with negative margin only. */
   .sticky-header {
     position: sticky;
     top: 0;
     z-index: 20;
-    width: calc(100% + (var(--brief-page-x) * 2));
+    width: auto;
     box-sizing: border-box;
     flex-shrink: 0;
     padding: 14px var(--brief-page-x);
     margin: 0 calc(-1 * var(--brief-page-x)) 2px;
-    background: color-mix(in srgb, var(--bg-primary, #0c0e12) 80%, transparent);
+    background: color-mix(in srgb, var(--bg-primary, #0c0e12) 88%, transparent);
     -webkit-backdrop-filter: blur(16px);
     backdrop-filter: blur(16px);
     border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
@@ -1199,7 +1200,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 8px;
   }
 
   .ph-title-row {
@@ -1213,14 +1214,14 @@
     margin: 0;
     color: color-mix(in srgb, var(--text-secondary) 85%, var(--text-primary));
     max-width: 72ch;
-    font-size: 12.5px;
-    line-height: 1.4;
+    font-size: 14px;
+    line-height: 1.5;
   }
 
   .header-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 12px;
     justify-content: flex-end;
     align-items: center;
     margin-left: auto;
@@ -1242,18 +1243,18 @@
   .panel-section-head {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     margin-bottom: 14px;
   }
   .panel-section-hint {
-    font-size: 12px;
+    font-size: 13px;
     color: color-mix(in srgb, var(--text-secondary) 85%, var(--text-primary));
   }
 
   .primary-btn {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     height: 36px;
     padding: 0 18px;
     border: none;
@@ -1278,13 +1279,13 @@
   .sync-pill {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    padding: 4px 10px;
+    gap: 8px;
+    padding: 5px 12px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
     background: color-mix(in srgb, var(--bg-secondary) 45%, transparent);
     color: var(--text-secondary);
-    font-size: 11.5px;
+    font-size: 13px;
     font-weight: 600;
     white-space: nowrap;
   }
@@ -1308,7 +1309,7 @@
   /* Segmented control (platform / editor mode) */
   .seg-control {
     display: inline-flex;
-    gap: 3px;
+    gap: 8px;
     padding: 3px;
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
@@ -1318,9 +1319,9 @@
     border: none;
     background: transparent;
     color: var(--text-secondary);
-    padding: 6px 12px;
+    padding: 8px 14px;
     border-radius: var(--border-radius-sm);
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     transition: background var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
@@ -1338,8 +1339,8 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
+    gap: 16px;
+    margin-bottom: 16px;
     flex-wrap: wrap;
   }
   .panel-head h3 {
@@ -1350,7 +1351,7 @@
   .brief-top-grid {
     display: grid;
     grid-template-columns: minmax(0, 1.35fr) minmax(380px, 460px);
-    gap: 16px;
+    gap: 20px;
     align-items: start;
     width: 100%;
   }
@@ -1364,7 +1365,7 @@
   .field-label {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     margin-bottom: 12px;
     color: var(--text-primary);
     font-weight: 600;
@@ -1407,7 +1408,7 @@
   }
 
   .hint {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
     color: color-mix(in srgb, var(--text-secondary) 85%, var(--text-primary));
   }
@@ -1425,11 +1426,11 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     min-width: 124px;
   }
   .icon-label {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
     color: var(--text-secondary);
   }
@@ -1443,7 +1444,7 @@
     display: grid;
     place-items: center;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 13px;
     cursor: pointer;
     transition: border-color var(--motion-fast, 160ms) ease, background var(--motion-fast, 160ms) ease;
   }
@@ -1469,32 +1470,32 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--text-secondary);
   }
   .icon-empty-state span {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
   }
 
   .icon-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     justify-content: center;
   }
 
   .sm-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 12px;
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 9px;
     background: rgba(255, 255, 255, 0.05);
     color: var(--text-primary);
-    font-size: 12.5px;
+    font-size: 14px;
     font-weight: 600;
     cursor: pointer;
     transition: background var(--motion-fast, 160ms) ease, border-color var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
@@ -1522,27 +1523,27 @@
   .categories-wrap {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px 10px;
+    gap: 10px 12px;
     width: 100%;
   }
 
   .cat-count-badge {
-    font-size: 11.5px;
+    font-size: 13px;
     font-weight: 700;
     color: var(--accent-primary);
-    margin-left: 4px;
+    margin-left: 6px;
   }
 
   .cat-chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
     background: color-mix(in srgb, var(--bg-secondary) 35%, transparent);
     color: var(--text-primary);
     border-radius: 999px;
-    padding: 6px 13px;
-    font-size: 12px;
+    padding: 8px 14px;
+    font-size: 14px;
     font-weight: 600;
     cursor: pointer;
     transition: background var(--motion-fast, 160ms) ease, border-color var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease, box-shadow var(--motion-fast, 160ms) ease;
@@ -1595,7 +1596,7 @@
     flex-wrap: wrap;
   }
   .preview-heading {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-primary);
   }
@@ -1626,13 +1627,13 @@
   }
   .listing-preview-compact :global(.mr-center),
   .listing-preview-compact :global(.cf-body) {
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
   }
   .listing-preview-compact :global(.mr-actions) {
     flex-direction: row;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .listing-preview-compact :global(.mr-dl-btn.card-dl) {
@@ -1668,7 +1669,7 @@
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     grid-auto-rows: minmax(0, 1fr);
     align-items: stretch;
-    gap: 12px;
+    gap: 16px;
     min-height: 0;
   }
   .md-split.edit-only,
@@ -1754,8 +1755,8 @@
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    padding-top: 2px;
+    gap: 20px;
+    padding-top: 8px;
   }
 
   .author-notes .panel-summary,
@@ -1776,22 +1777,22 @@
   .brief-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
-    margin-top: 12px;
+    gap: 16px;
+    margin-top: 16px;
   }
 
   .extras-grid {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    margin-top: 10px;
+    gap: 16px;
+    margin-top: 12px;
   }
   .extras-actions,
   .trail {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
   }
 
   .muted {

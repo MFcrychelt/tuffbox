@@ -279,12 +279,12 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .log-search {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     margin: 0;
     padding: 4px 8px;
     border-radius: var(--border-radius-sm);

@@ -230,10 +230,10 @@
   header span, li, .warn, .ok, .err, .review-diff p { color: var(--text-muted); font-size: 12px; }
   ul { margin: 0; padding-left: 18px; }
   .actions { display: flex; gap: 8px; }
-  .warn { display: flex; gap: 6px; align-items: center; margin: 0; color: #fde68a; }
+  .warn { display: flex; gap: 8px; align-items: center; margin: 0; color: #fde68a; }
   .review-diff {
     display: grid;
-    gap: 6px;
+    gap: 8px;
     padding: 8px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-sm);
@@ -241,14 +241,14 @@
   .review-diff p { margin: 0; }
   .risk-confirmations {
     display: grid;
-    gap: 6px;
+    gap: 8px;
     margin: 0;
     padding: 8px;
     border: 1px solid color-mix(in srgb, #fde68a 35%, var(--border-color));
     border-radius: var(--border-radius-sm);
   }
   .risk-confirmations legend { padding: 0 4px; color: #fde68a; font-size: 12px; font-weight: 700; }
-  .confirmation { display: flex; gap: 7px; align-items: flex-start; color: var(--text-secondary); font-size: 12px; }
+  .confirmation { display: flex; gap: 8px; align-items: flex-start; color: var(--text-secondary); font-size: 12px; }
   .confirmation input { margin: 1px 0 0; }
   .ok { margin: 0 0 12px; color: var(--accent-primary); font-size: 12px; }
   .err { margin: 0; color: #fecaca; }

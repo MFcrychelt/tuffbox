@@ -1285,7 +1285,7 @@
 
         <!-- Right: tabbed panel (Options / Matrix / History) -->
         <div class="min-w-0 min-h-0 flex flex-col overflow-hidden glass-card">
-          <div class="flex items-center gap-1 px-2.5 pt-2.5 pb-2 shrink-0 flex-wrap" role="tablist">
+          <div class="flex items-center gap-2 px-2.5 pt-2.5 pb-2 shrink-0 flex-wrap" role="tablist">
             <div class="seg-tabs" role="group">
               {#each sideTabs as tab (tab.id)}
                 <button
@@ -1346,7 +1346,7 @@
             {:else if sideTab === "matrix"}
               <div class="grid gap-3.5">
                 <div class="flex items-center gap-3 flex-wrap">
-                  <label class="inline-flex items-center gap-1.5 cursor-pointer"><input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={matrixStopOnFail} /> Stop on fail</label>
+                  <label class="inline-flex items-center gap-2 cursor-pointer"><input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={matrixStopOnFail} /> Stop on fail</label>
                   <button class="secondary" onclick={runMatrix} disabled={running || matrixRunning}>Run matrix</button>
                   {#if matrixRunning}
                     <button class="danger" onclick={stopMatrix}>Stop queue</button>
@@ -1354,7 +1354,7 @@
                 </div>
                 <div class="flex flex-wrap gap-2.5 gap-x-4">
                   {#each profiles as p (p.id)}
-                    <label class="inline-flex items-center gap-1.5 cursor-pointer text-[var(--text-muted)] text-[12px]">
+                    <label class="inline-flex items-center gap-2 cursor-pointer text-[var(--text-muted)] text-[12px]">
                       <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={matrixIds[p.id]} />
                       {p.name} <small>({p.id})</small>
                     </label>
@@ -1401,7 +1401,7 @@
                     >
                       <Crosshair size={14} /> Start isolation
                     </button>
-                    <label class="inline-flex items-center gap-1.5 cursor-pointer text-[12px] text-[var(--text-muted)]">
+                    <label class="inline-flex items-center gap-2 cursor-pointer text-[12px] text-[var(--text-muted)]">
                       <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={bisectAuto} />
                       Launch automatically
                     </label>
@@ -1429,7 +1429,7 @@
                       <div class="h-full rounded-full bg-[var(--accent-primary)] transition-width duration-300" style={`width: ${Math.round(bisectProgress(bisect) * 100)}%`}></div>
                     </div>
                     {#if bisect.defectives.length > 0}
-                      <div class="flex items-center gap-1.5 flex-wrap">
+                      <div class="flex items-center gap-2 flex-wrap">
                         <span class="text-[12px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Culprit{bisect.defectives.length > 1 ? "s" : ""}:</span>
                         {#each bisect.defectives as id (id)}
                           <span class="px-2 py-0.5 rounded-full text-[12px] font-semibold border border-[color-mix(in_srgb,var(--accent-danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent-danger)_12%,transparent)] text-[var(--text-primary)]">{id}</span>
@@ -1437,7 +1437,7 @@
                       </div>
                     {/if}
                     <div class="flex items-center gap-2 flex-wrap">
-                      <label class="inline-flex items-center gap-1.5 cursor-pointer text-[12px] text-[var(--text-muted)]">
+                      <label class="inline-flex items-center gap-2 cursor-pointer text-[12px] text-[var(--text-muted)]">
                         <input type="checkbox" class="w-auto accent-[var(--accent-primary)]" bind:checked={bisectAuto} />
                         Auto-launch
                       </label>
@@ -1472,7 +1472,7 @@
                   </div>
 
                   {#if bisectLog.length > 0}
-                    <div class="flex flex-col gap-1 max-h-56 overflow-y-auto p-3 rounded-[var(--border-radius-md)] border border-[var(--border-color)] bg-[var(--bg-primary)] font-[family-name:var(--font-mono)] text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
+                    <div class="flex flex-col gap-2 max-h-56 overflow-y-auto p-3 rounded-[var(--border-radius-md)] border border-[var(--border-color)] bg-[var(--bg-primary)] font-[family-name:var(--font-mono)] text-[12px] leading-relaxed text-[var(--text-secondary)]">
                       {#each bisectLog as line, i (i)}
                         <span class="whitespace-pre-wrap">{line}</span>
                       {/each}
@@ -1486,7 +1486,7 @@
                   <div class="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
                     {#each profiles as profile (profile.id)}
                       <button
-                        class="w-full flex flex-col items-start gap-1 border p-3 text-left transition-colors duration-150 cursor-pointer { selectedProfile === profile.id
+                        class="w-full flex flex-col items-start gap-2 border p-3 text-left transition-colors duration-150 cursor-pointer { selectedProfile === profile.id
                           ? "border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)]"
                           : "border-[var(--border-color)] bg-[var(--bg-tertiary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--accent-primary)_8%,transparent)]" }"
                         onclick={() => (selectedProfile = profile.id)}
@@ -1502,7 +1502,7 @@
                 {/if}
 
                 {#if launchStats}
-                  <div class="p-3 border border-[var(--border-color)] rounded-[var(--border-radius-md)] bg-[var(--bg-tertiary)] grid gap-1.5">
+                  <div class="p-3 border border-[var(--border-color)] rounded-[var(--border-radius-md)] bg-[var(--bg-tertiary)] grid gap-2">
                     <h3 class="text-[var(--text-secondary)] text-[12px] m-0 uppercase tracking-[0.04em]">Launch stats</h3>
                     <div class="grid grid-cols-3 gap-2 mb-1">
                       <div class="stat-tile">
@@ -1527,7 +1527,7 @@
 
                 <div class="flex items-center justify-between gap-2 flex-wrap">
                   <h2 class="m-0 text-[15px] text-[var(--text-primary)]">Run history</h2>
-                  <div class="flex gap-1 flex-wrap">
+                  <div class="flex gap-2 flex-wrap">
                     <button class="ghost mini" class:active={historyFilter === "all"} onclick={() => (historyFilter = "all")}>All</button>
                     <button class="ghost mini" class:active={historyFilter === "pass"} onclick={() => (historyFilter = "pass")}>Pass</button>
                     <button class="ghost mini" class:active={historyFilter === "fail"} onclick={() => (historyFilter = "fail")}>Fail</button>
@@ -1557,7 +1557,7 @@
                           {/if}
                           {#if run.verdictReason} · {run.verdictReason}{/if}
                         </small>
-                        <div class="flex gap-1 flex-wrap mt-1">
+                        <div class="flex gap-2 flex-wrap mt-1">
                           <button class="ghost mini" onclick={() => openRunLogs(run)}>Open logs</button>
                           {#if !capturedRunIds[run.id]}
                             <button class="ghost mini" onclick={() => captureRunLogs(run)}>Capture</button>
@@ -1611,7 +1611,7 @@
   .field {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 8px;
     min-width: 0;
   }
   .field select {
@@ -1637,7 +1637,7 @@
      win95 silver panel.) */
   .stat-tile {
     display: grid;
-    gap: 2px;
+    gap: 8px;
     padding: 8px;
     border-radius: var(--border-radius-sm);
     background: var(--bg-secondary);
@@ -1701,7 +1701,7 @@
   }
 
   .vbadge {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1736,7 +1736,7 @@
   }
 
   .val-badge {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     padding: 4px 8px;
     border-radius: 999px;
@@ -1815,7 +1815,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 7px;
+    gap: 8px;
     height: 36px;
     align-self: flex-end;
     padding: 0 16px;
@@ -1842,7 +1842,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     padding: 2px 7px;
     border-radius: 999px;
@@ -1854,7 +1854,7 @@
   /* Segmented tabs (right panel header). */
   .seg-tabs {
     display: inline-flex;
-    gap: 3px;
+    gap: 8px;
     padding: 3px;
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
@@ -1871,7 +1871,7 @@
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     transition: background var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
   }
   /* Accent-on-accent-tint text (segmented tabs, verdict badges, filter chips)

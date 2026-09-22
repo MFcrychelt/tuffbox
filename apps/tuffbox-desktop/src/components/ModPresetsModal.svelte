@@ -676,7 +676,7 @@
 
   .preset-create {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
 
   .preset-create input {
@@ -690,7 +690,7 @@
     overflow: auto;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   .preset-item {
@@ -732,7 +732,7 @@
     color: var(--text-muted);
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .presets-main {
@@ -786,7 +786,7 @@
 
   .search-tabs {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
 
   .search-tabs button {
@@ -826,7 +826,7 @@
   .search-results {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     max-height: 160px;
     overflow: auto;
   }
@@ -847,7 +847,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .row-meta strong {
@@ -860,12 +860,12 @@
   }
 
   .row-ok {
-    font-size: 11px;
+    font-size: 12px;
     color: #86efac;
   }
 
   .row-fail {
-    font-size: 11px;
+    font-size: 12px;
     color: #fca5a5;
   }
 
@@ -912,7 +912,7 @@
   .mod-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   button.sm {

@@ -796,7 +796,7 @@
   .modal-body { padding: 22px; overflow-y: auto; }
 
   /* ─── Login options ──────────────────────── */
-  .existing-accounts { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+  .existing-accounts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
   .existing-label { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .account-row {
     display: flex; align-items: center; gap: 12px; width: 100%;
@@ -816,15 +816,15 @@
     background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.18));
     color: var(--badge-ygg-fg, #e9d5ff);
   }
-  .account-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .account-text { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   .mc-nick {
     font-family: var(--font-minecraft);
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.4px;
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
-  .account-type { font-size: 11px; font-weight: 800; text-transform: uppercase; }
+  .account-type { font-size: 12px; font-weight: 800; text-transform: uppercase; }
   .account-type.mojang { color: var(--badge-ms-fg, #93c5fd); }
   .account-type.offline { color: var(--badge-offline-fg, #fde68a); }
   .account-type.ygg { color: var(--badge-ygg-fg, #e9d5ff); }
@@ -872,7 +872,7 @@
     color: var(--badge-ygg-fg, #e9d5ff);
   }
 
-  .option-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .option-info { flex: 1; display: flex; flex-direction: column; gap: 8px; }
   .option-title { font-weight: 700; font-size: 14px; color: var(--text-primary); }
   .option-desc { font-size: 12px; color: var(--text-muted); }
 
@@ -955,7 +955,7 @@
   .link-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .secondary-btn {
-    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
     width: 100%; padding: 10px 14px; border-radius: var(--border-radius-md);
     background: var(--bg-primary); border: 1px solid var(--border-color);
     color: var(--text-secondary); font-size: 12px; font-weight: 600; cursor: pointer;
@@ -965,7 +965,7 @@
   /* ─── Offline form ───────────────────────── */
   .offline-form { display: flex; flex-direction: column; gap: 16px; }
 
-  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field { display: flex; flex-direction: column; gap: 8px; }
   .field span { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 
   .field input,
@@ -979,14 +979,14 @@
   .field textarea:focus { border-color: var(--accent-primary); }
   .field textarea { min-height: 72px; line-height: 1.4; font-size: 12px; }
 
-  .skin-source-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .skin-source-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .ygg-presets { grid-template-columns: repeat(3, 1fr); }
 
   .source-option {
-    display: flex; align-items: center; justify-content: center; gap: 5px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
     padding: 8px 6px; border-radius: var(--border-radius-sm); background: var(--bg-primary);
     border: 1px solid var(--border-color); color: var(--text-secondary);
-    font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+    font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s;
   }
   .source-option:hover { border-color: var(--text-muted); color: var(--text-primary); }
   .source-option.active {

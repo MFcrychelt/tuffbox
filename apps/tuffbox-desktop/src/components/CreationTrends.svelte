@@ -1162,7 +1162,7 @@
   .peer-form label {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-muted);
   }
@@ -1196,12 +1196,12 @@
   .art-list li {
     flex-direction: column;
     align-items: stretch;
-    gap: 4px;
+    gap: 8px;
   }
   .art-list pre {
     margin: 0;
     padding: 8px;
-    font-size: 11px;
+    font-size: 12px;
     white-space: pre-wrap;
     word-break: break-word;
     background: var(--bg-tertiary);
@@ -1212,7 +1212,7 @@
   .tag-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     margin: 0 0 10px;
   }
   .tag-chip {
@@ -1354,7 +1354,7 @@
   .hit-card small {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     margin-top: 2px;
     font-size: 12px;
     color: var(--text-muted);
@@ -1369,7 +1369,7 @@
     padding: 0;
     margin: 0;
     display: grid;
-    gap: 6px;
+    gap: 8px;
   }
   li {
     font-size: 12px;
@@ -1413,7 +1413,7 @@
   .check-status {
     font-weight: 700;
     text-transform: uppercase;
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.04em;
   }
   .auth-line,
@@ -1434,14 +1434,14 @@
     padding: 10px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .suggest-card small {
     color: var(--text-muted);
   }
   .row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
   button.primary {
     font: inherit;

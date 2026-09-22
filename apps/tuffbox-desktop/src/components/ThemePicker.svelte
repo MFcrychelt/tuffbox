@@ -260,7 +260,7 @@
     padding: 10px;
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: 8px;
   }
 
   .dot {

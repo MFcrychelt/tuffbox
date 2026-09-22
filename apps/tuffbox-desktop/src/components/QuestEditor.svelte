@@ -2863,7 +2863,7 @@
   }
   .apply-save-banner .mini {
     padding: 4px 10px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .notice {
     display: flex;
@@ -3063,7 +3063,7 @@
   }
   .search-panel {
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 12px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
   }
@@ -3075,7 +3075,7 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
   .search-hit {
     display: grid;
@@ -3088,7 +3088,7 @@
     border-radius: var(--border-radius-sm, 4px);
     background: var(--bg-card);
     color: inherit;
-    font-size: 11px;
+    font-size: 12px;
     cursor: pointer;
   }
   .search-hit:hover,
@@ -3124,7 +3124,7 @@
   .panel-tabs {
     display: flex;
     flex-shrink: 0;
-    gap: 1px;
+    gap: 8px;
     padding: 4px 4px 0;
     border-bottom: 1px solid var(--border-color);
     background: var(--bg-primary);

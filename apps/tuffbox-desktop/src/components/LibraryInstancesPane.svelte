@@ -2254,7 +2254,7 @@ onkeydown={(e) => e.stopPropagation()}
   .tb-left {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
   }
   /* Library tabs (Your packs / Discover / Create) rendered inside the toolbar. */
@@ -2272,7 +2272,7 @@ onkeydown={(e) => e.stopPropagation()}
   .tb-search {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     min-width: 180px;
     max-width: 260px;
     padding: 5px 8px;
@@ -2341,7 +2341,7 @@ onkeydown={(e) => e.stopPropagation()}
   .tb-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 7px 12px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
@@ -2401,7 +2401,7 @@ onkeydown={(e) => e.stopPropagation()}
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
   .tb-menu.side-menu { left: auto; right: 0; }
   .tb-menu .menu-sep {
@@ -2758,7 +2758,7 @@ onkeydown={(e) => e.stopPropagation()}
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
     padding: 16px 6px 6px;
     border-radius: 0 0 var(--border-radius-sm) var(--border-radius-sm);
     background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.62) 78%);
@@ -2792,7 +2792,7 @@ onkeydown={(e) => e.stopPropagation()}
   .tile-play {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     height: 26px;
     padding: 0 10px;
     border: none;
@@ -2818,7 +2818,7 @@ onkeydown={(e) => e.stopPropagation()}
   .tile-acts {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
   }
   .tile-act {
     display: inline-flex;
@@ -2852,7 +2852,7 @@ onkeydown={(e) => e.stopPropagation()}
   .inst-rows {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .inst-row {
     display: grid;
@@ -2924,7 +2924,7 @@ onkeydown={(e) => e.stopPropagation()}
   .row-main {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
   }
   .row-name {
@@ -2946,7 +2946,7 @@ onkeydown={(e) => e.stopPropagation()}
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: 2px;
+    gap: 8px;
     flex-shrink: 0;
   }
   .row-stat {
@@ -2957,13 +2957,13 @@ onkeydown={(e) => e.stopPropagation()}
   .row-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
   }
   .row-play {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     height: 28px;
     padding: 0 11px;
     border: none;
@@ -3008,7 +3008,7 @@ onkeydown={(e) => e.stopPropagation()}
   .view-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 2px;
+    gap: 8px;
     padding: 2px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
@@ -3146,14 +3146,14 @@ onkeydown={(e) => e.stopPropagation()}
   .side-actions {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   /* Labeled secondaries under Play — IDE + folder, the two most common
      destinations, promoted out of the 32px icon row. */
   .side-secondary-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 6px;
+    gap: 8px;
   }
   .side-secondary.manage {
     grid-column: 1 / -1;
@@ -3169,7 +3169,7 @@ onkeydown={(e) => e.stopPropagation()}
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 7px;
+    gap: 8px;
     padding: 9px 10px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
@@ -3276,7 +3276,7 @@ onkeydown={(e) => e.stopPropagation()}
   .side-notes {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   .side-notes-label {
     font-size: 12px;
@@ -3311,7 +3311,7 @@ onkeydown={(e) => e.stopPropagation()}
   .side-group-chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     max-width: 100%;
     margin-top: 8px;
     padding: 3px 10px;
@@ -3395,7 +3395,7 @@ onkeydown={(e) => e.stopPropagation()}
   .side-icon-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .side-icon-btn {
     display: inline-flex;
@@ -3428,7 +3428,7 @@ onkeydown={(e) => e.stopPropagation()}
   .side-meta-item {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     padding: 8px 10px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
@@ -3472,7 +3472,7 @@ onkeydown={(e) => e.stopPropagation()}
     margin-top: 6px;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 10px 14px;
     border: none;
     border-radius: var(--border-radius-md);
@@ -3494,7 +3494,7 @@ onkeydown={(e) => e.stopPropagation()}
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
   .pack-ctx-menu button {
     display: inline-flex;
@@ -3549,7 +3549,7 @@ onkeydown={(e) => e.stopPropagation()}
   .group-chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     margin-bottom: 12px;
   }
   .chip {

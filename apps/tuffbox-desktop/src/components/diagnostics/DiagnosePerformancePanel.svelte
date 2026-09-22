@@ -30,7 +30,7 @@
     font-size: 12px;
   }
   summary { cursor: pointer; user-select: none; }
-  .timing-grid { display: grid; gap: 4px; margin-top: 8px; }
+  .timing-grid { display: grid; gap: 8px; margin-top: 8px; }
   .timing-row {
     display: grid;
     grid-template-columns: 1fr auto auto;

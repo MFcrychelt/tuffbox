@@ -243,7 +243,7 @@
     to { transform: rotate(360deg); }
   }
 
-  .pip-title { display: grid; gap: 1px; min-width: 0; }
+  .pip-title { display: grid; gap: 8px; min-width: 0; }
   .pip-title strong { font-size: 14px; color: var(--text-primary); }
   .pip-title span { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -275,7 +275,7 @@
     padding: 0;
     list-style: none;
     display: grid;
-    gap: 3px;
+    gap: 8px;
     max-height: 140px;
     overflow-y: auto;
   }
