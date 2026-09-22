@@ -274,6 +274,17 @@
     "0": "brief",
   };
 
+  // Reverse lookup for tooltip / chord badge — keeps discoverability of the
+  // non-sequential mapping (1→Content … 0→Brief) without cluttering the label.
+  const CHORD_FOR_STAGE: Record<StageId, string> = Object.fromEntries(
+    Object.entries(STAGE_CHORD).map(([k, v]) => [v, k]),
+  ) as Record<StageId, string>;
+  function stageTooltip(stage: Stage): string {
+    const chord = CHORD_FOR_STAGE[stage.id];
+    const chordHint = chord ? ` • Ctrl+${chord}` : "";
+    return `${stage.goal}${chordHint} • [ / ] соседние • Right-click to hide`;
+  }
+
   let activeStage = $state<StageId>("content");
   let leaveConfirmOpen = $state(false);
   let pendingStage = $state<StageId | null>(null);
@@ -635,10 +646,12 @@
       onmouseleave={() => scheduleHideRail()}
     ></div>
   {/if}
+  <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
   <nav
     class="workflow-rail"
     class:revealed={railRevealed || !$autoHideWorkflowRail}
     aria-label="Modpack production workflow"
+    role="tablist"
     onmouseenter={revealRail}
     onmouseleave={() => scheduleHideRail()}
     onfocusin={revealRail}
@@ -647,17 +660,21 @@
   >
     {#each visibleStages as stage (stage.id)}
       {@const StageIcon = stage.icon}
+      {@const chord = CHORD_FOR_STAGE[stage.id]}
       <button
         class="stage-tab"
         class:active={activeStage === stage.id}
+        role="tab"
+        aria-selected={activeStage === stage.id}
+        aria-current={activeStage === stage.id ? "step" : undefined}
+        data-chord={chord ?? undefined}
         onclick={(e) => {
           goToStage(stage.id);
           if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
           scheduleHideRail(320);
         }}
         oncontextmenu={(e) => openTabMenu(e, stage.id)}
-        title={stage.goal}
-        aria-current={activeStage === stage.id ? "step" : undefined}
+        title={stageTooltip(stage)}
       >
         <span class="stage-status" aria-hidden="true">
           <Circle size={12} fill={activeStage === stage.id ? "currentColor" : "none"} />
@@ -667,6 +684,9 @@
           <strong>{stage.label}</strong>
           <small>{stage.short}</small>
         </span>
+        {#if chord}
+          <span class="stage-chord" aria-hidden="true">{chord}</span>
+        {/if}
       </button>
     {/each}
     {#if hiddenStages.size > 0}
@@ -897,11 +917,23 @@
     left: 0;
     right: 0;
     bottom: 0;
-    /* Slim strip: the editor's horizontal scrollbar sits 8px above the bottom
-       edge (cm-scroller padding-bottom), so this zone no longer sits on top of
-       the scrollbar and stealing its pointer events. */
-    height: 12px;
+    /* Visible handle when rail is hidden — 2px accent line hint that the
+       workflow rail lives at the bottom. The 12px invisible zone is kept
+       for hover, but the handle itself is a subtle line the user can see. */
+    height: 14px;
     z-index: 6;
+    background: linear-gradient(
+      to top,
+      color-mix(in srgb, var(--accent-primary) 10%, transparent) 0%,
+      transparent 60%
+    );
+    border-top: 2px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
+    opacity: 0.95;
+    transition: opacity 0.16s ease, border-color 0.16s ease;
+  }
+  .ide-workspace.auto-hide-rail:has(.workflow-rail.revealed) .rail-hotzone {
+    opacity: 0;
+    pointer-events: none;
   }
 
   .workflow-rail {
@@ -946,10 +978,6 @@
       visibility 0s linear 0s;
   }
 
-  .ide-workspace.auto-hide-rail:has(.workflow-rail.revealed) .rail-hotzone {
-    pointer-events: none;
-  }
-
   .stage-tab {
     min-width: 0;
     min-height: 52px;
@@ -960,14 +988,24 @@
     background: transparent;
     color: var(--text-secondary);
     border: 1px solid transparent;
+    position: relative;
   }
 
-  .stage-tab:hover,
-  .stage-tab.active {
+  .stage-tab:hover {
     transform: none;
     background: var(--bg-tertiary);
-    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
     color: var(--text-primary);
+  }
+
+  .stage-tab.active {
+    transform: none;
+    background: color-mix(in srgb, var(--accent-primary) 14%, var(--bg-tertiary));
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    color: var(--text-primary);
+    box-shadow:
+      inset 0 -2px 0 var(--accent-primary),
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 18%, transparent);
   }
 
   .stage-tab.active .stage-status {
@@ -984,6 +1022,49 @@
     flex: 0 0 auto;
     place-items: center;
     color: var(--text-muted);
+  }
+
+  /* Shortcut badge — tiny number showing the Ctrl+chord, visible on hover/active
+     and always for screen-reader discoverability via title. Keeps the rail
+     scannable without adding a permanent label column. */
+  .stage-chord {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    min-width: 14px;
+    height: 14px;
+    display: grid;
+    place-items: center;
+    padding: 0 3px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent);
+    color: var(--accent-primary);
+    font: 700 9px/1 var(--font-mono, monospace);
+    opacity: 0;
+    transform: scale(0.9);
+    transition:
+      opacity 0.14s ease,
+      transform 0.14s ease;
+    pointer-events: none;
+  }
+  .stage-tab:hover .stage-chord,
+  .stage-tab.active .stage-chord,
+  .stage-tab:focus-visible .stage-chord {
+    opacity: 1;
+    transform: scale(1);
+  }
+  /* On wider rails the chord sits inline after the label to avoid overlap
+     with the icon on narrow columns — but absolute is cleaner for the bottom
+     rail, so keep it pinned to the corner across breakpoints. */
+  @media (max-width: 720px) {
+    .stage-chord {
+      top: 2px;
+      right: 4px;
+      font-size: 8px;
+      min-width: 12px;
+      height: 12px;
+    }
   }
 
   /* "+" reopen pill at the rail end — visible while tabs are closed. */
