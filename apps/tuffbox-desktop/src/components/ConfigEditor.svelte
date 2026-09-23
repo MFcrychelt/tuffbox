@@ -17,7 +17,9 @@
   import { StreamLanguage, LanguageSupport } from "@codemirror/language";
   import { toml } from "@codemirror/legacy-modes/mode/toml";
   import { properties as propertiesMode } from "@codemirror/legacy-modes/mode/properties";
-  import { oneDark } from "@codemirror/theme-one-dark";
+  import { editorThemeFor } from "../lib/editorTheme";
+  import { completionsForExtension, type CompletionKind } from "../lib/editorAutocomplete";
+  import { theme } from "../lib/store";
 
   /** CM6 doesn't map legacy token "quote" → string; remap so key=value actually colors. */
   const mcProperties = {
@@ -349,6 +351,20 @@
   }
 
   const currentLang = $derived(langForFile(selected) ?? (looksLikeProps(content) ? propsLang() : undefined));
+
+  /** Autocomplete source kind for the open file (Tune built-in editor). */
+  const completionKind = $derived.by(() => {
+    const ext = selected?.extension?.toLowerCase() ?? "";
+    if (ext === "json" || ext === "json5") return "json" as CompletionKind;
+    if (ext === "js" || ext === "zs") return "kubejs" as CompletionKind;
+    if (["toml", "txt", "properties", "cfg", "conf", "ini"].includes(ext)) return "flat" as CompletionKind;
+    if (looksLikeProps(content)) return "flat" as CompletionKind;
+    return null;
+  });
+
+  /** Editor follows the app theme (all 18) instead of hard-coded one-dark. */
+  const editorTheme = $derived(editorThemeFor($theme));
+  const editorExts = $derived(completionsForExtension(completionKind));
   const dirty = $derived(content !== originalContent);
   $effect(() => {
     tuneDirty.set(dirty);
@@ -832,7 +848,8 @@
               <CodeMirror
                 value={content}
                 lang={currentLang}
-                theme={oneDark}
+                theme={editorTheme}
+                extensions={editorExts}
                 on:change={(e) => handleCmChange(e.detail)}
                 on:ready={(e) => onCmReady(e.detail)}
               />
@@ -895,7 +912,7 @@
   .toolbar, .toolbar-actions, .title, .editor-header, .editor-stats, .notice, .trail-actions, .root-chips { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 10px; margin-bottom: 6px; flex-shrink: 0; min-height: 36px; }
   .title { gap: 8px; color: var(--text-secondary); font-weight: 700; font-size: 14px; }
-  .toolbar-actions { gap: 6px; flex-wrap: wrap; }
+  .toolbar-actions { gap: 8px; flex-wrap: wrap; }
   .toolbar-actions button {
     transform: none !important;
     padding: 5px 10px;
@@ -908,8 +925,8 @@
   .notice { gap: 8px; padding: 8px 10px; border-radius: var(--border-radius-md); margin-bottom: 8px; border: 1px solid var(--border-color); flex-shrink: 0; justify-content: space-between; flex-wrap: wrap; font-size: 13px; }
   .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
-  .trail-actions { gap: 6px; }
-  .mini { padding: 4px 8px; font-size: 11px; }
+  .trail-actions { gap: 8px; }
+  .mini { padding: 4px 8px; font-size: 12px; }
   .lint-bad { border-color: color-mix(in srgb, var(--accent-danger) 45%, transparent) !important; color: var(--accent-danger) !important; }
   .lint-warn { border-color: color-mix(in srgb, var(--accent-warning) 45%, transparent) !important; color: var(--accent-warning) !important; }
 
@@ -918,7 +935,7 @@
     position: absolute; top: calc(100% + 4px); right: 0; z-index: 20;
     min-width: 260px; max-height: 320px; overflow: auto;
     background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: 10px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 6px; display: grid; gap: 2px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 6px; display: grid; gap: 8px;
   }
   .snippet-menu button {
     text-align: left; background: transparent; border: none; color: var(--text-secondary);
@@ -927,11 +944,11 @@
   .snippet-menu button:hover { background: var(--bg-tertiary); color: var(--text-primary); }
   .snippet-menu button.gen { color: var(--accent-primary); border-top: 1px solid var(--border-color); margin-top: 4px; border-radius: 0 0 6px 6px; }
 
-  .root-chips { gap: 4px; flex-wrap: wrap; margin-bottom: 8px; flex-shrink: 0; }
+  .root-chips { gap: 8px; flex-wrap: wrap; margin-bottom: 8px; flex-shrink: 0; }
   .chip {
     line-height: 1.4;
     white-space: nowrap;
-    font-size: 11px; font-weight: 700; text-transform: lowercase; letter-spacing: .02em;
+    font-size: 12px; font-weight: 700; text-transform: lowercase; letter-spacing: .02em;
     padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-muted); cursor: pointer;
   }
@@ -1005,7 +1022,7 @@
   }
 
   .search-across { display: flex; flex-direction: column; min-height: 0; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
-  .search-across-row { display: flex; gap: 6px; align-items: center; }
+  .search-across-row { display: flex; gap: 8px; align-items: center; }
   .search-across-row input {
     flex: 1;
     min-width: 0;
@@ -1021,7 +1038,7 @@
   }
   .mini-btn { width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); color: var(--text-secondary); cursor: pointer; }
   .mini-btn:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
-  .search-error, .search-status { color: var(--accent-danger); font-size: 11px; margin-top: 4px; }
+  .search-error, .search-status { color: var(--accent-danger); font-size: 12px; margin-top: 4px; }
   .search-status { color: var(--text-muted); }
   .search-results {
     /* Give content search room to breathe: up to ~38% of the panel height on
@@ -1033,11 +1050,11 @@
     margin-top: 6px;
     overscroll-behavior: contain;
   }
-  .search-hit { width: 100%; display: grid; gap: 2px; text-align: left; padding: 5px 6px; margin-bottom: 2px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); transform: none; }
+  .search-hit { width: 100%; display: grid; gap: 8px; text-align: left; padding: 5px 6px; margin-bottom: 2px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); transform: none; }
   .search-hit:hover { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
-  .hit-path { font-size: 11px; color: var(--accent-primary); font-family: ui-monospace, monospace; }
-  .hit-text { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .search-truncated { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
+  .hit-path { font-size: 12px; color: var(--accent-primary); font-family: var(--font-mono, ui-monospace, monospace); }
+  .hit-text { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .search-truncated { font-size: 12px; color: var(--text-muted); padding: 6px 8px; }
 
   .tree {
     flex: 1;
@@ -1047,7 +1064,7 @@
     flex-direction: column;
   }
   .tree-dir, .tree-file {
-    width: 100%; display: flex; align-items: center; gap: 6px;
+    width: 100%; display: flex; align-items: center; gap: 8px;
     text-align: left; background: transparent; border: 1px solid transparent;
     color: var(--text-secondary); padding: 5px 10px; font-size: 13px;
     cursor: pointer; transform: none; border-radius: 6px;
@@ -1061,7 +1078,7 @@
   .tree-dir :global(.folder-icon) { color: var(--accent-primary); opacity: 0.7; }
   .tree-dir-name, .tree-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tree-file-name { font-weight: 500; }
-  .tree-file-meta { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+  .tree-file-meta { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 
   .muted { padding: 16px 8px; line-height: 1.5; color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
 
@@ -1084,7 +1101,7 @@
     padding: 2px 8px;
     border-radius: 999px;
     font-weight: 700;
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
   }
 
@@ -1128,20 +1145,20 @@
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .lint-panel { padding: 10px; border-top: 1px solid var(--border-color); max-height: 160px; overflow: auto; display: grid; gap: 3px; }
+  .lint-panel { padding: 10px; border-top: 1px solid var(--border-color); max-height: 160px; overflow: auto; display: grid; gap: 8px; }
   .lint-item {
-    display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px; font-size: 11px;
+    display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px; font-size: 12px;
     width: 100%; text-align: left; border: 1px solid transparent; cursor: pointer; background: transparent; transform: none;
   }
   .lint-item.error { background: color-mix(in srgb, var(--accent-danger) 8%, transparent); color: var(--accent-danger); }
   .lint-item.warning { background: color-mix(in srgb, var(--accent-warning) 8%, transparent); color: var(--accent-warning); }
   .lint-item:hover { border-color: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
-  .lint-sev { font-weight: 800; text-transform: uppercase; font-size: 9px; padding: 1px 4px; border-radius: 3px; }
+  .lint-sev { font-weight: 800; text-transform: uppercase; font-size: 12px; padding: 1px 4px; border-radius: 3px; }
   .lint-item.error .lint-sev { background: color-mix(in srgb, var(--accent-danger) 20%, transparent); }
   .lint-item.warning .lint-sev { background: color-mix(in srgb, var(--accent-warning) 20%, transparent); }
-  .lint-item code { font-size: 10px; color: var(--accent-primary); }
+  .lint-item code { font-size: 12px; color: var(--accent-primary); }
   .lint-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lint-item small { color: var(--text-muted); font-size: 10px; }
+  .lint-item small { color: var(--text-muted); font-size: 12px; }
   @media (max-width: 1050px) {
     .layout { grid-template-columns: 1fr; }
     .layout.with-ai { grid-template-columns: 1fr; }

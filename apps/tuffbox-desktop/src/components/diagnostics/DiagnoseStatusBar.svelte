@@ -172,7 +172,7 @@
   .dx-status.warn .dx-status-icon { color: var(--accent-warning); background: rgba(245, 158, 11, 0.14); }
   .dx-status.ok .dx-status-icon,
   .dx-status.soft .dx-status-icon { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
-  .dx-status-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .dx-status-body { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
   .dx-status-body strong { font-size: 13px; color: var(--text-primary); }
   .dx-status-body span { font-size: 12px; color: var(--text-muted); }
   .cascade-chip {
@@ -182,7 +182,7 @@
     margin-top: 4px;
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 11px !important;
+    font-size: 12px !important;
     font-weight: 700;
     color: var(--accent-primary) !important;
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
@@ -203,7 +203,7 @@
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 7px 12px;
     border-radius: var(--border-radius-sm);
     border: none;

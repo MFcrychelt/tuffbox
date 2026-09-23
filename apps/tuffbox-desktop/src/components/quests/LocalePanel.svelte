@@ -215,7 +215,7 @@
   }
   .block h4 {
     margin: 0 0 8px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--ftbq-title-gold);
     text-transform: uppercase;
@@ -230,8 +230,8 @@
   .field {
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    font-size: 10px;
+    gap: 8px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .field input,
@@ -265,17 +265,17 @@
   }
   .hint {
     margin: 6px 0 0;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .err {
     margin: 6px 0 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--accent-danger);
   }
   .gap-count {
     margin: 8px 0 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .gap-list {
@@ -283,7 +283,7 @@
     overflow: auto;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     border: 1px solid var(--ftbq-border);
     border-radius: var(--border-radius-sm);
     padding: 6px;
@@ -308,7 +308,7 @@
     background: rgba(61, 184, 168, 0.08);
   }
   .kind {
-    font-size: 9px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -320,14 +320,14 @@
     color: var(--accent-warning);
   }
   .key {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-accent-teal);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .prev {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;

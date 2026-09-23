@@ -1088,11 +1088,11 @@
   .tr-quick-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     justify-content: center;
   }
   .quick-add-btn {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     padding: 5px 10px;
     background: var(--bg-card, var(--bg-elevated));
@@ -1116,10 +1116,10 @@
   }
   .add-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
   .add-row select {
-    font-size: 11px;
+    font-size: 12px;
     padding: 6px 10px;
     min-width: 140px;
     background: var(--ftbq-input-bg);
@@ -1177,7 +1177,7 @@
 
   .card label {
     display: grid;
-    gap: 4px;
+    gap: 8px;
     font-size: 12px;
     letter-spacing: 0;
     color: var(--ftbq-text-muted);
@@ -1207,7 +1207,7 @@
 
   .item-row {
     display: flex;
-    gap: 4px;
+    gap: 8px;
     align-items: center;
   }
   .item-row input {
@@ -1247,7 +1247,7 @@
   .hint {
     margin: 0;
     padding: 8px 10px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     text-transform: none;
     background: rgba(0, 0, 0, 0.15);
@@ -1257,7 +1257,7 @@
 
   .raw {
     margin-top: 4px;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     text-transform: none;
   }
@@ -1277,8 +1277,8 @@
   }
   .raw textarea {
     width: 100%;
-    font-family: ui-monospace, monospace;
-    font-size: 10px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 12px;
     text-transform: none;
     background: var(--ftbq-bg);
     border: 1px solid var(--ftbq-frame);
@@ -1310,12 +1310,12 @@
 
   .kjs-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
     padding-top: 4px;
   }
   .kjs-btn {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     padding: 6px 12px;
     border-radius: var(--ftbq-radius-control);

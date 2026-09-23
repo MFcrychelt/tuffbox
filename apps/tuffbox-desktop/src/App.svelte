@@ -15,10 +15,12 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, youtubeQueueOpen, theme, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, hideIdeNextBar, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, authState, youtubeQueueOpen, theme, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import YoutubeQueueWindow from "./components/YoutubeQueueWindow.svelte";
   import { api } from "./lib/api";
+  import { needsTokenRefresh } from "./lib/launchState";
+  import { installAppHiddenSync } from "./lib/idlePerf";
   import { applyHomeSnapshot, ensureHomeEnrichListener } from "./lib/homeBootstrap";
   import { invoke, isTauri } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -132,6 +134,13 @@
   }
 
   let currentView = $state<View>("dashboard");
+  // Expose for browser preview / e2e — lets puppeteer jump to any view without clicking.
+  $effect(() => {
+    if (typeof window !== "undefined") {
+      (window as any).__setView = (v: View) => { currentView = v; };
+      (window as any).__getView = () => currentView;
+    }
+  });
   $effect(() => {
     void ensureViewLoaded(currentView);
   });
@@ -223,7 +232,7 @@
       localStorage.setItem("tuffbox-reduced-motion", "1");
       document.documentElement.classList.add("potato-pc");
       toasts.info(
-        "Detected lower-end hardware — enabled reduced-motion mode to keep things smooth. Turn it off anytime in Settings → Appearance.",
+        "Low-end hardware detected — reduced motion is on. Change it in Settings → Appearance.",
         8000,
       );
     }
@@ -233,6 +242,33 @@
       // best-effort — perfAutoDetected stays false server-side, so we simply retry next launch
     }
   }
+
+  // Idle CPU: body.app-hidden while the window is minimized/occluded —
+  // styles.css pauses every CSS animation for that class, so the
+  // backgrounded launcher stops compositing frames entirely.
+  onMount(() => installAppHiddenSync());
+
+  // Hydrate the account session early and renew a Microsoft token that
+  // expired while the launcher was closed (~24h lifetime) — the first Play
+  // of the day must not fail on a stale session. Offline / Yggdrasil
+  // accounts (null expiry) need no renewal.
+  onMount(() => {
+    void (async () => {
+      try {
+        let state = await api.mcAuth.getAuthStatus();
+        if (state.loggedIn && needsTokenRefresh(state.expiresAt)) {
+          try {
+            state = await api.mcAuth.refreshToken();
+          } catch {
+            // Keep the stale session — the launch flow asks again.
+          }
+        }
+        authState.set(state);
+      } catch {
+        // Auth store unavailable — the login modal handles sign-in.
+      }
+    })();
+  });
 
   onMount(() => {
     // Orphan portals / error overlays can survive HMR and eat all clicks.
@@ -316,6 +352,7 @@
         theme.set((s.theme === "light" ? "tuffbox-light" : s.theme) as ThemeId);
       }
       autoHideWorkflowRail.set(!!s.autoHideWorkflowRail);
+      hideIdeNextBar.set(!!s.hideIdeNextBar);
       sidebarMode.set(normalizeSidebarMode(s.sidebarMode));
       const applied = applyUiScaleFromSettings(launcherSnapshot);
       launcherSnapshot = { ...launcherSnapshot, uiScalePercent: applied };
@@ -1106,9 +1143,18 @@
     min-width: 420px;
     min-height: 420px;
     border-radius: 50%;
-    filter: blur(90px);
+    /* Pre-blurred blob: radial-gradient instead of a runtime
+       `filter: blur(90px)`. A 42vw blur layer drifting forever kept the
+       WebView2 dispatcher at ~9% CPU on an otherwise idle home page (the
+       blur re-rasters as the layer scales); the gradient is visually
+       identical at this size and leaves only cheap compositor work. */
+    background: radial-gradient(
+      circle,
+      var(--accent-primary) 0%,
+      var(--accent-primary) 55%,
+      transparent 78%
+    );
     opacity: 0.14;
-    background: var(--accent-primary);
     will-change: transform;
   }
   .glow-a {

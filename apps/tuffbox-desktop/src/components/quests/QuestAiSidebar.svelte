@@ -655,7 +655,7 @@
       <Sparkles size={16} class="text-[var(--accent-primary)]" />
       <strong class="text-xs font-bold text-[var(--text-primary)]">Quest AI</strong>
       {#if sessionUsageLabel}
-        <span class="usage-pill text-[10px] text-[var(--text-muted)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded border border-[var(--border-color)]" title="Session token usage">
+        <span class="usage-pill text-[12px] text-[var(--text-muted)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded border border-[var(--border-color)]" title="Session token usage">
           {sessionUsageLabel}
         </span>
       {/if}
@@ -669,10 +669,10 @@
     <div class="anchor-banner flex items-center gap-2 px-3 py-2 bg-[var(--accent-primary)]/10 border-b border-[var(--accent-primary)]/20 text-xs flex-shrink-0" title="Branch will root at this quest">
       <GitBranch size={13} class="text-[var(--accent-primary)] flex-shrink-0" />
       <div class="flex-1 min-w-0">
-        <span class="text-[10px] uppercase font-semibold text-[var(--accent-primary)] block">Branch root</span>
+        <span class="text-[12px] uppercase font-semibold text-[var(--accent-primary)] block">Branch root</span>
         <span class="font-bold truncate block text-[var(--text-primary)]">{anchorQuest.title || "Untitled quest"}</span>
       </div>
-      <code class="text-[10px] font-mono bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-[var(--text-muted)] border border-[var(--border-color)]">
+      <code class="text-[12px] font-mono bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-[var(--text-muted)] border border-[var(--border-color)]">
         {anchorQuest.id.slice(0, 8)}
       </code>
     </div>
@@ -681,14 +681,14 @@
   <!-- Sessions List -->
   <div class="sessions px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] flex-shrink-0">
     <div class="flex items-center justify-between mb-1.5">
-      <span class="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Sessions</span>
-      <button type="button" class="text-xs font-semibold text-[var(--accent-primary)] hover:brightness-110 flex items-center gap-1" onclick={newSession} disabled={!$projectPath}>
+      <span class="text-[12px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">Sessions</span>
+      <button type="button" class="text-xs font-semibold text-[var(--accent-primary)] hover:brightness-110 flex items-center gap-2" onclick={newSession} disabled={!$projectPath}>
         <Plus size={13} /> New
       </button>
     </div>
-    <div class="sess-list flex flex-col gap-1 max-h-24 overflow-y-auto">
+    <div class="sess-list flex flex-col gap-2 max-h-24 overflow-y-auto">
       {#each sessions as s (s.id)}
-        <div class="sess flex items-center justify-between gap-1 px-2 py-1 rounded text-xs transition {activeId === s.id ? 'bg-[var(--accent-primary)]/15 font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}">
+        <div class="sess flex items-center justify-between gap-2 px-2 py-1 rounded text-xs transition {activeId === s.id ? 'bg-[var(--accent-primary)]/15 font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}">
           <button type="button" class="sess-open flex-1 text-left truncate" onclick={() => selectSession(s.id)}>
             {s.title}
           </button>
@@ -714,7 +714,7 @@
         <p class="text-xs max-w-xs leading-relaxed text-[var(--text-secondary)]">
           Describe the quest line or chapter you want to create. Click <strong>Review</strong> to preview nodes before merging.
         </p>
-        <div class="chips flex flex-wrap gap-1.5 mt-3.5 justify-center">
+        <div class="chips flex flex-wrap gap-2 mt-3.5 justify-center">
           {#each exampleChips as chip (chip.label)}
             <button
               type="button"
@@ -732,12 +732,12 @@
           class="msg p-2.5 rounded-lg border text-xs leading-relaxed {m.role === 'user' ? 'bg-[var(--accent-primary)]/10 border-[var(--accent-primary)]/30 text-[var(--text-primary)] ml-3' : 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)] mr-3'}"
           aria-live={m.role === "assistant" ? "polite" : undefined}
         >
-          <strong class="block mb-1 text-[11px] font-bold text-[var(--accent-primary)]">
+          <strong class="block mb-1 text-[12px] font-bold text-[var(--accent-primary)]">
             {m.role === "user" ? "You" : "Quest AI"}
           </strong>
           <p class="whitespace-pre-wrap">{m.content}</p>
           {#if m.progressLog?.length}
-            <details class="prog mt-2 text-[11px] text-[var(--text-muted)] border-t border-[var(--border-color)] pt-1.5">
+            <details class="prog mt-2 text-[12px] text-[var(--text-muted)] border-t border-[var(--border-color)] pt-1.5">
               <summary class="cursor-pointer font-medium">{m.progressLog.length} generation log entries</summary>
               <ul class="list-disc pl-4 mt-1 space-y-0.5">
                 {#each m.progressLog as p, pi (`p-${pi}`)}
@@ -747,7 +747,7 @@
             </details>
           {/if}
           {#if formatUsage(m.usage)}
-            <div class="text-[10px] text-[var(--text-muted)] mt-1.5 text-right font-mono">{formatUsage(m.usage)}</div>
+            <div class="text-[12px] text-[var(--text-muted)] mt-1.5 text-right font-mono">{formatUsage(m.usage)}</div>
           {/if}
         </div>
       {/each}
@@ -762,8 +762,8 @@
     </div>
     {#if streamDraft}
       <details class="stream-wrap px-3 py-1 bg-[var(--bg-secondary)] border-t border-[var(--border-color)]" open={busy && !merge}>
-        <summary class="text-[11px] text-[var(--text-muted)] cursor-pointer font-medium">Live draft ({streamDraft.length} chars)</summary>
-        <pre class="text-[10px] max-h-24 overflow-y-auto bg-[var(--bg-primary)] p-2 rounded mt-1 font-mono text-[var(--text-secondary)] whitespace-pre-wrap border border-[var(--border-color)]">{streamDraft}</pre>
+        <summary class="text-[12px] text-[var(--text-muted)] cursor-pointer font-medium">Live draft ({streamDraft.length} chars)</summary>
+        <pre class="text-[12px] max-h-24 overflow-y-auto bg-[var(--bg-primary)] p-2 rounded mt-1 font-mono text-[var(--text-secondary)] whitespace-pre-wrap border border-[var(--border-color)]">{streamDraft}</pre>
       </details>
     {/if}
   {/if}
@@ -803,7 +803,7 @@
   {#if session?.pendingPlan && !merge}
     <div class="pending-plan-bar flex items-center justify-between gap-2 px-3 py-2 bg-amber-500/10 border-t border-amber-500/20 text-xs">
       <span class="font-semibold text-[var(--accent-warning)]">Pending plan ready for review</span>
-      <div class="flex items-center gap-1.5">
+      <div class="flex items-center gap-2">
         <button
           type="button"
           class="px-2.5 py-1 bg-[var(--accent-primary)] text-[var(--on-accent)] font-semibold rounded hover:brightness-110 disabled:opacity-50"
@@ -846,7 +846,7 @@
       </button>
       <button
         type="button"
-        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition flex items-center justify-center gap-1 {pendingIntent === 'branch' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
+        class="intent flex-1 py-1 text-center text-xs font-semibold rounded-md transition flex items-center justify-center gap-2 {pendingIntent === 'branch' ? 'bg-[var(--accent-primary)] text-[var(--on-accent)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40'}"
         role="radio"
         aria-checked={pendingIntent === "branch"}
         tabindex={pendingIntent === "branch" ? 0 : -1}
@@ -919,17 +919,17 @@
       <div class="flex min-w-0 items-center gap-2">
         <button
           type="button"
-          class="text-[11px] font-semibold text-[var(--text-muted)] hover:text-[var(--text-primary)] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+          class="text-[12px] font-semibold text-[var(--text-muted)] hover:text-[var(--text-primary)] flex items-center gap-2 whitespace-nowrap flex-shrink-0"
           onclick={() => (showJson = !showJson)}
           disabled={busy}
         >
           <Code size={12} />
           {showJson ? "Switch to Text" : "Paste JSON"}
         </button>
-        <span class="text-[10px] text-[var(--text-muted)] whitespace-nowrap">Ctrl+Enter to send</span>
+        <span class="text-[12px] text-[var(--text-muted)] whitespace-nowrap">Ctrl+Enter to send</span>
       </div>
 
-      <div class="ml-auto flex items-center gap-1.5 flex-shrink-0">
+      <div class="ml-auto flex items-center gap-2 flex-shrink-0">
         {#if busy}
           <button
             type="button"
@@ -941,7 +941,7 @@
         {:else}
           <button
             type="button"
-            class="px-4 py-1.5 bg-[var(--accent-primary)] text-[var(--on-accent)] text-xs font-bold rounded-lg hover:brightness-110 shadow-sm flex items-center gap-1.5 disabled:opacity-40"
+            class="px-4 py-1.5 bg-[var(--accent-primary)] text-[var(--on-accent)] text-xs font-bold rounded-lg hover:brightness-110 shadow-sm flex items-center gap-2 disabled:opacity-40"
             disabled={!canSend}
             onclick={() => send(pendingIntent)}
           >
@@ -952,7 +952,7 @@
       </div>
     </div>
 
-    <details class="text-[11px] text-[var(--text-muted)] pt-0.5">
+    <details class="text-[12px] text-[var(--text-muted)] pt-0.5">
       <summary class="cursor-pointer font-medium hover:text-[var(--text-primary)]">Advanced settings</summary>
       <label class="flex items-center gap-2 mt-1.5 cursor-pointer">
         <input type="checkbox" bind:checked={forceAi} />

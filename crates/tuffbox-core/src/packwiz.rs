@@ -45,6 +45,11 @@ pub struct PackwizExportResult {
     pub path: PathBuf,
     pub file_count: usize,
     pub override_count: usize,
+    /// Non-fatal problems, same contract as `exporter::ExportResult::warnings`.
+    /// The packwiz exporter currently hard-fails on unreadable override files
+    /// (io error aborts the export), so this is empty today; the field exists
+    /// so callers can map the result onto `ExportResult` uniformly.
+    pub warnings: Vec<String>,
 }
 
 /// True when `path` is a directory containing `pack.toml`.
@@ -177,6 +182,9 @@ pub fn export_packwiz_pack(
         path: output_dir.to_path_buf(),
         file_count: index_entries.len() + 2,
         override_count,
+        // Hard-fail exporter: unreadable files abort with an error, so there
+        // are never soft skips to report.
+        warnings: Vec::new(),
     })
 }
 

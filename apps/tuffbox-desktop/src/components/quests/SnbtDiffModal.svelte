@@ -213,7 +213,7 @@
     max-height: 58vh;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     border-right: 1px solid var(--border-color, var(--ftbq-border));
     padding-right: 8px;
   }
@@ -224,7 +224,7 @@
     border-radius: var(--border-radius-sm);
     background: transparent;
     color: var(--text-secondary, #c4c4c8);
-    font-size: 11px;
+    font-size: 12px;
     cursor: pointer;
   }
   .file-btn:hover,
@@ -244,8 +244,8 @@
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
     border: 1px solid var(--border-color, var(--ftbq-border));
-    font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
-    font-size: 11px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 12px;
     line-height: 1.45;
     white-space: pre;
   }

@@ -6,6 +6,7 @@
     "quest-editor-web"
   ],
   "dependencies": {
+    "@internationalized/date": "^3.12.4",
     "ecc-universal": "^2.0.0"
   }
 }

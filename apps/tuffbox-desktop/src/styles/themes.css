@@ -20,10 +20,11 @@
   /* Panels sit on a translucent white card, so muted labels land on #e9eee8
      rather than the shell #f3f5f1: #5f7166 measured 4.4:1 there. */
   --text-muted: #586a5e;
-  --accent-primary: #0a9a44;
-  --accent-hover: #088038;
+  /* Deeper green/reds keep the white on-accent ink at AA (see styles.css). */
+  --accent-primary: #087f38;
+  --accent-hover: #076b30;
   --accent-secondary: #5c33c4;
-  --accent-danger: #dc2626;
+  --accent-danger: #b91c1c;
   --accent-warning: #c2410c;
   --border-color: #cfd8cf;
   --shadow-sm: 0 1px 2px rgba(21, 40, 28, 0.06);
@@ -40,7 +41,7 @@
   --badge-ms-fg: #1d4ed8;
   --badge-ms-bg: rgba(37, 99, 235, 0.1);
   --badge-ms-border: rgba(37, 99, 235, 0.28);
-  --badge-offline-fg: #b45309;
+  --badge-offline-fg: #9c4c07;
   --badge-offline-bg: rgba(217, 119, 6, 0.12);
   --badge-offline-border: rgba(180, 83, 9, 0.28);
   --badge-ygg-fg: #6d28d9;
@@ -83,9 +84,12 @@
   --bg-active: #4d556a;
   --text-primary: #ffffff;
   --text-secondary: #c4c8d4;
-  --text-muted: #959cb2;
+  /* #959cb2 read 4.2:1 on the elevated panel; #a5acbf clears 5:1. */
+  --text-muted: #a5acbf;
   --accent-primary: #3e85d0;
-  --accent-hover: #2b6bb1;
+  /* Hover LIGHTENS (dark ink stays readable: #06301e on the old darker
+     #2b6bb1 hover measured 2.65:1). */
+  --accent-hover: #4a90d9;
   --accent-secondary: #8cb6e3;
   --accent-danger: #f87171;
   --accent-warning: #fbbf24;
@@ -93,6 +97,8 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.55);
+  /* Navy ink on the steel-blue accent — green-black #06301e measured 3.8:1. */
+  --on-accent: #0a1420;
   /* Glass tint: slate blue, tracks the steel palette. */
   --glass-bg: rgba(16, 20, 27, 0.58);
   --glass-highlight: color-mix(in srgb, #fff 12%, transparent);
@@ -179,7 +185,8 @@
   --bg-active: #4a2d2d;
   --text-primary: #fffaf5;
   --text-secondary: #e8b4a4;
-  --text-muted: #a87a6e;
+  /* #a87a6e read 4.3:1 on the elevated panel; #b98d80 clears 5:1. */
+  --text-muted: #b98d80;
   --accent-primary: #ff5722;
   --accent-hover: #f44336;
   --accent-secondary: #ffc107;
@@ -220,21 +227,25 @@
 }
 
 [data-theme="frost"] {
-  --bg-primary: #0c4c7a;
-  --bg-secondary: #075e99;
-  --bg-tertiary: #0388d2;
-  --bg-elevated: #0ea5e9;
-  --bg-hover: #38bdf8;
-  --bg-active: #7dd3fc;
+  /* Readable ocean ramp: the old ramp ran bright (elevated #0ea5e9, active
+     #7dd3fc) with white text on top — white on #0ea5e9 measured 2.8:1 and on
+     #7dd3fc 1.7:1. Surfaces now darken bottom-up like every other dark theme;
+     the sky blues survive in the accent and text hues. */
+  --bg-primary: #072a44;
+  --bg-secondary: #0b3a5e;
+  --bg-tertiary: #104a74;
+  --bg-elevated: #155a86;
+  --bg-hover: #1a6b96;
+  --bg-active: #1c78a8;
   --text-primary: #ffffff;
-  --text-secondary: #e0f2fe;
-  --text-muted: #bae6fd;
-  --accent-primary: #06b6d4;
-  --accent-hover: #0891b2;
+  --text-secondary: #d9edfc;
+  --text-muted: #b5d5ec;
+  --accent-primary: #22d3ee;
+  --accent-hover: #06b6d4;
   --accent-secondary: #fbbf24;
   --accent-danger: #fb7185;
   --accent-warning: #fcd34d;
-  --border-color: #0284c7;
+  --border-color: #104a74;
   --shadow-sm: 0 1px 2px rgba(0, 30, 60, 0.35);
   --shadow-md: 0 4px 14px rgba(0, 30, 60, 0.4);
   --shadow-lg: 0 14px 36px rgba(0, 30, 60, 0.45);
@@ -247,12 +258,13 @@
   --bg-primary: #101010;
   --bg-secondary: #202020;
   --bg-tertiary: #303030;
-  --bg-elevated: #404040;
-  --bg-hover: #505050;
-  --bg-active: #606060;
+  --bg-elevated: #383838;
+  --bg-hover: #464646;
+  --bg-active: #565656;
   --text-primary: #ffffff;
   --text-secondary: #b4b4b4;
-  --text-muted: #787878;
+  /* #787878 on the grey ramp read as low as 2.4:1; #a4a4a4 clears 4.7:1. */
+  --text-muted: #a4a4a4;
   --accent-primary: #4caf50;
   --accent-hover: #43a047;
   --accent-secondary: #4169e1;
@@ -282,9 +294,11 @@
   --text-muted: #383838;
   --accent-primary: #000080;
   --accent-hover: #0000c0;
-  --accent-secondary: #008080;
+  /* Classic #008080 / #808000 read 2.6:1 / 2.3:1 on the silver panels —
+     darker teal/olive keep the hue at readable 5:1+. */
+  --accent-secondary: #004f4f;
   --accent-danger: #800000;
-  --accent-warning: #808000;
+  --accent-warning: #565600;
   --border-color: #808080;
   --shadow-sm: inset -1px -1px 0 #000, inset 1px 1px 0 #fff;
   --shadow-md: inset -2px -2px 0 #000, inset 2px 2px 0 #fff;
@@ -507,7 +521,8 @@
   --bg-active: #184a2e;
   --text-primary: #e8fff0;
   --text-secondary: #a8e0bc;
-  --text-muted: #5a9a70;
+  /* #5a9a70 read 4.4:1 on the elevated panel; #66aa7e clears 5:1. */
+  --text-muted: #66aa7e;
   --accent-primary: #00c85a;
   --accent-hover: #2ee87a;
   --accent-secondary: #00e0a8;
@@ -530,7 +545,8 @@
   --bg-active: #522020;
   --text-primary: #fff5f5;
   --text-secondary: #f0b4b4;
-  --text-muted: #a86a6a;
+  /* #a86a6a read as low as 4.0:1 on the ember ramp; #c08888 clears 5.5:1. */
+  --text-muted: #c08888;
   --accent-primary: #ff2d2d;
   --accent-hover: #ff5a5a;
   --accent-secondary: #ff7a45;
@@ -607,7 +623,8 @@
   --accent-primary: #3fad32;
   --accent-hover: #4cbe3e;
   --accent-secondary: #6bc45e;
-  --accent-danger: #e5484d;
+  /* #e5484d on the #3a3a3a tertiary read 2.9:1; #ec5d62 clears 3.4:1. */
+  --accent-danger: #ec5d62;
   --accent-warning: #f0c14b;
   --border-color: #3d3d3d;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
@@ -652,7 +669,8 @@
   --bg-active: #35502a;
   --text-primary: #f2f8ee;
   --text-secondary: #c4d4b8;
-  --text-muted: #7f9474;
+  /* #7f9474 read 4.2:1 on the elevated panel; #8da383 clears 5:1. */
+  --text-muted: #8da383;
   --accent-primary: #52d465;
   --accent-hover: #6fe083;
   --accent-secondary: #f0a44a;
@@ -736,7 +754,8 @@
   --bg-active: #1a3240;
   --text-primary: #e8f6f6;
   --text-secondary: #a8ccd0;
-  --text-muted: #5f8890;
+  /* #5f8890 read 4.46:1 on the elevated panel; #6794a0 clears 5.2:1. */
+  --text-muted: #6794a0;
   --accent-primary: #2fd6c8;
   --accent-hover: #54e4d6;
   --accent-secondary: #1e9e93;

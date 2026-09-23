@@ -190,7 +190,7 @@
   .dx-problems-empty strong { color: var(--text-secondary); }
   .dx-sec-label {
     margin: 0 0 8px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -233,17 +233,17 @@
     text-overflow: ellipsis;
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.02em;
     background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--accent-primary);
   }
-  .dx-card-top { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .dx-card-top { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
   .sev-chip, .cat-chip, .src-chip {
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.02em;
   }
@@ -252,9 +252,9 @@
   .cat-chip, .src-chip { background: var(--bg-tertiary); color: var(--text-muted); text-transform: capitalize; }
   .dx-card h4 { margin: 0; font-size: 15px; color: var(--text-primary); }
   .summary { margin: 6px 0 0; font-size: 13px; line-height: 1.45; color: var(--text-secondary); }
-  .mods { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .mods { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 8px; }
   .mods code {
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 6px;
     border-radius: 6px;
     background: var(--bg-tertiary);
@@ -277,7 +277,7 @@
   .dx-install-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     margin-top: 10px;
   }
   .install-chip {
@@ -286,7 +286,7 @@
     border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     color: var(--accent-primary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     cursor: pointer;
   }
@@ -300,7 +300,7 @@
   .dx-card-actions .primary {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 7px 12px;
     border-radius: var(--border-radius-sm);
     border: none;
@@ -317,7 +317,7 @@
   .dx-card-actions .ghost {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     padding: 6px 10px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
@@ -331,7 +331,7 @@
   .dx-card-actions button:disabled { opacity: 0.55; cursor: not-allowed; }
   .risk {
     margin: 8px 0 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .risk.destructive { color: var(--accent-danger); font-weight: 600; }

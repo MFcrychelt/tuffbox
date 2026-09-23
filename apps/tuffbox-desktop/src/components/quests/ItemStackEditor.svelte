@@ -279,7 +279,7 @@
 <style>
   .ise {
     display: grid;
-    gap: 6px;
+    gap: 8px;
   }
   .ise-h {
     display: flex;
@@ -288,7 +288,7 @@
     flex-wrap: wrap;
   }
   .lbl {
-    font-size: 11px;
+    font-size: 12px;
     text-transform: none;
     letter-spacing: 0;
     color: var(--ftbq-text-muted);
@@ -301,7 +301,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px;
+    font-size: 12px;
     padding: 1px 6px;
     border-radius: 2px;
     background: rgba(61, 184, 168, 0.15);
@@ -310,7 +310,7 @@
   }
   .mode {
     margin-left: auto;
-    font-size: 11px;
+    font-size: 12px;
     background: var(--ftbq-bg);
     border: 1px solid var(--ftbq-border);
     color: inherit;
@@ -320,7 +320,7 @@
   .item-row {
     display: grid;
     grid-template-columns: auto 1fr auto auto;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .item-row input,
@@ -336,8 +336,8 @@
   }
   .field {
     display: grid;
-    gap: 3px;
-    font-size: 11px;
+    gap: 8px;
+    font-size: 12px;
     text-transform: none;
     color: var(--ftbq-text-muted);
   }
@@ -367,7 +367,7 @@
     color: var(--ftbq-text-muted);
     cursor: pointer;
     padding: 6px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .mini.add {
     justify-self: start;
@@ -378,10 +378,10 @@
   }
   .kids {
     display: grid;
-    gap: 6px;
+    gap: 8px;
   }
   .extra {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .extra summary {
@@ -389,17 +389,17 @@
   }
   .tag-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     margin: 6px 0;
   }
   textarea {
     width: 100%;
     resize: vertical;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
   .err {
     margin: 0;
     color: var(--accent-danger);
-    font-size: 11px;
+    font-size: 12px;
   }
 </style>

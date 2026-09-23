@@ -327,12 +327,12 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   .inspector-name {
     margin: 0;
-    font-size: 15px;
+    font-size: 1.15rem;
     font-weight: 700;
     line-height: 1.25;
     color: var(--text-primary);
@@ -341,7 +341,7 @@
 
   .inspector-authors {
     margin: 0;
-    font-size: 12.5px;
+    font-size: 0.82rem;
     line-height: 1.35;
     color: var(--text-muted);
   }
@@ -365,13 +365,13 @@
     align-items: center;
     gap: 8px;
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: 0.85rem;
     padding: 8px 0;
   }
 
   .inspector-error {
     margin: 0;
-    font-size: 12px;
+    font-size: 0.78rem;
     color: var(--accent-danger, #f87171);
     line-height: 1.4;
   }
@@ -384,7 +384,7 @@
 
   .inspector-description {
     margin: 0;
-    font-size: 13px;
+    font-size: 0.9rem;
     line-height: 1.65;
     color: var(--text-secondary);
     white-space: pre-wrap;
@@ -395,13 +395,13 @@
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .fact-badge {
     display: inline-flex;
     align-items: center;
-    font-size: 11px;
+    font-size: 0.72rem;
     font-weight: 700;
     letter-spacing: 0.02em;
     padding: 3px 8px;
@@ -411,7 +411,7 @@
     border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
   }
   .fact-badge.mono {
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     max-width: 160px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -425,7 +425,7 @@
   }
 
   .inspector-action {
-    font-size: 12.5px;
+    font-size: 0.82rem;
     font-weight: 600;
     padding: 6px 12px;
     border-radius: var(--border-radius-sm);
@@ -449,7 +449,7 @@
     background: color-mix(in srgb, var(--accent-secondary) 4%, transparent);
   }
   .recommended-label {
-    font-size: 11px;
+    font-size: 0.72rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -457,7 +457,7 @@
   }
   .recommended p {
     margin: 4px 0 0;
-    font-size: 13px;
+    font-size: 0.85rem;
     line-height: 1.5;
     color: var(--text-secondary);
   }
@@ -466,20 +466,20 @@
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px 8px;
+    gap: 8px 8px;
     padding-top: 4px;
   }
 
   .links-label {
-    font-size: 12.5px;
+    font-size: 0.82rem;
     color: var(--text-muted);
   }
 
   .issues-link {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    font-size: 13px;
+    gap: 8px;
+    font-size: 0.85rem;
     font-weight: 600;
     color: var(--accent-primary);
     text-decoration: none;
@@ -504,7 +504,7 @@
   .license-badge {
     display: inline-flex;
     align-items: center;
-    font-size: 11px;
+    font-size: 0.72rem;
     font-weight: 700;
     letter-spacing: 0.02em;
     padding: 3px 8px;
@@ -516,7 +516,7 @@
 
   .license-muted,
   .meta-muted {
-    font-size: 12px;
+    font-size: 0.72rem;
     color: var(--text-muted);
   }
 

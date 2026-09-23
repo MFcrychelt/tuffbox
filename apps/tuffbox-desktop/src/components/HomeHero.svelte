@@ -23,6 +23,7 @@
   import { fade } from "svelte/transition";
   import type { CrashFixBannerPayload } from "../lib/homeBootstrap";
   import type { AccountEntry } from "../lib/store";
+  import { t } from "../lib/i18n";
   import AccountCarousel from "./AccountCarousel.svelte";
   import MojangNews from "./MojangNews.svelte";
 
@@ -42,7 +43,6 @@
     actionBusy = false,
     overflowOpen = false,
     signedIn = true,
-    playerName = "",
     accounts = [],
     accountSkins = null,
     activeAccountUuid = null,
@@ -86,7 +86,6 @@
     actionBusy?: boolean;
     overflowOpen?: boolean;
     signedIn?: boolean;
-    playerName?: string;
     /** Saved accounts for the mini-avatar switcher row. */
     accounts?: AccountEntry[];
     /** Cached skin PNG path per account UUID. */
@@ -155,7 +154,7 @@
 
 <section
   class={["poster", { launching, storefront: showStorefront }]}
-  aria-label="Play"
+  aria-label={$t("home.playAria")}
 >
   <div class="poster-art-stack" aria-hidden="true">
     {#key `${coverKind}:${coverUrl ?? ""}`}
@@ -198,68 +197,67 @@
   {#if hasSelection}
     <div class="poster-toolbar">
       <div class="poster-toolbar-bar">
-        <button type="button" class="glass-seg" onclick={onSettings} disabled={actionBusy} title="Instance settings" aria-label="Instance settings">
+        <button type="button" class="glass-seg" onclick={onSettings} disabled={actionBusy} title={$t("home.instanceSettings")} aria-label={$t("home.instanceSettings")}>
           <Settings size={14} />
-          <span>Instance</span>
+          <span>{$t("home.instance")}</span>
         </button>
-        <button type="button" class="glass-seg" onclick={onFolder} disabled={actionBusy} title="Open instance folder" aria-label="Open instance folder">
+        <button type="button" class="glass-seg" onclick={onFolder} disabled={actionBusy} title={$t("home.openInstanceFolder")} aria-label={$t("home.openInstanceFolder")}>
           <FolderOpen size={14} />
-          <span>Folder</span>
-        </button>
-        <button type="button" class="glass-seg" onclick={onRename} disabled={actionBusy} title="Rename instance" aria-label="Rename instance">
-          <Pencil size={14} />
-          <span>Rename</span>
-        </button>
-        <button type="button" class="glass-seg" onclick={onClone} disabled={actionBusy} title="Clone instance" aria-label="Clone instance">
-          <Copy size={14} />
-          <span>Clone</span>
+          <span>{$t("home.folder")}</span>
         </button>
         <div class="poster-overflow">
           <button
             type="button"
             class="glass-seg glass-seg-icon"
-            aria-label="More instance actions"
+            aria-label={$t("home.moreActions")}
             aria-expanded={overflowOpen}
             aria-haspopup="menu"
             disabled={actionBusy}
+            title={$t("home.moreTitle")}
             onclick={onToggleOverflow}
           >
             <MoreHorizontal size={15} />
           </button>
         </div>
-        {#if playerName}
-          <span class="poster-player" title={`Signed in as ${playerName}`}>{playerName}</span>
-        {/if}
       </div>
       {#if overflowOpen}
         <div class="poster-overflow-menu" role="menu">
+          <button type="button" role="menuitem" disabled={actionBusy} onclick={onRename}>
+            <Pencil size={14} />
+            {$t("home.rename")}
+          </button>
+          <button type="button" role="menuitem" disabled={actionBusy} onclick={onClone}>
+            <Copy size={14} />
+            {$t("home.clone")}
+          </button>
+          <div class="poster-overflow-sep" role="separator"></div>
           {#if onExportMrpack}
             <button type="button" role="menuitem" disabled={actionBusy} onclick={onExportMrpack}>
               <Package size={14} />
-              Export .mrpack
+              {$t("home.exportMrpack")}
             </button>
           {/if}
           {#if onExportServer}
             <button type="button" role="menuitem" disabled={actionBusy} onclick={onExportServer}>
               <Server size={14} />
-              Server pack
+              {$t("home.serverPack")}
             </button>
           {/if}
           {#if onRepair}
             <button type="button" role="menuitem" disabled={actionBusy} onclick={onRepair}>
               <Wrench size={14} />
-              Repair
+              {$t("home.repair")}
             </button>
           {/if}
           {#if onLogsZip}
             <button type="button" role="menuitem" disabled={actionBusy} onclick={onLogsZip}>
               <FileArchive size={14} />
-              Logs .zip
+              {$t("home.logsZip")}
             </button>
           {/if}
           <button type="button" role="menuitem" class="danger" disabled={actionBusy} onclick={onDelete}>
             <Trash2 size={14} />
-            Delete
+            {$t("common.delete")}
           </button>
         </div>
       {/if}
@@ -270,25 +268,25 @@
     <div class="poster-storefront">
       <div class="storefront-copy">
         {#if emptyZero}
-          <p class="storefront-title">No instances yet</p>
-          <p class="storefront-hint">Create a blank pack, import one you already have, or browse the library.</p>
+          <p class="storefront-title">{$t("library.emptyTitle")}</p>
+          <p class="storefront-hint">{$t("home.emptyHint")}</p>
         {:else}
-          <p class="storefront-title">Select an instance</p>
-          <p class="storefront-hint">Pick a pack from the shelf below, or create a new instance.</p>
+          <p class="storefront-title">{$t("home.selectTitle")}</p>
+          <p class="storefront-hint">{$t("home.selectHint")}</p>
         {/if}
       </div>
       <div class="storefront-ctas">
         <button type="button" class="storefront-primary" onclick={onCreate}>
           <Package size={15} />
-          Create
+          {$t("home.create")}
         </button>
         <button type="button" class="glass-seg storefront-ghost" onclick={onImport}>
           <FolderInput size={15} />
-          Import
+          {$t("home.import")}
         </button>
         <button type="button" class="glass-seg storefront-ghost" onclick={onBrowse}>
           <Search size={15} />
-          Browse
+          {$t("home.browse")}
         </button>
       </div>
     </div>
@@ -299,21 +297,21 @@
       <div class="crash-fix-banner" role="status">
         <span class="crash-fix-icon"><ShieldAlert size={18} /></span>
         <div class="crash-fix-banner-body">
-          <strong>Fix applied</strong>
+          <strong>{$t("home.fixApplied")}</strong>
           <span>
             {#if crashBanner.softVerifyStartedUnix}
-              Play about {softVerifyRemainingSecs ?? 0}s more to confirm it works.
+              {$t("home.fixSoftVerify", { n: softVerifyRemainingSecs ?? 0 })}
             {:else}
-              Launch the game to confirm the fix. You can restore anytime.
+              {$t("home.fixLaunch")}
             {/if}
           </span>
         </div>
         <div class="crash-fix-banner-actions">
           <button class="crash-restore" type="button" disabled={crashFixBusy} onclick={onRollback}>
-            Restore
+            {$t("manager.restore")}
           </button>
           <button class="crash-fix-diag" type="button" onclick={onDiagnostics}>
-            Diagnostics
+            {$t("home.diagnostics")}
           </button>
         </div>
       </div>
@@ -361,16 +359,16 @@
         >
           {#if launching}
             <span class="spinner spin" aria-hidden="true"></span>
-            <span class="play-text play-phase">{launchMessage || "Launching…"}</span>
+            <span class="play-text play-phase">{launchMessage || $t("home.launching")}</span>
             {#if launchPercent != null}
               <span class="play-pct" aria-hidden="true">{launchPercent}%</span>
             {/if}
           {:else if playStop}
             <Square size={24} fill="currentColor" />
-            <span class="play-text">Stop</span>
+            <span class="play-text">{$t("common.stop")}</span>
           {:else}
             <Play size={28} fill="currentColor" />
-            <span class="play-text">Play</span>
+            <span class="play-text">{$t("common.play")}</span>
           {/if}
         </button>
         </div>
@@ -581,7 +579,7 @@
   .glass-seg {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 12px;
     border: none;
     border-radius: 0;
@@ -630,7 +628,7 @@
     z-index: 8;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .poster-overflow-menu button {
@@ -654,6 +652,12 @@
   .poster-overflow-menu button:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+
+  .poster-overflow-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--border-color);
   }
 
   .poster-overflow-menu button.danger {
@@ -717,7 +721,7 @@
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
   }
 
-  /* Build name (left) + Play button (right) sit under the Java Updates strip. */
+  /* Build name (left) + Play button (right) sit under the news feed strip. */
   .poster-title-row {
     display: flex;
     align-items: center;
@@ -743,7 +747,7 @@
   .edit-in-btn {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     padding: 10px 16px;
     border-radius: var(--border-radius-lg);
     background: var(--glass-bg);
@@ -768,7 +772,7 @@
   }
 
   .poster-action-bar {
-    margin-top: 14px;
+    margin-top: 8px;
     width: 100%;
   }
 
@@ -779,7 +783,7 @@
     gap: 12px;
     min-width: 0;
     width: 100%;
-    padding: 10px 16px 6px;
+    padding: 6px 16px 4px;
     /* Nearly invisible block: a whisper of tint over the page background,
        no border, no shadow — the carousel floats on the page itself. */
     background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
@@ -865,7 +869,7 @@
   }
 
   .play-pct {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     opacity: 0.85;
     flex-shrink: 0;
@@ -886,23 +890,6 @@
     white-space: nowrap;
     animation: poster-in var(--motion-enter, 320ms) var(--ease-spring, ease) both;
     animation-delay: calc(var(--stagger-step, 48ms) * 1);
-  }
-
-  /* Signed-in nick — in the poster toolbar, next to the instance actions. */
-  .poster-player {
-    display: inline-flex;
-    align-items: center;
-    min-width: 0;
-    max-width: 180px;
-    margin-left: 6px;
-    padding-left: 12px;
-    border-left: 1px solid color-mix(in srgb, #fff 16%, transparent);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--hero-fg-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .poster-signin {
@@ -943,7 +930,7 @@
   .storefront-copy {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
   }
 
@@ -1018,7 +1005,7 @@
   .crash-fix-banner-body {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     flex: 1;
     min-width: 140px;
     font-size: 12px;
@@ -1033,7 +1020,7 @@
   .crash-fix-banner-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
   }
 

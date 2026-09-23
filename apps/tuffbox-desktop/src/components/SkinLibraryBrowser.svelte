@@ -512,7 +512,7 @@
     border-radius: 999px;
     background: var(--accent-primary);
     color: var(--on-accent);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
     white-space: nowrap;
     pointer-events: none;
@@ -543,7 +543,7 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 6px;
+    gap: 8px;
     padding: 10px 10px 12px;
     border-radius: var(--border-radius-md);
     background: color-mix(in srgb, var(--bg-primary, #121214) 92%, transparent);
@@ -574,7 +574,7 @@
     border-radius: var(--border-radius-sm);
     background: color-mix(in srgb, var(--badge-offline-bg, rgba(245, 158, 11, 0.12)) 60%, transparent);
     color: var(--badge-offline-fg, #fde68a);
-    font-size: 10px;
+    font-size: 12px;
     line-height: 1.35;
     text-align: center;
   }
@@ -583,7 +583,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
     width: 100%;
     padding: 7px 8px;
     border-radius: var(--border-radius-sm);

@@ -234,6 +234,53 @@
     }
   }
 
+  // ── Per-pack dedup store opt-out (docs/17) ─────────────────────────────
+  let dedupEnabled = $state(true);
+  let dedupBusy = $state(false);
+
+  async function loadDedupStatus() {
+    if (!$projectPath) return;
+    try {
+      const s: any = await invoke("dedup_project_status", { path: $projectPath });
+      dedupEnabled = s.enabled !== false;
+    } catch {
+      /* status stays at defaults */
+    }
+  }
+
+  async function setDedupEnabled(next: boolean) {
+    if (!$projectPath || dedupBusy) return;
+    dedupBusy = true;
+    error = "";
+    successMessage = "";
+    try {
+      const r: any = await invoke("dedup_project_set_enabled", {
+        path: $projectPath,
+        enabled: next,
+      });
+      dedupEnabled = r.enabled !== false;
+      if (next) {
+        const linked = r.linked ?? 0;
+        const recorded = r.recorded ?? 0;
+        successMessage =
+          `Deduplication on — ${linked} file(s) linked into the shared store` +
+          (recorded ? `, ${recorded} new unique file(s) recorded` : "") +
+          ".";
+      } else {
+        const made = r.materialized ?? 0;
+        successMessage =
+          made > 0
+            ? `Deduplication off — ${made} file(s) are now independent copies owned by this pack.`
+            : "Deduplication off — this pack already owns all of its files.";
+      }
+      await loadDedupStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      dedupBusy = false;
+    }
+  }
+
   async function migrateSchema() {
     if (!$projectPath) return;
     saving = true;
@@ -303,6 +350,7 @@
     void detectJavaPreview();
     void loadSchemaStatus();
     void loadOptionsStatus();
+    void loadDedupStatus();
     void (async () => {
       try {
         const versions = (await invoke("get_minecraft_versions")) as {
@@ -452,41 +500,40 @@
 <div class="settings-page">
   <!-- Sticky Header: pins title and save action at the top -->
   <header class="page-header sticky-header">
-    <div class="ph-text">
-      <div class="ph-title-row">
-        {#if showBack}
-          <button type="button" class="sm-btn ghost" onclick={onBack}>
-            <ArrowLeft size={16} /> Back
-          </button>
-        {/if}
-        <h1 class="page-title">Setup & Runtime Settings</h1>
-        <span
-          class="sync-pill"
-          class:unsaved={dirty}
-          title={dirty ? "You have unsaved changes" : "All changes saved to project"}
-        >
-          <span class="sync-dot" class:on={!dirty}></span>
-          {dirty ? "Unsaved changes" : "Saved"}
-        </span>
+    <div class="header-inner">
+      <div class="ph-text">
+        <div class="ph-title-row">
+          {#if showBack}
+            <button type="button" class="sm-btn ghost" onclick={onBack}>
+              <ArrowLeft size={16} /> Back
+            </button>
+          {/if}
+          <h1 class="page-title">Setup & Runtime Settings</h1>
+          <span
+            class="sync-pill"
+            class:unsaved={dirty}
+            title={dirty ? "You have unsaved changes" : "All changes saved to project"}
+          >
+            <span class="sync-dot" class:on={!dirty}></span>
+            {dirty ? "Unsaved changes" : "Saved"}
+          </span>
+        </div>
       </div>
-      <p class="ph-sub">
-        Configure Minecraft engine, mod loader, Java runtime, RAM allocation, and launch arguments.
-      </p>
-    </div>
-    <div class="header-actions">
-      {#if showBack}
-        <button type="button" class="sm-btn" onclick={onBack}>Cancel</button>
-      {/if}
-      <button
-        type="button"
-        class="primary-btn"
-        onclick={save}
-        disabled={saving || !$projectPath}
-        title="Save project settings (Ctrl+S)"
-      >
-        <Save size={15} />
-        {saving ? "Saving…" : "Save changes"}
-      </button>
+      <div class="header-actions">
+        {#if showBack}
+          <button type="button" class="sm-btn" onclick={onBack}>Cancel</button>
+        {/if}
+        <button
+          type="button"
+          class="primary-btn"
+          onclick={save}
+          disabled={saving || !$projectPath}
+          title="Save project settings (Ctrl+S)"
+        >
+          <Save size={15} />
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </div>
     </div>
   </header>
 
@@ -496,21 +543,21 @@
     </div>
   {:else}
     <div class="main-scroll-body">
-      {#if loading}
-        <div class="loading-bar">
-          <RefreshCw size={15} class="spin" />
-          <span>Fetching versions and instance metadata…</span>
-        </div>
-      {/if}
-
-      {#if error}
-        <div class="inline-error">{error}</div>
-      {/if}
-      {#if successMessage}
-        <div class="inline-success">{successMessage}</div>
-      {/if}
-
       <div class="setup-container">
+        {#if loading}
+          <div class="loading-bar">
+            <RefreshCw size={15} class="spin" />
+            <span>Fetching versions and instance metadata…</span>
+          </div>
+        {/if}
+
+        {#if error}
+          <div class="inline-error">{error}</div>
+        {/if}
+        {#if successMessage}
+          <div class="inline-success">{successMessage}</div>
+        {/if}
+
         <!-- ── Card 1: Game & Mod Loader ───────────────────────── -->
         <section class="panel glass-card">
           <div class="card-head-row">
@@ -520,8 +567,6 @@
             </div>
             <span class="card-hint-tag">Core Engine</span>
           </div>
-          <p class="card-desc">Select the target Minecraft version and loader ecosystem for this instance.</p>
-
           <div class="form-grid-3">
             <div class="field">
               <label for="mc-version" class="fl-label">Minecraft version</label>
@@ -532,7 +577,6 @@
                   </option>
                 {/each}
               </select>
-              <span class="field-hint">Base game version</span>
             </div>
 
             <div class="field">
@@ -542,7 +586,6 @@
                   <option value={l.id}>{l.label}</option>
                 {/each}
               </select>
-              <span class="field-hint">Ecosystem runtime</span>
             </div>
 
             <div class="field">
@@ -556,7 +599,6 @@
                   {/each}
                 </select>
               {/if}
-              <span class="field-hint">Build / Release tag</span>
             </div>
           </div>
         </section>
@@ -572,8 +614,6 @@
               <span class="java-badge">{javaVersion}</span>
             {/if}
           </div>
-          <p class="card-desc">Java runtime used to spawn the Minecraft client and server processes.</p>
-
           <div class="field">
             <label for="java-path" class="fl-label">Java executable path</label>
             <div class="flex-input-row">
@@ -607,9 +647,6 @@
                 </button>
               {/if}
             </div>
-            <p class="field-hint">
-              Minecraft 1.20.5+ requires Java 21; 1.18–1.20.4 requires Java 17; 1.16 and below requires Java 8.
-            </p>
           </div>
         </section>
 
@@ -625,10 +662,6 @@
               <span class="mem-sub">({memory} MB)</span>
             </div>
           </div>
-          <p class="card-desc">
-            Maximum heap memory (`-Xmx`) allocated to the game process during launch.
-          </p>
-
           <!-- Slider + Direct input side-by-side -->
           <div class="memory-control-row">
             <div class="slider-wrap">
@@ -643,9 +676,9 @@
                 aria-label="Memory slider"
               />
               <div class="slider-bounds">
-                <span>1 GB (1024 MB)</span>
+                <span>1 GB</span>
                 <span>8 GB</span>
-                <span>16 GB (16384 MB)</span>
+                <span>16 GB</span>
               </div>
             </div>
 
@@ -687,14 +720,14 @@
           <div class="recommendation-box">
             <Sparkles size={14} class="rec-icon" />
             <span>
-              <strong>Recommended:</strong> 4 GB to 6 GB for light-to-medium packs, 6 GB to 8 GB for heavy quest/tech modpacks. Allocating over 10 GB may increase GC latency unless using modern garbage collectors.
+              <strong>Recommended:</strong> 4–8 GB for most packs.
             </span>
           </div>
           {#if heapRec}
             <div class="recommendation-box mt-2">
               <Sparkles size={14} class="rec-icon" />
               <span>
-                <strong>Auto for this pack:</strong> {formatMemory(heapRec.memoryMb)} ({heapRec.memoryMb} MB) — {heapRec.modCount} mods, base {formatMemory(heapRec.baseMb)} + categories {formatMemory(heapRec.categoryMb)}.
+                <strong>Auto:</strong> {formatMemory(heapRec.memoryMb)} for {heapRec.modCount} mods.
               </span>
               <button
                 type="button"
@@ -723,10 +756,6 @@
               </button>
             </div>
           </div>
-          <p class="card-desc">
-            Custom Java Virtual Machine flags passed to the Minecraft runtime on launch.
-          </p>
-
           <div class="field">
             <textarea
               bind:value={jvmArgs}
@@ -757,7 +786,6 @@
                       <Check size={13} class="check-icon" />
                     {/if}
                   </div>
-                  <small>{preset.desc}</small>
                 </button>
               {/each}
             </div>
@@ -780,7 +808,6 @@
                   <Check size={13} class="check-icon" />
                 {/if}
               </div>
-              <small>{jvmRec.note} Leave the field empty to apply this automatically at launch.</small>
             </button>
           {/if}
         </section>
@@ -795,8 +822,6 @@
                 <h3>Player Identity</h3>
               </div>
             </div>
-            <p class="card-desc">Username used for offline test launches.</p>
-
             <div class="field">
               <label for="player-name" class="fl-label">Offline test player name</label>
               <input
@@ -806,9 +831,6 @@
                 placeholder="Player"
                 maxlength={16}
               />
-              <p class="field-hint">
-                TuffBox derives a stable offline UUID from this name (vanilla algorithm), keeping your inventory and quest progress consistent across test launches.
-              </p>
             </div>
           </section>
 
@@ -827,16 +849,12 @@
                 {/if}
               </span>
             </div>
-            <p class="card-desc">
-              Synchronize keybinds, audio, and video settings across all instances of the same Minecraft version.
-            </p>
-
             <div class="options-actions-block">
               <div class="options-status-text">
                 {#if optionsManaged}
-                  <span>Syncing with version group: <code>{optionsGroup || mcVersion}</code></span>
+                  <span>Shared group: <code>{optionsGroup || mcVersion}</code></span>
                 {:else}
-                  <span>This instance has its own isolated <code>options.txt</code>.</span>
+                  <span>Independent <code>options.txt</code></span>
                 {/if}
               </div>
 
@@ -873,6 +891,57 @@
               </div>
             </div>
           </section>
+
+          <!-- File deduplication block -->
+          <section class="panel glass-card">
+            <div class="card-head-row">
+              <div class="card-head-title">
+                <Database size={18} />
+                <h3>File deduplication</h3>
+              </div>
+              <span class="options-badge" class:shared={dedupEnabled}>
+                {#if dedupEnabled}
+                  <Share2 size={12} /> Shared store
+                {:else}
+                  <Shield size={12} /> Independent files
+                {/if}
+              </span>
+            </div>
+            <div class="options-actions-block">
+              <div class="options-status-text">
+                {#if dedupEnabled}
+                  <span>Shared file store enabled.</span>
+                {:else}
+                  <span>Independent file copies.</span>
+                {/if}
+              </div>
+
+              <div class="flex flex-wrap gap-2.5">
+                {#if dedupEnabled}
+                  <button
+                    type="button"
+                    class="sm-btn secondary-btn"
+                    onclick={() => setDedupEnabled(false)}
+                    disabled={dedupBusy}
+                    title="Replace shared files with this pack's own copies"
+                  >
+                    {dedupBusy ? "Working…" : "Turn off (make files independent)"}
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    class="sm-btn primary-action-btn"
+                    onclick={() => setDedupEnabled(true)}
+                    disabled={dedupBusy}
+                    title="Link identical files into the shared store to save disk space"
+                  >
+                    <Share2 size={13} />
+                    {dedupBusy ? "Working…" : "Turn on (share identical files)"}
+                  </button>
+                {/if}
+              </div>
+            </div>
+          </section>
         </div>
 
         <!-- ── Card 6: Advanced & Project Schema (Collapsible) ─── -->
@@ -882,7 +951,6 @@
               <Database size={16} />
               <span>Project schema & metadata</span>
             </div>
-            <span class="summary-hint">View manifest version & migration status</span>
           </summary>
 
           <div class="advanced-body">
@@ -944,12 +1012,13 @@
 
 <style>
   .settings-page {
+    --setup-page-x: 20px;
     height: 100%;
     min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    padding: 0 20px 20px;
+    padding: 0 var(--setup-page-x) 20px;
     box-sizing: border-box;
     width: 100%;
     background: rgba(0, 0, 0, 0.08);
@@ -961,8 +1030,10 @@
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-gutter: stable;
+    padding-top: 10px;
     padding-right: 4px;
     padding-bottom: 28px;
+    box-sizing: border-box;
   }
 
   /* Centered, balanced container: eliminates awkward bottom dead space */
@@ -972,62 +1043,67 @@
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 20px;
   }
 
-  /* Sticky top header */
+  /* Sticky top header — fixed: was width:calc(100%+2*pad) + negative margin
+     causing 1px horizontal shift when vertical scrollbar appears (scrollbar-gutter
+     on body is stable but header is outside scroll). Now width:auto with
+     negative margin only, no calc, so no shift and no horizontal scroll. */
   .sticky-header {
     position: sticky;
     top: 0;
     z-index: 20;
-    display: flex;
-    justify-content: space-between;
-    gap: 16px;
-    align-items: center;
-    flex-wrap: wrap;
+    width: auto;
+    box-sizing: border-box;
     flex-shrink: 0;
-    padding: 14px 4px 14px;
-    margin-bottom: 4px;
-    background: color-mix(in srgb, var(--bg-primary, #ffffff) 85%, transparent);
+    padding: 14px var(--setup-page-x);
+    margin: 0 calc(-1 * var(--setup-page-x)) 4px;
+    background: color-mix(in srgb, var(--bg-primary, #ffffff) 88%, transparent);
     -webkit-backdrop-filter: blur(16px);
     backdrop-filter: blur(16px);
     border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+  }
+
+  .header-inner {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0 4px;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    align-items: center;
+    flex-wrap: wrap;
   }
 
   .ph-text {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 8px;
   }
 
   .ph-title-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     flex-wrap: wrap;
   }
 
   .page-title {
-    font-size: 19px;
+    font-size: 21px;
     font-weight: 800;
     color: var(--text-primary);
     line-height: 1.2;
     margin: 0;
   }
 
-  .ph-sub {
-    margin: 0;
-    color: var(--text-secondary);
-    max-width: 76ch;
-    font-size: 12.5px;
-    line-height: 1.4;
-  }
-
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     margin-left: auto;
     flex-shrink: 0;
   }
@@ -1038,15 +1114,15 @@
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     box-shadow: var(--shadow-sm);
-    padding: 20px 22px;
+    padding: 22px 24px;
   }
 
   .card-head-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 4px;
+    gap: 16px;
+    margin-bottom: 16px;
     flex-wrap: wrap;
   }
 
@@ -1059,7 +1135,7 @@
 
   .card-head-title h3 {
     margin: 0;
-    font-size: 15px;
+    font-size: 17px;
     font-weight: 700;
     color: var(--text-primary);
   }
@@ -1069,37 +1145,30 @@
   }
 
   .card-hint-tag {
-    font-size: 11.5px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-muted);
-    padding: 2px 8px;
+    padding: 3px 10px;
     border-radius: 999px;
     background: var(--bg-tertiary);
   }
 
-  .card-desc {
-    font-size: 12.5px;
-    color: var(--text-secondary);
-    margin: 0 0 16px 0;
-    line-height: 1.45;
-  }
-
-  /* Form Grids */
+  /* Form Grids — increased gaps for breathability, fixes “малые отступы” */
   .form-grid-3 {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
+    gap: 16px;
   }
 
   .field {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
   }
 
   .fl-label {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-primary);
   }
@@ -1111,9 +1180,9 @@
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
     color: var(--text-primary);
-    padding: 9px 12px;
+    padding: 11px 13px;
     font-family: inherit;
-    font-size: 13.5px;
+    font-size: 14.5px;
     transition: border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
   }
 
@@ -1131,18 +1200,11 @@
     background: var(--bg-tertiary);
   }
 
-  .field-hint {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    margin: 2px 0 0;
-    line-height: 1.45;
-  }
-
   .flex-input-row {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   .java-input {
@@ -1151,9 +1213,9 @@
   }
 
   .java-badge {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 700;
-    padding: 3px 10px;
+    padding: 4px 10px;
     border-radius: var(--border-radius-sm);
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
@@ -1164,16 +1226,16 @@
   .memory-live-badge {
     display: flex;
     align-items: baseline;
-    gap: 6px;
+    gap: 8px;
   }
   .mem-highlight {
-    font-size: 19px;
+    font-size: 21px;
     font-weight: 800;
     color: var(--accent-primary);
     font-variant-numeric: tabular-nums;
   }
   .mem-sub {
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
     font-weight: 600;
   }
@@ -1181,15 +1243,15 @@
   .memory-control-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 180px;
-    gap: 20px;
+    gap: 24px;
     align-items: center;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
   }
 
   .slider-wrap {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .range-slider {
@@ -1204,25 +1266,25 @@
   .slider-bounds {
     display: flex;
     justify-content: space-between;
-    font-size: 11.5px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 700;
     color: var(--text-secondary);
   }
 
   .memory-manual-box {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   .manual-label {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-primary);
   }
   .manual-input-wrap {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .number-input {
     width: 110px;
@@ -1230,7 +1292,7 @@
     font-weight: 700;
   }
   .unit {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-secondary);
   }
@@ -1238,28 +1300,28 @@
   .memory-presets-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
+    gap: 12px;
+    margin-bottom: 16px;
     flex-wrap: wrap;
   }
   .presets-label {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-primary);
   }
   .preset-chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
   }
   .preset-chip {
-    padding: 4px 11px;
+    padding: 8px 14px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated);
     color: var(--text-primary);
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 700;
     cursor: pointer;
     transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease;
   }
@@ -1276,30 +1338,26 @@
   .recommendation-box {
     display: flex;
     align-items: flex-start;
-    gap: 8px;
-    padding: 10px 14px;
+    gap: 10px;
+    padding: 12px 16px;
     border-radius: var(--border-radius-md);
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent);
     color: var(--text-primary);
-    font-size: 12px;
-    line-height: 1.45;
-  }
-  .recommendation-box .rec-icon {
-    color: var(--accent-primary);
-    margin-top: 1px;
-    flex-shrink: 0;
+    font-size: 14px;
+    line-height: 1.5;
   }
 
   /* JVM Arguments */
   .jvm-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
+    flex-wrap: wrap;
   }
   .jvm-textarea {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12.5px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 14px;
     line-height: 1.6;
     white-space: pre;
     overflow-x: auto;
@@ -1309,20 +1367,20 @@
   .jvm-presets-section {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    margin-top: 6px;
+    gap: 10px;
+    margin-top: 8px;
   }
   .jvm-presets-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
   }
   .jvm-preset-card {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 8px;
     text-align: left;
-    padding: 9px 12px;
+    padding: 11px 14px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated);
@@ -1342,26 +1400,17 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-size: 12.5px;
+    font-size: 14px;
     font-weight: 700;
   }
-  .preset-title-row .check-icon {
-    color: var(--accent-primary);
-  }
-  .jvm-preset-card small {
-    font-size: 11px;
-    color: var(--text-secondary);
-    line-height: 1.3;
-  }
-
   /* Shared options */
   .options-badge {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    font-size: 11.5px;
+    gap: 8px;
+    font-size: 13px;
     font-weight: 700;
-    padding: 3px 9px;
+    padding: 4px 10px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
@@ -1378,7 +1427,7 @@
     gap: 12px;
   }
   .options-status-text {
-    font-size: 12.5px;
+    font-size: 14px;
     color: var(--text-secondary);
     line-height: 1.45;
   }
@@ -1401,19 +1450,13 @@
     align-items: center;
     justify-content: space-between;
     list-style: none;
-    font-size: 13.5px;
+    font-size: 14.5px;
     font-weight: 700;
     color: var(--text-primary);
   }
   .advanced-summary::-webkit-details-marker {
     display: none;
-  }
-  .summary-hint {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
-  }
-  .advanced-body {
+  }  .advanced-body {
     margin-top: 14px;
     padding-top: 14px;
     border-top: 1px solid var(--border-color);
@@ -1425,32 +1468,32 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 13px;
+    font-size: 14px;
     color: var(--text-primary);
   }
   .schema-row code {
-    font-family: ui-monospace, monospace;
-    font-size: 13px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 14px;
     font-weight: 700;
     color: var(--accent-primary);
   }
   .schema-warning {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
+    gap: 10px;
+    padding: 12px 14px;
     border-radius: var(--border-radius-md);
     background: color-mix(in srgb, var(--accent-warning) 10%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent);
     color: var(--accent-warning);
-    font-size: 12.5px;
+    font-size: 14px;
   }
   .schema-ok {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--accent-primary);
-    font-size: 12.5px;
+    font-size: 14px;
     font-weight: 600;
   }
 
@@ -1458,14 +1501,14 @@
   .primary-btn {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    height: 36px;
-    padding: 0 18px;
+    gap: 8px;
+    height: 40px;
+    padding: 0 20px;
     border: none;
     border-radius: var(--border-radius-md);
     background: linear-gradient(180deg, #10b981, #059669);
     color: #fff;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     cursor: pointer;
     box-shadow: 0 0 14px rgba(16, 185, 129, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.22);
@@ -1483,14 +1526,14 @@
   .primary-action-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 12px;
+    gap: 8px;
+    height: 38px;
+    padding: 0 16px;
     border-radius: var(--border-radius-sm);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
     background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
     color: var(--accent-primary);
-    font-size: 12.5px;
+    font-size: 14px;
     font-weight: 700;
     cursor: pointer;
     transition: background var(--motion-fast) ease;
@@ -1511,11 +1554,11 @@
   .sm-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 12px;
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
     border-radius: var(--border-radius-sm);
-    font-size: 12.5px;
+    font-size: 14px;
     font-weight: 600;
     cursor: pointer;
     transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
@@ -1533,13 +1576,13 @@
   .sync-pill {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
+    gap: 8px;
+    padding: 5px 12px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 11.5px;
+    font-size: 13px;
     font-weight: 600;
   }
   .sync-pill.unsaved {
@@ -1562,29 +1605,36 @@
     display: flex;
     justify-content: flex-end;
     align-items: center;
-    gap: 12px;
-    padding-top: 8px;
+    gap: 16px;
+    padding: 16px 0 4px;
+    margin-top: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    position: sticky;
+    bottom: 0;
+    background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+    backdrop-filter: blur(8px);
+    z-index: 5;
   }
 
   .loading-bar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 14px;
+    gap: 10px;
+    padding: 10px 16px;
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 12.5px;
-    margin-bottom: 12px;
+    font-size: 14px;
+    margin-bottom: 14px;
   }
 
   .inline-error,
   .inline-success {
-    padding: 10px 14px;
+    padding: 12px 16px;
     border-radius: var(--border-radius-md);
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
-    margin-bottom: 12px;
+    margin-bottom: 14px;
   }
   .inline-error {
     color: var(--accent-danger);
@@ -1598,6 +1648,10 @@
   }
 
   .empty-wrap {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    box-sizing: border-box;
     padding: 40px 20px;
   }
 

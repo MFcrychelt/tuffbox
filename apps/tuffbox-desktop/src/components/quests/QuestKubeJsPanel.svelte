@@ -2,7 +2,8 @@
   import { X, RefreshCw, Copy, Code2, Link2, Unlink, Plus, Save } from "@lucide/svelte";
   import CodeMirror from "svelte-codemirror-editor";
   import { javascript } from "@codemirror/lang-javascript";
-  import { oneDark } from "@codemirror/theme-one-dark";
+  import { editorThemeFor } from "../../lib/editorTheme";
+  import { completionsForExtension } from "../../lib/editorAutocomplete";
   import { EditorView } from "@codemirror/view";
   import {
     api,
@@ -12,7 +13,7 @@
     type QuestKubeJsBinding,
     type QuestKubeJsTemplateParams,
   } from "../../lib/api";
-  import { projectPath } from "../../lib/store";
+  import { projectPath, theme } from "../../lib/store";
   import { onMount } from "svelte";
 
   let {
@@ -436,7 +437,8 @@
         <CodeMirror
           bind:value={content}
           lang={javascript()}
-          theme={oneDark}
+          theme={editorThemeFor($theme)}
+          extensions={completionsForExtension("kubejs")}
           styles={{ ".cm-editor": { height: "100%", "font-size": "12px" } }}
           on:ready={(e) => onCmReady(e.detail)}
         />
@@ -476,14 +478,14 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
   .hero strong {
     font-size: 13px;
     letter-spacing: 0.02em;
   }
   .sub {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   :global(.hero-ico) {
@@ -492,15 +494,15 @@
   }
   .stats {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 14px;
     border-bottom: 1px solid var(--ftbq-border, var(--ftbq-frame));
   }
   .stat {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 11px;
+    gap: 8px;
+    font-size: 12px;
     padding: 4px 8px;
     border-radius: 2px;
     border: 1px solid var(--ftbq-border, var(--ftbq-frame));
@@ -520,7 +522,7 @@
   .ok {
     margin: 0;
     padding: 6px 14px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .err {
     color: var(--accent-danger);
@@ -555,7 +557,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 10px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--ftbq-accent-teal);
@@ -568,7 +570,7 @@
     text-transform: none;
     letter-spacing: 0;
     font-weight: 500;
-    font-size: 10px;
+    font-size: 12px;
     padding: 2px 6px;
     border-radius: 2px;
     background: rgba(61, 184, 168, 0.12);
@@ -580,7 +582,7 @@
   }
   .card {
     display: grid;
-    gap: 4px;
+    gap: 8px;
     padding: 8px;
     border: 1px solid var(--ftbq-border, var(--ftbq-frame));
     border-radius: 2px;
@@ -592,16 +594,20 @@
   .card.focus {
     box-shadow: inset 0 0 0 1px rgba(61, 184, 168, 0.55);
   }
-  .card.orphan {
+  /* Dim the CONTENT, not the glass card itself: `.card` is a backdrop-filter
+     surface (glass toggle / quiet-glass themes), and opacity on the card
+     element re-groups its backdrop layer — the WebView2 square-artifact
+     class (see scripts/check-glass-compositing.mjs). */
+  .card.orphan :is(.card-t, .meta, .row) {
     opacity: 0.9;
   }
   .card-t {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .card-t code {
-    font-size: 11px;
+    font-size: 12px;
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -615,7 +621,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 9px;
+    font-size: 12px;
     text-transform: uppercase;
     padding: 1px 5px;
     border-radius: 2px;
@@ -628,12 +634,12 @@
   }
   .meta {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .row {
     display: flex;
-    gap: 4px;
+    gap: 8px;
     flex-wrap: wrap;
   }
   .row.gen {
@@ -644,8 +650,8 @@
   .primary {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 11px;
+    gap: 8px;
+    font-size: 12px;
     padding: 4px 8px;
     border-radius: 2px;
     border: 1px solid var(--ftbq-border, var(--ftbq-frame));
@@ -669,12 +675,12 @@
     padding-top: 8px;
     border-top: 1px solid var(--ftbq-border, var(--ftbq-frame));
     display: grid;
-    gap: 6px;
+    gap: 8px;
   }
   .templates label {
     display: grid;
-    gap: 3px;
-    font-size: 10px;
+    gap: 8px;
+    font-size: 12px;
     text-transform: uppercase;
     color: var(--ftbq-text-muted);
   }
@@ -695,12 +701,12 @@
   }
   .hint {
     margin: 0;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     text-transform: none;
   }
   .hint code {
-    font-size: 10px;
+    font-size: 12px;
   }
   .empty {
     margin: 8px 0;

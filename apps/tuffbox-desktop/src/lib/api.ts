@@ -985,6 +985,8 @@ export interface ExportResult {
   path: string;
   fileCount: number;
   overrideCount: number;
+  /** Non-fatal problems: files skipped because they were unreadable. */
+  warnings?: string[] | null;
 }
 
 export interface ExportIssue {
@@ -1026,6 +1028,9 @@ export interface ModInfo {
   clientSide?: string | null;
   serverSide?: string | null;
   contentType?: string;
+  /** Present since list_mods started reporting manifest status. */
+  disabled?: boolean;
+  status?: string[];
 }
 
 export interface SearchResult {
@@ -1176,6 +1181,16 @@ export interface WorldBackupEntry {
   sizeFormatted: string;
   /** Unix epoch seconds (file mtime). */
   createdAt: number;
+}
+
+export interface ScreenshotEntry {
+  fileName: string;
+  /** Absolute path — render via convertFileSrc (asset protocol). */
+  path: string;
+  sizeBytes: number;
+  sizeFormatted: string;
+  /** Unix epoch milliseconds (file mtime). */
+  modifiedMs: number;
 }
 
 export interface ContentPackEntry {
@@ -2121,6 +2136,11 @@ export const api = {
     readIcon(worldName: string, p?: string) {
       return cmd<string | null>("read_world_icon", { ...pathArg(p), worldName });
     },
+    /** Instance screenshots (newest first) for the manager grid. */
+    listScreenshots(p?: string) { return cmd<ScreenshotEntry[]>("list_screenshots", pathArg(p)); },
+    deleteScreenshot(fileName: string, p?: string) {
+      return cmd<void>("delete_screenshot", { ...pathArg(p), fileName });
+    },
     /** Open bundled Querz MCA Selector for this world (File → Open Recent). No download. */
     openMcaSelector(worldName: string, p?: string) {
       return cmd<void>("open_mca_selector", { ...pathArg(p), worldName });
@@ -2847,12 +2867,37 @@ export const api = {
   // ── Modpack library (remote browse + import) ─────────────────────
   modpacks: {
     getModpackUrl(projectId: string) { return cmd<string>("get_modrinth_pack_download", { projectId }); },
-    install(url: string, targetDir: string, instanceName: string) {
-      return cmd<{ path: string; download?: Record<string, unknown> }>("install_modpack", {
+    install(url: string, targetDir: string, instanceName: string, dedup?: boolean | null) {
+      return cmd<{
+        path: string;
+        download?: Record<string, unknown>;
+        dedup?: Record<string, unknown>;
+      }>("install_modpack", {
         source: url,
         targetDir,
         instanceName,
+        dedup: dedup ?? null,
       });
+    },
+  },
+
+  // ── Personal YouTube feed (own channels via the RSS hub) ──────────
+  youtubeMyFeed: {
+    lookup(query: string) {
+      return cmd<{ channelId: string; label: string }>("youtube_my_feed_lookup", { query });
+    },
+    fetch(channelIds: string[]) {
+      return cmd<{
+        videos: {
+          videoId: string;
+          title: string;
+          thumbnailUrl: string | null;
+          channelName: string | null;
+          viewCount: number | null;
+          publishedAt: string | null;
+        }[];
+        errors: string[];
+      }>("youtube_my_feed_fetch", { channelIds });
     },
   },
 
@@ -3043,6 +3088,8 @@ export const api = {
     },
     deleteProject(p?: string) { return cmd<void>("delete_project", pathArg(p)); },
     cloneProject(newName: string, p?: string) { return cmd<string>("clone_project", { ...pathArg(p), newName }); },
+    /** Renames the instance (manifest display name; folder path is unchanged). */
+    rename(newName: string, p?: string) { return cmd<string>("rename_project", { ...pathArg(p), newName }); },
     createDesktopShortcut(p?: string) {
       return cmd<string>("create_project_desktop_shortcut", pathArg(p));
     },
@@ -3079,6 +3126,7 @@ export const api = {
     getAuthStatus() { return cmd<AuthState>("mc_get_auth_status"); },
     logout() { return cmd<AuthState>("mc_logout"); },
     refreshProfile() { return cmd<McProfile>("mc_refresh_profile"); },
+    refreshToken() { return cmd<AuthState>("mc_refresh_token"); },
     getSkinPath(uuid: string) { return cmd<string>("mc_get_skin_path", { uuid }); },
     fetchSkinUrl(uuid: string) { return cmd<string | null>("mc_fetch_skin_url", { uuid }); },
     fetchSkinForUsername(username: string, source: SkinSource) {

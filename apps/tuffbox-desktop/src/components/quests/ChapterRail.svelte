@@ -157,7 +157,7 @@
   <div class="rail-list flex-1 overflow-y-auto min-h-0 flex flex-col py-1">
     {#each groups as g (g.key)}
       {#if groups.length > 1 || g.key}
-        <button type="button" class="group-h flex items-center gap-1 w-full pt-2 px-2.5 pb-1" onclick={() => toggleGroup(g.key)} aria-expanded={!collapsed.has(g.key)}>
+        <button type="button" class="group-h flex items-center gap-2 w-full pt-2 px-2.5 pb-1" onclick={() => toggleGroup(g.key)} aria-expanded={!collapsed.has(g.key)}>
           {#if collapsed.has(g.key)}<ChevronRight size={12} class="flex-shrink-0" />{:else}<ChevronDown size={12} class="flex-shrink-0" />{/if}
           <span>{g.label}</span>
           <span class="group-count">{g.chapters.length}</span>
@@ -286,7 +286,7 @@
   .rail-h h3 {
     margin: 0;
     color: var(--text-muted, var(--ftbq-text-muted));
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.04em;
     font-weight: 600;
     text-shadow: none;
@@ -324,7 +324,7 @@
     border: none;
     background: transparent;
     color: var(--ftbq-text-muted);
-    font-size: 10px;
+    font-size: 12px;
     letter-spacing: 0.04em;
     cursor: pointer;
     font-weight: 600;
@@ -334,7 +334,7 @@
   }
   .group-count {
     margin-left: auto;
-    font-size: 9px;
+    font-size: 12px;
     font-weight: 700;
     padding: 1px 6px;
     border-radius: 999px;
@@ -415,7 +415,7 @@
     background: transparent;
     color: var(--ftbq-text);
     padding: 8px 10px;
-    font-size: 11px;
+    font-size: 12px;
     cursor: pointer;
   }
   .ch-menu button:hover {
@@ -427,7 +427,7 @@
   .ico.tiny {
     width: 18px;
     height: 18px;
-    font-size: 11px;
+    font-size: 12px;
     padding: 0;
   }
   .glyph {
@@ -440,7 +440,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     color: var(--ftbq-text);
     box-shadow: none;
@@ -454,7 +454,7 @@
   }
   .ch-text {
     display: grid;
-    gap: 1px;
+    gap: 8px;
     min-width: 0;
     flex: 1;
   }
@@ -466,7 +466,7 @@
     font-weight: 600;
   }
   .ch-text span {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .title-edit {
@@ -480,7 +480,7 @@
   }
   .dot {
     color: var(--ftbq-quest-started);
-    font-size: 10px;
+    font-size: 12px;
   }
   .save-ch {
     width: calc(100% - 16px);
@@ -488,7 +488,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
     padding: 7px;
     border-radius: var(--ftbq-radius-control);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
@@ -496,7 +496,7 @@
     box-shadow: none;
     color: #fff;
     text-shadow: none;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     cursor: pointer;
   }

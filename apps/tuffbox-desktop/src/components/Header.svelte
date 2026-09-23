@@ -34,7 +34,12 @@
 
   onMount(() => {
     void refreshOnline();
-    onlineTimer = setInterval(() => void refreshOnline(), 15000);
+    // Cosmetic "online now" counter: 30s cadence, and no Supabase
+    // round-trip at all while the window is minimized / occluded.
+    onlineTimer = setInterval(() => {
+      if (document.hidden) return;
+      void refreshOnline();
+    }, 30000);
   });
 
   onDestroy(() => {
@@ -213,7 +218,7 @@
   .left {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     min-width: 0;
     position: relative;
   }
@@ -221,13 +226,13 @@
   .title-swap {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .breadcrumb {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-muted);
   }

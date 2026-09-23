@@ -37,14 +37,14 @@
   .placement-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
-    padding: 5px 8px;
+    padding: 5px 10px;
     border: 1px solid transparent;
     border-radius: var(--border-radius-sm);
     background: transparent;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
   }

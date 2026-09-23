@@ -989,7 +989,10 @@ pub fn download_with_sha1(
         // `download_streaming` writes atomically through a `.part` file. A
         // bad/empty destination must be removed first or a no-checksum
         // artifact would be mistaken for a completed download forever.
+        // The destination may be a read-only dedup-store hardlink — clear
+        // the attribute first (remove on a read-only file fails on Windows).
         if path.is_file() {
+            crate::fs_util::clear_readonly(path);
             fs::remove_file(path)?;
         } else {
             return Err(InstallError::Integrity(format!(

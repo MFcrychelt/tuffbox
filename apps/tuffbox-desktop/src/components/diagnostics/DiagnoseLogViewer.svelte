@@ -274,17 +274,17 @@
     color: var(--text-primary);
     font-size: 13px;
   }
-  .log-meta { color: var(--text-muted); font-size: 11px; font-weight: 500; }
+  .log-meta { color: var(--text-muted); font-size: 12px; font-weight: 500; }
   .log-viewer-actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .log-search {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     margin: 0;
     padding: 4px 8px;
     border-radius: var(--border-radius-sm);
@@ -301,7 +301,7 @@
     font-size: 12px;
     outline: none;
   }
-  .log-match-count { font-size: 11px; color: var(--text-muted); min-width: 36px; text-align: center; }
+  .log-match-count { font-size: 12px; color: var(--text-muted); min-width: 36px; text-align: center; }
   .log-viewer-actions .ghost.mini.active {
     border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
     color: var(--accent-primary);
@@ -312,7 +312,7 @@
     max-height: min(62vh, 720px);
     overflow: auto;
     background: #0a0a0c;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
     line-height: 1.55;
   }

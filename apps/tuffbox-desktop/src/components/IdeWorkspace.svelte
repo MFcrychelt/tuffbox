@@ -17,6 +17,9 @@
     ScrollText,
     Circle,
     Map as MapIcon,
+    Plus,
+    RotateCcw,
+    X,
   } from "@lucide/svelte";
   import {
     projectPath,
@@ -31,23 +34,57 @@
     pushIdeRecent,
   } from "../lib/store";
   import { onDestroy, onMount } from "svelte";
-  import ProjectSettings from "./ProjectSettings.svelte";
-  import Mods from "./Mods.svelte";
-  import Graph from "./Graph.svelte";
-  import ConfigEditor from "./ConfigEditor.svelte";
-  import Diagnostics from "./Diagnostics.svelte";
-  import Snapshots from "./Snapshots.svelte";
-  import TestRuns from "./TestRuns.svelte";
-  import ChangeHistory from "./ChangeHistory.svelte";
-  import OreGenVisualizer from "./OreGenVisualizer.svelte";
-  import World from "./World.svelte";
-  import RecipeBrowser from "./RecipeBrowser.svelte";
-  import QuestEditor from "./QuestEditor.svelte";
-  import ExportBuilder from "./ExportBuilder.svelte";
-  import ReleaseRoom from "./ReleaseRoom.svelte";
+  import type { Component } from "svelte";
+  // Stage canvases load on demand — mounting the workspace must not parse the
+  // whole production suite (Mods/Quests/Graph/…) at once; each stage arrives
+  // when first opened (mirrors App.svelte VIEW_LOADERS).
+  const STAGE_LOADERS: Record<StageId, () => Promise<{ default: Component }>> = {
+    brief: () => import("./BriefEditor.svelte"),
+    setup: () => import("./ProjectSettings.svelte"),
+    content: () => import("./Mods.svelte"),
+    quests: () => import("./QuestEditor.svelte"),
+    recipes: () => import("./RecipeBrowser.svelte"),
+    "world-map": () => import("./World.svelte"),
+    "ore-gen": () => import("./OreGenVisualizer.svelte"),
+    resolve: () => import("./Graph.svelte"),
+    configs: () => import("./ConfigEditor.svelte"),
+    history: () => import("./ChangeHistory.svelte"),
+    test: () => import("./TestRuns.svelte"),
+    diagnose: () => import("./Diagnostics.svelte"),
+    snapshots: () => import("./Snapshots.svelte"),
+    export: () => import("./ExportBuilder.svelte"),
+    release: () => import("./ReleaseRoom.svelte"),
+  };
+  const stageCache = new Map<StageId, Component>();
+  let stageComp = $state<Component | null>(null);
+  let stageCompFor = $state<StageId | null>(null);
+  let stageLoadError = $state<string | null>(null);
+
+  async function mountStage(id: StageId) {
+    const cached = stageCache.get(id);
+    if (cached) {
+      stageComp = cached;
+      stageCompFor = id;
+      stageLoadError = null;
+      return;
+    }
+    stageComp = null;
+    stageCompFor = id;
+    stageLoadError = null;
+    try {
+      const mod = await STAGE_LOADERS[id]();
+      stageCache.set(id, mod.default);
+      if (stageCompFor === id) stageComp = mod.default;
+    } catch (e) {
+      if (stageCompFor === id) stageLoadError = String(e);
+    }
+  }
+  $effect(() => {
+    void mountStage(activeStage);
+  });
   import GithubPackUpdateBanner from "./GithubPackUpdateBanner.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
-  import BriefEditor from "./BriefEditor.svelte";
+  import { portal } from "../lib/portal";
   import IdeNextBar from "./IdeNextBar.svelte";
 
   type StageId =
@@ -199,6 +236,63 @@
     },
   ];
 
+  // ── Closable tabs: the rail hides stages on request; navigation onto a
+  // hidden stage reopens it automatically. Persisted per app, not per project.
+  const HIDDEN_STAGES_KEY = "tuffbox.ide.hiddenStages";
+
+  function loadHiddenStages(): Set<StageId> {
+    try {
+      const raw = localStorage.getItem(HIDDEN_STAGES_KEY);
+      const list: unknown = raw ? JSON.parse(raw) : [];
+      const valid = Array.isArray(list)
+        ? (list as unknown[]).filter((id): id is StageId =>
+            stages.some((s) => s.id === id),
+          )
+        : [];
+      // At least one tab must stay visible — reset a corrupt "all hidden" state.
+      if (valid.length >= stages.length) return new Set();
+      return new Set(valid);
+    } catch {
+      return new Set();
+    }
+  }
+
+  let hiddenStages = $state<Set<StageId>>(loadHiddenStages());
+  $effect(() => {
+    try {
+      localStorage.setItem(HIDDEN_STAGES_KEY, JSON.stringify([...hiddenStages]));
+    } catch {
+      /* ignore quota / private mode */
+    }
+  });
+
+  const visibleStages = $derived(stages.filter((s) => !hiddenStages.has(s.id)));
+
+  function closeStage(id: StageId) {
+    if (hiddenStages.size >= stages.length - 1) return; // keep one tab visible
+    const next = new Set(hiddenStages);
+    next.add(id);
+    hiddenStages = next;
+    if (activeStage === id) {
+      // Jump to the nearest still-visible neighbour (dirty-leave guards run
+      // inside goToStage, so unsaved Tune/Brief/Quests edits stay protected).
+      const order = stages.filter((s) => !next.has(s.id));
+      const after = order.find((s) => stages.findIndex((x) => x.id === s.id) > stages.findIndex((x) => x.id === id));
+      goToStage((after ?? order[0]).id);
+    }
+  }
+
+  function reopenStage(id: StageId) {
+    if (!hiddenStages.has(id)) return;
+    const next = new Set(hiddenStages);
+    next.delete(id);
+    hiddenStages = next;
+  }
+
+  function reopenAllStages() {
+    hiddenStages = new Set();
+  }
+
   /** Stage chords when IDE focused (avoid App Ctrl+1… Home shortcuts). */
   const STAGE_CHORD: Record<string, StageId> = {
     "1": "content",
@@ -213,19 +307,52 @@
     "0": "brief",
   };
 
+  // Reverse lookup for tooltip / chord badge — keeps discoverability of the
+  // non-sequential mapping (1→Content … 0→Brief) without cluttering the label.
+  const CHORD_FOR_STAGE: Record<StageId, string> = Object.fromEntries(
+    Object.entries(STAGE_CHORD).map(([k, v]) => [v, k]),
+  ) as Record<StageId, string>;
+  function stageTooltip(stage: Stage): string {
+    const chord = CHORD_FOR_STAGE[stage.id];
+    const chordHint = chord ? ` • Ctrl+${chord}` : "";
+    return `${stage.goal}${chordHint} • [ / ] соседние • Right-click to hide`;
+  }
+
   let activeStage = $state<StageId>("content");
   let leaveConfirmOpen = $state(false);
+  // Expose for browser preview / e2e — set synchronously so puppeteer can call immediately after navigation
+  if (typeof window !== "undefined") {
+    (window as any).__setIdeStage = (s: string) => goToStage(s as StageId);
+    (window as any).__getIdeStage = () => activeStage;
+  }
+  $effect(() => {
+    if (typeof window !== "undefined") {
+      (window as any).__setIdeStage = (s: string) => goToStage(s as StageId);
+      (window as any).__getIdeStage = () => activeStage;
+    }
+  });
   let pendingStage = $state<StageId | null>(null);
   let leaveKind = $state<"tune" | "brief" | "quests">("tune");
 
   function goAdjacentStage(dir: -1 | 1) {
-    const index = stages.findIndex((s) => s.id === activeStage);
-    if (index < 0) return;
-    const next = stages[index + dir];
+    const visible = visibleStages;
+    if (visible.length === 0) return;
+    const index = visible.findIndex((s) => s.id === activeStage);
+    if (index < 0) {
+      goToStage(visible[0].id);
+      return;
+    }
+    const next = visible[index + dir];
     if (next) goToStage(next.id);
   }
 
   function goToStage(id: StageId) {
+    if (hiddenStages.has(id)) {
+      // Navigating onto a closed tab (chord, IdeNextBar, library links) reopens it.
+      const next = new Set(hiddenStages);
+      next.delete(id);
+      hiddenStages = next;
+    }
     if (id === activeStage) return;
     if (activeStage === "configs" && $tuneDirty) {
       leaveKind = "tune";
@@ -268,6 +395,60 @@
     leaveConfirmOpen = false;
     pendingStage = null;
   }
+
+  // ── Rail tab context menus (right-click: close / reopen) ──
+  /** Menu anchored at the pointer; `stageId` set → per-tab menu, null → rail menu. */
+  let tabMenu = $state<{ x: number; y: number; stageId: StageId | null } | null>(null);
+
+  const MENU_W = 220;
+  const MENU_H = 260;
+  function menuPosition(e: MouseEvent): { x: number; y: number } {
+    const pad = 8;
+    let x = e.clientX;
+    let y = e.clientY;
+    if (x + MENU_W > window.innerWidth - pad) x = window.innerWidth - MENU_W - pad;
+    // The rail hugs the bottom edge — open the menu upward from the click.
+    if (y + MENU_H > window.innerHeight - pad) y = window.innerHeight - MENU_H - pad;
+    return { x: Math.max(pad, x), y: Math.max(pad, y) };
+  }
+
+  function openTabMenu(e: MouseEvent, id: StageId) {
+    e.preventDefault();
+    e.stopPropagation();
+    const { x, y } = menuPosition(e);
+    tabMenu = { x, y, stageId: id };
+  }
+
+  function openRailMenu(e: MouseEvent) {
+    if ((e.target as HTMLElement | null)?.closest?.(".stage-tab, .stage-add")) return;
+    e.preventDefault();
+    const { x, y } = menuPosition(e);
+    tabMenu = { x, y, stageId: null };
+  }
+
+  function closeTabMenu() {
+    tabMenu = null;
+  }
+
+  $effect(() => {
+    function onGlobalPointerDown(e: MouseEvent) {
+      if (!tabMenu) return;
+      if ((e.target as HTMLElement | null)?.closest?.(".ide-ctx-menu")) return;
+      tabMenu = null;
+    }
+    function onGlobalKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && tabMenu) {
+        e.stopPropagation();
+        tabMenu = null;
+      }
+    }
+    window.addEventListener("pointerdown", onGlobalPointerDown, true);
+    window.addEventListener("keydown", onGlobalKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onGlobalPointerDown, true);
+      window.removeEventListener("keydown", onGlobalKey, true);
+    };
+  });
 
   $effect(() => {
     ideActiveStage.set(activeStage);
@@ -460,43 +641,28 @@
       {#if $projectPath}
         <GithubPackUpdateBanner />
       {/if}
-      {#if activeStage === "brief"}
-        <BriefEditor />
-      {:else if activeStage === "setup"}
-        {#if $projectPath}
-          <ProjectSettings showBack={false} stayAfterSave={true} />
+      {#if activeStage === "setup" && !$projectPath}
+        <div class="skeleton-page">
+          <h2>No project opened</h2>
+          <p>Go to Home, create or open an instance, then return to the IDE workflow.</p>
+        </div>
+      {:else if stageComp && stageCompFor === activeStage}
+        {#if activeStage === "setup"}
+          {@const StageView = stageComp}
+          <StageView showBack={false} stayAfterSave={true} />
         {:else}
-          <div class="skeleton-page">
-            <h2>No project opened</h2>
-            <p>Go to Home, create or open an instance, then return to the IDE workflow.</p>
-          </div>
+          {@const StageView = stageComp}
+          <StageView />
         {/if}
-      {:else if activeStage === "quests"}
-        <QuestEditor />
-      {:else if activeStage === "recipes"}
-        <RecipeBrowser />
-      {:else if activeStage === "world-map"}
-        <World />
-      {:else if activeStage === "ore-gen"}
-        <OreGenVisualizer />
-      {:else if activeStage === "content"}
-        <Mods />
-      {:else if activeStage === "resolve"}
-        <Graph />
-      {:else if activeStage === "configs"}
-        <ConfigEditor />
-      {:else if activeStage === "history"}
-        <ChangeHistory />
-      {:else if activeStage === "test"}
-        <TestRuns />
-      {:else if activeStage === "diagnose"}
-        <Diagnostics />
-      {:else if activeStage === "snapshots"}
-        <Snapshots />
-      {:else if activeStage === "export"}
-        <ExportBuilder />
-      {:else if activeStage === "release"}
-        <ReleaseRoom />
+      {:else if stageLoadError}
+        <div class="skeleton-page">
+          <h2>Stage failed to load</h2>
+          <p>{stageLoadError}</p>
+        </div>
+      {:else}
+        <div class="skeleton-page">
+          <p>Loading…</p>
+        </div>
       {/if}
     </div>
   </section>
@@ -509,27 +675,35 @@
       onmouseleave={() => scheduleHideRail()}
     ></div>
   {/if}
+  <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
   <nav
     class="workflow-rail"
     class:revealed={railRevealed || !$autoHideWorkflowRail}
     aria-label="Modpack production workflow"
+    role="tablist"
     onmouseenter={revealRail}
     onmouseleave={() => scheduleHideRail()}
     onfocusin={revealRail}
     onfocusout={onRailFocusOut}
+    oncontextmenu={openRailMenu}
   >
-    {#each stages as stage (stage.id)}
+    {#each visibleStages as stage (stage.id)}
       {@const StageIcon = stage.icon}
+      {@const chord = CHORD_FOR_STAGE[stage.id]}
       <button
         class="stage-tab"
         class:active={activeStage === stage.id}
+        role="tab"
+        aria-selected={activeStage === stage.id}
+        aria-current={activeStage === stage.id ? "step" : undefined}
+        data-chord={chord ?? undefined}
         onclick={(e) => {
           goToStage(stage.id);
           if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
           scheduleHideRail(320);
         }}
-        title={stage.goal}
-        aria-current={activeStage === stage.id ? "step" : undefined}
+        oncontextmenu={(e) => openTabMenu(e, stage.id)}
+        title={stageTooltip(stage)}
       >
         <span class="stage-status" aria-hidden="true">
           <Circle size={12} fill={activeStage === stage.id ? "currentColor" : "none"} />
@@ -539,10 +713,85 @@
           <strong>{stage.label}</strong>
           <small>{stage.short}</small>
         </span>
+        {#if chord}
+          <span class="stage-chord" aria-hidden="true">{chord}</span>
+        {/if}
       </button>
     {/each}
+    {#if hiddenStages.size > 0}
+      <button
+        class="stage-add"
+        title="Reopen closed tabs"
+        aria-label={`Reopen closed tabs (${hiddenStages.size})`}
+        onclick={(e) => {
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          tabMenu = {
+            x: Math.max(8, Math.min(rect.left, window.innerWidth - MENU_W - 8)),
+            y: Math.max(8, rect.top - MENU_H),
+            stageId: null,
+          };
+        }}
+      >
+        <Plus size={16} />
+      </button>
+    {/if}
   </nav>
 </div>
+
+{#if tabMenu}
+  <div
+    class="ide-ctx-menu"
+    use:portal
+    style={`position:fixed; left:${tabMenu.x}px; top:${tabMenu.y}px; z-index:10000`}
+    role="menu"
+  >
+    {#if tabMenu.stageId}
+      {@const menuStage = stages.find((s) => s.id === tabMenu?.stageId)}
+      {#if menuStage}
+        {@const MenuIcon = menuStage.icon}
+        <button
+          type="button"
+          role="menuitem"
+          class="danger"
+          disabled={visibleStages.length <= 1}
+          title={visibleStages.length <= 1 ? "At least one tab stays open" : `Hide ${menuStage.label} from the rail`}
+          onclick={() => {
+            const id = menuStage.id;
+            closeTabMenu();
+            closeStage(id);
+          }}
+        >
+          <X size={14} /> Close {menuStage.label}
+        </button>
+      {/if}
+    {/if}
+    {#if hiddenStages.size > 0}
+      {#if tabMenu.stageId}
+        <div class="menu-sep"></div>
+      {/if}
+      <div class="menu-title">Reopen</div>
+      {#each stages.filter((s) => hiddenStages.has(s.id)) as hidden (hidden.id)}
+        {@const HiddenIcon = hidden.icon}
+        <button
+          type="button"
+          role="menuitem"
+          onclick={() => {
+            closeTabMenu();
+            reopenStage(hidden.id);
+          }}
+        >
+          <HiddenIcon size={14} /> {hidden.label}
+        </button>
+      {/each}
+      <div class="menu-sep"></div>
+      <button type="button" role="menuitem" onclick={() => { closeTabMenu(); reopenAllStages(); }}>
+        <RotateCcw size={14} /> Reopen all
+      </button>
+    {:else if !tabMenu.stageId}
+      <div class="menu-empty">No closed tabs</div>
+    {/if}
+  </div>
+{/if}
 
 {#if leaveConfirmOpen}
   <ConfirmDialog
@@ -697,11 +946,23 @@
     left: 0;
     right: 0;
     bottom: 0;
-    /* Slim strip: the editor's horizontal scrollbar sits 8px above the bottom
-       edge (cm-scroller padding-bottom), so this zone no longer sits on top of
-       the scrollbar and stealing its pointer events. */
-    height: 12px;
+    /* Visible handle when rail is hidden — 2px accent line hint that the
+       workflow rail lives at the bottom. The 12px invisible zone is kept
+       for hover, but the handle itself is a subtle line the user can see. */
+    height: 14px;
     z-index: 6;
+    background: linear-gradient(
+      to top,
+      color-mix(in srgb, var(--accent-primary) 10%, transparent) 0%,
+      transparent 60%
+    );
+    border-top: 2px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
+    opacity: 0.95;
+    transition: opacity 0.16s ease, border-color 0.16s ease;
+  }
+  .ide-workspace.auto-hide-rail:has(.workflow-rail.revealed) .rail-hotzone {
+    opacity: 0;
+    pointer-events: none;
   }
 
   .workflow-rail {
@@ -709,9 +970,9 @@
     display: flex;
     flex-wrap: wrap;
     align-items: stretch;
-    gap: 4px;
+    gap: 8px;
     min-width: 0;
-    padding: 8px 12px;
+    padding: 10px 12px;
     overflow: visible;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
@@ -746,10 +1007,6 @@
       visibility 0s linear 0s;
   }
 
-  .ide-workspace.auto-hide-rail:has(.workflow-rail.revealed) .rail-hotzone {
-    pointer-events: none;
-  }
-
   .stage-tab {
     min-width: 0;
     min-height: 52px;
@@ -760,14 +1017,24 @@
     background: transparent;
     color: var(--text-secondary);
     border: 1px solid transparent;
+    position: relative;
   }
 
-  .stage-tab:hover,
-  .stage-tab.active {
+  .stage-tab:hover {
     transform: none;
     background: var(--bg-tertiary);
-    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
     color: var(--text-primary);
+  }
+
+  .stage-tab.active {
+    transform: none;
+    background: color-mix(in srgb, var(--accent-primary) 14%, var(--bg-tertiary));
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    color: var(--text-primary);
+    box-shadow:
+      inset 0 -2px 0 var(--accent-primary),
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 18%, transparent);
   }
 
   .stage-tab.active .stage-status {
@@ -783,6 +1050,131 @@
     display: grid;
     flex: 0 0 auto;
     place-items: center;
+    color: var(--text-muted);
+  }
+
+  /* Shortcut badge — tiny number showing the Ctrl+chord, visible on hover/active
+     and always for screen-reader discoverability via title. Keeps the rail
+     scannable without adding a permanent label column. */
+  .stage-chord {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    min-width: 14px;
+    height: 14px;
+    display: grid;
+    place-items: center;
+    padding: 0 3px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent);
+    color: var(--accent-primary);
+    font: 700 12px/1 var(--font-mono, monospace);
+    opacity: 0;
+    transform: scale(0.9);
+    transition:
+      opacity 0.14s ease,
+      transform 0.14s ease;
+    pointer-events: none;
+  }
+  .stage-tab:hover .stage-chord,
+  .stage-tab.active .stage-chord,
+  .stage-tab:focus-visible .stage-chord {
+    opacity: 1;
+    transform: scale(1);
+  }
+  /* On wider rails the chord sits inline after the label to avoid overlap
+     with the icon on narrow columns — but absolute is cleaner for the bottom
+     rail, so keep it pinned to the corner across breakpoints. */
+  @media (max-width: 720px) {
+    .stage-chord {
+      top: 2px;
+      right: 4px;
+      font-size: 12px;
+      min-width: 14px;
+      height: 14px;
+    }
+  }
+
+  /* "+" reopen pill at the rail end — visible while tabs are closed. */
+  .stage-add {
+    flex: 0 0 auto;
+    align-self: center;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    margin-left: 2px;
+    padding: 0;
+    border: 1px dashed color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--accent-primary);
+    cursor: pointer;
+    transform: none;
+  }
+  .stage-add:hover {
+    background: var(--bg-tertiary);
+    border-style: solid;
+  }
+
+  /* Right-click menu for the rail tabs (opens upward, clamped). */
+  .ide-ctx-menu {
+    display: flex;
+    flex-direction: column;
+    min-width: 210px;
+    max-height: min(320px, 46vh);
+    overflow-y: auto;
+    padding: 4px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-primary);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.4);
+  }
+  .ide-ctx-menu button[role="menuitem"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 9px;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+    transform: none;
+  }
+  .ide-ctx-menu button[role="menuitem"]:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .ide-ctx-menu button[role="menuitem"]:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .ide-ctx-menu button[role="menuitem"].danger {
+    color: var(--accent-danger);
+  }
+  .ide-ctx-menu .menu-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--border-color);
+  }
+  .ide-ctx-menu .menu-title {
+    padding: 3px 9px 4px;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .ide-ctx-menu .menu-empty {
+    padding: 7px 9px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -804,7 +1196,7 @@
 
   .stage-text small {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .skeleton-page {
@@ -818,61 +1210,6 @@
   .skeleton-page p {
     color: var(--text-muted);
   }
-
-
-  .page-header {
-    display: flex;
-    justify-content: space-between;
-    gap: 16px;
-    align-items: flex-start;
-  }
-
-  .inline-error,
-  .inline-success {
-    margin-top: 12px;
-    padding: 10px 12px;
-    border-radius: var(--border-radius-md);
-    border: 1px solid var(--border-color);
-  }
-
-  .inline-error {
-    color: var(--accent-danger);
-    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
-    border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent);
-  }
-
-  .inline-success {
-    color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
-  }
-
-  .brief-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
-    margin-top: 18px;
-  }
-
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    color: var(--text-secondary);
-    font-weight: 700;
-  }
-
-  textarea {
-    min-height: 120px;
-    resize: vertical;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-    padding: 12px;
-    font-family: inherit;
-  }
-
 
   @media (max-width: 1100px) {
     .stage-content {
@@ -898,12 +1235,12 @@
 
     .stage-tab {
       flex-direction: column;
-      gap: 4px;
+      gap: 8px;
       padding-inline: 6px;
     }
 
     .stage-text small {
-      font-size: 10px;
+      font-size: 12px;
     }
   }
 </style>

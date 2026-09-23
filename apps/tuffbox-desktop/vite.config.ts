@@ -45,6 +45,10 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    // Browser preview (e2b.app sandbox proxy) hits the dev server through a
+    // generated *.e2b.app host — allow it or Vite answers 403.
+    allowedHosts: true,
+
     hmr: host
       ? {
           protocol: "ws",
@@ -65,5 +69,13 @@ export default defineConfig(async () => ({
         : "safari13",
     minify: process.env.TAURI_ENV_DEBUG ? false : "esbuild",
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    // Two entries: the main IDE shell and the standalone "Browse content"
+    // window (mods-browser.html) that opens beside the IDE.
+    rollupOptions: {
+      input: {
+        main: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "index.html"),
+        modsBrowser: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "mods-browser.html"),
+      },
+    },
   },
 }));

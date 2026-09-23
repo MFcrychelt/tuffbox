@@ -363,7 +363,10 @@ pub(crate) fn copy_dir_recursive(from: &Path, to: &Path) -> Result<(), String> {
         if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
             copy_dir_recursive(&entry.path(), &target)?;
         } else {
-            std::fs::copy(entry.path(), &target).map_err(|e| e.to_string())?;
+            // copy_replacing: an in-place fs::copy would mutate any
+            // dedup-store hardlink already sitting at `target`.
+            tuffbox_core::fs_util::copy_replacing(&entry.path(), &target)
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok(())

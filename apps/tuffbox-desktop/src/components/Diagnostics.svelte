@@ -42,6 +42,12 @@
     type DiagnoseFocus,
   } from "../lib/store";
   import { shareCrashLogWithFeedback } from "../lib/mclogs";
+  import {
+    DIAGNOSE_BUSY_CAP_MS,
+    UnifiedBusyTracker,
+    shouldAutoScheduleAi,
+    shouldTripWatchdog,
+  } from "../lib/diagnoseAutoSchedule";
   import EmptyState from "./EmptyState.svelte";
   import AiConnectionModal from "./AiConnectionModal.svelte";
   import DiagnoseTriagePanels from "./diagnostics/DiagnoseTriagePanels.svelte";
@@ -191,6 +197,9 @@
   // cancelled (Ollama/network), so late results from an older refresh must
   // never overwrite the currently selected report.
   let analysisGeneration = 0;
+  // Ownership of `analysisBusy` — see UnifiedBusyTracker. The generation
+  // counter is bumped by MANUAL AI runs too, which used to strand the flag.
+  const unifiedBusy = new UnifiedBusyTracker();
   let analysisKickoff: ReturnType<typeof setTimeout> | undefined;
   let diagnoseTimings = $state<Record<string, { elapsedMs: number; cacheHit: boolean }>>({});
   const isCurrentAnalysis = (generation: number) => generation === analysisGeneration;
@@ -262,13 +271,18 @@
   // Diagnose can appear to hang forever when an IPC never settles (stuck
   // Ollama/endpoint, p2p swarm lookup). Watchdog: after a hard cap, clear the
   // busy flags so the Health view stops spinning and tells the user what was stuck.
-  const DIAGNOSE_BUSY_CAP_S = 180;
-  const DIAGNOSE_BUSY_CAP_MS = DIAGNOSE_BUSY_CAP_S * 1000;
   let diagnoseWatch: ReturnType<typeof setInterval> | undefined;
   let diagnoseBusySince = 0;
+  // Set when the watchdog force-stops a stuck run. Blocks the AI tab's
+  // AUTOMATIC re-scheduling until the user explicitly retries (Re-analyze /
+  // Retry AI / Refresh / source switch). Without it, the watchdog clearing
+  // the busy flags + the AI-tab auto-effect re-arming formed an infinite
+  // "Analyzing…" loop: every reset spawned another backend cascade that
+  // piled onto the still-running one.
+  let diagnoseWatchdogTripped = $state(false);
 
   function syncDiagnoseWatchdog() {
-    const busy = loading || analysisBusy || crashLoading || aiLoading;
+    const busy = loading || analysisBusy || crashLoading || aiLoading || healthLoading;
     if (!busy) {
       if (diagnoseWatch) {
         clearInterval(diagnoseWatch);
@@ -280,7 +294,14 @@
     if (!diagnoseBusySince) diagnoseBusySince = Date.now();
     if (diagnoseWatch) return;
     diagnoseWatch = setInterval(() => {
-      if (Date.now() - diagnoseBusySince <= DIAGNOSE_BUSY_CAP_MS) return;
+      if (
+        !shouldTripWatchdog({
+          busySinceMs: diagnoseBusySince,
+          nowMs: Date.now(),
+          capMs: DIAGNOSE_BUSY_CAP_MS,
+        })
+      )
+        return;
       const stage =
         cascadeLiveStage ||
         (aiLoading
@@ -289,12 +310,18 @@
             ? "crash rules"
             : loading
               ? "reading logs"
-              : "pack scan");
+              : healthLoading
+                ? "health report"
+                : "pack scan");
       analysisBusy = false;
       crashLoading = false;
       aiLoading = false;
       loading = false;
+      healthLoading = false;
       cascadeLiveStage = null;
+      // Break the auto-restart loop: block the AI tab's automatic
+      // re-scheduling until the user explicitly retries.
+      diagnoseWatchdogTripped = true;
       // The backend cascade may still be running (no client-side cancel).
       // Forget the source stamp so a refresh re-runs analysis instead of
       // trusting state from a run whose results will land out of order.
@@ -312,11 +339,18 @@
     void analysisBusy;
     void crashLoading;
     void aiLoading;
+    void healthLoading;
+    void diagnoseWatchdogTripped;
     syncDiagnoseWatchdog();
     return () => {
       if (diagnoseWatch) {
         clearInterval(diagnoseWatch);
         diagnoseWatch = undefined;
+      }
+      // Never let a coalesced analysis kickoff fire after destroy.
+      if (analysisKickoff) {
+        clearTimeout(analysisKickoff);
+        analysisKickoff = undefined;
       }
     };
   });
@@ -353,6 +387,8 @@
 
   async function load(force = false) {
     if (!$projectPath) return;
+    // Explicit reload: re-arm automatic AI scheduling after a watchdog stop.
+    if (force) diagnoseWatchdogTripped = false;
     const requestedPath = $projectPath;
     if (activeLoadPath === requestedPath) return;
     if (!force && lastLoadedPath === requestedPath && diagnosis) return;
@@ -943,12 +979,19 @@
    * cascade on every tab visit made the tab appear stuck in "Analyzing…". */
   async function runUnifiedAnalysis(opts: { force?: boolean; includeAi?: boolean } = {}) {
     if (!$projectPath || analysisBusy) return;
+    // Manual Re-analyze: re-arm automatic AI scheduling after a watchdog stop.
+    if (opts.force) diagnoseWatchdogTripped = false;
     const source = activeReportId();
     const includeAi = opts.includeAi ?? true;
     if (!opts.force && !includeAi && lastRulesSource === source) return;
     if (!opts.force && includeAi && lastAiSource === source && (aiAnalysis || aiSoftError)) return;
     lastRulesSource = source;
     const run = ++analysisGeneration;
+    // Claim busy-flag ownership BEFORE any await: a manual "Retry AI" during
+    // this run bumps analysisGeneration, and the old
+    // `if (isCurrentAnalysis(run))` settle condition would then never match,
+    // leaving analysisBusy stuck on until the watchdog tripped.
+    const settle = unifiedBusy.begin();
     analysisBusy = true;
     aiSoftError = null;
     try {
@@ -968,7 +1011,10 @@
       enrichCrashFindingsWithAi();
       lastAiSource = source;
     } finally {
-      if (isCurrentAnalysis(run)) analysisBusy = false;
+      // Settle by unified-run ownership (not AI generation): the latest
+      // unified run owns the flag even if a manual AI run bumped the
+      // generation counter mid-flight.
+      if (unifiedBusy.shouldSettle(settle)) analysisBusy = false;
     }
   }
 
@@ -1191,6 +1237,8 @@
 
   async function runAiExplain(opts: { quiet?: boolean; runId?: number } = {}) {
     if (!$projectPath) return;
+    // Manual AI run (Retry AI / Explain): re-arm automatic scheduling.
+    if (!opts.quiet) diagnoseWatchdogTripped = false;
     const run = opts.runId ?? ++analysisGeneration;
     aiLoading = true;
     cascadeLiveStage = "l1_searching";
@@ -2062,10 +2110,10 @@
   }
 
   function hypothesisForGroup(title: string) {
-    if (title === "Entrypoint") return "Likely a mod initialization failure. Check the provided-by mod first, then its required libraries and loader-compatible version.";
-    if (title === "Loader mismatch") return "Likely a wrong loader/API bridge or incompatible dependency version. Check Fabric/Forge/NeoForge API ports and update matching libraries.";
-    if (title === "Render/OpenGL") return "Likely render pipeline conflict. Disable shaders and test render mods such as Sodium/Iris/Voxy/ETF/MCEF/Litematica in groups.";
-    if (title === "Performance") return "Likely overload, not a crash root cause. Lower view distance, profile heavy entities/worldgen and rerun the test.";
+    if (title === "Entrypoint") return "Likely a mod init failure. Check the provided-by mod, then its libraries and loader version.";
+    if (title === "Loader mismatch") return "Likely a loader/API mismatch. Check the loader port and update its matching libraries.";
+    if (title === "Render/OpenGL") return "Likely a render conflict. Disable shaders and test render mods (Sodium, Iris, Voxy…) in groups.";
+    if (title === "Performance") return "Likely overload, not a crash cause. Lower view distance, profile heavy entities, rerun.";
     return "Review this signal group and compare it with recent snapshots.";
   }
 
@@ -2696,7 +2744,18 @@
   // the user explicitly presses AI explain.
   $effect(() => {
     const path = $projectPath;
-    if (mainTab === "ai" && path && diagnosis && !sessionOk && !aiAnalysis && !aiSoftError && !analysisBusy) {
+    if (
+      shouldAutoScheduleAi({
+        mainTabAi: mainTab === "ai",
+        hasProject: !!path,
+        hasDiagnosis: !!diagnosis,
+        sessionOk,
+        hasAiAnalysis: !!aiAnalysis,
+        hasAiSoftError: !!aiSoftError,
+        analysisBusy,
+        watchdogTripped: diagnoseWatchdogTripped,
+      })
+    ) {
       scheduleUnifiedAnalysis(true);
     }
   });
@@ -3350,7 +3409,8 @@
     overflow: auto;
     scrollbar-gutter: stable;
   }
-  .toolbar, .actions, .title { display: flex; align-items: center; }
+  .toolbar,
+ .title { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 10px; flex-wrap: wrap; }
   .dx-chrome {
     position: sticky;
@@ -3385,7 +3445,7 @@
   .dx-main-tabs {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 8px;
     margin: 12px 0 14px;
     padding: 4px;
     border-radius: var(--border-radius-md);
@@ -3395,7 +3455,7 @@
   .dx-main-tab {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 12px;
     border: none;
     border-radius: var(--border-radius-sm);
@@ -3415,32 +3475,12 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
     color: var(--accent-primary);
-    font-size: 10px;
+    font-size: 12px;
   }
   .dx-resolve-bridge {
     margin-top: 12px;
     display: flex;
     justify-content: flex-end;
-  }
-  .dx-advanced {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 14px;
-  }
-  .dx-advanced .tools-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-  }
-  .dx-advanced .tools-label {
-    width: 100%;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-muted);
   }
   .dx-empty-sources {
     display: flex;
@@ -3477,52 +3517,7 @@
     padding: 6px 10px;
     font-size: 12px;
   }
-  .title, h2 { gap: 10px; color: var(--text-secondary); font-weight: 700; }
-  .actions { gap: 8px; flex-wrap: wrap; }
-  .primary-actions { gap: 8px; flex-wrap: wrap; }
-  .primary-actions .primary, .primary-actions .secondary, .primary-actions .ghost { cursor: pointer; }
-  .ghost.icon-only { padding: 8px; min-width: 36px; justify-content: center; }
-
-  .tools-strip {
-    padding: 0;
-    margin-bottom: 14px;
-    border-radius: var(--border-radius-lg);
-    border: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-  }
-  .tools-strip > summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 14px;
-    cursor: pointer;
-    list-style: none;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-secondary);
-  }
-  .tools-strip > summary::-webkit-details-marker { display: none; }
-  .tools-strip > summary span:first-child {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-  }
-  .tools-strip[open] .tools-hint :global(svg) { transform: rotate(180deg); }
-  .tools-strip-body {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 0 14px 12px;
-    border-top: 1px solid var(--border-color);
-  }
-  .tools-primary-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    padding-top: 10px;
-  }
+  .title{ gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .health-strip {
     display: flex;
     flex-wrap: wrap;
@@ -3555,7 +3550,7 @@
   .health-blockers {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     width: 100%;
     margin-top: 6px;
     padding: 8px 10px;
@@ -3564,7 +3559,7 @@
     border: 1px solid rgba(251, 191, 36, 0.25);
   }
   .health-blockers code {
-    font-size: 11px;
+    font-size: 12px;
     color: #fbbf24;
   }
   .health-blockers span {
@@ -3579,7 +3574,7 @@
   }
   .recent-meta {
     flex: 1;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .recent-head {
@@ -3592,13 +3587,13 @@
   .recent-head strong {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 13px;
   }
   .recent-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   .recent-row {
     display: grid;
@@ -3616,7 +3611,7 @@
     font: inherit;
   }
   .recent-op {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.3px;
@@ -3629,7 +3624,7 @@
     border-color: var(--border-color);
   }
   .recent-actor {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     color: var(--text-muted);
@@ -3642,32 +3637,8 @@
   }
   .recent-row small {
     color: var(--text-muted);
-    font-size: 10px;
-  }
-  .tools-group {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-  }
-  .tools-label {
-    min-width: 64px;
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
-  .tools-group button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
     font-size: 12px;
-    padding: 6px 10px;
   }
-
-  .tools-results { margin-bottom: 14px; padding: 14px; }
-  .tools-results h2, .tools-results h3 { margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
 
   .dx-source-select {
     width: 100%;
@@ -3678,13 +3649,11 @@
     color: var(--text-primary);
     font-size: 13px;
   }
-  h2 { display: flex; font-size: 14px; margin: 0 0 12px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .panel, .empty, .loading { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .panel { padding: 16px; min-width: 0; }
-  .muted-inline { margin: 0; color: var(--text-muted); font-size: 12px; }
   .analyzing-pill {
     display: inline-flex;
     align-items: center;
@@ -3692,27 +3661,10 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
   }
   .notice.warning { color: var(--accent-warning); background: color-mix(in srgb, var(--accent-warning) 8%, transparent); border-color: color-mix(in srgb, var(--accent-warning) 28%, transparent); }
-  .group-test-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    text-align: left;
-  }
-  .group-test-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .group-test-auto {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-  }
   .soft-ai-detail {
     display: block;
     margin-top: 4px;
@@ -3723,23 +3675,19 @@
   .soft-verify-notice { font-size: 12px; padding: 8px 12px; }
   .network-pending { display: flex; flex-direction: column; gap: 8px; }
   .network-pending-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; }
-  .trust-card-line { font-size: 12px; color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .trust-card-line { font-size: 12px; color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .diff-chip {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
   }
-  .diff-chip.add { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
-  .diff-chip.remove { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); background: color-mix(in srgb, var(--accent-danger) 10%, transparent); }
-  .diff-chip.change { color: var(--accent-warning); border-color: color-mix(in srgb, var(--accent-warning) 35%, transparent); background: color-mix(in srgb, var(--accent-warning) 10%, transparent); }
-  .muted-box { padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color); }
   .loading, .empty { padding: 24px; text-align: center; color: var(--text-muted); }
   .loading-title { font-weight: 700; color: var(--text-primary); }
   .loading-stage {
@@ -3753,44 +3701,6 @@
     0%, 100% { opacity: 1; }
     50% { opacity: 0.55; }
   }
-  .log-pre {
-    margin: 0;
-    max-height: 320px;
-    padding: 12px;
-    border-radius: var(--border-radius-md);
-    background: #09090b;
-    color: #d4d4d8;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 12px;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    overflow: auto;
-  }
-  .plan-card, .author-form { margin-top: 12px; padding: 12px; border-top: 1px solid var(--border-color); }
-  .plan-options { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
-  .plan-options-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
-  .plan-option {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 2px 8px;
-    align-items: center;
-    padding: 8px 10px;
-    border-radius: var(--border-radius-sm);
-    border: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
-    cursor: pointer;
-  }
-  .plan-option.preferred { border-color: var(--accent, #f6a821); }
-  .plan-option-label { font-size: 13px; color: var(--text-primary); }
-  .plan-option-reason { grid-column: 2; font-size: 12px; color: var(--text-muted); }
-  .author-form label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; font-size: 12px; color: var(--text-muted); }
-  .author-form textarea, .author-form input {
-    padding: 8px 10px;
-    border-radius: var(--border-radius-sm);
-    border: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-  }
   :global(.spin) { animation: dx-spin 0.9s linear infinite; }
   @keyframes dx-spin { to { transform: rotate(360deg); } }
   .trail-notice {
@@ -3800,7 +3710,7 @@
     justify-content: space-between;
     gap: 8px;
   }
-  .trail-links { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+  .trail-links { display: inline-flex; flex-wrap: wrap; gap: 8px; }
   .dx-empty-sources {
     display: flex;
     flex-wrap: wrap;
@@ -3835,5 +3745,4 @@
     background: var(--bg-primary);
     color: inherit;
   }
-  .author-form textarea.mono { font-family: ui-monospace, monospace; font-size: 11px; }
 </style>

@@ -81,6 +81,7 @@ pub async fn github_pack_install(
     source: String,
     target_dir: String,
     instance_name: Option<String>,
+    dedup: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let parsed = parse_github_source(&source).map_err(|e| e.to_string())?;
     let git_ref = parsed.git_ref.clone().unwrap_or_else(|| "HEAD".into());
@@ -117,6 +118,7 @@ pub async fn github_pack_install(
             Some(&commit),
             &target_dir,
             instance_name,
+            dedup,
         );
         match &result {
             Ok(v) => tuffbox_core::task_progress::succeed(
@@ -143,6 +145,7 @@ fn install_from_tarball_bytes(
     commit_sha_val: Option<&str>,
     target_dir: &str,
     instance_name: Option<String>,
+    dedup: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let extract_dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     extract_github_tarball(bytes, extract_dir.path()).map_err(|e| e.to_string())?;
@@ -227,12 +230,17 @@ fn install_from_tarball_bytes(
         let _ = fs::remove_dir_all(&final_instance_dir);
         return Err(error.to_string());
     }
+    // Import-time dedup choice (docs/17 §4.4) — same contract as the
+    // non-GitHub install paths: Some(true) links the pack into the shared
+    // store, Some(false) writes the opt-out marker, None keeps defaults.
+    let dedup_info = crate::apply_import_dedup_choice(&final_instance_dir, dedup);
     Ok(serde_json::json!({
         "path": manifest_path.to_string_lossy(),
         "name": manifest.project.name,
         "modCount": manifest.mods.len(),
         "provider": "github",
         "repo": format!("{owner}/{repo}"),
+        "dedup": dedup_info,
     }))
 }
 
@@ -279,7 +287,9 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+            // copy_replacing: never write into an inode that may be shared
+            // with the dedup store (re-installing over an existing pack).
+            tuffbox_core::fs_util::copy_replacing(&src, &dest).map_err(|e| e.to_string())?;
         }
     }
     Ok(())

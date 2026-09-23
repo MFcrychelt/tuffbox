@@ -202,6 +202,34 @@ fn update_project_brief(path: String, brief: PackBrief) -> Result<(), String> {
     save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())
 }
 
+/// Renames an instance in place (manifest `project.name`). The folder path is
+/// the identity everywhere (recents, groups, running processes), so only the
+/// display name changes. Keeps the storefront listing name in sync when it
+/// matched the old display name. Returns the applied (trimmed) name.
+#[tauri::command(rename_all = "camelCase")]
+fn rename_project(path: String, new_name: String) -> Result<String, String> {
+    let new_name = new_name.trim().to_string();
+    if new_name.is_empty() {
+        return Err("Instance name cannot be empty".into());
+    }
+    if new_name.len() > 80 {
+        return Err("Instance name is too long (max 80 characters)".into());
+    }
+    let manifest_path = resolve_manifest_path(&path)?;
+    auto_snapshot(&manifest_path, "rename-project").map_err(|e| e.to_string())?;
+    let mut manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let old_name = manifest.project.name.clone();
+    manifest.project.name = new_name.clone();
+    if let Some(listing) = manifest.listing.as_mut() {
+        if listing.name.trim().is_empty() || listing.name == old_name {
+            listing.name = new_name.clone();
+        }
+    }
+    save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+    Ok(new_name)
+}
+
 #[tauri::command]
 fn list_profiles(path: String) -> Result<Vec<ProfileSummary>, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -2145,7 +2173,9 @@ async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> 
                         }
                         if let Ok(actual) = tuffbox_core::sha1_file(&path) {
                             if actual.eq_ignore_ascii_case(hash) {
+                                tuffbox_core::fs_util::clear_readonly(&path);
                                 let _ = std::fs::remove_file(path);
+                                release_store_object_detached(actual);
                             }
                         }
                     }
@@ -2220,6 +2250,7 @@ async fn disable_project_mod(path: String, mod_id: String) -> Result<serde_json:
             // Already renamed on disk — just mark the status.
         } else if active.is_file() {
             if disabled.exists() {
+                tuffbox_core::fs_util::clear_readonly(&disabled);
                 let _ = std::fs::remove_file(&disabled);
             }
             std::fs::rename(&active, &disabled).map_err(|e| {
@@ -2376,6 +2407,7 @@ fn set_mod_jar_disabled(
             // already on disk
         } else if active.is_file() {
             if disabled.exists() {
+                tuffbox_core::fs_util::clear_readonly(&disabled);
                 let _ = std::fs::remove_file(&disabled);
             }
             std::fs::rename(&active, &disabled).map_err(|e| e.to_string())?;
@@ -2452,7 +2484,18 @@ fn apply_group_test_layout(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn start_mod_group_test(
+async fn start_mod_group_test(
+    path: String,
+    suspected: Option<Vec<String>>,
+) -> Result<tuffbox_core::mod_group_test::GroupTestSession, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; this
+    // one snapshots/rolls back files and must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || start_mod_group_test_impl(path, suspected))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn start_mod_group_test_impl(
     path: String,
     suspected: Option<Vec<String>>,
 ) -> Result<tuffbox_core::mod_group_test::GroupTestSession, String> {
@@ -2485,7 +2528,15 @@ fn start_mod_group_test(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn get_mod_group_test(path: String) -> Result<Option<tuffbox_core::mod_group_test::GroupTestSession>, String> {
+async fn get_mod_group_test(path: String) -> Result<Option<tuffbox_core::mod_group_test::GroupTestSession>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; this
+    // one snapshots/rolls back files and must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || get_mod_group_test_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_mod_group_test_impl(path: String) -> Result<Option<tuffbox_core::mod_group_test::GroupTestSession>, String> {
     let project_dir = PathBuf::from(&path)
         .parent()
         .map(|p| p.to_path_buf())
@@ -2494,7 +2545,18 @@ fn get_mod_group_test(path: String) -> Result<Option<tuffbox_core::mod_group_tes
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn report_mod_group_test_outcome(
+async fn report_mod_group_test_outcome(
+    path: String,
+    outcome: String,
+) -> Result<tuffbox_core::mod_group_test::GroupTestSession, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; this
+    // one snapshots/rolls back files and must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || report_mod_group_test_outcome_impl(path, outcome))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn report_mod_group_test_outcome_impl(
     path: String,
     outcome: String,
 ) -> Result<tuffbox_core::mod_group_test::GroupTestSession, String> {
@@ -2533,7 +2595,15 @@ fn report_mod_group_test_outcome(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn cancel_mod_group_test(path: String) -> Result<(), String> {
+async fn cancel_mod_group_test(path: String) -> Result<(), String> {
+    // Blocking-pool conversion: sync commands run on the main thread; this
+    // one snapshots/rolls back files and must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || cancel_mod_group_test_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn cancel_mod_group_test_impl(path: String) -> Result<(), String> {
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_path
         .parent()
@@ -2871,6 +2941,7 @@ fn disable_project_mod_inner(
         // Already renamed on disk.
     } else if active.is_file() {
         if disabled.exists() {
+            tuffbox_core::fs_util::clear_readonly(&disabled);
             let _ = std::fs::remove_file(&disabled);
         }
         std::fs::rename(&active, &disabled).map_err(|e| {
@@ -3184,8 +3255,9 @@ fn execute_fix_action_inner(
             }
             let mut manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
             // ensure_java_for_minecraft_with_log picks the best installed
-            // runtime for the Minecraft version AND downloads the matching
-            // GraalVM JDK when nothing installed satisfies the requirement.
+            // runtime for the Minecraft version AND downloads a managed JDK
+            // (GraalVM for modern majors, Adoptium Temurin for legacy
+            // Java 8/16) when no matching runtime is installed.
             let best = {
                 let log = |line: &str| eprintln!("[autoJava] {line}");
                 tuffbox_core::jre::ensure_java_for_minecraft_with_log(
@@ -3485,6 +3557,24 @@ async fn detect_wrong_loader_mods(path: String) -> Result<Vec<serde_json::Value>
     .map_err(|e| e.to_string())?
 }
 
+/// A `mods/` file name received over IPC must be a BARE name — never a path.
+/// `mods_dir.join("../manifest.json")` would otherwise rename/delete files
+/// OUTSIDE the mods directory. Defense in depth: the UI passes scanned
+/// names, but one crafted or future caller value must not escape the folder.
+fn mods_dir_file(mods_dir: &Path, file_name: &str) -> Result<PathBuf, String> {
+    let name = file_name.trim();
+    let p = Path::new(name);
+    if name.is_empty()
+        || p.is_absolute()
+        || p.components().count() != 1
+        || name == "."
+        || name == ".."
+    {
+        return Err(format!("invalid mods file name: '{file_name}'"));
+    }
+    Ok(mods_dir.join(name))
+}
+
 /// Renames a .jar file in mods/ to .jar.disabled so Minecraft won't load it.
 #[tauri::command(rename_all = "camelCase")]
 async fn disable_wrong_loader_jar(path: String, file_name: String) -> Result<String, String> {
@@ -3493,10 +3583,9 @@ async fn disable_wrong_loader_jar(path: String, file_name: String) -> Result<Str
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
-        let src = project_dir.join("mods").join(&file_name);
-        let dst = project_dir
-            .join("mods")
-            .join(format!("{}.disabled", file_name));
+        let mods_dir = project_dir.join("mods");
+        let src = mods_dir_file(&mods_dir, &file_name)?;
+        let dst = mods_dir_file(&mods_dir, &format!("{file_name}.disabled"))?;
         if !src.is_file() {
             return Err(format!("{} not found in mods/", file_name));
         }
@@ -3515,11 +3604,20 @@ async fn remove_loose_jar(path: String, file_name: String) -> Result<String, Str
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
-        let target = project_dir.join("mods").join(&file_name);
+        let target = mods_dir_file(&project_dir.join("mods"), &file_name)?;
         if !target.is_file() {
             return Err(format!("{} not found in mods/", file_name));
         }
+        // Remember the content hash so the store object can be released
+        // when no other pack uses these bytes.
+        let sha1 = tuffbox_core::sha1_file(&target).ok();
+        // The jar may be a dedup-store hardlink carrying the store's
+        // read-only attribute — clear it or remove fails on Windows.
+        tuffbox_core::fs_util::clear_readonly(&target);
         std::fs::remove_file(&target).map_err(|e| e.to_string())?;
+        if let Some(sha1) = sha1 {
+            release_store_object_detached(sha1);
+        }
         Ok(format!("Removed {}", file_name))
     })
     .await
@@ -3684,7 +3782,7 @@ async fn keep_one_duplicate_mod_jar(
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
         let mods_dir = project_dir.join("mods");
-        let keep_path = mods_dir.join(&keep_file_name);
+        let keep_path = mods_dir_file(&mods_dir, &keep_file_name)?;
         if !keep_path.is_file() {
             return Err(format!("{keep_file_name} not found in mods/"));
         }
@@ -3733,7 +3831,12 @@ async fn keep_one_duplicate_mod_jar(
             if id != mod_id_l {
                 continue;
             }
+            let sha1 = tuffbox_core::sha1_file(&jar_path).ok();
+            tuffbox_core::fs_util::clear_readonly(&jar_path);
             std::fs::remove_file(&jar_path).map_err(|e| e.to_string())?;
+            if let Some(sha1) = sha1 {
+                release_store_object_detached(sha1);
+            }
             removed.push(file_name);
         }
 
@@ -5869,6 +5972,277 @@ fn store_gc() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "removed": removed, "bytesReclaimed": bytes }))
 }
 
+/// ── Personal YouTube feed (docs: home feed sources) ──────────────────
+///
+/// The default home feed is a curated table. These commands let the player
+/// wire the feed to THEIR YouTube instead: channels they follow are polled
+/// through the public RSS hub (no key, no login) and their latest videos
+/// replace the curated picks. Fetching happens Rust-side: the RSS endpoint
+/// sends no CORS headers, so the webview can't reach it directly.
+
+/// Inner text of the first `<tag …>…</tag>` in `xml` (attributes tolerated
+/// on the opening tag). Minimal parser — the RSS hub format is stable.
+fn yt_xml_tag(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let start = xml.find(&open)?;
+    let after = xml[start..].find('>')? + start + 1;
+    let close = format!("</{tag}>");
+    let end = xml[after..].find(&close)? + after;
+    Some(xml[after..end].trim().to_string())
+}
+
+/// Value of `attr="…"` inside the first `<tag …` occurrence.
+fn yt_xml_attr(xml: &str, tag: &str, attr: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let start = xml.find(&open)?;
+    let seg_end = xml[start..].find('>')? + start;
+    let seg = &xml[start..seg_end];
+    let key = format!("{attr}=\"");
+    let a = seg.find(&key)? + key.len();
+    let b = seg[a..].find('"')? + a;
+    Some(seg[a..b].to_string())
+}
+
+/// Decode the handful of entities YouTube puts in RSS titles.
+fn yt_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+async fn yt_fetch_text(url: &str) -> Result<String, String> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
+    if parsed.scheme() != "https" || parsed.host_str() != Some("www.youtube.com") {
+        return Err("only www.youtube.com is allowed".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(parsed)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TuffBox")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(text)
+}
+
+/// Resolve a user-typed channel reference (UC id, channel URL, @handle,
+/// /c/ or /user/ link) to a channel id by reading the public channel page.
+#[tauri::command(rename_all = "camelCase")]
+async fn youtube_my_feed_lookup(query: String) -> Result<serde_json::Value, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Err("Enter a channel link, @handle, or channel ID.".into());
+    }
+    // Direct channel id.
+    let direct = q
+        .strip_prefix("UC")
+        .filter(|r| r.len() >= 20 && r.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+    if direct.is_some() {
+        let id = q.to_string();
+        let feed = yt_fetch_text(&format!(
+            "https://www.youtube.com/feeds/videos.xml?channel_id={id}"
+        ))
+        .await?;
+        let label = yt_xml_tag(&feed, "title").unwrap_or_else(|| id.clone());
+        return Ok(serde_json::json!({ "channelId": id, "label": yt_unescape(&label) }));
+    }
+    let page_url = if q.starts_with("http") {
+        // URL forms: ?channel_id=…, /channel/UC…, or a handle page.
+        if let Some(id) = q
+            .split("channel_id=")
+            .nth(1)
+            .and_then(|r| r.split('&').next())
+            .filter(|r| r.starts_with("UC") && r.len() > 20)
+        {
+            let feed = yt_fetch_text(&format!(
+                "https://www.youtube.com/feeds/videos.xml?channel_id={id}"
+            ))
+            .await?;
+            let label = yt_xml_tag(&feed, "title").unwrap_or_else(|| id.to_string());
+            return Ok(serde_json::json!({ "channelId": id, "label": yt_unescape(&label) }));
+        }
+        if let Some(id) = q
+            .split("/channel/")
+            .nth(1)
+            .and_then(|r| r.split('/').next())
+            .filter(|r| r.starts_with("UC") && r.len() > 20)
+        {
+            let feed = yt_fetch_text(&format!(
+                "https://www.youtube.com/feeds/videos.xml?channel_id={id}"
+            ))
+            .await?;
+            let label = yt_xml_tag(&feed, "title").unwrap_or_else(|| id.to_string());
+            return Ok(serde_json::json!({ "channelId": id, "label": yt_unescape(&label) }));
+        }
+        q.to_string()
+    } else {
+        // Bare @handle or handle without @.
+        let handle = q.trim_start_matches('@');
+        format!("https://www.youtube.com/@{handle}")
+    };
+
+    // Handle / custom URL: read the channel page and pull the channel id
+    // (the RSS auto-discovery link or the embedded channelId field).
+    let page = yt_fetch_text(&page_url).await?;
+    let id = page
+        .split("channel_id=")
+        .nth(1)
+        .and_then(|r| r.split('&').next())
+        .filter(|r| r.starts_with("UC") && r.len() > 20)
+        .map(|r| r.to_string())
+        .or_else(|| {
+            page.find("\"channelId\":\"UC")
+                .and_then(|i| {
+                    let rest = &page[i + 12..];
+                    rest.find('"').map(|e| rest[..e].to_string())
+                })
+                .filter(|r| r.len() > 20)
+        });
+    let Some(id) = id else {
+        return Err("Couldn't find that channel — paste the channel page link or its UC… ID.".into());
+    };
+    let feed = yt_fetch_text(&format!(
+        "https://www.youtube.com/feeds/videos.xml?channel_id={id}"
+    ))
+    .await?;
+    let label = yt_xml_tag(&feed, "title").unwrap_or_else(|| id.clone());
+    Ok(serde_json::json!({ "channelId": id, "label": yt_unescape(&label) }))
+}
+
+/// Latest videos for the player's channels (YouTube RSS hub, ~15 each).
+#[tauri::command(rename_all = "camelCase")]
+async fn youtube_my_feed_fetch(channel_ids: Vec<String>) -> Result<serde_json::Value, String> {
+    let mut videos: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for id in channel_ids.iter().take(24) {
+        let url = format!("https://www.youtube.com/feeds/videos.xml?channel_id={id}");
+        let feed = match yt_fetch_text(&url).await {
+            Ok(f) => f,
+            Err(e) => {
+                errors.push(format!("{id}: {e}"));
+                continue;
+            }
+        };
+        for entry in feed.split("<entry>").skip(1) {
+            let end = entry.find("</entry>").unwrap_or(entry.len());
+            let seg = &entry[..end];
+            let Some(video_id) = yt_xml_tag(seg, "yt:videoId") else {
+                continue;
+            };
+            let title = yt_unescape(&yt_xml_tag(seg, "title").unwrap_or_default());
+            let published = yt_xml_tag(seg, "published").unwrap_or_default();
+            let channel = yt_unescape(&yt_xml_tag(seg, "name").unwrap_or_default());
+            let thumb = yt_xml_attr(seg, "media:thumbnail", "url");
+            let views = yt_xml_attr(seg, "media:statistics", "views")
+                .and_then(|v| v.parse::<u64>().ok());
+            videos.push(serde_json::json!({
+                "videoId": video_id,
+                "title": title,
+                "thumbnailUrl": thumb,
+                "channelName": channel,
+                "viewCount": views,
+                "publishedAt": published,
+            }));
+            if videos.len() >= 360 {
+                break;
+            }
+        }
+    }
+    Ok(serde_json::json!({ "videos": videos, "errors": errors }))
+}
+
+/// After a pack file was deleted, drop the shared store object too when no
+/// other pack links it — the user's «delete» must free disk space, not just
+/// swap a link for a parked copy. Best-effort on a detached thread: never
+/// blocks a command, and hard-link semantics make a wrong call harmless
+/// (other packs' links keep the inode alive regardless).
+fn release_store_object_detached(sha1: String) {
+    let roots: Vec<PathBuf> = helpers::load_recent_projects()
+        .into_iter()
+        .map(|entry| PathBuf::from(entry.path))
+        .collect();
+    std::thread::spawn(move || {
+        tuffbox_core::mod_store::release(&sha1, &roots);
+    });
+}
+
+/// ── Per-pack dedup opt-out (docs/17) ─────────────────────────────────
+
+/// Is the shared dedup store used for this pack? Reads the
+/// `.tuffbox-no-dedup` marker in the project root (cheap — no hashing).
+#[tauri::command(rename_all = "camelCase")]
+fn dedup_project_status(path: String) -> Result<serde_json::Value, String> {
+    let manifest_path = resolve_manifest_path(&path)?;
+    let project_dir = manifest_path
+        .parent()
+        .ok_or("manifest has no parent directory")?
+        .to_path_buf();
+    Ok(serde_json::json!({
+        "enabled": !tuffbox_core::mod_store::dedup_disabled(&project_dir),
+    }))
+}
+
+/// Turn the shared dedup store on/off for one pack. Reversible at any time:
+/// - off  → writes the marker, then materializes every store hardlink in
+///   the pack back into independent copies (atomic per file; the store and
+///   other packs keep their objects).
+/// - on   → removes the marker and immediately links matching files into
+///   the store (single-root retro-dedup).
+/// Both sweeps hash the pack's jars/zips — run off the main thread.
+#[tauri::command(rename_all = "camelCase")]
+async fn dedup_project_set_enabled(path: String, enabled: bool) -> Result<serde_json::Value, String> {
+    let manifest_path = resolve_manifest_path(&path)?;
+    let project_dir = manifest_path
+        .parent()
+        .ok_or("manifest has no parent directory")?
+        .to_path_buf();
+
+    tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let marker = project_dir.join(tuffbox_core::mod_store::NO_DEDUP_MARKER);
+        if enabled {
+            let _ = std::fs::remove_file(&marker);
+            let report = tuffbox_core::mod_store::retro_dedup(&[&project_dir]);
+            Ok(serde_json::json!({
+                "enabled": true,
+                "action": "linked",
+                "scanned": report.scanned,
+                "linked": report.linked,
+                "recorded": report.recorded,
+                "skipped": report.skipped,
+                "bytesReclaimed": report.bytes_reclaimed,
+                "errors": report.errors,
+            }))
+        } else {
+            if let Some(parent) = marker.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&marker, b"")
+                .map_err(|e| format!("write {}: {e}", marker.display()))?;
+            let report = tuffbox_core::mod_store::materialize_project(&project_dir);
+            Ok(serde_json::json!({
+                "enabled": false,
+                "action": "materialized",
+                "scanned": report.scanned,
+                "materialized": report.materialized,
+                "skipped": report.skipped,
+                "errors": report.errors,
+            }))
+        }
+    })
+    .await
+    .map_err(|e| format!("dedup toggle task panicked: {e}"))?
+}
+
 /// Sodium config checks: (filename, fn(&content, &mut findings))
 const SODIUM_CHECKS: &[(&str, fn(&str, &mut Vec<serde_json::Value>))] = &[(
     "sodium-options.json",
@@ -6147,7 +6521,15 @@ fn read_config_key(content: &str, key: &str) -> Option<String> {
 /// adding "tin_ingot") and returns resolution suggestions with
 /// generated KubeJS/CraftTweaker scripts.
 #[tauri::command(rename_all = "camelCase")]
-fn detect_duplicate_items(path: String) -> Result<Vec<serde_json::Value>, String> {
+async fn detect_duplicate_items(path: String) -> Result<Vec<serde_json::Value>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || detect_duplicate_items_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn detect_duplicate_items_impl(path: String) -> Result<Vec<serde_json::Value>, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
@@ -6210,7 +6592,15 @@ fn detect_duplicate_items(path: String) -> Result<Vec<serde_json::Value>, String
 /// Generates an Almost Unified config (unify.json) tailored for the
 /// project's installed mods, and optionally writes it to disk.
 #[tauri::command(rename_all = "camelCase")]
-fn generate_unify_config(path: String, save: Option<bool>) -> Result<serde_json::Value, String> {
+async fn generate_unify_config(path: String, save: Option<bool>) -> Result<serde_json::Value, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || generate_unify_config_impl(path, save))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn generate_unify_config_impl(path: String, save: Option<bool>) -> Result<serde_json::Value, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let mod_slugs: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
     let config = tuffbox_core::unified::unify_config::UnifyConfig::for_project(&mod_slugs);
@@ -6350,7 +6740,15 @@ fn run_crash_assistant(path: String) -> Result<serde_json::Value, String> {
 /// Searches all mod JARs to find which one contains a given Java class.
 /// This mirrors Crash Assistant's Package/Class Finder GUI tool.
 #[tauri::command(rename_all = "camelCase")]
-fn find_class_in_mods(path: String, class_name: String) -> Result<Vec<serde_json::Value>, String> {
+async fn find_class_in_mods(path: String, class_name: String) -> Result<Vec<serde_json::Value>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || find_class_in_mods_impl(path, class_name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn find_class_in_mods_impl(path: String, class_name: String) -> Result<Vec<serde_json::Value>, String> {
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
     let mods_key = format!(
@@ -6374,7 +6772,18 @@ fn find_class_in_mods(path: String, class_name: String) -> Result<Vec<serde_json
 /// Searches all mod JARs to find which mods depend on a given class
 /// (Jdeps analysis tool from Crash Assistant).
 #[tauri::command(rename_all = "camelCase")]
-fn find_dependents_on_class(
+async fn find_dependents_on_class(
+    path: String,
+    class_name: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || find_dependents_on_class_impl(path, class_name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn find_dependents_on_class_impl(
     path: String,
     class_name: String,
 ) -> Result<Vec<serde_json::Value>, String> {
@@ -7254,7 +7663,7 @@ async fn build_ai_crash_context(
         .unwrap_or(0);
     let similar_case_count = ai_ctx.similar_cases.len();
     let fingerprint_key = ai_ctx.fingerprint_key.clone();
-    let mut ui_ctx = ai_ctx;
+    let ui_ctx = ai_ctx;
 
     Ok(serde_json::json!({
         "context": ui_ctx,
@@ -7370,7 +7779,9 @@ async fn analyze_crash_with_ai_inner(
     let mut speculative_used = false;
     let mut speculative_draft_model: Option<String> = None;
     let mut fallback_notes: Vec<String> = Vec::new();
-    let mut cascade_stage = String::new();
+    // Assigned by every arm of the plan cascade below before its first read,
+    // so it is declared without an initializer.
+    let mut cascade_stage: String;
     let mut cascade_tried: Vec<String> = vec!["l1".into()];
 
     emit_diagnose_cascade(&app, "l1_searching");
@@ -7389,7 +7800,7 @@ async fn analyze_crash_with_ai_inner(
         .await
         .unwrap_or_default();
         if !global_hits.is_empty() {
-            let mut merged = tuffbox_core::crash_remote::hits_to_similar_cases(&global_hits);
+            let mut merged = tuffbox_core::crash_remote::hits_to_similar_cases(&global_hits, &fingerprint);
             merged.extend(ai_ctx.similar_cases.drain(..));
             let mut seen = std::collections::HashSet::new();
             merged.retain(|h| seen.insert(h.id.clone()));
@@ -7418,7 +7829,7 @@ async fn analyze_crash_with_ai_inner(
                 l1_lookup_started,
                 false,
             );
-            let mut remote = tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
+            let mut remote = tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits, &fingerprint);
             remote.extend(ai_ctx.similar_cases.drain(..));
             let mut seen = std::collections::HashSet::new();
             remote.retain(|h| seen.insert(h.id.clone()));
@@ -7858,7 +8269,12 @@ fn strong_plan_from_similar(
                 .partial_cmp(&b.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })?;
-    if hit.score < tuffbox_core::swarm::STRONG_MATCH_THRESHOLD {
+    // Strong KB fallback requires an ANCHOR (fingerprint-key / blamed-mod /
+    // mod-file agreement), not just a score over the threshold: the score is
+    // additive over generic signals (exception wording, common frames,
+    // capped popularity), which used to let an unrelated popular case about
+    // a generic NullPointerException become the "strong match" plan.
+    if !hit.anchored || hit.score < tuffbox_core::swarm::STRONG_MATCH_THRESHOLD {
         return None;
     }
     let mut plan = tuffbox_core::action_plan::plan_from_kb_hit(
@@ -7979,34 +8395,64 @@ async fn ai_plan_with_fallback(
     match ai_call {
         Ok(detailed) => {
             let raw = serde_json::to_string(&detailed.value).unwrap_or_default();
-            let mut plan = tuffbox_core::action_plan::parse_action_plan(&raw)?;
-            tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
-            Ok((plan, compact, None, detailed.speculative))
-        }
-        Err(ai_err) => {
-            if let Some(mut plan) = strong_plan_from_similar(ctx) {
-                tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
-                return Ok((
-                    plan,
+            match tuffbox_core::action_plan::parse_action_plan(&raw) {
+                Ok(mut plan) => {
+                    tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
+                    Ok((plan, compact, None, detailed.speculative))
+                }
+                // The model ANSWERED, but not with a usable plan: JSON
+                // truncated by a token limit, prose around the object, wrong
+                // shape — very common with small local models. The fallback
+                // chain below exists exactly for "no usable AI plan", yet it
+                // used to run only on transport errors, so a garbage answer
+                // surfaced as a hard error instead of the KB/heuristic plan.
+                Err(parse_err) => fallback_plan_without_ai(
+                    ctx,
                     compact,
-                    Some(format!("AI unavailable ({ai_err}); used strong KB match")),
-                    speculative::SpeculativeMeta::default(),
-                ));
+                    format!("AI answer was not a usable plan ({parse_err})"),
+                ),
             }
-            if let Some(mut plan) = heuristic_plan_from_context(ctx) {
-                tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
-                return Ok((
-                    plan,
-                    compact,
-                    Some(format!("AI unavailable ({ai_err}); used local crash heuristics")),
-                    speculative::SpeculativeMeta::default(),
-                ));
-            }
-            Err(format!(
-                "AI unavailable: {ai_err}. Configure Ollama or an OpenAI-compatible endpoint in Settings → AI, or enable Crash KB / TuffSwarm."
-            ))
         }
+        Err(ai_err) => fallback_plan_without_ai(ctx, compact, format!("AI unavailable ({ai_err})")),
     }
+}
+
+/// Strong-KB → local-heuristics fallback used when the AI path yields no
+/// usable plan — transport failure OR an answer that failed to parse.
+fn fallback_plan_without_ai(
+    ctx: &tuffbox_core::ai_explanation::CrashAiContext,
+    compact: bool,
+    reason: String,
+) -> Result<
+    (
+        tuffbox_core::action_plan::ActionPlan,
+        bool, /*compact*/
+        Option<String>,
+        speculative::SpeculativeMeta,
+    ),
+    String,
+> {
+    if let Some(mut plan) = strong_plan_from_similar(ctx) {
+        tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
+        return Ok((
+            plan,
+            compact,
+            Some(format!("{reason}; used strong KB match")),
+            speculative::SpeculativeMeta::default(),
+        ));
+    }
+    if let Some(mut plan) = heuristic_plan_from_context(ctx) {
+        tuffbox_core::action_plan::veto_content_vs_optimization(&mut plan);
+        return Ok((
+            plan,
+            compact,
+            Some(format!("{reason}; used local crash heuristics")),
+            speculative::SpeculativeMeta::default(),
+        ));
+    }
+    Err(format!(
+        "{reason}. Configure Ollama or an OpenAI-compatible endpoint in Settings → AI, or enable Crash KB / TuffSwarm."
+    ))
 }
 
 /// Apply a validated ActionPlan (after user confirm). Runs snapshot once, then each op.
@@ -8175,6 +8621,15 @@ fn apply_launcher_edit_config(
         .parent()
         .ok_or_else(|| "manifest has no parent".to_string())?;
     let target = safe_project_file(project_dir, relative)?;
+    // Defense in depth: validation already rejects non-config paths, but the
+    // plan comes from an AI model — a `replace_file` text patch must never
+    // overwrite a jar/binary/script inside the project, even if a crafted or
+    // older plan slips past validation.
+    if !is_editable_config_path(&target) {
+        return Err(format!(
+            "edit_config refused: '{relative}' is not a config file (allowed: json/json5/toml/properties/cfg/conf/txt/js/zs/yaml/yml/md)"
+        ));
+    }
     let current = if target.is_file() {
         std::fs::read_to_string(&target).map_err(|e| e.to_string())?
     } else {
@@ -8207,7 +8662,18 @@ fn apply_launcher_edit_config(
 
 /// Record Helped/Wrong feedback into the project crash knowledge base.
 #[tauri::command(rename_all = "camelCase")]
-fn record_crash_ai_feedback(
+async fn record_crash_ai_feedback(
+    path: String,
+    feedback: CrashAiFeedbackPayload,
+) -> Result<String, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || record_crash_ai_feedback_impl(path, feedback))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn record_crash_ai_feedback_impl(
     path: String,
     feedback: CrashAiFeedbackPayload,
 ) -> Result<String, String> {
@@ -8250,7 +8716,18 @@ fn record_crash_ai_feedback(
 
 /// Author a private KB case from the current crash + your resolution.
 #[tauri::command(rename_all = "camelCase")]
-fn save_authored_crash_case(
+async fn save_authored_crash_case(
+    path: String,
+    input: tuffbox_core::crash_kb::AuthorCaseInput,
+) -> Result<tuffbox_core::crash_kb::AuthorCaseSaveResult, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; KB
+    // reads/writes must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || save_authored_crash_case_impl(path, input))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn save_authored_crash_case_impl(
     path: String,
     input: tuffbox_core::crash_kb::AuthorCaseInput,
 ) -> Result<tuffbox_core::crash_kb::AuthorCaseSaveResult, String> {
@@ -8260,7 +8737,18 @@ fn save_authored_crash_case(
 
 /// Prefill author form: fingerprint + optional draft from AI analysis / report.
 #[tauri::command(rename_all = "camelCase")]
-fn draft_authored_crash_case(
+async fn draft_authored_crash_case(
+    path: String,
+    report_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; KB
+    // reads/writes must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || draft_authored_crash_case_impl(path, report_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn draft_authored_crash_case_impl(
     path: String,
     report_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
@@ -8301,13 +8789,29 @@ fn draft_authored_crash_case(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn list_authored_crash_cases(path: String) -> Result<Vec<tuffbox_core::crash_kb::CrashCase>, String> {
+async fn list_authored_crash_cases(path: String) -> Result<Vec<tuffbox_core::crash_kb::CrashCase>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; KB
+    // reads/writes must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || list_authored_crash_cases_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn list_authored_crash_cases_impl(path: String) -> Result<Vec<tuffbox_core::crash_kb::CrashCase>, String> {
     let project_dir = manifest_parent(&path)?;
     Ok(tuffbox_core::crash_kb::list_authored_cases(&project_dir))
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn get_authored_case_export(path: String, case_id: String) -> Result<String, String> {
+async fn get_authored_case_export(path: String, case_id: String) -> Result<String, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; KB
+    // reads/writes must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || get_authored_case_export_impl(path, case_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_authored_case_export_impl(path: String, case_id: String) -> Result<String, String> {
     let project_dir = manifest_parent(&path)?;
     let case = tuffbox_core::crash_kb::list_authored_cases(&project_dir)
         .into_iter()
@@ -8485,6 +8989,16 @@ fn push_rec(
 
 /// Drop suggestions that have no Modrinth file for this pack's MC + loader.
 /// Also rewrites the slug to the first alias that actually resolves.
+/// A compat-check error is DEFINITIVE (the rec should be dropped) only when
+/// the API actually answered — 404 means the project does not exist on
+/// Modrinth (hallucinated slug / renamed project). Everything else — DNS
+/// failure, timeout, rate limit, 5xx, open circuit breaker — is inconclusive
+/// and must NOT drop the recommendation. `get_json_with_context` embeds the
+/// HTTP status in the error text, which is the only signal at this layer.
+fn compat_check_definitive(err_msg: &str) -> bool {
+    err_msg.contains("status 404")
+}
+
 fn filter_compatible_recommendations(
     manifest: &ProjectManifest,
     recs: Vec<serde_json::Value>,
@@ -8498,6 +9012,13 @@ fn filter_compatible_recommendations(
     };
 
     let mut out = Vec::new();
+    // Compat-check bookkeeping: an answer from the API (even "no versions
+    // for this loader/MC") is a DEFINITIVE verdict; a transport error is
+    // INCONCLUSIVE. The old code treated both as "drop the recommendation",
+    // so a Modrinth outage / rate limit silently wiped the whole list —
+    // including locally computed heuristics.
+    let mut definitive_checks = 0usize;
+    let mut inconclusive_checks = 0usize;
     for mut rec in recs {
         let Some(slug) = rec.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
             continue;
@@ -8510,20 +9031,43 @@ fn filter_compatible_recommendations(
         }
 
         let mut matched: Option<(String, String)> = None;
+        let mut check_failed = false;
         for candidate in &try_slugs {
             match provider.get_versions(candidate, &query) {
                 Ok(versions) if !versions.is_empty() => {
+                    definitive_checks += 1;
                     matched = Some((candidate.clone(), versions[0].version_number.clone()));
                     break;
                 }
-                _ => continue,
+                Ok(_) => {
+                    // The API answered: no build for this loader/MC version.
+                    definitive_checks += 1;
+                }
+                Err(e) => {
+                    if compat_check_definitive(&e.to_string()) {
+                        definitive_checks += 1;
+                    } else {
+                        check_failed = true;
+                    }
+                }
             }
         }
 
         let Some((resolved_slug, version_number)) = matched else {
+            if check_failed {
+                // Keep the recommendation, marked unverified: dropping it
+                // here is how a Modrinth outage used to empty the panel.
+                inconclusive_checks += 1;
+                if let Some(obj) = rec.as_object_mut() {
+                    obj.insert("compatibility".into(), serde_json::json!("unverified"));
+                }
+                out.push(rec);
+            }
+            // else: definitive negative → drop the recommendation.
             continue;
         };
         if let Some(obj) = rec.as_object_mut() {
+            obj.insert("compatibility".into(), serde_json::json!("verified"));
             if resolved_slug != slug {
                 if let Ok(project) = provider.get_project(&resolved_slug) {
                     obj.insert("name".into(), serde_json::json!(project.name));
@@ -8542,6 +9086,19 @@ fn filter_compatible_recommendations(
             );
         }
         out.push(rec);
+    }
+    // Total outage: not a single query got a real answer, so "filtering"
+    // proved nothing. Everything was already kept above and marked
+    // `unverified`; annotate the list so the UI can say so.
+    if definitive_checks == 0 && inconclusive_checks > 0 {
+        for rec in &mut out {
+            if let Some(obj) = rec.as_object_mut() {
+                obj.insert(
+                    "compatibilityNote".into(),
+                    serde_json::json!("Modrinth could not be reached — compatibility unverified"),
+                );
+            }
+        }
     }
     out
 }
@@ -8704,7 +9261,15 @@ async fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> 
             .and_then(|v| v.as_str())
         {
             let settings = integrations::get_integration_status().settings;
-            if let Ok(ai_json) = integrations::call_ai(&settings.ai, prompt).await {
+            // Best-effort step: cap it so a stalled endpoint cannot pin the
+            // whole recommendations command (per-attempt retries alone can
+            // stretch the underlying call to ~10 minutes).
+            let ai_call = tokio::time::timeout(
+                std::time::Duration::from_secs(90),
+                integrations::call_ai(&settings.ai, prompt),
+            )
+            .await;
+            if let Ok(Ok(ai_json)) = ai_call {
                 let keys = tokio::task::spawn_blocking({
                     let path = path.clone();
                     move || {
@@ -8797,6 +9362,39 @@ async fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> 
 
     recommendations.truncate(12);
     Ok(recommendations)
+}
+
+#[cfg(test)]
+mod compat_check_tests {
+    use super::compat_check_definitive;
+
+    #[test]
+    fn not_found_is_definitive() {
+        assert!(compat_check_definitive(
+            "JSON decode error for https://api.modrinth.com/v2/project/nope/version?loaders=[\"forge\"] (status 404): invalid type: map, expected a sequence"
+        ));
+    }
+
+    #[test]
+    fn network_failures_are_inconclusive() {
+        assert!(!compat_check_definitive("HTTP request failed: error sending request for url (https://api.modrinth.com/): operation timed out"));
+        assert!(!compat_check_definitive(
+            "network request failed: Connection refused (os error 111)"
+        ));
+        // Rate limits and server errors must never drop a recommendation.
+        assert!(!compat_check_definitive(
+            "JSON decode error for https://api.modrinth.com/v2/project/jei/version (status 429): invalid type: map, expected a sequence"
+        ));
+        assert!(!compat_check_definitive(
+            "JSON decode error for https://api.modrinth.com/v2/project/jei/version (status 503): invalid type: map, expected a sequence"
+        ));
+    }
+
+    #[test]
+    fn empty_and_unknown_errors_are_inconclusive() {
+        assert!(!compat_check_definitive(""));
+        assert!(!compat_check_definitive("circuit breaker open for api.modrinth.com"));
+    }
 }
 
 #[cfg(test)]
@@ -10886,6 +11484,7 @@ async fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String
                     "path": result.path.to_string_lossy(),
                     "files": result.file_count,
                     "overrideCount": result.override_count,
+                    "warnings": result.warnings,
                     "status": "ok",
                 }));
             }
@@ -10904,6 +11503,7 @@ async fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String
                 path: result.path.clone(),
                 file_count: result.file_count,
                 override_count: result.override_count,
+                warnings: vec![],
             };
             let _ = append_release_artifact(&path, "packwiz", &mapped);
             results.push(serde_json::json!({
@@ -11353,7 +11953,18 @@ async fn get_pack_health(path: String) -> Result<PackHealthReport, String> {
 /// counts so the Health screen can render one verdict instead of stitching
 /// together several unrelated endpoints (spec: «Один агрегат HealthReport»).
 #[tauri::command(rename_all = "camelCase")]
-fn get_health_report(path: String) -> Result<serde_json::Value, String> {
+async fn get_health_report(path: String) -> Result<serde_json::Value, String> {
+    // Sync Tauri commands run on the MAIN thread; this one walked the graph
+    // and sha1-hashed every non-local jar, freezing the event loop and
+    // stalling delivery of every other IPC response (Diagnose spinners
+    // never settled). Heavy work belongs on the blocking pool (same
+    // treatment as get_crash_diagnosis / run_crash_assistant_full).
+    tokio::task::spawn_blocking(move || get_health_report_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_health_report_impl(path: String) -> Result<serde_json::Value, String> {
     let manifest_path = resolve_manifest_path(&path).map_err(|e| e.to_string())?;
     let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     let graph = DependencyGraph::from_manifest(&manifest);
@@ -11475,7 +12086,15 @@ fn get_health_report(path: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn get_resolve_change_plan(path: String) -> Result<Option<tuffbox_core::ChangePlan>, String> {
+async fn get_resolve_change_plan(path: String) -> Result<Option<tuffbox_core::ChangePlan>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || get_resolve_change_plan_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_resolve_change_plan_impl(path: String) -> Result<Option<tuffbox_core::ChangePlan>, String> {
     let manifest = manifest_for_graph(&path)?;
     let graph = DependencyGraph::from_manifest(&manifest);
     let diagnostics = Resolver::analyze_project(&manifest, &graph);
@@ -11734,7 +12353,7 @@ fn diagnose_timing(
     eprintln!("[diagnose] phase={phase} elapsed_ms={elapsed_ms} cache_hit={cache_hit}");
 }
 
-fn diagnose_finish(app: &tauri::AppHandle, ok: bool, detail: &str) {
+fn diagnose_finish(_app: &tauri::AppHandle, ok: bool, detail: &str) {
     if ok {
         tuffbox_core::task_progress::succeed(DIAGNOSE_TASK_ID, Some(detail.to_string()));
     } else {
@@ -11935,7 +12554,19 @@ fn get_crash_diagnosis_uncached(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn import_external_crash(
+async fn import_external_crash(
+    path: String,
+    file_name: String,
+    content: String,
+) -> Result<String, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || import_external_crash_impl(path, file_name, content))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn import_external_crash_impl(
     path: String,
     file_name: String,
     content: String,
@@ -12072,7 +12703,18 @@ fn run_crash_assistant_analysis(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn create_crash_fix_plan(
+async fn create_crash_fix_plan(
+    path: String,
+    report_id: Option<String>,
+) -> Result<tuffbox_core::ChangePlan, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || create_crash_fix_plan_impl(path, report_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn create_crash_fix_plan_impl(
     path: String,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::ChangePlan, String> {
@@ -13280,7 +13922,18 @@ async fn scan_project_changes(path: String) -> Result<pack_events::ScanProjectCh
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn list_recent_pack_events(
+async fn list_recent_pack_events(
+    path: String,
+    limit: Option<usize>,
+) -> Result<Vec<pack_events::PackEvent>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); heavy I/O must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || list_recent_pack_events_impl(path, limit))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn list_recent_pack_events_impl(
     path: String,
     limit: Option<usize>,
 ) -> Result<Vec<pack_events::PackEvent>, String> {
@@ -13518,7 +14171,9 @@ fn rollback_history_file(
     if !canonical_parent.starts_with(&canonical_project) {
         return Err("file is outside project directory".to_string());
     }
-    std::fs::copy(src, dst).map_err(|e| e.to_string())?;
+    // copy_replacing: the destination may be a dedup-store hardlink — an
+    // in-place copy would corrupt every pack sharing that object.
+    tuffbox_core::fs_util::copy_replacing(&src, &dst).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -13847,7 +14502,15 @@ fn get_snapshot_file_diff(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn validate_modrinth_export(path: String) -> Result<Vec<tuffbox_core::ExportIssue>, String> {
+async fn validate_modrinth_export(path: String) -> Result<Vec<tuffbox_core::ExportIssue>, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || validate_modrinth_export_impl(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn validate_modrinth_export_impl(path: String) -> Result<Vec<tuffbox_core::ExportIssue>, String> {
     let manifest_path = resolve_manifest_path(&path)?;
     let manifest =
         ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
@@ -13984,7 +14647,18 @@ fn resolve_export_output(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_modrinth_pack(
+async fn export_modrinth_pack(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || export_modrinth_pack_impl(path, target_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_modrinth_pack_impl(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
@@ -14017,7 +14691,15 @@ fn export_modrinth_pack(
 /// Reuses the same manifest walk as the real exporter so counts match what a
 /// subsequent export produces.
 #[tauri::command(rename_all = "camelCase")]
-fn export_preview(path: String, kind: String) -> Result<serde_json::Value, String> {
+async fn export_preview(path: String, kind: String) -> Result<serde_json::Value, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || export_preview_impl(path, kind))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_preview_impl(path: String, kind: String) -> Result<serde_json::Value, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let manifest_dir = PathBuf::from(&path);
     let project_dir = manifest_dir
@@ -14068,7 +14750,18 @@ fn export_preview(path: String, kind: String) -> Result<serde_json::Value, Strin
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_server_pack(
+async fn export_server_pack(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || export_server_pack_impl(path, target_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_server_pack_impl(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
@@ -14086,7 +14779,18 @@ fn export_server_pack(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_prism_instance(
+async fn export_prism_instance(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || export_prism_instance_impl(path, target_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_prism_instance_impl(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
@@ -14104,7 +14808,18 @@ fn export_prism_instance(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_curseforge_pack(
+async fn export_curseforge_pack(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
+    // Blocking-pool conversion: sync commands run on the main thread (see
+    // get_health_report); zipping a multi-GB pack must not freeze the app.
+    tokio::task::spawn_blocking(move || export_curseforge_pack_impl(path, target_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn export_curseforge_pack_impl(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
@@ -14177,6 +14892,7 @@ fn export_packwiz_pack(
         path: result.path,
         file_count: result.file_count,
         override_count: result.override_count,
+        warnings: Vec::new(),
     };
     append_release_artifact(&path, "packwiz", &mapped).map_err(|e| e.to_string())?;
     swarm_api::spawn_pack_cooccurrence(path, "pack_export");
@@ -15003,7 +15719,8 @@ fn build_and_spawn(
         // — using e.g. Java 21 for Forge 1.20.1 (which needs Java 17)
         // fails deep inside Forge's bootstrap launcher with a confusing
         // module-system error instead of launching at all.
-        // If nothing is installed, download the latest GraalVM Community JDK.
+        // If nothing matching is installed, download a managed JDK
+        // (GraalVM for modern majors, Temurin 8/16 for legacy versions).
         emit_launch_progress(&app, "java", "Installing Java…", Some(20));
         tuffbox_core::jre::ensure_java_for_minecraft_with_log(
             &manifest.minecraft.version,
@@ -15930,6 +16647,37 @@ async fn get_curseforge_modpack_files(
 /// Download a CurseForge / Modrinth / local pack and create an instance with
 /// resolved mods + download progress (Prism InstanceImportTask flow).
 ///
+/// Apply the user's import-time dedup choice to the freshly created pack:
+/// - `Some(true)`  → single-root retro-dedup: identical jars/zips already in
+///   the shared store (e.g. from another imported Prism pack) are linked in,
+///   new unique files are recorded — the pack immediately shares bytes.
+/// - `Some(false)` → `.tuffbox-no-dedup` marker: the pack keeps independent
+///   files (installs never consult or feed the store).
+/// - `None`        → no decision (legacy callers): store behavior unchanged.
+pub(crate) fn apply_import_dedup_choice(
+    instance_dir: &Path,
+    dedup: Option<bool>,
+) -> serde_json::Value {
+    match dedup {
+        Some(true) => {
+            let report = tuffbox_core::mod_store::retro_dedup(&[instance_dir]);
+            serde_json::json!({
+                "mode": "shared",
+                "linked": report.linked,
+                "recorded": report.recorded,
+                "bytesReclaimed": report.bytes_reclaimed,
+                "errors": report.errors.len(),
+            })
+        }
+        Some(false) => {
+            let marker = instance_dir.join(tuffbox_core::mod_store::NO_DEDUP_MARKER);
+            let _ = std::fs::write(&marker, b"");
+            serde_json::json!({ "mode": "independent" })
+        }
+        None => serde_json::json!({ "mode": "default" }),
+    }
+}
+
 /// Also accepts launcher instance folders (Prism / MultiMC / CurseForge /
 /// plain `mods/`) and mods-only zip archives.
 #[tauri::command(rename_all = "camelCase")]
@@ -15938,6 +16686,7 @@ async fn install_modpack(
     source: String,
     target_dir: String,
     instance_name: Option<String>,
+    dedup: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     if !std::path::Path::new(&source).exists()
         && tuffbox_core::github_pack::parse_github_source(&source).is_ok()
@@ -15947,6 +16696,7 @@ async fn install_modpack(
             source,
             target_dir,
             instance_name,
+            dedup,
         )
         .await;
     }
@@ -15963,6 +16713,7 @@ async fn install_modpack(
             "modpack-install-progress",
             serde_json::json!({ "phase": "resolving", "message": "Preparing modpack…" }),
         );
+        let import_dedup = dedup;
         let task_id = tuffbox_core::task_progress::start_task(
             format!("modpack-{}", tuffbox_core::time_util::compact_now()),
             "Install modpack",
@@ -16012,11 +16763,13 @@ async fn install_modpack(
                 manifest_path.to_string_lossy().to_string(),
                 "pack_import",
             );
+            let dedup_info = apply_import_dedup_choice(&instance_dir, import_dedup);
             return Ok(serde_json::json!({
                 "path": manifest_path.to_string_lossy(),
                 "name": manifest.project.name,
                 "modCount": manifest.mods.len(),
                 "provider": "folder",
+                "dedup": dedup_info,
             }));
         }
 
@@ -16348,12 +17101,14 @@ async fn install_modpack(
             manifest_path.to_string_lossy().to_string(),
             "pack_import",
         );
+        let dedup_info = apply_import_dedup_choice(&instance_dir, import_dedup);
 
         Ok(serde_json::json!({
             "path": manifest_path.to_string_lossy(),
             "name": manifest.project.name,
             "modCount": manifest.mods.len(),
             "download": report,
+            "dedup": dedup_info,
             "provider": if is_cf {
                 "curseforge"
             } else if effective_ext == "mrpack" {
@@ -17589,7 +18344,7 @@ async fn retry_failed_mod_downloads(
 #[tauri::command(rename_all = "camelCase")]
 #[allow(deprecated)]
 fn open_project_folder(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     path: String,
     subdir: Option<String>,
 ) -> Result<(), String> {
@@ -18398,7 +19153,18 @@ fn pick_shareable_crash_log(logs_dir: &Path, crashes_dir: &Path) -> Option<PathB
 /// project and return the suspected mods together with the exact line numbers
 /// where they were referenced, so the UI can highlight those lines.
 #[tauri::command(rename_all = "camelCase")]
-fn analyze_log_text(
+async fn analyze_log_text(
+    path: String,
+    text: String,
+) -> Result<serde_json::Value, String> {
+    // Blocking-pool conversion: sync commands run on the main thread; the
+    // suspect scan over the pasted log must not freeze IPC delivery.
+    tokio::task::spawn_blocking(move || analyze_log_text_impl(path, text))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn analyze_log_text_impl(
     path: String,
     text: String,
 ) -> Result<serde_json::Value, String> {
@@ -18867,8 +19633,24 @@ fn remove_mod_file_from_disk(manifest_path: &Path, removed_mod: &ModSpec) {
         if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(manifest_path) {
             let content_dir =
                 tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
-            let _ = std::fs::remove_file(content_dir.join(file_name));
-            let _ = std::fs::remove_file(content_dir.join(format!("{file_name}.disabled")));
+            let live = content_dir.join(file_name);
+            let disabled = content_dir.join(format!("{file_name}.disabled"));
+            // Hash the content before removal so the shared store object can
+            // be released when this was the last pack using these bytes.
+            let sha1 = removed_mod
+                .hashes
+                .as_ref()
+                .and_then(|h| h.sha1.clone())
+                .or_else(|| tuffbox_core::sha1_file(&live).ok());
+            // Dedup-store hardlinks are read-only on Windows — clear before
+            // remove or the file silently survives (stale jar on next sync).
+            tuffbox_core::fs_util::clear_readonly(&live);
+            tuffbox_core::fs_util::clear_readonly(&disabled);
+            let _ = std::fs::remove_file(&live);
+            let _ = std::fs::remove_file(&disabled);
+            if let Some(sha1) = sha1 {
+                release_store_object_detached(sha1);
+            }
         }
     }
 }
@@ -20778,6 +21560,7 @@ pub fn run() {
             resolve_project_path,
             get_project_brief,
             update_project_brief,
+            rename_project,
             listing_api::get_project_listing,
             listing_api::update_project_listing,
             listing_api::set_project_listing_icon,
@@ -21001,6 +21784,8 @@ pub fn run() {
             worlds::list_world_backups,
             worlds::delete_world_backup,
             worlds::read_world_icon,
+            worlds::list_screenshots,
+            worlds::delete_screenshot,
             mca_selector::open_mca_selector,
             list_content_packs,
             set_content_pack_enabled,
@@ -21078,6 +21863,10 @@ pub fn run() {
             store_stats,
             store_retro_dedup,
             store_gc,
+            dedup_project_status,
+            dedup_project_set_enabled,
+            youtube_my_feed_lookup,
+            youtube_my_feed_fetch,
             scan_ore_generation,
             detect_duplicate_items,
             generate_unify_config,
@@ -21216,6 +22005,7 @@ pub fn run() {
             auth::mc_get_auth_status,
             auth::mc_logout,
             auth::mc_refresh_profile,
+            auth::mc_refresh_token,
             auth::mc_get_skin_path,
             auth::mc_fetch_skin_url,
             auth::mc_offline_login,

@@ -4,6 +4,7 @@
   import { onDestroy, onMount } from "svelte";
   import { X, Loader2, CheckCircle2, AlertTriangle, Pause, Play } from "@lucide/svelte";
   import { toasts } from "../lib/toast";
+  import { taskPollIntervalMs } from "../lib/idlePerf";
 
   type BackgroundTask = {
     id: string;
@@ -22,12 +23,20 @@
   };
 
   let tasks = $state<BackgroundTask[]>([]);
-  let timer: ReturnType<typeof setInterval> | null = null;
   let unlistenPullDone: UnlistenFn | null = null;
 
   async function refresh() {
     try {
-      tasks = await invoke<BackgroundTask[]>("list_background_tasks");
+      const next = await invoke<BackgroundTask[]>("list_background_tasks");
+      // Skip the reassign when nothing changed — an identical array would
+      // still re-run the each-block diff every tick.
+      if (
+        tasks.length === next.length &&
+        JSON.stringify(tasks) === JSON.stringify(next)
+      ) {
+        return;
+      }
+      tasks = next;
     } catch {
       tasks = [];
     }
@@ -88,9 +97,6 @@
 
   onMount(() => {
     void refresh();
-    timer = setInterval(() => {
-      void refresh();
-    }, 800);
     void listen<{
       ok: boolean;
       paused?: boolean;
@@ -112,7 +118,6 @@
   });
 
   onDestroy(() => {
-    if (timer) clearInterval(timer);
     void unlistenPullDone?.();
   });
 
@@ -125,6 +130,19 @@
         t.status === "cancelRequested",
     ),
   );
+
+  // Poll cadence tracks what's on screen: fast while background work is
+  // visible, relaxed when the panel is empty (the old fixed 800ms tick kept
+  // the WebView2 process awake on an idle home page). A hidden window
+  // (minimized / occluded) skips the IPC entirely.
+  $effect(() => {
+    const activeCount = visible.length;
+    const id = setInterval(() => {
+      if (document.hidden) return;
+      void refresh();
+    }, taskPollIntervalMs(activeCount));
+    return () => clearInterval(id);
+  });
 </script>
 
 {#if visible.length}
@@ -243,7 +261,7 @@
     display: block;
     margin-top: 4px;
     opacity: 0.75;
-    font-size: 11px;
+    font-size: 12px;
   }
   .err {
     color: #f88;

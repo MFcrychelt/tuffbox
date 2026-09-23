@@ -262,7 +262,7 @@
           toasts.success("Registered and signed in");
         } else {
           authNote =
-            "Check your email to confirm. If the link opens localhost:3000 and fails, the account is still confirmed — return here and Sign in. New confirms open a success page in the browser.";
+            "Check your email to confirm, then sign in here. If the link fails to open, the account is still confirmed.";
           toasts.success("Check your email to confirm registration");
           authMode = "signin";
         }
@@ -775,7 +775,7 @@
 
   .author-kudos {
     margin-top: 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .author-kudos strong {
@@ -824,7 +824,7 @@
   .filters {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
@@ -968,7 +968,7 @@
     align-items: center;
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1018,7 +1018,7 @@
 
   .auth-tabs {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
 
   .auth-form {
@@ -1034,7 +1034,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .auth-form.compact input {
@@ -1064,11 +1064,11 @@
 
   .meta-bits {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex: 1;
     min-width: 0;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .meta-bits span {
@@ -1110,13 +1110,13 @@
   .trust-block {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .trust-head {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-secondary);
   }
@@ -1130,7 +1130,7 @@
   .trust-label {
     color: var(--text-muted);
     text-transform: uppercase;
-    font-size: 10px;
+    font-size: 12px;
     letter-spacing: 0.06em;
     font-weight: 700;
   }
@@ -1139,9 +1139,9 @@
     margin-left: auto;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .trust-meter {
@@ -1165,8 +1165,8 @@
   .mod-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 11px;
+    gap: 8px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -1228,9 +1228,9 @@
 
   .fp-key {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     word-break: break-all;
   }
 
@@ -1255,14 +1255,14 @@
     margin: 0 0 8px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 13px;
     color: var(--text-secondary);
   }
 
   .panel-note {
     margin: -4px 0 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -1282,11 +1282,11 @@
     padding-left: 18px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   .frames code {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-secondary);
     word-break: break-all;
   }
@@ -1298,7 +1298,7 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .mod-list li {
@@ -1312,7 +1312,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     padding: 6px 8px;
     background: var(--bg-elevated);
@@ -1350,7 +1350,7 @@
   }
 
   .risk {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     color: var(--text-muted);
@@ -1391,7 +1391,7 @@
   .hint {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--accent-warning);
   }

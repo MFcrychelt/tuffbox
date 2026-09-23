@@ -339,11 +339,11 @@
   }
   .sel-btns {
     display: flex;
-    gap: 4px;
+    gap: 8px;
     margin-left: auto;
   }
   .sel-btn {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     padding: 2px 8px;
     color: var(--ftbq-text-muted);
@@ -351,7 +351,7 @@
   .tree {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .ch-block {
     border: 1px solid rgba(255, 255, 255, 0.04);
@@ -362,7 +362,7 @@
   .ch-row {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 8px;
     padding: 0 4px;
   }
   .fold {
@@ -408,7 +408,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 9px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -421,11 +421,11 @@
   .ch small,
   .q small {
     margin-left: auto;
-    font-size: 10px;
+    font-size: 12px;
     opacity: 0.7;
   }
   .dep-anch {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-line, #5c8a9e);
     max-width: 40%;
     overflow: hidden;
@@ -453,7 +453,7 @@
   .errs {
     margin: 0;
     padding-left: 18px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .warns {
     color: var(--ftbq-quest-started);
@@ -468,7 +468,7 @@
   .actions button {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .actions .ghost {
     background: transparent;
@@ -477,7 +477,7 @@
   }
   .apply-hint {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--accent-warning);
   }
 </style>

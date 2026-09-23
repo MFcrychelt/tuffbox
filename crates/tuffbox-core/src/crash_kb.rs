@@ -59,6 +59,15 @@ pub struct CrashCase {
 pub struct SimilarCaseHit {
     pub id: String,
     pub score: f64,
+    /// True when the match rests on a STRONG anchor: exact/soft fingerprint
+    /// key, a blamed-mod overlap, or the same mod file. Generic signals
+    /// (exception wording, common stack frames, popularity) can accumulate
+    /// score but never set this — `STRONG_MATCH_THRESHOLD` consumers must
+    /// require `anchored` so a popular case about a generic
+    /// NullPointerException can never become a "strong match" fallback plan
+    /// for an unrelated crash.
+    #[serde(default)]
+    pub anchored: bool,
     pub solution: String,
     pub suspected_mods: Vec<String>,
     pub actions: Vec<AiAction>,
@@ -541,17 +550,20 @@ pub fn search_similar(
     k: usize,
 ) -> Vec<SimilarCaseHit> {
     let hay = haystack.to_ascii_lowercase();
-    let mut scored: Vec<(f64, &CrashCase)> = cases
+    let mut scored: Vec<(f64, bool, &CrashCase)> = cases
         .iter()
         .filter(|c| c.fail_count <= c.success_count.saturating_add(2))
-        .map(|c| (score_case(c, fp, &hay), c))
-        .filter(|(s, _)| *s > 0.15)
+        .map(|c| {
+            let (score, anchored) = score_case_with_anchor(c, fp, &hay);
+            (score, anchored, c)
+        })
+        .filter(|(s, _, _)| *s > 0.15)
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(k);
     scored
         .into_iter()
-        .map(|(score, c)| {
+        .map(|(score, anchored, c)| {
             let actions = if !c.launcher_actions.is_empty() {
                 crate::action_plan::plan_to_legacy_ai_actions(&crate::action_plan::ActionPlan {
                     schema_version: crate::action_plan::ACTION_PLAN_SCHEMA_VERSION,
@@ -570,6 +582,7 @@ pub fn search_similar(
             SimilarCaseHit {
                 id: c.id.clone(),
                 score,
+                anchored,
                 solution: c.solution.clone(),
                 suspected_mods: c.suspected_mods.clone(),
                 actions,
@@ -772,10 +785,15 @@ mod author_tests {
     }
 }
 
-fn score_case(case: &CrashCase, fp: &CrashFingerprint, hay: &str) -> f64 {
+/// Score a case against a fingerprint. Returns `(score, anchored)`:
+/// `anchored` is true only for strong identifying signals (fingerprint-key
+/// match, blamed-mod overlap, same mod file) — see `SimilarCaseHit::anchored`.
+fn score_case_with_anchor(case: &CrashCase, fp: &CrashFingerprint, hay: &str) -> (f64, bool) {
     let mut score = 0.0;
+    let mut anchored = false;
     if !fp.key.is_empty() && fp.key == case.fingerprint.key {
         score += 1.0;
+        anchored = true;
     } else if !fp.key.is_empty() && !case.fingerprint.key.is_empty() {
         // Soft match: ignore trailing blame suffix so older cases still hit.
         let trunc = |k: &str| -> String {
@@ -790,6 +808,7 @@ fn score_case(case: &CrashCase, fp: &CrashFingerprint, hay: &str) -> f64 {
             || case.fingerprint.key.starts_with(&fp_trunc)
         {
             score += 0.75;
+            anchored = true;
         }
     }
     if !fp.blame_mod_ids.is_empty() {
@@ -807,6 +826,8 @@ fn score_case(case: &CrashCase, fp: &CrashFingerprint, hay: &str) -> f64 {
             .count();
         if overlap > 0 {
             score += 0.2 * overlap as f64;
+            // A blamed mod literally present in the case is identifying.
+            anchored = true;
         }
     }
     let ex = normalize_token(&fp.exception);
@@ -831,6 +852,8 @@ fn score_case(case: &CrashCase, fp: &CrashFingerprint, hay: &str) -> f64 {
     if let (Some(a), Some(b)) = (&fp.mod_file, &case.fingerprint.mod_file) {
         if normalize_token(a) == normalize_token(b) {
             score += 0.25;
+            // The crash literally names the same mod jar — identifying.
+            anchored = true;
         }
     }
     for symptom in &case.symptoms {
@@ -838,8 +861,11 @@ fn score_case(case: &CrashCase, fp: &CrashFingerprint, hay: &str) -> f64 {
             score += 0.12;
         }
     }
-    // Prefer proven cases slightly.
-    score += (case.success_count as f64) * 0.02;
+    // Prefer proven cases slightly — CAPPED: popularity is not evidence.
+    // The old uncapped `success_count * 0.02` let a case applied 40+ times
+    // add +0.8 on its own, carrying unrelated crashes past the strong-match
+    // threshold with zero identifying signals.
+    score += (case.success_count as f64).min(10.0) * 0.01;
     score -= (case.fail_count as f64) * 0.03;
     if !case.fingerprint.loader.is_empty()
         && !fp.loader.is_empty()
@@ -847,7 +873,9 @@ fn score_case(case: &CrashCase, fp: &CrashFingerprint, hay: &str) -> f64 {
     {
         score += 0.05;
     }
-    score
+    // The score is additive across independent signals; keep it a sane
+    // 0..=1 confidence for display, plans and threshold comparisons.
+    (score.clamp(0.0, 1.0), anchored)
 }
 
 fn jaccard_tokens(a: &str, b: &str) -> f64 {
@@ -1051,6 +1079,130 @@ mod tests {
         );
         assert!(!fp.frames.is_empty());
         assert_eq!(fp.mc_major, "1.20");
+    }
+
+    fn test_case(
+        text: &str,
+        mc: &str,
+        loader: &str,
+        success_count: u32,
+    ) -> CrashCase {
+        CrashCase {
+            id: format!("case-{success_count}"),
+            fingerprint: fingerprint_from_text(text, mc, loader),
+            symptoms: Vec::new(),
+            suspected_mods: Vec::new(),
+            solution: "Unrelated popular fix".into(),
+            actions: Vec::new(),
+            launcher_actions: Vec::new(),
+            notes: None,
+            source: "builtin".into(),
+            success_count,
+            fail_count: 0,
+        }
+    }
+
+    #[test]
+    fn generic_exception_plus_popularity_is_never_a_strong_match() {
+        // REGRESSION: an unrelated, very popular case about a generic
+        // NullPointerException used to clear STRONG_MATCH_THRESHOLD (0.75)
+        // on popularity alone (success_count * 0.02, uncapped) plus generic
+        // exception-token overlap — and became the "strong KB match"
+        // fallback plan with its remove/disable actions.
+        let case = test_case(
+            "java.lang.NullPointerException: unrelated context\n\tat net.example.Other.run(Other.java:9)\n",
+            "1.20.1",
+            "forge",
+            50,
+        );
+        let fp = fingerprint_from_text(
+            "java.lang.NullPointerException: loading world\n\tat net.minecraft.server.MinecraftServer.tick(MinecraftServer.java:1)\n",
+            "1.20.1",
+            "fabric",
+        );
+        let hits = search_similar(&[case], &fp, "generic crash text", 3);
+        if let Some(hit) = hits.first() {
+            assert!(!hit.anchored, "generic signals must not anchor");
+            assert!(
+                hit.score < 0.75,
+                "score {} must stay below the strong threshold",
+                hit.score
+            );
+        }
+    }
+
+    #[test]
+    fn exact_fingerprint_match_is_anchored_and_strong() {
+        let text = "java.lang.NoClassDefFoundError: com/example/Foo\n\tat com.example.Bar.run(Bar.java:10)\nMod File: sodium.jar\n";
+        let case = test_case(text, "1.20.1", "fabric", 0);
+        let fp = fingerprint_from_text(text, "1.20.1", "fabric");
+        let hits = search_similar(&[case], &fp, text, 3);
+        let hit = hits.first().expect("exact match must hit");
+        assert!(hit.anchored);
+        assert!(hit.score >= 0.75);
+    }
+
+    #[test]
+    fn blame_overlap_anchors_even_at_low_score() {
+        // Different exception/frames/loader — only the blamed mod agrees.
+        let case = CrashCase {
+            suspected_mods: vec!["sodium".into()],
+            ..test_case(
+                "java.lang.IllegalStateException: totally different\n\tat net.example.Zed.run(Zed.java:3)\n",
+                "1.19.4",
+                "forge",
+                0,
+            )
+        };
+        let fp = fingerprint_from_text_with_blame(
+            "java.lang.NullPointerException: boom\n\tat net.minecraft.client.Minecraft.run(Minecraft.java:2)\n",
+            "1.20.1",
+            "fabric",
+            &["sodium".into()],
+        );
+        let hits = search_similar(&[case], &fp, "crash text", 3);
+        if let Some(hit) = hits.first() {
+            assert!(hit.anchored, "blame overlap must anchor");
+        }
+    }
+
+    #[test]
+    fn score_is_clamped_to_unit_range() {
+        // Everything agrees + popularity: the additive score must still be
+        // a sane 0..=1 confidence.
+        let text = "java.lang.NoClassDefFoundError: com/example/Foo\n\tat com.example.Bar.run(Bar.java:10)\nMod File: sodium.jar\n";
+        let case = CrashCase {
+            success_count: 30,
+            ..test_case(text, "1.20.1", "fabric", 0)
+        };
+        let fp = fingerprint_from_text_with_blame(text, "1.20.1", "fabric", &["sodium".into()]);
+        let hits = search_similar(&[case], &fp, text, 3);
+        let hit = hits.first().expect("must hit");
+        assert!(hit.score <= 1.0, "score must be clamped, got {}", hit.score);
+        assert!(hit.anchored);
+    }
+
+    #[test]
+    fn popularity_alone_does_not_even_qualify_as_candidate() {
+        // A popular case with zero signal agreement used to pass the 0.15
+        // candidate filter on success_count alone (50 * 0.02 = 1.0).
+        let case = test_case(
+            "java.lang.IllegalStateException: unrelated\n\tat net.example.Zed.run(Zed.java:3)\n",
+            "1.19.4",
+            "forge",
+            50,
+        );
+        let fp = fingerprint_from_text(
+            "java.lang.NullPointerException: boom\n\tat net.minecraft.client.Minecraft.run(Minecraft.java:2)\n",
+            "1.20.1",
+            "fabric",
+        );
+        let hits = search_similar(&[case], &fp, "nothing matches", 3);
+        assert!(
+            hits.is_empty(),
+            "popularity alone must not qualify, got score {}",
+            hits.first().map(|h| h.score).unwrap_or(0.0)
+        );
     }
 
     #[test]

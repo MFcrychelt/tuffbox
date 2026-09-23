@@ -243,7 +243,7 @@
     to { transform: rotate(360deg); }
   }
 
-  .pip-title { display: grid; gap: 1px; min-width: 0; }
+  .pip-title { display: grid; gap: 8px; min-width: 0; }
   .pip-title strong { font-size: 14px; color: var(--text-primary); }
   .pip-title span { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -264,7 +264,7 @@
   .pip-meta {
     display: flex;
     justify-content: space-between;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
@@ -275,7 +275,7 @@
     padding: 0;
     list-style: none;
     display: grid;
-    gap: 3px;
+    gap: 8px;
     max-height: 140px;
     overflow-y: auto;
   }
@@ -296,6 +296,6 @@
   }
 
   .pip-state { flex-shrink: 0; color: var(--text-muted); }
-  .pip-more { color: var(--text-muted); font-size: 11px; }
+  .pip-more { color: var(--text-muted); font-size: 12px; }
   .pip-fail { margin: 0; color: var(--accent-danger); font-size: 12px; }
 </style>

@@ -406,7 +406,7 @@
   .follow-toggle {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--text-muted, #9aa4b2);
     cursor: pointer;
@@ -416,7 +416,7 @@
   .log-selector {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
   }
 
   .log-dropdown {
@@ -447,7 +447,7 @@
 
   .log-file-row:hover,
   .log-file-row.selected {
-    background: rgba(255, 255, 255, 0.06);
+    background: color-mix(in srgb, var(--text-primary) 6%, transparent);
   }
 
   .icon-btn {
@@ -483,7 +483,7 @@
   .log-select-btn {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
+      gap: 8px;
       padding: 4px 10px;
       border-radius: 6px;
       border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
@@ -541,7 +541,7 @@
     padding: 12px 14px;
     overflow: auto;
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
-    font-size: 11.5px;
+    font-size: 12px;
     line-height: 1.45;
     white-space: pre-wrap;
     word-break: break-word;
@@ -560,14 +560,14 @@
 
   .live-hint {
     flex: 1;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, #9aa4b2);
   }
 
   .ghost {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 6px 12px;
     border-radius: 6px;
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -578,6 +578,6 @@
   }
 
   .ghost:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
   }
 </style>

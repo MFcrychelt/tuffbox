@@ -13,13 +13,20 @@
     Box,
     FileArchive,
   } from "@lucide/svelte";
-  import { projectPath, projectInfo, pushWorkTrail } from "../lib/store";
+  import {
+    projectPath,
+    projectInfo,
+    pushWorkTrail,
+    isProjectRunning,
+    runningInstances,
+  } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
 
   type ExportResult = {
     path: string;
     fileCount: number;
     overrideCount: number;
+    warnings?: string[] | null;
   };
 
   type ExportIssue = {
@@ -38,6 +45,7 @@
     files?: number;
     overrideCount?: number;
     error?: string;
+    warnings?: string[] | null;
   };
 
   let targetPath = $state("");
@@ -289,6 +297,12 @@
     }
   }
 
+  /** The game may be running while exporting: nothing in an export is
+   *  write-locked by the JVM (jars are opened read-shared, saves/logs are not
+   *  exported), so we ALLOW it — but say so instead of failing silently on a
+   *  config that is mid-flush. */
+  const gameRunning = $derived(isProjectRunning($projectPath, $runningInstances));
+
   const blockingErrors = $derived(issues.filter((i) => i.severity === "error"));
   const warnings = $derived(issues.filter((i) => i.severity === "warning"));
   const busy = $derived(exporting || batching || issuesLoading);
@@ -319,6 +333,18 @@
       <span>{error}</span>
     </div>
   {/if}
+  {#if gameRunning}
+    <div class="notice warn" role="status">
+      <AlertTriangle size={16} />
+      <div class="notice-body">
+        <strong>Minecraft is running with this pack</strong>
+        <span>
+          Exporting is safe — the game only reads mod jars, and saves/logs are never exported. Config
+          files reflect the live session; stop the game first for a byte-perfect export.
+        </span>
+      </div>
+    </div>
+  {/if}
   {#if result}
     <div class="notice success" role="status">
       <CheckCircle2 size={16} />
@@ -327,6 +353,12 @@
         <span>
           {result.fileCount} remote entries · {result.overrideCount} override files
         </span>
+        {#if result.warnings && result.warnings.length > 0}
+          <span class="export-warnings">
+            {result.warnings.length} file{result.warnings.length === 1 ? "" : "s"} skipped (unreadable —
+            locked or in use): {result.warnings.slice(0, 3).join("; ")}{result.warnings.length > 3 ? "…" : ""}
+          </span>
+        {/if}
         <code class="path-chip">{result.path}</code>
         <button class="linkish" onclick={() => void revealPath(result!.path)}>
           <FolderOpen size={14} /> Show in folder
@@ -617,21 +649,32 @@
     color: var(--text-muted);
     background: var(--bg-tertiary);
   }
+  .notice.warn {
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--accent-warning) 10%, transparent);
+    border-color: color-mix(in srgb, var(--accent-warning) 30%, transparent);
+    align-items: flex-start;
+  }
+  .export-warnings {
+    color: var(--accent-warning);
+    font-size: 12px;
+    word-break: break-all;
+  }
   .notice-body {
     display: grid;
-    gap: 4px;
+    gap: 8px;
   }
   .path-chip {
     display: block;
     word-break: break-all;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
     color: var(--text-secondary);
   }
   .linkish {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     background: none;
     border: none;
     color: var(--accent-primary);
@@ -716,7 +759,7 @@
     border-radius: 14px;
     padding: 14px;
     display: grid;
-    gap: 4px;
+    gap: 8px;
   }
   .issues {
     display: grid;
@@ -732,7 +775,7 @@
   }
   .issue {
     display: grid;
-    gap: 4px;
+    gap: 8px;
     padding: 12px;
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
@@ -749,7 +792,7 @@
   }
   code {
     color: var(--text-secondary);
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
     word-break: break-all;
   }
@@ -798,7 +841,7 @@
   }
   .batch-results li {
     display: grid;
-    gap: 2px;
+    gap: 8px;
     padding: 10px 12px;
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);

@@ -326,7 +326,7 @@
   .sig-group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     padding: 8px;
     border-radius: var(--border-radius-sm);
     background: var(--bg-primary);
@@ -334,7 +334,7 @@
   }
   .sig-group small {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
   .sig-group ul {
     margin: 0;
@@ -345,8 +345,8 @@
     display: block;
     width: 100%;
     text-align: left;
-    font-size: 11px;
-    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    font-family: var(--font-mono, ui-monospace, monospace);
     padding: 4px 0;
     border: none;
     background: transparent;
@@ -371,7 +371,7 @@
   }
   .sec-card pre {
     margin: 6px 0 0;
-    font-size: 11px;
+    font-size: 12px;
     white-space: pre-wrap;
     color: var(--text-muted);
     max-height: 72px;
@@ -389,7 +389,7 @@
   .dx-suspects h3 {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     margin: 0 0 8px;
     font-size: 13px;
   }
@@ -406,7 +406,7 @@
   .snap-list li {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     padding: 8px;
     border-radius: var(--border-radius-sm);
     background: var(--bg-primary);
@@ -416,20 +416,20 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
   }
   .suspect-acts {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .bisect-check {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 11px;
+    gap: 8px;
+    font-size: 12px;
     color: var(--text-muted);
     cursor: pointer;
   }
@@ -441,7 +441,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px;
+    font-size: 12px;
     padding: 1px 6px;
     border-radius: 999px;
     background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
@@ -454,7 +454,7 @@
   }
   .class-finder label {
     display: grid;
-    gap: 4px;
+    gap: 8px;
     font-size: 12px;
   }
   .class-finder input {
@@ -477,7 +477,7 @@
   .crash-tags {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     margin-top: 6px;
   }
   .muted-inline {

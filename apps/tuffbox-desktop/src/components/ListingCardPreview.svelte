@@ -267,7 +267,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     justify-content: center;
   }
 
@@ -336,15 +336,15 @@
   .mr-tags {
     display: flex;
     flex-wrap: wrap;
-    gap: 5px;
+    gap: 8px;
     margin-top: 2px;
   }
 
   .mr-tag {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 11px;
+    gap: 8px;
+    font-size: 12px;
     font-weight: 600;
     padding: 3px 8px;
     border-radius: 999px;
@@ -379,7 +379,7 @@
   .mr-action-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .mr-dl-btn {
@@ -397,7 +397,7 @@
   .mr-dl-btn.card-dl {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 7px 12px;
     font-size: 12px;
     border-radius: 6px;
@@ -433,7 +433,7 @@
   .mr-stat-item {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
   }
 
   /* ── CurseForge card ── */
@@ -465,7 +465,7 @@
     position: absolute;
     top: 6px;
     left: 6px;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     padding: 2px 6px;
     border-radius: 3px;
@@ -480,7 +480,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     justify-content: center;
   }
 
@@ -524,19 +524,19 @@
     border: 1px solid #52525b;
     color: #e4e4e7;
     background: transparent;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
   }
 
   .cf-cat-more {
     color: #a1a1aa;
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .cf-meta-item {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     white-space: nowrap;
   }
 
@@ -621,14 +621,14 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .mr-page-badges,
   .cf-page-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
   }
 
   .chip,
@@ -641,7 +641,7 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     padding: 2px 7px;
     border-radius: 999px;
@@ -662,7 +662,7 @@
   }
 
   .cf-kicker {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -678,7 +678,7 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 6px;
+    gap: 8px;
     flex: 0 0 auto;
   }
 
@@ -696,7 +696,7 @@
   }
 
   .mr-stat {
-    font-size: 11px;
+    font-size: 12px;
     color: #94a3b8;
     text-align: center;
   }
@@ -706,7 +706,7 @@
   .cf-cats {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 8px;
   }
 
   .page-chips,

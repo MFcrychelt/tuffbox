@@ -260,7 +260,7 @@
     padding: 10px;
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: 8px;
   }
 
   .dot {
@@ -329,7 +329,7 @@
   }
 
   .badge {
-    font-size: 9px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;

@@ -4,7 +4,8 @@
   import { open as openShell } from "@tauri-apps/plugin-shell";
   import CodeMirror from "svelte-codemirror-editor";
   import { markdown } from "@codemirror/lang-markdown";
-  import { oneDark } from "@codemirror/theme-one-dark";
+  import { editorThemeFor } from "../lib/editorTheme";
+  import { theme } from "../lib/store";
   import { EditorView } from "@codemirror/view";
   import PromptDialog from "./PromptDialog.svelte";
   import { marked } from "marked";
@@ -711,32 +712,34 @@
 <div class="brief-editor" onpaste={handlePaste}>
   <!-- Sticky header: stays accessible while scrolling long descriptions & galleries -->
   <header class="page-header sticky-header">
-    <div class="ph-text">
-      <div class="ph-title-row">
-        <h2 class="text-lg font-bold text-[color:var(--text-primary)] leading-tight">Storefront listing</h2>
-        <span
-          class="sync-pill"
-          class:unsaved={dirty}
-          title={dirty ? "You have unsaved changes (auto-saves in a moment)" : "All changes saved to project"}
-        >
-          <span class="sync-dot" class:on={!dirty}></span>
-          {dirty ? "Unsaved changes" : "Synced"}
-        </span>
+    <div class="header-inner">
+      <div class="ph-text">
+        <div class="ph-title-row">
+          <h2 class="text-lg font-bold text-[color:var(--text-primary)] leading-tight">Storefront listing</h2>
+          <span
+            class="sync-pill"
+            class:unsaved={dirty}
+            title={dirty ? "You have unsaved changes (auto-saves in a moment)" : "All changes saved to project"}
+          >
+            <span class="sync-dot" class:on={!dirty}></span>
+            {dirty ? "Unsaved changes" : "Synced"}
+          </span>
+        </div>
+        <p class="ph-sub">
+          The public modpack card shown on Modrinth & CurseForge — preview updates live as you type.
+        </p>
       </div>
-      <p class="ph-sub">
-        The public modpack card shown on Modrinth & CurseForge — preview updates live as you type.
-      </p>
-    </div>
-    <div class="header-actions">
-      <button
-        type="button"
-        class="primary-btn"
-        onclick={saveAll}
-        disabled={!$projectPath || saving || nameEmpty}
-        title="Save listing changes (Ctrl+S)"
-      >
-        <Save size={15} /> {saving ? "Saving…" : "Save"}
-      </button>
+      <div class="header-actions">
+        <button
+          type="button"
+          class="primary-btn"
+          onclick={saveAll}
+          disabled={!$projectPath || saving || nameEmpty}
+          title="Save listing changes (Ctrl+S)"
+        >
+          <Save size={15} /> {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
     </div>
   </header>
 
@@ -746,11 +749,12 @@
     <div class="empty">Loading listing…</div>
   {:else}
     <div class="main-body">
-      {#if error}<div class="inline-error">{error}</div>{/if}
-      {#if message}<div class="inline-success">{message}</div>{/if}
+      <div class="brief-content">
+        {#if error}<div class="inline-error">{error}</div>{/if}
+        {#if message}<div class="inline-success">{message}</div>{/if}
 
-      <!-- Top adaptive 2-column grid: Identity (Left) + Live Preview (Right) -->
-      <div class="brief-top-grid">
+        <!-- Top adaptive 2-column grid: Identity (Left) + Live Preview (Right) -->
+        <div class="brief-top-grid">
         <!-- Identity block -->
         <section class="panel glass-card p-5">
           <div class="panel-section-head">
@@ -973,7 +977,7 @@
               <CodeMirror
                 value={bodyMarkdown}
                 lang={markdown()}
-                theme={oneDark}
+                theme={editorThemeFor($theme)}
                 on:change={onBodyChange}
                 on:ready={(e) => (cmView = e.detail)}
               />
@@ -1104,6 +1108,7 @@
           </div>
         </details>
       </div>
+      </div>
     </div>
   {/if}
 </div>
@@ -1120,12 +1125,14 @@
 
 <style>
   .brief-editor {
+    --brief-page-max: 1600px;
+    --brief-page-x: 20px;
     height: 100%;
     min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    padding: 0 20px 20px;
+    padding: 0 var(--brief-page-x) 20px;
     box-sizing: border-box;
     max-width: 100%;
     width: 100%;
@@ -1139,38 +1146,61 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 16px;
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-gutter: stable;
-    font-size: 13px;
-    padding-right: 4px;
+    font-size: 14px;
+    padding-top: 12px;
+    padding-right: 6px;
     padding-bottom: 24px;
   }
 
-  /* Sticky top header */
+  .brief-content {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  /* Sticky top header — fixed: was width:calc(100%+2*pad) causing 1px shift
+     when scrollbar appears. Now width:auto with negative margin only. */
   .sticky-header {
     position: sticky;
     top: 0;
     z-index: 20;
+    width: auto;
+    box-sizing: border-box;
+    flex-shrink: 0;
+    padding: 14px var(--brief-page-x);
+    margin: 0 calc(-1 * var(--brief-page-x)) 2px;
+    background: color-mix(in srgb, var(--bg-primary, #0c0e12) 88%, transparent);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+  }
+
+  .header-inner {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0 4px;
+    box-sizing: border-box;
     display: flex;
     justify-content: space-between;
     gap: 16px;
     align-items: center;
     flex-wrap: wrap;
-    flex-shrink: 0;
-    padding: 14px 4px;
-    background: color-mix(in srgb, var(--bg-primary, #0c0e12) 80%, transparent);
-    -webkit-backdrop-filter: blur(16px);
-    backdrop-filter: blur(16px);
-    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
   }
 
   .ph-text {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 8px;
   }
 
   .ph-title-row {
@@ -1184,14 +1214,14 @@
     margin: 0;
     color: color-mix(in srgb, var(--text-secondary) 85%, var(--text-primary));
     max-width: 72ch;
-    font-size: 12.5px;
-    line-height: 1.4;
+    font-size: 14px;
+    line-height: 1.5;
   }
 
   .header-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 12px;
     justify-content: flex-end;
     align-items: center;
     margin-left: auto;
@@ -1213,18 +1243,18 @@
   .panel-section-head {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
     margin-bottom: 14px;
   }
   .panel-section-hint {
-    font-size: 12px;
+    font-size: 13px;
     color: color-mix(in srgb, var(--text-secondary) 85%, var(--text-primary));
   }
 
   .primary-btn {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     height: 36px;
     padding: 0 18px;
     border: none;
@@ -1249,13 +1279,13 @@
   .sync-pill {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    padding: 4px 10px;
+    gap: 8px;
+    padding: 5px 12px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
     background: color-mix(in srgb, var(--bg-secondary) 45%, transparent);
     color: var(--text-secondary);
-    font-size: 11.5px;
+    font-size: 13px;
     font-weight: 600;
     white-space: nowrap;
   }
@@ -1279,7 +1309,7 @@
   /* Segmented control (platform / editor mode) */
   .seg-control {
     display: inline-flex;
-    gap: 3px;
+    gap: 8px;
     padding: 3px;
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
@@ -1289,9 +1319,9 @@
     border: none;
     background: transparent;
     color: var(--text-secondary);
-    padding: 6px 12px;
+    padding: 8px 14px;
     border-radius: var(--border-radius-sm);
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     transition: background var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
@@ -1309,8 +1339,8 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
+    gap: 16px;
+    margin-bottom: 16px;
     flex-wrap: wrap;
   }
   .panel-head h3 {
@@ -1321,7 +1351,7 @@
   .brief-top-grid {
     display: grid;
     grid-template-columns: minmax(0, 1.35fr) minmax(380px, 460px);
-    gap: 16px;
+    gap: 20px;
     align-items: start;
     width: 100%;
   }
@@ -1335,7 +1365,7 @@
   .field-label {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     margin-bottom: 12px;
     color: var(--text-primary);
     font-weight: 600;
@@ -1378,7 +1408,7 @@
   }
 
   .hint {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
     color: color-mix(in srgb, var(--text-secondary) 85%, var(--text-primary));
   }
@@ -1396,11 +1426,11 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     min-width: 124px;
   }
   .icon-label {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
     color: var(--text-secondary);
   }
@@ -1414,7 +1444,7 @@
     display: grid;
     place-items: center;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 13px;
     cursor: pointer;
     transition: border-color var(--motion-fast, 160ms) ease, background var(--motion-fast, 160ms) ease;
   }
@@ -1440,40 +1470,40 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--text-secondary);
   }
   .icon-empty-state span {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
   }
 
   .icon-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     justify-content: center;
   }
 
   .sm-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-sm);
-    background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.05);
     color: var(--text-primary);
-    font-size: 12.5px;
+    font-size: 14px;
     font-weight: 600;
     cursor: pointer;
     transition: background var(--motion-fast, 160ms) ease, border-color var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
   }
   .sm-btn:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
-    border-color: rgba(255, 255, 255, 0.22);
-    color: var(--text-primary);
+    background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+    border-color: rgba(255, 255, 255, 0.24);
+    color: #fff;
   }
   .sm-btn.ghost {
     background: transparent;
@@ -1481,7 +1511,7 @@
     color: var(--text-secondary);
   }
   .sm-btn.ghost:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.06);
+    background: color-mix(in srgb, var(--text-primary) 8%, transparent);
     color: var(--text-primary);
   }
   .sm-btn:disabled {
@@ -1493,46 +1523,41 @@
   .categories-wrap {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px 10px;
+    gap: 10px 12px;
     width: 100%;
   }
 
   .cat-count-badge {
-    font-size: 11.5px;
+    font-size: 13px;
     font-weight: 700;
     color: var(--accent-primary);
-    margin-left: 4px;
+    margin-left: 6px;
   }
 
   .cat-chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
     background: color-mix(in srgb, var(--bg-secondary) 35%, transparent);
     color: var(--text-primary);
     border-radius: 999px;
-    padding: 6px 13px;
-    font-size: 12px;
+    padding: 8px 14px;
+    font-size: 14px;
     font-weight: 600;
     cursor: pointer;
     transition: background var(--motion-fast, 160ms) ease, border-color var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease, box-shadow var(--motion-fast, 160ms) ease;
   }
   .cat-chip:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: color-mix(in srgb, var(--text-primary) 12%, transparent);
     border-color: rgba(255, 255, 255, 0.22);
-    color: var(--text-primary);
+    color: #fff;
   }
   .cat-chip.on {
     background: rgba(16, 185, 129, 0.22);
     border-color: rgba(16, 185, 129, 0.6);
     color: #34d399;
     box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
-  }
-  .cat-chip.on:hover {
-    background: rgba(16, 185, 129, 0.3);
-    border-color: rgba(16, 185, 129, 0.75);
-    color: #6ee7b7;
   }
 
   .cat-checkbox {
@@ -1571,7 +1596,7 @@
     flex-wrap: wrap;
   }
   .preview-heading {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-primary);
   }
@@ -1602,13 +1627,13 @@
   }
   .listing-preview-compact :global(.mr-center),
   .listing-preview-compact :global(.cf-body) {
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
   }
   .listing-preview-compact :global(.mr-actions) {
     flex-direction: row;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .listing-preview-compact :global(.mr-dl-btn.card-dl) {
@@ -1641,29 +1666,58 @@
 
   .md-split {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-auto-rows: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 16px;
     min-height: 0;
   }
   .md-split.edit-only,
   .md-split.preview-only {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .cm-wrap {
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     overflow: hidden;
+    min-width: 0;
     min-height: 0;
     height: 100%;
+    background: var(--bg-elevated);
+    display: flex;
+    flex-direction: column;
+  }
+  /* svelte-codemirror-editor renders an extra middle wrapper:
+     .cm-wrap > .codemirror-wrapper > .cm-editor. Pin every layer to the split
+     pane height so the editor doesn't collapse to a few lines while the
+     preview pane fills the remaining canvas. */
+  .cm-wrap :global(.codemirror-wrapper) {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
   .cm-wrap :global(.cm-editor) {
+    flex: 1 1 auto;
+    min-height: 0;
     height: 100%;
+    width: 100%;
   }
   .cm-wrap :global(.cm-scroller) {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    min-height: 0;
+    height: 100%;
+    overflow: auto;
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 13.5px;
     line-height: 1.6;
+  }
+  .cm-wrap :global(.cm-content),
+  .cm-wrap :global(.cm-gutters) {
+    min-height: 100%;
   }
 
   .md-preview {
@@ -1701,8 +1755,8 @@
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    padding-top: 2px;
+    gap: 20px;
+    padding-top: 8px;
   }
 
   .author-notes .panel-summary,
@@ -1723,28 +1777,32 @@
   .brief-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
-    margin-top: 12px;
+    gap: 16px;
+    margin-top: 16px;
   }
 
   .extras-grid {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    margin-top: 10px;
+    gap: 16px;
+    margin-top: 12px;
   }
   .extras-actions,
   .trail {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
   }
 
   .muted {
     color: var(--text-muted);
   }
   .empty {
+    width: 100%;
+    max-width: var(--brief-page-max);
+    margin: 0 auto;
+    box-sizing: border-box;
     padding: 28px;
     color: var(--text-secondary);
     font-size: 14px;
@@ -1783,7 +1841,7 @@
   }
   .main-body::-webkit-scrollbar-thumb:hover,
   .md-preview::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.24);
+    background: color-mix(in srgb, var(--text-primary) 24%, transparent);
   }
 
   @media (max-width: 1100px) {

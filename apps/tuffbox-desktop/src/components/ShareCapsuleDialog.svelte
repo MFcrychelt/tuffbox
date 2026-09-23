@@ -402,10 +402,10 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
   .sc-risk {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     padding: 1px 6px;
@@ -426,7 +426,7 @@
   .sc-reason {
     display: block;
     margin-top: 4px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .sc-validation {
@@ -462,8 +462,8 @@
     resize: vertical;
   }
   .sc-code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 11px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 12px;
   }
   .sc-actions {
     display: flex;
@@ -475,6 +475,6 @@
   .sc-actions button {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 </style>

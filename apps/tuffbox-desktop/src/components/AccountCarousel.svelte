@@ -26,7 +26,7 @@
     onswitch?: (uuid: string) => void;
   } = $props();
 
-  const HEAD_W = 76; // rendered head size (canvas) — CSS scale handles the rest
+  const HEAD_W = 64; // rendered head size (canvas) — CSS scale handles the rest
   const SLOT_GAP = 18; // px between slots — wide enough for the rail to breathe
   const SLOT_W = HEAD_W + SLOT_GAP; // one step of the rail
   const WHEEL_STEP = 22; // accumulated deltaY per selection step
@@ -210,7 +210,7 @@
 <style>
   .account-carousel {
     position: relative;
-    padding: 14px 0 12px;
+    padding: 8px 0 6px;
     outline: none;
   }
 
@@ -251,8 +251,8 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 9px;
-    width: 76px;
+    gap: 8px;
+    width: 64px;
     padding: 0;
     border: none;
     background: none;
@@ -272,8 +272,8 @@
 
   .slot-head {
     position: relative;
-    width: 76px;
-    height: 76px;
+    width: 64px;
+    height: 64px;
     border-radius: 6px;
     overflow: visible;
   }
@@ -403,7 +403,7 @@
 
   .slot-name {
     font-family: var(--font-minecraft);
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.3px;
     /* Fit the full nick: no clipping, overflow allowed to spill over the
        narrow 76px slot, centered so it stays balanced. */
@@ -411,7 +411,7 @@
     width: max-content;
     white-space: nowrap;
     text-align: center;
-    line-height: 1.2;
+    line-height: 1.4;
     display: inline-block;
     overflow: visible;
     color: var(--text-secondary);
@@ -447,7 +447,7 @@
 
   .carousel-arrow {
     position: absolute;
-    top: 38px; /* head-row center: pad-top 14px + head 76/2 − arrow 28/2 */
+    top: 26px; /* head-row center: pad-top 8px + head 64/2 − arrow 28/2 */
     z-index: 2;
     display: flex;
     align-items: center;

@@ -229,7 +229,7 @@
 
 <style>
   .muted-inline { margin: 0; color: var(--text-muted); font-size: 12px; }
-  .eyebrow { display: block; margin-bottom: 4px; color: var(--text-muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+  .eyebrow { display: block; margin-bottom: 4px; color: var(--text-muted); font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
   .linkish {
     border: none; background: none; padding: 0;
     color: var(--accent-primary); font: inherit; font-weight: 700;
@@ -303,7 +303,7 @@
     font-size: 12px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .dx-class-card.warn {
     border-color: rgba(251, 191, 36, 0.45);

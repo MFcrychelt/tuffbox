@@ -179,7 +179,7 @@
     font-weight: 700;
   }
   .collapsible-block > summary::-webkit-details-marker { display: none; }
-  .collapsible-block > summary span { display: flex; align-items: center; gap: 7px; }
+  .collapsible-block > summary span { display: flex; align-items: center; gap: 8px; }
   .collapsible-block .tools-hint { color: var(--text-muted); font-weight: 500; }
   .collapsible-block[open] .tools-hint :global(svg),
   .collapsible-block[open] > summary :global(svg:last-child) { transform: rotate(180deg); }
@@ -203,14 +203,14 @@
     background: var(--bg-tertiary);
   }
   .diag-row p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; }
-  .diag-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+  .diag-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
   .dup-jar-list {
     margin: 8px 0 0;
     padding: 0;
     list-style: none;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .dup-jar-list li {
     display: flex;
@@ -221,7 +221,7 @@
     color: var(--text-secondary);
   }
   .dup-jar-list .pill {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;

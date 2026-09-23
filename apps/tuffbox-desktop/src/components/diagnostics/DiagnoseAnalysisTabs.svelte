@@ -225,7 +225,7 @@
   .notice.warning { color: var(--accent-warning); background: color-mix(in srgb, var(--accent-warning) 8%, transparent); border-color: color-mix(in srgb, var(--accent-warning) 28%, transparent); }
   .notice.tight { padding: 8px 10px; margin-bottom: 10px; font-size: 12px; }
   .risk-pill {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     padding: 1px 6px;
@@ -240,13 +240,13 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
   }
   .sev-chip {
     display: inline-flex;
     align-items: center;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.02em;
     text-transform: uppercase;
@@ -269,7 +269,7 @@
   .dx-tab {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     padding: 11px 16px;
     border: none;
     border-bottom: 2px solid transparent;
@@ -297,7 +297,7 @@
     place-items: center;
     border-radius: 999px;
     background: var(--bg-tertiary);
-    font-size: 11px;
+    font-size: 12px;
   }
   .findings-stack { display: flex; flex-direction: column; gap: 10px; }
   .finding-card {
@@ -309,7 +309,7 @@
   .finding-card header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
   .finding-card header strong { color: var(--text-primary); }
   .finding-card p { margin: 0 0 6px; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
-  .finding-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .finding-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .ai-hint, .auto-fix { font-size: 12px; color: var(--text-muted); }
   .ai-agree-badge, .ai-source-badge {
     display: inline-flex;
@@ -317,7 +317,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
   }
   .ai-human { margin: 0 0 12px; color: var(--text-primary); font-size: 14px; line-height: 1.5; }
@@ -329,6 +329,6 @@
   .ai-list ul { margin: 0; padding-left: 18px; color: var(--text-secondary); font-size: 13px; }
   .ai-list li { margin-bottom: 6px; }
   .ai-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
-  .crash-tags { display: flex; flex-wrap: wrap; gap: 6px; }
-  .crash-tags code { padding: 2px 6px; border-radius: 4px; background: var(--bg-secondary); font-size: 11px; }
+  .crash-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+  .crash-tags code { padding: 2px 6px; border-radius: 4px; background: var(--bg-secondary); font-size: 12px; }
 </style>

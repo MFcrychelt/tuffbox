@@ -304,7 +304,7 @@
   summary {
     cursor: pointer;
     padding: 10px 4px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -318,7 +318,7 @@
   .rt-side {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   .rt-side button {
     text-align: left;
@@ -327,7 +327,7 @@
     border: 1px solid var(--ftbq-border);
     background: rgba(0, 0, 0, 0.25);
     color: var(--ftbq-text-muted);
-    font-size: 11px;
+    font-size: 12px;
     cursor: pointer;
   }
   .rt-side button.sel,
@@ -352,7 +352,7 @@
   }
   .rt-empty p {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .rt-edit {
@@ -361,8 +361,8 @@
   }
   .rt-edit label {
     display: grid;
-    gap: 3px;
-    font-size: 10px;
+    gap: 8px;
+    font-size: 12px;
     text-transform: uppercase;
     color: var(--ftbq-text-muted);
   }
@@ -381,12 +381,12 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .entry-card {
     display: grid;
-    gap: 6px;
+    gap: 8px;
     padding: 8px;
     border: 1px solid var(--ftbq-border);
     border-radius: 2px;
@@ -395,7 +395,7 @@
   .entry-top {
     display: grid;
     grid-template-columns: 1fr 72px 28px;
-    gap: 4px;
+    gap: 8px;
   }
   .mini,
   .ico,
@@ -403,7 +403,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 4px;
+    gap: 8px;
     border-radius: 2px;
     border: 1px solid var(--ftbq-border);
     background: transparent;
@@ -427,12 +427,12 @@
     color: var(--ftbq-text-muted);
   }
   .extra {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .extra textarea {
     width: 100%;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     margin: 6px 0;
   }
   @media (max-width: 900px) {

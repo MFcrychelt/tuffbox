@@ -2238,6 +2238,7 @@
         onDelete={deleteChapter}
         onMove={moveChapter}
       />
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
       <div
         class="col-resizer"
         role="separator"
@@ -2316,6 +2317,7 @@
         </SvelteFlowProvider>
       </div>
       {#if selectedChapterObj && !inspectorCollapsed}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
         <div
           class="col-resizer"
           role="separator"
@@ -2811,110 +2813,6 @@
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
-  .qe-tb,
-  .qe-title,
-  .qe-actions {
-    position: relative;
-  }
-  .tb-pop {
-    position: relative;
-  }
-  .tb-btn-group {
-    display: inline-flex;
-    align-items: center;
-    flex-shrink: 0;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-sm, 6px);
-    background: var(--bg-secondary);
-  }
-  .qe.ftbq .tb-btn-group :global(button) {
-    border: none;
-    border-left: 1px solid var(--border-color);
-    border-radius: 0;
-    background: transparent;
-    padding: 5px 8px;
-    color: var(--text-muted);
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-  }
-  .qe.ftbq .tb-btn-group :global(button:first-child) {
-    border-left: none;
-  }
-  .qe.ftbq .tb-btn-group :global(button:hover:not(:disabled)) {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
-  .qe.ftbq .tb-btn-group :global(button.active) {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
-  .menu-locale {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-muted);
-  }
-  .menu-locale select {
-    flex: 1;
-    font-size: 11px;
-    padding: 4px 6px;
-  }
-  .menu-sep {
-    height: 1px;
-    background: var(--border-color);
-    margin: 4px 0;
-  }
-  .locale-select {
-    max-width: 110px;
-    font-size: 11px;
-    padding: 4px 6px;
-  }
-  .book-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 45;
-    min-width: 180px;
-    padding: 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md, 8px);
-    box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.12));
-  }
-  .book-menu button {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    width: 100%;
-    text-align: left;
-    padding: 8px 10px;
-    border: none;
-    border-radius: var(--border-radius-sm, 6px);
-    background: transparent;
-    color: var(--text-primary);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .book-menu button:hover,
-  .book-menu button.active {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
-  .dot-mini {
-    color: var(--accent-warning);
-    margin-left: 4px;
-    font-size: 10px;
-  }
   .drawer-h {
     display: flex;
     align-items: center;
@@ -2950,76 +2848,6 @@
   .qe-sheet-wide {
     width: min(1100px, 96vw);
   }
-  .issues-wrap {
-    position: relative;
-  }
-  .issues-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    box-shadow: none;
-    color: var(--accent-primary);
-    border-radius: 999px;
-    padding: 3px 10px;
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    text-shadow: none;
-  }
-  .issues-btn.warn {
-    color: var(--accent-warning);
-  }
-  .issues-pop {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    z-index: 30;
-    min-width: 320px;
-    max-height: min(80vh, 480px);
-    overflow: auto;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md, 8px);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
-  }
-  .issue-row {
-    display: flex;
-    gap: 8px;
-    width: 100%;
-    text-align: left;
-    padding: 9px 12px;
-    border: none;
-    border-bottom: 1px solid var(--border-color);
-    background: transparent;
-    color: var(--text-primary);
-    font-size: 12px;
-    line-height: 1.45;
-    cursor: pointer;
-  }
-  .issue-row:hover {
-    background: var(--bg-hover);
-  }
-  .issue-row.action {
-    color: var(--text-primary);
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border-bottom: none;
-  }
-  .issue-row.action:hover {
-    color: var(--accent-primary);
-  }
-  .issues-ok {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px;
-    font-size: 11px;
-    color: var(--accent-primary);
-    border-bottom: 1px solid var(--border-color);
-  }
   .apply-save-banner {
     display: flex;
     align-items: center;
@@ -3035,7 +2863,7 @@
   }
   .apply-save-banner .mini {
     padding: 4px 10px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .notice {
     display: flex;
@@ -3170,7 +2998,6 @@
   .qe-lay.with-insp {
     grid-template-columns: var(--qe-rail, 200px) 4px 1fr 4px var(--qe-insp, 320px);
   }
-  .qe-lay.rail-collapsed > .ftbq-rail,
   .qe-lay.rail-collapsed > .col-resizer:first-of-type {
     display: none;
   }
@@ -3236,7 +3063,7 @@
   }
   .search-panel {
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 12px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
   }
@@ -3248,7 +3075,7 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
   .search-hit {
     display: grid;
@@ -3261,7 +3088,7 @@
     border-radius: var(--border-radius-sm, 4px);
     background: var(--bg-card);
     color: inherit;
-    font-size: 11px;
+    font-size: 12px;
     cursor: pointer;
   }
   .search-hit:hover,
@@ -3278,7 +3105,7 @@
   }
   .hit-field {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 12px;
   }
   .hit-text {
     overflow: hidden;
@@ -3297,7 +3124,7 @@
   .panel-tabs {
     display: flex;
     flex-shrink: 0;
-    gap: 1px;
+    gap: 8px;
     padding: 4px 4px 0;
     border-bottom: 1px solid var(--border-color);
     background: var(--bg-primary);

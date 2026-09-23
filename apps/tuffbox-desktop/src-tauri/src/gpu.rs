@@ -159,7 +159,7 @@ fn sort_key(kind: &str) -> u8 {
 #[cfg(target_os = "windows")]
 pub fn detect_platform_gpus() -> Result<Vec<GpuInfo>, String> {
     use windows::Win32::Graphics::Dxgi::{
-        CreateDXGIFactory1, DXGI_ADAPTER_DESC1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1,
+        CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1,
     };
 
     let factory: IDXGIFactory1 =

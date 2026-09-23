@@ -230,7 +230,7 @@
     min-width: 200px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
   .dz-title {
     margin: 0;
@@ -254,7 +254,7 @@
   .action-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     height: 32px;
     padding: 0 12px;
     border-radius: var(--border-radius-sm);
@@ -294,13 +294,13 @@
   .gallery-count {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12.5px;
     font-weight: 700;
     color: var(--text-secondary);
   }
   .gallery-hint {
-    font-size: 11.5px;
+    font-size: 12px;
     color: color-mix(in srgb, var(--text-secondary) 85%, var(--text-primary));
   }
 
@@ -315,7 +315,7 @@
   .gal-tile {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
   }
 
@@ -341,7 +341,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--text-muted);
     font-size: 12px;
   }
@@ -352,7 +352,7 @@
     left: 6px;
     background: rgba(0, 0, 0, 0.72);
     color: #e5e7eb;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     padding: 2px 6px;
     border-radius: 4px;
@@ -367,7 +367,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
+    gap: 8px;
     background: linear-gradient(0deg, rgba(6, 9, 14, 0.88), rgba(6, 9, 14, 0.45) 60%, rgba(6, 9, 14, 0.3));
     opacity: 0;
     transition: opacity var(--motion-fast, 160ms) ease;
@@ -389,14 +389,14 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 4px;
+    gap: 8px;
     height: 28px;
     padding: 0 9px;
     border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: var(--border-radius-sm);
     background: rgba(18, 22, 28, 0.85);
     color: #f3f4f6;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     cursor: pointer;
     backdrop-filter: blur(8px);
@@ -425,7 +425,7 @@
   }
 
   .gal-caption {
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 500;
     color: color-mix(in srgb, var(--text-secondary) 85%, var(--text-primary));
     white-space: nowrap;

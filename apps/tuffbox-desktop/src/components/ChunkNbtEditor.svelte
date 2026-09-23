@@ -290,14 +290,14 @@
     padding: 12px 14px; border-bottom: 1px solid var(--border-color);
   }
   .meta { margin-left: 8px; font-size: 12px; color: var(--text-muted); font-weight: 400; }
-  .head-actions { display: flex; gap: 6px; align-items: center; }
+  .head-actions { display: flex; gap: 8px; align-items: center; }
   .head-actions select {
     background: var(--bg-secondary); color: var(--text-primary);
     border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 8px; font-size: 12px;
   }
-  .tree { overflow: auto; padding: 8px 10px; flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  .tree { overflow: auto; padding: 8px 10px; flex: 1; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
   .row {
-    display: flex; align-items: center; gap: 6px; width: 100%;
+    display: flex; align-items: center; gap: 8px; width: 100%;
     background: transparent; border: none; color: var(--text-secondary);
     padding: 3px 4px; border-radius: 4px; cursor: pointer; text-align: left;
   }
@@ -307,7 +307,7 @@
   .type { color: var(--accent-secondary); min-width: 72px; }
   .name { color: var(--text-primary); font-weight: 600; }
   .val { color: var(--accent-primary); margin-left: 6px; word-break: break-all; }
-  .muted { color: var(--text-muted); font-size: 11px; }
+  .muted { color: var(--text-muted); font-size: 12px; }
   .err { color: var(--accent-danger); padding: 8px 14px; font-size: 12px; }
   .pad { width: 12px; display: inline-block; }
   .edit {
@@ -315,6 +315,6 @@
     background: var(--bg-secondary); color: var(--text-primary);
     border: 1px solid rgba(120,200,255,.5); border-radius: 4px; padding: 2px 6px; font-size: 12px;
   }
-  .hint { padding: 8px 14px; font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border-color); }
-  .ghost { display: inline-flex; align-items: center; gap: 5px; }
+  .hint { padding: 8px 14px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border-color); }
+  .ghost { display: inline-flex; align-items: center; gap: 8px; }
 </style>

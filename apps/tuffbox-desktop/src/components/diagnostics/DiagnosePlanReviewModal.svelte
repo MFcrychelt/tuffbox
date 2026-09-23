@@ -158,10 +158,10 @@
   .diff-chip {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
@@ -212,7 +212,7 @@
     color: var(--text-secondary);
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
     margin: 0 0 12px;
   }
@@ -221,7 +221,7 @@
     align-items: center;
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
@@ -238,11 +238,11 @@
     background: var(--bg-tertiary);
     cursor: pointer;
   }
-  .plan-review-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .plan-review-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .plan-review-body p { margin: 4px 0 0; font-size: 12px; color: var(--text-secondary); }
   .problem-ref {
     margin: 0 0 2px !important;
-    font-size: 11px !important;
+    font-size: 12px !important;
     color: var(--text-muted) !important;
     font-weight: 600;
   }
@@ -251,7 +251,7 @@
     padding: 8px;
     max-height: 120px;
     overflow: auto;
-    font-size: 11px;
+    font-size: 12px;
     border-radius: 6px;
     background: var(--bg-primary);
     color: var(--text-muted);
@@ -269,7 +269,7 @@
     gap: 8px;
   }
   .risk-pill {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     padding: 1px 6px;

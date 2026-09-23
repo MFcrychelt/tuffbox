@@ -10,8 +10,6 @@
 //! Flow: `cargo tauri dev` (debug only) → macro exports src/bindings.ts →
 //! frontend: `const taurpc = createTauRPCProxy(); await taurpc.swarmApi.getP2pStatus()`
 
-use serde::{Deserialize, Serialize};
-
 /// Node health snapshot for the TuffSwarm P2P status card.
 #[taurpc::ipc_type]
 #[derive(Debug, Default)]

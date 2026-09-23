@@ -194,7 +194,7 @@
   .drawer label {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     font-size: 12px;
     color: var(--ftbq-text-muted);
   }
@@ -208,13 +208,13 @@
   }
   .drawer-hint {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .book-flags {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     max-height: 160px;
     overflow: auto;
     padding: 4px 0;
@@ -224,19 +224,19 @@
     flex-direction: row !important;
     align-items: center;
     gap: 8px;
-    font-size: 11px;
+    font-size: 12px;
     text-transform: none;
     color: var(--ftbq-text);
     letter-spacing: 0;
   }
   .group-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .book-extra .extra-val {
     flex: 1;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;

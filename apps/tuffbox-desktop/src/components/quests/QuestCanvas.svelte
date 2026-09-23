@@ -727,7 +727,7 @@
           />
         </div>
         {#if questFilter}
-          <span class="text-[11px] font-mono font-semibold text-[var(--text-muted)] bg-[var(--bg-card)] px-2 py-0.5 rounded border border-[var(--border-color)]">
+          <span class="text-[12px] font-mono font-semibold text-[var(--text-muted)] bg-[var(--bg-card)] px-2 py-0.5 rounded border border-[var(--border-color)]">
             {quests.length}/{filterTotal}
           </span>
         {/if}
@@ -735,7 +735,7 @@
 
       <button
         type="button"
-        class="hud-btn flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition"
+        class="hud-btn flex items-center gap-2 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition"
         title="Add quest at center (N or double-click)"
         onclick={addAtCenter}
       >
@@ -748,7 +748,7 @@
     <div class="flex items-center gap-2 flex-shrink-0">
       <button
         type="button"
-        class="hud-btn flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition"
+        class="hud-btn flex items-center gap-2 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition"
         title="Fit canvas to content (Ctrl+0)"
         onclick={() => flowFitView({ padding: 0.2 })}
       >
@@ -756,7 +756,7 @@
         <span>Fit</span>
       </button>
 
-      <span class="zoom-pct text-[11px] font-mono font-bold text-[var(--text-muted)] px-1.5 py-0.5 rounded bg-[var(--bg-card)] border border-[var(--border-color)]" title="Current zoom level">
+      <span class="zoom-pct text-[12px] font-mono font-bold text-[var(--text-muted)] px-1.5 py-0.5 rounded bg-[var(--bg-card)] border border-[var(--border-color)]" title="Current zoom level">
         {zoomPercent}%
       </span>
 
@@ -764,7 +764,7 @@
         <div class="layout-pop relative">
           <button
             type="button"
-            class="hud-btn flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition {layoutMenuOpen ? 'border-[var(--accent-primary)] bg-[var(--bg-hover)]' : ''}"
+            class="hud-btn flex items-center gap-2 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition {layoutMenuOpen ? 'border-[var(--accent-primary)] bg-[var(--bg-hover)]' : ''}"
             title="Auto-layout nodes"
             onclick={() => (layoutMenuOpen = !layoutMenuOpen)}
           >
@@ -804,7 +804,7 @@
         <div class="layout-pop relative">
           <button
             type="button"
-            class="hud-btn flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition {alignMenuOpen ? 'border-[var(--accent-primary)] bg-[var(--bg-hover)]' : ''}"
+            class="hud-btn flex items-center gap-2 px-2.5 py-1 text-xs font-semibold rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition {alignMenuOpen ? 'border-[var(--accent-primary)] bg-[var(--bg-hover)]' : ''}"
             title="Align or distribute selected quests"
             onclick={() => (alignMenuOpen = !alignMenuOpen)}
           >
@@ -813,15 +813,15 @@
             <ChevronDown size={11} />
           </button>
           {#if alignMenuOpen}
-            <div class="layout-menu absolute top-full right-0 mt-1.5 w-44 p-1.5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg shadow-lg z-50 flex flex-col gap-1" role="menu">
-              <span class="text-[10px] uppercase font-bold text-[var(--text-muted)] px-2 py-0.5">Align Nodes</span>
+            <div class="layout-menu absolute top-full right-0 mt-1.5 w-44 p-1.5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg shadow-lg z-50 flex flex-col gap-2" role="menu">
+              <span class="text-[12px] uppercase font-bold text-[var(--text-muted)] px-2 py-0.5">Align Nodes</span>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("left")}>Align Left</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("right")}>Align Right</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("top")}>Align Top</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("bottom")}>Align Bottom</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("centerX")}>Center Horizontally</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doAlign("centerY")}>Center Vertically</button>
-              <span class="text-[10px] uppercase font-bold text-[var(--text-muted)] px-2 py-0.5 border-t border-[var(--border-color)] mt-1">Distribute</span>
+              <span class="text-[12px] uppercase font-bold text-[var(--text-muted)] px-2 py-0.5 border-t border-[var(--border-color)] mt-1">Distribute</span>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doDistribute("horizontally")}>Evenly Horizontal</button>
               <button type="button" class="w-full text-left px-2 py-1 text-xs rounded hover:bg-[var(--bg-hover)] text-[var(--text-primary)]" onclick={() => doDistribute("vertically")}>Evenly Vertical</button>
             </div>
@@ -832,6 +832,7 @@
   </div>
 
   <!-- SvelteFlow Canvas Stage -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
   <div
     class="viewport flex-1 min-h-0 relative focus:outline-none"
     role="application"

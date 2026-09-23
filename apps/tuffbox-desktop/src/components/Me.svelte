@@ -642,7 +642,7 @@
   .back-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 6px 10px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
@@ -675,7 +675,7 @@
   .ghost-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 6px 10px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
@@ -729,7 +729,7 @@
   .skin-meta-row {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 4px;
     background: color-mix(in srgb, var(--bg-tertiary) 72%, transparent);
     border: 1px solid var(--border-color);
@@ -777,7 +777,7 @@
   .card-head {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     margin-bottom: 10px;
     color: var(--text-secondary);
   }
@@ -810,7 +810,7 @@
   .cape-tabs {
     display: flex;
     flex-wrap: wrap;
-    gap: 5px;
+    gap: 8px;
     margin-bottom: 10px;
   }
 
@@ -823,7 +823,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
     color: var(--accent-primary);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
     align-items: center;
     justify-content: center;
@@ -840,7 +840,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     padding: 8px 6px 10px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
@@ -904,7 +904,7 @@
   }
 
   .cape-tile-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-align: center;
     line-height: 1.2;
@@ -915,7 +915,7 @@
   }
 
   .cape-tile-src {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.4px;
@@ -926,7 +926,7 @@
     position: absolute;
     top: 6px;
     right: 6px;
-    font-size: 9px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     padding: 1px 5px;
@@ -953,12 +953,12 @@
 
   .variant-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
 
   .url-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
 
   .skin-input {
@@ -1003,7 +1003,7 @@
 
   .mini {
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     border-radius: 6px;
     border: none;
@@ -1012,7 +1012,7 @@
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
   }
 
   .mini:disabled {
@@ -1023,13 +1023,13 @@
   .account-list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .account-item {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     padding: 4px 6px 4px 4px;
     border-radius: var(--border-radius-md);
     background: var(--bg-primary);
@@ -1096,12 +1096,12 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .account-text .name {
     font-family: var(--font-minecraft);
-    font-size: 10px;
+    font-size: 12px;
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
     overflow: hidden;
@@ -1110,13 +1110,13 @@
   }
 
   .account-text .meta {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
   .actions {
     display: flex;
-    gap: 2px;
+    gap: 8px;
   }
 
   .ghost-icon {
@@ -1168,7 +1168,7 @@
   }
 
   .type-badge {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 800;
     text-transform: uppercase;
     padding: 2px 8px;
@@ -1194,14 +1194,14 @@
   .layer-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     margin-top: 4px;
     padding: 4px 8px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     user-select: none;
@@ -1225,7 +1225,7 @@
   .accent-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 12px;
     border-radius: var(--border-radius-md);
     background: var(--accent-primary);

@@ -304,7 +304,7 @@
 
   .gate-title div {
     display: grid;
-    gap: 2px;
+    gap: 8px;
   }
 
   .gate-title strong {
@@ -355,7 +355,7 @@
 
   .gate-warn {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
     margin: 0;
     padding: 8px 10px;
@@ -368,7 +368,7 @@
 
   .gate-diff {
     display: grid;
-    gap: 6px;
+    gap: 8px;
     padding: 10px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-sm);
@@ -393,7 +393,7 @@
 
   .gate-risk {
     display: grid;
-    gap: 6px;
+    gap: 8px;
     margin: 0;
     padding: 8px 10px;
     border: 1px solid color-mix(in srgb, #fde68a 35%, var(--border-color));
@@ -409,7 +409,7 @@
 
   .gate-check {
     display: flex;
-    gap: 7px;
+    gap: 8px;
     align-items: flex-start;
     color: var(--text-secondary);
     font-size: 12px;

@@ -497,19 +497,19 @@
     color: var(--badge-ygg-fg, #e9d5ff);
   }
 
-  .account-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .account-info { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   .account-name { font-weight: 700; font-size: 13px; color: var(--text-primary); }
   .account-name.mc-font {
     font-family: var(--font-minecraft);
-    font-size: 10px;
+    font-size: 12px;
     letter-spacing: 0.4px;
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
-  .account-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .account-meta { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
   .type-pill {
-    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    font-size: 12px; font-weight: 800; text-transform: uppercase;
     padding: 1px 6px; border-radius: 4px;
   }
   .type-pill.mojang {
@@ -524,7 +524,7 @@
     color: var(--badge-ygg-fg, #e9d5ff);
     background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.15));
   }
-  .skin-src { font-size: 10px; color: var(--text-muted); }
+  .skin-src { font-size: 12px; color: var(--text-muted); }
 
   .active-badge {
     display: inline-block;
@@ -534,11 +534,11 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 10px; font-weight: 700; color: var(--accent-primary);
+    font-size: 12px; font-weight: 700; color: var(--accent-primary);
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent); padding: 1px 5px; border-radius: 4px;
   }
 
-  .account-actions { display: flex; gap: 4px; }
+  .account-actions { display: flex; gap: 8px; }
 
   .icon-btn.small {
     width: 28px; height: 28px; min-width: 28px; min-height: 28px;
@@ -577,14 +577,14 @@
 
   .ygg-presets { grid-template-columns: repeat(3, 1fr); margin-bottom: 4px; }
 
-  .option-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .option-info { flex: 1; display: flex; flex-direction: column; gap: 8px; }
   .option-title { font-weight: 700; font-size: 14px; }
   .option-desc { font-size: 12px; color: var(--text-muted); }
 
   /* ─── Offline Form ──────────────────────── */
   .offline-form { display: flex; flex-direction: column; gap: 16px; }
 
-  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field { display: flex; flex-direction: column; gap: 8px; }
   .field span { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 
   .field input {
@@ -594,13 +594,13 @@
   }
   .field input:focus { border-color: var(--accent-primary); }
 
-  .skin-source-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .skin-source-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 
   .source-option {
-    display: flex; align-items: center; justify-content: center; gap: 5px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
     padding: 8px 6px; border-radius: var(--border-radius-sm); background: var(--bg-primary);
     border: 1px solid var(--border-color); color: var(--text-secondary);
-    font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+    font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s;
   }
   .source-option:hover { border-color: var(--text-muted); color: var(--text-primary); }
   .source-option.active {
@@ -616,7 +616,7 @@
 
   /* ─── Buttons ───────────────────────────── */
   .accent-btn {
-    display: flex; align-items: center; justify-content: center; gap: 6px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
     padding: 10px 16px; border-radius: var(--border-radius-md);
     background: var(--accent-primary); color: var(--on-accent, #000); border: none;
     font-size: 13px; font-weight: 700; cursor: pointer;

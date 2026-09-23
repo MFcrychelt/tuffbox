@@ -665,8 +665,8 @@
   .gen-field {
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    font-size: 11px;
+    gap: 8px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
   }
   .gen-field input,
@@ -681,7 +681,7 @@
     outline: none;
   }
   .gen-field textarea {
-    font-family: monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     resize: vertical;
   }
   .gen-run {
@@ -700,7 +700,7 @@
   }
   .gen-status {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
   }
   .batch-title {
@@ -710,7 +710,7 @@
     color: var(--text-primary, var(--ftbq-text));
   }
   .batch-count {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     padding: 2px 6px;
     border: 1px solid var(--ftbq-frame);
@@ -721,7 +721,7 @@
     border-bottom: 1px solid var(--ftbq-frame);
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
   }
   .search-input {
@@ -747,8 +747,8 @@
   .filter {
     display: flex;
     align-items: center;
-    gap: 4px;
-    font-size: 11px;
+    gap: 8px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     cursor: pointer;
   }
@@ -762,7 +762,7 @@
   .scope-row select {
     flex: 1;
     min-width: 0;
-    font-size: 11px;
+    font-size: 12px;
     padding: 5px 6px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
@@ -786,7 +786,7 @@
     flex-shrink: 0;
   }
   .mass-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--ftbq-accent-teal);
     align-self: center;
@@ -794,8 +794,8 @@
   .mass-field {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    font-size: 10px;
+    gap: 8px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
     text-transform: uppercase;
     letter-spacing: 0.03em;
@@ -804,7 +804,7 @@
   .mass-field input {
     min-width: 72px;
     max-width: 110px;
-    font-size: 11px;
+    font-size: 12px;
     padding: 4px 6px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
@@ -819,7 +819,7 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .mass-status {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ftbq-accent-green);
     align-self: center;
   }
@@ -841,7 +841,7 @@
     padding: 8px 12px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .quest-card {
@@ -864,20 +864,20 @@
     padding: 7px 8px;
     background: transparent;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12px;
   }
   .quest-chapter {
     font-weight: 600;
     white-space: nowrap;
   }
   .quest-id {
-    font-family: monospace;
+    font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--text-muted, var(--ftbq-text-muted));
-    font-size: 10px;
+    font-size: 12px;
   }
   .save-badge {
     margin-left: auto;
-    font-size: 10px;
+    font-size: 12px;
     padding: 1px 6px;
     border-radius: 4px;
     font-weight: 600;
@@ -888,11 +888,11 @@
 
   .quest-preview {
     padding: 0 8px 8px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .preview-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     margin-bottom: 2px;
   }
   .preview-label {
@@ -919,17 +919,17 @@
     padding: 8px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     border-top: 1px solid var(--ftbq-frame);
     background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
   }
   .field {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
   .field-label {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted, var(--ftbq-text-muted));
     text-transform: uppercase;
@@ -954,11 +954,11 @@
   .field textarea {
     resize: vertical;
     min-height: 60px;
-    font-family: monospace;
-    font-size: 11px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 12px;
   }
   .field-preview {
-    font-size: 11px;
+    font-size: 12px;
     padding: 4px 6px;
     background: color-mix(in srgb, var(--ftbq-bg) 70%, transparent);
     border: 1px solid var(--ftbq-frame);
@@ -973,7 +973,7 @@
   }
   .edit-actions {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     margin-top: 4px;
     flex-wrap: wrap;
   }
@@ -988,7 +988,7 @@
     flex-shrink: 0;
   }
   .page-info {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted, var(--ftbq-text-muted));
   }
 
@@ -1013,5 +1013,5 @@
     color: var(--ftbq-accent-green);
   }
   .btn.ghost { background: transparent; }
-  .btn.small { padding: 4px 8px; font-size: 11px; }
+  .btn.small { padding: 4px 8px; font-size: 12px; }
 </style>

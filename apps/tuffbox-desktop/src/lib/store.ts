@@ -8,6 +8,8 @@ export {
   getFixPreference,
   setFixPreference,
 } from "./fixPreferences";
+// Screen-aware YouTube modal sizing — video counterpart of suggestUiScalePercent.
+export { suggestYouTubeModalWidth, YOUTUBE_MODAL_MIN_WIDTH } from "./youtubeSizing";
 
 export interface ProjectInfo {
   id: string;
@@ -203,6 +205,8 @@ export interface LauncherSettings {
   youtubeInlinePlayer: boolean;
   /** Show the YouTube feed on the home dashboard. Off by default; enable in Settings. */
   showYoutubeOnHome: boolean;
+  /** Show Minecraft game updates (snapshots & releases) in the home news feed. */
+  newsShowUpdates: boolean;
   /** Inject the in-game overlay bridge (YouTube player + friends/chat) on launch. */
   ingameOverlay: boolean;
   /** CPU affinity for the game process: off | performance | manual. */
@@ -213,6 +217,8 @@ export interface LauncherSettings {
   gpuPreference: "auto" | "discrete" | "integrated";
   /** Hide IDE bottom workflow rail until cursor hits the window bottom edge. */
   autoHideWorkflowRail: boolean;
+  /** Hide the IDE top panel (status / next-step / health strip). */
+  hideIdeNextBar: boolean;
   /** Left nav: full labels | icons (button toggle) | autoHide (left-edge hover). */
   sidebarMode: SidebarMode;
   /** Interface zoom percent (75–150). */
@@ -731,7 +737,8 @@ export function removeRunning(
     error?: LaunchErrorInfo;
   },
 ) {
-  runningInstances.update((list) => list.filter((r) => r.id !== id));
+  const key = normalizeInstancePath(id);
+  runningInstances.update((list) => list.filter((r) => normalizeInstancePath(r.id) !== key));
   markLaunchExited(id, opts);
 }
 
@@ -892,36 +899,9 @@ export function pushIdeRecent(id: string, label: string) {
   });
 }
 
-/** Deterministic Next Action for IdeNextBar / Open IDE. */
-export function computeIdeNextAction(opts: {
-  issueCount: number;
-  needsHealth: boolean;
-  briefDirty: boolean;
-  tuneDirty: boolean;
-  questDirty: boolean;
-}): { label: string; stage: string | null; kind: "stage" | "none"; detail?: string } {
-  if (opts.issueCount > 0) {
-    return {
-      label: "Fix pack graph",
-      stage: "resolve",
-      kind: "stage",
-      detail: `${opts.issueCount} issue${opts.issueCount === 1 ? "" : "s"}`,
-    };
-  }
-  if (opts.needsHealth) {
-    return { label: "Open Health", stage: "diagnose", kind: "stage", detail: "Crash needs a look" };
-  }
-  if (opts.briefDirty) {
-    return { label: "Finish Brief", stage: "brief", kind: "stage", detail: "Unsaved listing" };
-  }
-  if (opts.tuneDirty) {
-    return { label: "Save Tune", stage: "configs", kind: "stage", detail: "Unsaved configs" };
-  }
-  if (opts.questDirty) {
-    return { label: "Save Quests", stage: "quests", kind: "stage", detail: "Unsaved quests" };
-  }
-  return { label: "Open Launch", stage: "test", kind: "stage", detail: "Verify the pack in Test" };
-}
+// Next-action guidance copy lives in its own pure module (unit-tested
+// there): plain language for first-time users, no launcher jargon.
+export { computeIdeNextAction, packStatusLabel } from "./ideNextAction";
 
 /** One-shot: open Quests AI sidebar on this quest chat session id. Cleared by QuestAiSidebar. */
 export const questChatFocusId = writable<string | null>(null);
@@ -970,6 +950,9 @@ export const questDirty = writable(false);
 
 /** Live mirror of launcherSettings.autoHideWorkflowRail for IDE rail. */
 export const autoHideWorkflowRail = writable(false);
+
+/** Live mirror of launcherSettings.hideIdeNextBar for the IDE top panel. */
+export const hideIdeNextBar = writable(false);
 
 /** Live mirror of launcherSettings.sidebarMode. */
 export const sidebarMode = writable<SidebarMode>("full");

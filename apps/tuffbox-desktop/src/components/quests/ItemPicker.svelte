@@ -243,7 +243,7 @@
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 6px;
+    gap: 8px;
     padding: 10px;
     overflow: auto;
   }
@@ -251,7 +251,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     padding: 8px 6px;
     border-radius: 2px;
     border: 1px solid var(--ftbq-border);
@@ -284,7 +284,7 @@
     color: var(--ftbq-title-gold);
   }
   .id {
-    font-size: 9px;
+    font-size: 12px;
     word-break: break-all;
     text-align: center;
     line-height: 1.2;

@@ -134,7 +134,7 @@
     margin-bottom: 18px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
   :global(.prompt-option) {
     display: flex;

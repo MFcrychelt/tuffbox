@@ -15,7 +15,7 @@ pub fn enter_for_game(java_pid: u32) -> Result<(), String> {
     // are the documented PROCESS_MODE_BACKGROUND_* values.
     const PROCESS_MODE_BACKGROUND_BEGIN: u32 = 0x0010_0000;
     const PROCESS_MODE_BACKGROUND_END: u32 = 0x0020_0000;
-    unsafe {
+    let previous = unsafe {
         let process = GetCurrentProcess();
         let previous = GetPriorityClass(process);
         if previous == 0 {
@@ -26,21 +26,25 @@ pub fn enter_for_game(java_pid: u32) -> Result<(), String> {
         }
         SetPriorityClass(process, PROCESS_CREATION_FLAGS(PROCESS_MODE_BACKGROUND_BEGIN))
                     .map_err(|e| format!("SetPriorityClass(background): {e}"))?;
+        previous
+    };
 
-                std::thread::spawn(move || {
-            while tuffbox_core::process::pid_is_alive(java_pid) {
-                std::thread::sleep(std::time::Duration::from_millis(750));
+    // Restore the previous priority class once the game exits. The unsafe ops
+    // run on the watcher thread after this function returned, so they need
+    // their own unsafe block here (spawning itself is safe).
+    std::thread::spawn(move || {
+        while tuffbox_core::process::pid_is_alive(java_pid) {
+            std::thread::sleep(std::time::Duration::from_millis(750));
+        }
+        unsafe {
+            let process = GetCurrentProcess();
+            // Prefer the exact previous class. If it became invalid,
+            // background end still exits background mode safely.
+            if SetPriorityClass(process, PROCESS_CREATION_FLAGS(previous)).is_err() {
+                let _ = SetPriorityClass(process, PROCESS_CREATION_FLAGS(PROCESS_MODE_BACKGROUND_END));
             }
-            unsafe {
-                let process = GetCurrentProcess();
-                // Prefer the exact previous class. If it became invalid,
-                // background end still exits background mode safely.
-                if SetPriorityClass(process, PROCESS_CREATION_FLAGS(previous)).is_err() {
-                    let _ = SetPriorityClass(process, PROCESS_CREATION_FLAGS(PROCESS_MODE_BACKGROUND_END));
-                }
-            }
-        });
-    }
+        }
+    });
     Ok(())
 }
 

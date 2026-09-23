@@ -676,7 +676,7 @@
 
   .preset-create {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
 
   .preset-create input {
@@ -690,7 +690,7 @@
     overflow: auto;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   .preset-item {
@@ -721,7 +721,7 @@
   }
 
   .preset-count {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
     flex-shrink: 0;
   }
@@ -732,7 +732,7 @@
     color: var(--text-muted);
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .presets-main {
@@ -786,7 +786,7 @@
 
   .search-tabs {
     display: flex;
-    gap: 6px;
+    gap: 8px;
   }
 
   .search-tabs button {
@@ -826,7 +826,7 @@
   .search-results {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     max-height: 160px;
     overflow: auto;
   }
@@ -847,7 +847,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 8px;
   }
 
   .row-meta strong {
@@ -855,22 +855,22 @@
   }
 
   .row-meta code {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
 
   .row-ok {
-    font-size: 11px;
+    font-size: 12px;
     color: #86efac;
   }
 
   .row-fail {
-    font-size: 11px;
+    font-size: 12px;
     color: #fca5a5;
   }
 
   .pill {
-    font-size: 10px;
+    font-size: 12px;
     text-transform: uppercase;
     font-weight: 700;
     padding: 2px 6px;
@@ -897,7 +897,7 @@
   }
 
   .mods-head .count {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-muted);
   }
@@ -912,7 +912,7 @@
   .mod-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   button.sm {

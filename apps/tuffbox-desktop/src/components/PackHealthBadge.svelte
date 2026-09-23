@@ -40,6 +40,7 @@
     void load(path);
     if (!pollTimer) {
       pollTimer = setInterval(() => {
+        if (document.hidden) return; // "while visible" — a hidden window skips the scan
         const p = $projectPath;
         if (p) void load(p);
       }, 60000);
@@ -106,8 +107,8 @@
   .health-badge {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
+    gap: 8px;
+    padding: 4px 12px;
     border-radius: 999px;
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);

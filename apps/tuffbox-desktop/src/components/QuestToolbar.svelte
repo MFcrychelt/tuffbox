@@ -60,7 +60,7 @@
     </div>
     <div class="min-w-0">
       <div class="truncate text-sm font-semibold text-[var(--text-primary)]">{title}</div>
-      <div class="text-[11px] font-medium text-[var(--text-muted)]">{chapterCount} chapters · {questCount} quests</div>
+      <div class="text-[12px] font-medium text-[var(--text-muted)]">{chapterCount} chapters · {questCount} quests</div>
     </div>
   </div>
 
@@ -105,7 +105,7 @@
       {/if}
     </button>
 
-    <span class="hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold sm:inline-flex {hasErrors ? 'border-[var(--accent-danger)]/40 bg-[var(--accent-danger)]/10 text-[var(--accent-danger)]' : dirty ? 'border-[var(--accent-warning)]/40 bg-[var(--accent-warning)]/10 text-[var(--accent-warning)]' : 'border-[var(--accent-primary)]/40 bg-[var(--accent-primary)]/10 text-[var(--accent-primary)]'}">
+    <span class="hidden items-center gap-2 rounded-full border px-2.5 py-1 text-[12px] font-semibold sm:inline-flex {hasErrors ? 'border-[var(--accent-danger)]/40 bg-[var(--accent-danger)]/10 text-[var(--accent-danger)]' : dirty ? 'border-[var(--accent-warning)]/40 bg-[var(--accent-warning)]/10 text-[var(--accent-warning)]' : 'border-[var(--accent-primary)]/40 bg-[var(--accent-primary)]/10 text-[var(--accent-primary)]'}">
       {#if hasErrors}
         <AlertTriangle size={12} /> Needs review
       {:else if dirty}
@@ -127,7 +127,7 @@
 
     <button
       type="button"
-      class="inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all {aiOpen ? 'border-violet-400 bg-violet-600 text-white shadow-md shadow-violet-500/25' : 'border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--accent-secondary)] hover:bg-[var(--bg-hover)]'}"
+      class="inline-flex items-center gap-2 whitespace-nowrap flex-shrink-0 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all {aiOpen ? 'border-violet-400 bg-violet-600 text-white shadow-md shadow-violet-500/25' : 'border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--accent-secondary)] hover:bg-[var(--bg-hover)]'}"
       onclick={onAi}
       title={aiOpen ? "Close Quest AI" : "Open Quest AI"}
     >
@@ -137,13 +137,13 @@
 
     <button
       type="button"
-      class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-semibold text-[var(--on-accent)] shadow-md shadow-[var(--accent-primary)]/20 hover:brightness-110 active:scale-[0.98] transition disabled:opacity-50"
+      class="inline-flex items-center gap-2 whitespace-nowrap rounded-lg bg-[var(--accent-primary)] px-3.5 py-1.5 text-xs font-semibold text-[var(--on-accent)] shadow-md shadow-[var(--accent-primary)]/20 hover:brightness-110 active:scale-[0.98] transition disabled:opacity-50"
       onclick={onSave}
       disabled={saving}
     >
       <Save size={14} />
       {saving ? "Saving…" : "Save all"}
-      <kbd class="hidden text-[10px] text-white/70 sm:inline ml-1 font-mono">Ctrl S</kbd>
+      <kbd class="hidden text-[12px] text-white/70 sm:inline ml-1 font-mono">Ctrl S</kbd>
     </button>
 
     <button

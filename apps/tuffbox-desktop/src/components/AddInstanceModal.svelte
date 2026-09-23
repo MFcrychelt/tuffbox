@@ -75,6 +75,9 @@
   // --- Import pack (.mrpack / zip) ---
   let importName = $state("New Instance");
   let importPath = $state("");
+  // Dedup choice asked at import time (docs/17 §4): share identical files
+  // through the store, or keep the pack fully independent.
+  let importDedup = $state<"share" | "independent">("share");
 
   // --- Shared ---
   let location = $state("");
@@ -356,10 +359,19 @@
         source: importPath,
         targetDir,
         instanceName: importName,
+        dedup: importDedup === "share",
       });
       const failed = result?.download?.failed?.length ?? 0;
       if (failed > 0) {
         error = `Installed with ${failed} download failure(s) — open Content and Retry.`;
+      }
+      const dedupInfo = result?.dedup;
+      if (dedupInfo?.mode === "shared" && (dedupInfo.linked ?? 0) > 0) {
+        const mb = Math.round((dedupInfo.bytesReclaimed ?? 0) / 1e6);
+        toasts.info(
+          `File deduplication on — ${dedupInfo.linked} file(s) shared${mb > 0 ? `, ~${mb} MB saved` : ""}.`,
+          4000,
+        );
       }
       oncreated?.(result.path as string);
       onclose?.();
@@ -595,6 +607,35 @@
            <label for="inst-name-imp">Instance name</label>
            <input id="inst-name-imp" bind:value={importName} oninput={() => (location = guessLocation())} />
          </div>
+         <div class="field">
+           <span class="label-ish">File deduplication</span>
+           <div class="dedup-choice" role="radiogroup" aria-label="File deduplication">
+             <button
+               type="button"
+               role="radio"
+               aria-checked={importDedup === "share"}
+               class="dedup-chip"
+               class:active={importDedup === "share"}
+               onclick={() => (importDedup = "share")}
+             >
+               Share identical files (recommended)
+             </button>
+             <button
+               type="button"
+               role="radio"
+               aria-checked={importDedup === "independent"}
+               class="dedup-chip"
+               class:active={importDedup === "independent"}
+               onclick={() => (importDedup = "independent")}
+             >
+               Keep independent files
+             </button>
+           </div>
+           <p class="hint">
+             Identical files are stored once on disk and shared between your packs — nothing is
+             deleted, every pack keeps its full file list. Change it later in Project Settings.
+           </p>
+         </div>
        {/if}
 
        <div class="field">
@@ -669,7 +710,7 @@
     color: rgba(255, 255, 255, 0.8);
   }
   .tabs {
-    display: flex; gap: 6px; padding: 12px 20px 8px;
+    display: flex; gap: 8px; padding: 12px 20px 8px;
   }
   .tabs button {
     background: transparent; border: 1px solid transparent; color: var(--text-muted);
@@ -685,9 +726,28 @@
     display: flex; justify-content: flex-end; gap: 10px;
     padding: 12px 20px 18px; border-top: 1px solid var(--border-color);
   }
-  .field { display: grid; gap: 6px; }
+  .field { display: grid; gap: 8px; }
   .field.grow { flex: 1; min-width: 0; }
-  .field label, .field-label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+  .field label, .field-label, .label-ish { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+  .hint { margin: 6px 0 0; font-size: 12px; line-height: 1.4; color: var(--text-secondary); }
+  .dedup-choice { display: flex; flex-wrap: wrap; gap: 8px; }
+  .dedup-chip {
+    padding: 7px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out);
+  }
+  .dedup-chip:hover { color: var(--text-primary); border-color: var(--accent-primary); }
+  .dedup-chip.active {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 1px var(--accent-primary);
+  }
   .field input:not([type="radio"]):not([type="range"]):not([type="checkbox"]),
   .field select {
     box-sizing: border-box; width: 100%; height: 42px; padding: 0 12px; border-radius: 10px;
@@ -755,7 +815,7 @@
     border: 0;
     background: none;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
     cursor: pointer;
     text-decoration: underline;
   }
@@ -783,7 +843,7 @@
   .mem-presets {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
     margin-top: 8px;
   }
   .mem-preset {
@@ -792,7 +852,7 @@
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     cursor: pointer;
   }
@@ -845,7 +905,7 @@
   .mem-scale {
     display: flex;
     justify-content: space-between;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -860,15 +920,15 @@
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent); color: var(--accent-primary);
   }
   .muted { color: var(--text-muted); font-size: 13px; }
-  .path-hint { font-size: 11px; color: var(--text-muted); }
+  .path-hint { font-size: 12px; color: var(--text-muted); }
   .opt-check {
     display: flex; align-items: center; gap: 8px;
     font-size: 13px; color: var(--text-secondary); font-weight: 600;
     cursor: pointer;
   }
   .opt-check input { width: auto; accent-color: var(--accent-primary); }
-  .loader-empty-actions { display: grid; gap: 6px; margin-top: 6px; }
-  .loader-empty-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .loader-empty-actions { display: grid; gap: 8px; margin-top: 6px; }
+  .loader-empty-btns { display: flex; gap: 8px; flex-wrap: wrap; }
   .ghost.mini {
     padding: 5px 10px; font-size: 12px; border-radius: 999px;
     border: 1px solid var(--border-color); background: transparent;
@@ -877,9 +937,9 @@
   .ghost.mini:hover { color: var(--accent-primary); border-color: var(--accent-primary); }
   .field-loader { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
   .template-btn { align-self: flex-start; }
-  .template-list { display: grid; gap: 6px; }
+  .template-list { display: grid; gap: 8px; }
   .template-row {
-    display: grid; text-align: left; gap: 2px; padding: 10px 12px;
+    display: grid; text-align: left; gap: 8px; padding: 10px 12px;
     border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
   }
   .template-row span { color: var(--text-muted); font-size: 12px; }

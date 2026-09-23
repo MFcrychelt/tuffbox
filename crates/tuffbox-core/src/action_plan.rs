@@ -898,6 +898,31 @@ pub fn validate_action_plan_with_inventory(
     validate_action_plan_with_inventory_and_compat(plan, inventory_mod_ids, missing_dep_ids, &[])
 }
 
+/// File extensions an `edit_config` action may touch. The plan comes from an
+/// AI model, so the apply path must never let a hallucinated path overwrite
+/// a non-config file (a jar, the manifest, a launcher script) — `replace_file`
+/// would corrupt binaries with text content. Kept in sync with the desktop
+/// app's `helpers::is_editable_config_path`.
+pub fn is_editable_config_extension(ext: &str) -> bool {
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "json" | "json5" | "toml" | "properties" | "cfg" | "conf" | "txt" | "js" | "zs"
+            | "yaml" | "yml" | "md"
+    )
+}
+
+/// Whether an `edit_config` relative path points at an editable config file.
+fn editable_config_path(rel: &str) -> bool {
+    let normalized = rel.replace('\\', "/");
+    let Some(name) = normalized.rsplit('/').next() else {
+        return false;
+    };
+    match name.rsplit_once('.') {
+        Some((stem, ext)) => !stem.is_empty() && is_editable_config_extension(ext),
+        None => false,
+    }
+}
+
 /// Like [`validate_action_plan_with_inventory`], plus co-occurrence negative
 /// evidence. A speculative-conflict warning is suppressed when the implicated
 /// mods are observed co-existing widely in working packs.
@@ -997,6 +1022,13 @@ pub fn validate_action_plan_with_inventory_and_compat(
             "edit_config" => {
                 if a.path.as_deref().unwrap_or("").trim().is_empty() {
                     errors.push(format!("{label}: edit_config requires path"));
+                } else if !editable_config_path(a.path.as_deref().unwrap_or("")) {
+                    // A model can hallucinate any path; only config files are
+                    // ever legitimate targets for a text patch.
+                    errors.push(format!(
+                        "{label}: edit_config path '{}' is not a config file (allowed: json/json5/toml/properties/cfg/conf/txt/js/zs/yaml/yml/md)",
+                        a.path.as_deref().unwrap_or("")
+                    ));
                 }
                 let pt = a.patch_type.as_deref().unwrap_or("replace_file");
                 if !matches!(
@@ -1491,6 +1523,28 @@ fn string_array(v: &Value, keys: &[&str]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::editable_config_path;
+
+    #[test]
+    fn edit_config_paths_must_be_config_files() {
+        assert!(editable_config_path("config/sodium-options.json"));
+        assert!(editable_config_path("defaultconfigs\\server.toml"));
+        assert!(editable_config_path("kubejs/server_scripts/quests.js"));
+        // A hallucinated plan must never pass jars/binaries/scripts through.
+        assert!(!editable_config_path("mods/sodium.jar"));
+        assert!(!editable_config_path("start.bat"));
+        assert!(!editable_config_path("manifest.json.bak"));
+        assert!(!editable_config_path("shaderpacks/Complementary.zip"));
+    }
+
+    #[test]
+    fn edit_config_rejects_extensionless_and_hidden_paths() {
+        assert!(!editable_config_path("config/options"));
+        assert!(!editable_config_path(".env"));
+        assert!(!editable_config_path(""));
+        assert!(!editable_config_path("scripts/"));
+    }
+
     use super::*;
 
     #[test]

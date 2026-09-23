@@ -92,12 +92,12 @@
   }
   .drawer-hint {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--ftbq-text-muted);
   }
   .group-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   .group-row input {

@@ -55,9 +55,17 @@ pub struct LauncherSettings {
     /// Show the YouTube feed strip on the home dashboard. Off by default; enable in Settings.
     #[serde(default)]
     pub show_youtube_on_home: bool,
+    /// Show Minecraft game updates (snapshots & releases) in the home news feed.
+    /// Off-by-default would hide the strip for existing users, so default = true.
+    #[serde(default = "default_news_show_updates")]
+    pub news_show_updates: bool,
     /// Hide IDE workflow rail (Content / Setup / …); reveal on bottom-edge hover.
     #[serde(default)]
     pub auto_hide_workflow_rail: bool,
+    /// Hide the IDE top panel (IdeNextBar: pack status, suggested next step,
+    /// health-check strip). Triggers (shortcuts / command palette) keep working.
+    #[serde(default)]
+    pub hide_ide_next_bar: bool,
     /// Left nav: `full` | `icons` (toggle labels) | `autoHide` (left-edge hover).
     #[serde(default = "default_sidebar_mode")]
     pub sidebar_mode: String,
@@ -103,7 +111,15 @@ fn default_concurrent() -> u32 {
 fn default_memory() -> u32 {
     4096
 }
+fn default_news_show_updates() -> bool {
+    true
+}
 fn default_youtube_inline_player() -> bool {
+    true
+}
+/// Show Minecraft game updates in the home news feed by default — off-by-default
+/// would hide the strip for existing users (see `LauncherSettings::news_show_updates`).
+fn default_news_show_updates() -> bool {
     true
 }
 fn default_sidebar_mode() -> String {
@@ -162,7 +178,9 @@ impl Default for LauncherSettings {
             default_memory_mb: default_memory(),
             youtube_inline_player: default_youtube_inline_player(),
             show_youtube_on_home: false,
+            news_show_updates: default_news_show_updates(),
             auto_hide_workflow_rail: false,
+            hide_ide_next_bar: false,
             sidebar_mode: default_sidebar_mode(),
             ui_scale_percent: default_ui_scale_percent(),
             ui_scale_mode: "auto".into(),

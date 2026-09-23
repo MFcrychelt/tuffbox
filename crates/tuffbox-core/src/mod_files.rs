@@ -147,12 +147,20 @@ pub fn materialize_mod_file_with_progress(
     std::fs::create_dir_all(&target_dir)?;
     let expected_sha1 = module.hashes.as_ref().and_then(|h| h.sha1.as_deref());
 
+    // Per-pack opt-out (`.tuffbox-no-dedup` in the project root): this pack
+    // keeps fully independent files — no store consult, no recording. The
+    // user can flip it back any time in Project Settings; turning it off
+    // again materializes existing links back into plain copies.
+    let dedup_off = crate::mod_store::dedup_disabled(instance_dir);
+
     // Dedup store (Shard-inspired): if the jar's exact bytes are already in
     // the shared object store, hard-link them into this instance — no
     // download, no extra disk usage. Requires a known sha1.
-    if let Some(sha1) = expected_sha1 {
-        if crate::mod_store::try_hardlink(&target, sha1) {
-            return Ok(MaterializeOutcome::AlreadyPresent);
+    if !dedup_off {
+        if let Some(sha1) = expected_sha1 {
+            if crate::mod_store::try_hardlink(&target, sha1) {
+                return Ok(MaterializeOutcome::AlreadyPresent);
+            }
         }
     }
 
@@ -165,8 +173,10 @@ pub fn materialize_mod_file_with_progress(
     match download_result {
         Ok(()) => {
             // Feed the dedup store so other instances get this jar for free.
-            if let Some(sha1) = expected_sha1 {
-                crate::mod_store::record(&target, sha1);
+            if !dedup_off {
+                if let Some(sha1) = expected_sha1 {
+                    crate::mod_store::record(&target, sha1);
+                }
             }
             return Ok(MaterializeOutcome::Downloaded);
         }
