@@ -1159,8 +1159,7 @@
     align-items: center;
     flex-wrap: wrap;
     flex-shrink: 0;
-    padding: 14px 4px 14px;
-    margin-bottom: 2px;
+    padding: 14px 4px;
     background: color-mix(in srgb, var(--bg-primary, #0c0e12) 80%, transparent);
     -webkit-backdrop-filter: blur(16px);
     backdrop-filter: blur(16px);
@@ -1462,9 +1461,9 @@
     gap: 6px;
     height: 32px;
     padding: 0 12px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 9px;
-    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
     color: var(--text-primary);
     font-size: 12.5px;
     font-weight: 600;
@@ -1472,9 +1471,9 @@
     transition: background var(--motion-fast, 160ms) ease, border-color var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
   }
   .sm-btn:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.24);
-    color: #fff;
+    background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
+    border-color: rgba(255, 255, 255, 0.22);
+    color: var(--text-primary);
   }
   .sm-btn.ghost {
     background: transparent;
@@ -1482,7 +1481,7 @@
     color: var(--text-secondary);
   }
   .sm-btn.ghost:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.06);
     color: var(--text-primary);
   }
   .sm-btn:disabled {
@@ -1522,13 +1521,18 @@
   .cat-chip:hover {
     background: rgba(255, 255, 255, 0.12);
     border-color: rgba(255, 255, 255, 0.22);
-    color: #fff;
+    color: var(--text-primary);
   }
   .cat-chip.on {
     background: rgba(16, 185, 129, 0.22);
     border-color: rgba(16, 185, 129, 0.6);
     color: #34d399;
     box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
+  }
+  .cat-chip.on:hover {
+    background: rgba(16, 185, 129, 0.3);
+    border-color: rgba(16, 185, 129, 0.75);
+    color: #6ee7b7;
   }
 
   .cat-checkbox {

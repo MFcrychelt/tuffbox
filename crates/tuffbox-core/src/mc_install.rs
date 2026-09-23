@@ -154,9 +154,18 @@ pub fn verify_install_integrity(version: &InstalledVersion) -> Result<(), Instal
         verify_nonempty_file(library, "classpath library")?;
     }
 
-    if !has_native_library(&version.natives_dir)? {
+    // Modern Minecraft versions (1.13+) don't ship native classifiers; the
+    // natives_dir is created empty during install.  Only enforce the check
+    // when the directory actually exists *and* is non-empty — an empty dir
+    // means no natives were expected.
+    if version.natives_dir.is_dir()
+        && fs::read_dir(&version.natives_dir)?
+            .filter_map(|e| e.ok())
+            .any(|e| e.path().is_file())
+        && !has_native_library(&version.natives_dir)?
+    {
         return Err(InstallError::Integrity(format!(
-            "no extracted native library found in {}",
+            "native library extraction incomplete in {}",
             version.natives_dir.display()
         )));
     }

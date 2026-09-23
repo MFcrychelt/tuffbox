@@ -182,7 +182,7 @@
     color: var(--text-secondary);
     border-radius: var(--border-radius-sm);
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     transition: background var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease, transform var(--motion-fast, 160ms) ease;
   }
@@ -197,7 +197,7 @@
 
   .font-code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: -0.5px;
   }
 </style>

@@ -3937,10 +3937,10 @@ import { trapFocus } from "../lib/focusTrap";
           <div class="flex-1 min-h-0 overflow-y-auto px-2 py-2 space-y-1 overscroll-contain [scrollbar-width:thin] [scrollbar-color:var(--bg-elevated)_transparent]">
 
           <!-- Game version -->
-          <section class="rounded-lg transition-colors duration-150 {(accordionOpen.gameVersion) ? "bg-[var(--bg-tertiary)]/60" : ""}">
+          <section class="filter-section rounded-lg transition-colors duration-150 {(accordionOpen.gameVersion) ? "bg-[var(--bg-tertiary)]/60" : ""}">
             <button
               type="button"
-              class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              class="filter-section-toggle"
               onclick={() => toggleAccordion("gameVersion")}
             >
               <span class="flex items-center gap-2"><Layers size={13} class="text-[var(--text-muted)]" /> Game version</span>
@@ -3952,13 +3952,12 @@ import { trapFocus } from "../lib/focusTrap";
                   <span class="search-glyph"><Search size={14} /></span>
                   <input bind:value={versionSearch} placeholder="Search version..." />
                 </div>
-                <div class="max-h-44 overflow-y-auto pr-0.5 flex flex-col gap-0.5 [scrollbar-width:thin] [scrollbar-color:var(--bg-elevated)_transparent]">
+                <div class="version-filter-list">
                   {#each filteredVersions as version (version)}
                     <button
                       type="button"
-                      class="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-150 cursor-pointer {filterGameVersion === version
-                        ? "bg-[var(--bg-elevated)] font-semibold text-[var(--accent-primary)]"
-                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"}"
+                      class="version-filter-item"
+                      class:selected={filterGameVersion === version}
                       onclick={() => { filterGameVersion = version; searchMods(1); }}
                     >
                       <span>{version}</span>
@@ -3966,11 +3965,11 @@ import { trapFocus } from "../lib/focusTrap";
                     </button>
                   {/each}
                 </div>
-                <label class="flex cursor-pointer items-center gap-2 px-2.5 py-1 text-[12px] text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
+                <label class="version-filter-check">
                   <input type="checkbox" class="accent-[var(--accent-primary)]" checked={filterGameVersion === ""} onchange={() => { filterGameVersion = ""; searchMods(1); }} /> Any version
                 </label>
                 {#if !versionSearch.trim()}
-                  <label class="flex cursor-pointer items-center gap-2 px-2.5 py-1 text-[12px] text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
+                  <label class="version-filter-check">
                     <input type="checkbox" class="accent-[var(--accent-primary)]" bind:checked={showAllVersions} /> Show full version list
                   </label>
                 {/if}
@@ -6108,6 +6107,7 @@ import { trapFocus } from "../lib/focusTrap";
     border-color: rgba(245, 166, 35, 0.35);
     background:
       linear-gradient(90deg, rgba(245, 166, 35, 0.08), transparent 28%),
+      linear-gradient(135deg, rgba(255,255,255,0.02), transparent 40%),
       var(--bg-secondary);
   }
 
@@ -6283,10 +6283,15 @@ import { trapFocus } from "../lib/focusTrap";
   /* Fixed columns so client / source / Update stay aligned across rows. */
   .installed-tags {
     display: grid;
-    grid-template-columns: 5.25rem 6.25rem 4.5rem;
+    grid-template-columns: auto auto auto;
     gap: 8px;
     align-items: center;
     flex-shrink: 0;
+  }
+  /* In split/dual view the panes are narrower — shrink tags to prevent
+     card name clipping. */
+  .installed-dual .installed-tags {
+    grid-template-columns: 4rem 5rem auto;
   }
 
   .installed-tags .tag {
@@ -6306,7 +6311,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .installed-tags .tag.update-slot:not(.on) {
-    visibility: hidden;
+    display: none;
   }
 
   .card-actions {
@@ -7149,6 +7154,79 @@ import { trapFocus } from "../lib/focusTrap";
     transform: none !important;
   }
 
+  /* Filter section accordion */
+  .filter-section-toggle {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    border-radius: var(--border-radius-sm);
+    padding: 8px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: background var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
+  }
+  .filter-section-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .version-filter-list {
+    max-height: 180px;
+    overflow-y: auto;
+    padding-right: 2px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-elevated) transparent;
+  }
+
+  .version-filter-item {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    border-radius: var(--border-radius-sm);
+    padding: 5px 10px;
+    text-align: left;
+    font-size: 12.5px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background var(--motion-fast, 160ms) ease, color var(--motion-fast, 160ms) ease;
+  }
+  .version-filter-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .version-filter-item.selected {
+    background: var(--bg-elevated);
+    font-weight: 600;
+    color: var(--accent-primary);
+  }
+
+  .version-filter-check {
+    display: flex;
+    cursor: pointer;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+    transition: color var(--motion-fast, 160ms) ease;
+  }
+  .version-filter-check:hover {
+    color: var(--text-secondary);
+  }
+
   .filter-block {
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-sm);
@@ -7886,6 +7964,7 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 10px 12px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-secondary); text-align: left;
     width: 100%; transform: none;
+    overflow: hidden;
   }
   .version-row:hover, .version-row.current, .version-row.selected {
     border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
