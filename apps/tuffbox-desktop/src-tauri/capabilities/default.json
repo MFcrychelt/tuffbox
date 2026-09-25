@@ -8,6 +8,7 @@
     "core:webview:allow-create-webview-window",
     "dialog:default",
     "shell:default",
-    "deep-link:default"
+    "deep-link:default",
+    "mcp-bridge:default"
   ]
 }

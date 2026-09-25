@@ -70,6 +70,12 @@ windows = { version = "0.58", features = [
 taurpc = "0.7.1"
 specta = { version = "2.0.0-rc.22", features = ["derive", "export", "function"] }
 json5 = "1.3.1"
+# Tauri MCP bridge (hypothesi/mcp-server-tauri): lets the `tauri` MCP server
+# drive the running app — webview screenshots, DOM snapshots, IPC capture.
+# The dependency stays unconditional so the `mcp-bridge:default` permission in
+# capabilities/default.json still resolves for release builds; only the plugin
+# registration in lib.rs is gated on debug builds.
+tauri-plugin-mcp-bridge = "0.13"
 
 [target.'cfg(windows)'.dependencies]
 winreg.workspace = true

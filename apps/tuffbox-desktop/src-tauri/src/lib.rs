@@ -21485,6 +21485,15 @@ pub fn run() {
     // Me tab, instance folder pickers, server folder staging, …).
     let builder = builder.plugin(tauri_plugin_dialog::init());
 
+    // Tauri MCP bridge — dev builds only. Lets the OMP `tauri` MCP server drive
+    // this running app (webview screenshots, DOM snapshot, element picker, IPC
+    // capture, console logs) over the bridge injected into the webview.
+    // `withGlobalTauri: true` (required by the bridge) comes from the
+    // tauri.dev.conf.json overlay wired into the `tauri:dev` script, so release
+    // builds keep the global object off. Permission: `mcp-bridge:default`.
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+
     builder
         .setup(|app| {
             parse_launch_cli_args();
