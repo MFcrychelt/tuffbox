@@ -1,30 +1,30 @@
 # Tool usage for token efficiency
 
-## Code search — use codebase-memory-mcp FIRST
+## Code search — graph-first (graphify)
 
-Проект проиндексирован в codebase-memory-mcp (граф знаний). Вместо grep/glob используй:
+Проект проиндексирован в **graphify**: `graphify-out/graph.json` (~11.9k узлов / 31k рёбер / 466 сообществ).
+Пересборка: `graphify update .` (~50 с, **0 токенов** — локальный AST). Свежесть: `graphify-out/GRAPH_REPORT.md` → «Built from commit: <sha>» vs `git rev-parse HEAD`.
 
-| Вместо | Используй |
-|--------|-----------|
-| `grep` / `glob` для поиска функций/классов | `search_graph` — ранжированный BM25 поиск |
-| `grep` для поиска определений | `search_code` — объединяет grep + граф, дедуплицирует |
-| `grep` для поиска кто вызывает функцию | `trace_path` — трейсинг вызовов |
-| Чтение множества файлов для понимания структуры | `get_architecture` — архитектура проекта |
+MCP-сервер `graphify` (OMP/Claude/Cursor) — сигнатуры вызовов:
 
-Форматы:
-- `search_code(mode="compact")` — только сигнатуры (минимум токенов)
-- `search_code(mode="full")` — с исходным кодом
-- `search_code(mode="files")` — только пути файлов
+| Инструмент | Аргументы | Зачем |
+|-----------|-----------|-------|
+| `query_graph` | `question` (обяз.), `mode`, `depth`, `token_budget`, `context_filter` | вопрос по коду → узлы-ответы с цитатами |
+| `god_nodes` | `top_n`, `exclude_hubs_percentile` | архитектурные хабы |
+| `get_community` | `community_id` (обяз.), `token_budget` | кластер/модуль целиком |
+| `get_node` | `label`\|`node_id`, `project_path` | символ и его метаданные |
+| `get_neighbors` | `label`\|`node_id`, `relation_filter`, `token_budget` | кто вызывает / что вызывает |
+| `shortest_path` | `source`, `target` (обяз.), `max_hops`, `undirected` | как связаны две сущности |
+| `graph_stats` | `project_path` | объём и состояние графа |
+| `get_pr_impact` / `triage_prs` | `pr_number` / `base`, `repo` | влияние PR |
 
-## Графовые возможности codebase-memory-mcp
+CLI-эквивалент (когда MCP недоступен): `graphify query "<вопрос>"`, `graphify path A B`, `graphify explain X`, `graphify affected X`, `graphify god-nodes`.
 
-- **Семантический поиск**: `search_graph(semantic_query=["...", "..."])` — векторный поиск без API/ключа (nomic-embed-code встроен в бинарник). Находит функции по смыслу, а не по имени.
-- **Архитектура**: `get_architecture` — языки, пакеты, точки входа, слои, границы, кластеры (Louvain), хотспоты. Всё в одном вызове.
-- **ADR**: `manage_adr` — сохраняй архитектурные решения между сессиями.
-- **Cross-service**: `trace_path(mode="cross_service")` — трейсинг через HTTP/gRPC/GraphQL/tRPC вызовы между сервисами.
-- **Impact**: `detect_changes` — карта незакоммиченных изменений с классификацией риска.
-- **Dead code**: `query_graph` с Cypher-подобными запросами — найди функции без вызывающих.
-- **Cross-repo**: CROSS_* edges связывают узлы между разными репозиториями.
+**Порядок:** граф → точечный `read path:120-180` по названному узлу → правка → повторное чтение диапазона.
+Широкие `grep`/`glob`/`find` и чтение больших файлов целиком **блокируются хуком** `.omp/hooks/pre/graph-first.ts` (обойти намеренно: `path=<файл|каталог>` для поиска, `:A-B` / `:1-` для чтения).
+Полный протокол — скилл `skill://graphify` и правило `.omp/RULES.md`.
+
+Исключения (прямой доступ оправдан): не-код (`.json`/`.md`/`.toml`/логи/данные), `.svelte` (парсится JS-экстрактором → покрытие частичное), `Cargo.toml` (в графе нет), проверка INFERRED-факта по первоисточнику.
 
 ## Memory — engram (только важное)
 
