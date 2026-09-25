@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
-  import { ChevronLeft, ChevronRight, SlidersHorizontal } from "@lucide/svelte";
+  import { SlidersHorizontal } from "@lucide/svelte";
   import { api } from "../lib/api";
   import { launcherSettingsLive, notifyLauncherSettingsChanged } from "../lib/store";
 
@@ -273,6 +273,23 @@
     e.preventDefault();
   }
 
+  /** Pixel-map (7x5) of a right-pointing chevron, drawn with unit squares. */
+  const ARROW_CELLS = [
+    [3, 0],
+    [2, 1],
+    [3, 1],
+    [4, 1],
+    [1, 2],
+    [2, 2],
+    [3, 2],
+    [4, 2],
+    [5, 2],
+    [2, 3],
+    [3, 3],
+    [4, 3],
+    [3, 4],
+  ] as const;
+
   function formatDate(iso: string): string {
     const d = iso ? new Date(iso) : null;
     if (!d || Number.isNaN(d.getTime())) return iso || "";
@@ -294,12 +311,18 @@
   }
 </script>
 
-{#snippet navArrow(dir: "left" | "right")}
-  {#if dir === "left"}
-    <ChevronLeft size={30} stroke-width={2.4} />
-  {:else}
-    <ChevronRight size={30} stroke-width={2.4} />
-  {/if}
+{#snippet pixelArrow(dir: "left" | "right")}
+  <svg
+    class="pixel-arrow"
+    viewBox="0 0 7 5"
+    aria-hidden="true"
+    shape-rendering="crispEdges"
+  >
+    {#each ARROW_CELLS as [x, y], i (i)}
+      {@const cx = dir === "left" ? 6 - x : x}
+      <rect x={cx} y={y} width="1" height="1" />
+    {/each}
+  </svg>
 {/snippet}
 
 <svelte:window onmousedown={onSourcesPointerDown} onkeydown={onSourcesKeydown} />
@@ -367,7 +390,7 @@
       title="Scroll left"
       onclick={() => scrollDir(-1)}
     >
-      {@render navArrow("left")}
+      {@render pixelArrow("left")}
     </button>
 
     {#if loading}
@@ -429,7 +452,7 @@
       title="Scroll right"
       onclick={() => scrollDir(1)}
     >
-      {@render navArrow("right")}
+      {@render pixelArrow("right")}
     </button>
   </div>
   {/if}
@@ -610,7 +633,7 @@
     transform: none;
   }
 
-  .news-arrow:active:not(:disabled) :global(svg) {
+  .news-arrow:active:not(:disabled) .pixel-arrow {
     transform: translateY(2px);
   }
 
@@ -619,10 +642,11 @@
     cursor: default;
   }
 
-  .news-arrow :global(svg) {
-    width: 56%;
+  .pixel-arrow {
+    width: 46%;
     height: auto;
     display: block;
+    fill: currentColor;
     transition: transform var(--motion-fast, 160ms) var(--ease-out, ease);
   }
 
@@ -811,7 +835,7 @@
   @media (prefers-reduced-motion: reduce) {
     .news-card,
     .news-arrow,
-    .news-arrow :global(svg) {
+    .pixel-arrow {
       transition: none;
     }
   }
