@@ -24,6 +24,7 @@
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
   import { sanitizeHtml } from "../lib/sanitizeHtml";
+  import { localeTag } from "../lib/i18n";
   import CopyButton from "./CopyButton.svelte";
 
   let {
@@ -153,7 +154,7 @@
   function formatDate(iso: string | null | undefined): string {
     if (!iso) return "—";
     try {
-      return new Date(iso).toLocaleDateString(undefined, {
+      return new Date(iso).toLocaleDateString($localeTag, {
         year: "numeric",
         month: "short",
         day: "numeric",

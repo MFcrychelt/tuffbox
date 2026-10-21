@@ -435,7 +435,6 @@
             <span class="card-cap">
               <span class="card-title">{entry.title}</span>
               <span class="card-version">
-                <span class="card-ver">{entry.version}</span>
                 <span class="card-date">{formatDate(entry.date)}</span>
               </span>
             </span>
@@ -796,23 +795,14 @@
     color: #fff;
   }
 
-  /* Version and date stacked on their own lines — clearer than the old
-     "1.21.4 · 12 Mar 2025" dot-separated single line. */
+  /* Date under the caption. The version is not repeated here — it already
+     reads large on the card cover (`shot-ver`). */
   .card-version {
     display: flex;
     flex-direction: column;
     gap: 8px;
     width: 100%;
     min-width: 0;
-  }
-
-  .card-ver {
-    font-size: 12px;
-    font-weight: 700;
-    color: #fff;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .card-date {

@@ -277,15 +277,21 @@
        compositing-only and give the same affordance without a filter. */
     box-shadow:
       0 10px 22px color-mix(in srgb, var(--bg-primary) 45%, transparent),
-      0 0 0 1px color-mix(in srgb, var(--accent-primary) 38%, transparent);
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
   }
   .pack-tile.selected .pack-icon {
+    /* Selected build reads as a quiet accent ring plus a diffuse bloom.
+       The old 72% ring + 22px/32% bloom turned into a harsh neon frame in
+       the Minimal themes (Glacier's accent is a near-white #a8e6ff). */
     box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--accent-primary) 72%, transparent),
-      0 8px 22px color-mix(in srgb, var(--accent-primary) 32%, transparent);
+      0 0 0 2px color-mix(in srgb, var(--accent-primary) 52%, transparent),
+      0 6px 16px color-mix(in srgb, var(--accent-primary) 20%, transparent);
   }
+  /* Selected pill sits on the dark glass shelf; the light theme's
+     `--accent-primary` (#087f38) measured 1.4:1 there. Lighten the accent
+     toward white so the label reads in every theme. */
   .pack-tile.selected .pack-name {
-    color: var(--accent-primary);
+    color: color-mix(in srgb, var(--accent-primary) 25%, #ffffff);
     background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
     border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
@@ -426,7 +432,7 @@
     box-shadow: 0 6px 14px color-mix(in srgb, var(--bg-primary) 35%, transparent);
   }
   .potato .pack-tile.selected .pack-icon {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 72%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 52%, transparent);
   }
   .potato .running-dot {
     animation: none;

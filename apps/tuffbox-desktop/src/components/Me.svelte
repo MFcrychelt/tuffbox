@@ -293,7 +293,6 @@
       <ArrowLeft size={18} />
       <span>Back</span>
     </button>
-    <h1 class="me-title">Me</h1>
     <div class="me-top-actions">
       {#if $authState.loggedIn}
         <button class="ghost-btn danger" disabled={busy} onclick={logout} title="Sign out">
@@ -658,18 +657,11 @@
     border-color: var(--accent-primary);
   }
 
-  .me-title {
-    flex: 1;
-    margin: 0;
-    font-size: 17px;
-    font-weight: 800;
-    color: var(--text-primary);
-  }
-
   .me-top-actions {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    margin-left: auto;
   }
 
   .ghost-btn {
@@ -720,6 +712,7 @@
   .player-name {
     font-family: var(--font-minecraft);
     font-size: 12px;
+    line-height: 1.6;
     letter-spacing: 0.5px;
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
@@ -1102,6 +1095,7 @@
   .account-text .name {
     font-family: var(--font-minecraft);
     font-size: 12px;
+    line-height: 1.6;
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
     overflow: hidden;

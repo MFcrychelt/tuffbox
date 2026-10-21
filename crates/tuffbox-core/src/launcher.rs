@@ -426,7 +426,19 @@ impl TestLauncher {
 
         let mut cmd = Command::new(PathBuf::from(&java.path));
         cmd.arg(format!("-Xmx{}M", options.memory_mb));
-        cmd.args(&options.jvm_args);
+
+        // Profile-supplied JVM flags come from the manifest, which can arrive
+        // over a `tuffbox://install?repo=…` deep link — filter out anything
+        // that could load code, replace the classpath, or redirect logging
+        // before it reaches `java`.
+        let sanitized = crate::launch_args::sanitize_jvm_args(&options.jvm_args);
+        for rejected in &sanitized.rejected {
+            progress.log(&format!(
+                "# Ignored unsafe JVM arg {:?}: {}",
+                rejected.arg, rejected.reason
+            ));
+        }
+        cmd.args(&sanitized.accepted);
 
         for arg in &game.jvm_args {
             // Keep each profile arg as a single argv entry. Fabric ships
@@ -452,6 +464,19 @@ impl TestLauncher {
                 let log_arg = format!("-Dlog4j.configurationFile={}", log_path.to_string_lossy());
                 cmd.arg(log_arg);
             }
+        }
+
+        // Log4Shell (CVE-2021-44228) mitigation, on every launch. Placed after
+        // the version json's own `-Dlog4j.configurationFile`: `java` keeps the
+        // *last* value of a duplicated `-D`, and for pre-1.17 versions the
+        // hardened config has to win. Failing to materialise the config is not
+        // fatal — the `formatMsgNoLookups` property still applies.
+        let log4j_config = crate::launch_args::ensure_log4j_config(launcher_dir).ok();
+        for arg in crate::launch_args::log4shell_args(
+            &manifest.minecraft.version,
+            log4j_config.as_deref(),
+        ) {
+            cmd.arg(arg);
         }
 
         // Java 9+ requires --add-opens for module system access
@@ -519,6 +544,25 @@ impl TestLauncher {
         let log_path = options.instance_dir.join("logs").join("latest.log");
         if let Some(parent) = log_path.parent() {
             fs::create_dir_all(parent)?;
+        }
+
+        // Windows caps the whole command line at 32767 UTF-16 units. A Forge
+        // pack with a few hundred libraries overflows that, and `CreateProcess`
+        // then fails with an opaque error instead of starting the game — hand
+        // the arguments to `java @argfile` instead.
+        #[cfg(windows)]
+        {
+            if estimate_command_line_len(&cmd) > WINDOWS_CMDLINE_LIMIT {
+                let argfile = options.instance_dir.join("logs").join("tuffbox-args.txt");
+                match rewrite_to_argfile(&mut cmd, &argfile) {
+                    Ok(()) => progress.log(
+                        "# Command line exceeds the Windows limit — passing arguments via @argfile",
+                    ),
+                    Err(error) => progress.log(&format!(
+                        "# Could not write the launch argfile ({error}); the launch may fail on the Windows command-line limit"
+                    )),
+                }
+            }
         }
 
         cmd.current_dir(&options.instance_dir);
@@ -696,9 +740,268 @@ fn copy_dir_incremental(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<
     Ok(())
 }
 
+/// Quote one argument for a `java @argfile` line.
+///
+/// The launcher's argfile parser splits on whitespace, treats `"` and `\` as
+/// escapes, and reads a leading `#` as a comment — an argument containing any of
+/// those has to be quoted and escaped or it silently changes the command line.
+fn argfile_line(arg: &str) -> String {
+    let needs_quotes = arg.is_empty()
+        || arg.starts_with('#')
+        || arg.chars().any(|c| c.is_whitespace() || c == '"' || c == '\\');
+    if !needs_quotes {
+        return arg.to_string();
+    }
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    for ch in arg.chars() {
+        if ch == '"' || ch == '\\' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    out
+}
+
+/// `@argfile` bytes in the encoding the launcher expects.
+///
+/// On Windows the `java` launcher decodes argument files in the *system* ANSI
+/// code page, not UTF-8 (JDK-8286998 — JEP 400 changed the default charset of
+/// the APIs, not of argument files). Writing UTF-8 there turns a Cyrillic user
+/// path into mojibake and the classpath stops resolving.
+#[cfg(windows)]
+fn argfile_bytes(text: &str) -> Vec<u8> {
+    native_encoding::to_ansi(text)
+}
+
+#[cfg(not(windows))]
+fn argfile_bytes(text: &str) -> Vec<u8> {
+    text.as_bytes().to_vec()
+}
+
+/// Minimal `WideCharToMultiByte` binding — the alternative is pulling the whole
+/// `windows` crate into a crate that is otherwise platform-free. `kernel32` is
+/// already linked by std on Windows.
+#[cfg(windows)]
+mod native_encoding {
+    /// `CP_ACP` — the system ANSI code page.
+    const CP_ACP: u32 = 0;
+
+    extern "system" {
+        fn WideCharToMultiByte(
+            code_page: u32,
+            flags: u32,
+            wide_char_str: *const u16,
+            wide_char_count: i32,
+            multi_byte_str: *mut u8,
+            multi_byte_count: i32,
+            default_char: *const u8,
+            used_default_char: *mut i32,
+        ) -> i32;
+
+        #[cfg(test)]
+        fn MultiByteToWideChar(
+            code_page: u32,
+            flags: u32,
+            multi_byte_str: *const u8,
+            multi_byte_count: i32,
+            wide_char_str: *mut u16,
+            wide_char_count: i32,
+        ) -> i32;
+    }
+
+    /// Inverse of [`to_ansi`], used by tests to prove the bytes we write are the
+    /// bytes the `java` launcher will read back.
+    #[cfg(test)]
+    pub fn from_ansi_for_test(bytes: &[u8]) -> String {
+        if bytes.is_empty() {
+            return String::new();
+        }
+        let len = unsafe {
+            MultiByteToWideChar(
+                CP_ACP,
+                0,
+                bytes.as_ptr(),
+                bytes.len() as i32,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if len <= 0 {
+            return String::new();
+        }
+        let mut wide = vec![0u16; len as usize];
+        let written = unsafe {
+            MultiByteToWideChar(
+                CP_ACP,
+                0,
+                bytes.as_ptr(),
+                bytes.len() as i32,
+                wide.as_mut_ptr(),
+                len,
+            )
+        };
+        if written <= 0 {
+            return String::new();
+        }
+        wide.truncate(written as usize);
+        String::from_utf16_lossy(&wide)
+    }
+
+    /// Encode `text` in the process ANSI code page. Characters the code page
+    /// cannot represent degrade to `?`; a conversion failure falls back to UTF-8
+    /// rather than losing the launch.
+    pub fn to_ansi(text: &str) -> Vec<u8> {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = std::ffi::OsStr::new(text).encode_wide().collect();
+        if wide.is_empty() {
+            return Vec::new();
+        }
+        let len = unsafe {
+            WideCharToMultiByte(
+                CP_ACP,
+                0,
+                wide.as_ptr(),
+                wide.len() as i32,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
+        };
+        if len <= 0 {
+            return text.as_bytes().to_vec();
+        }
+        let mut buffer = vec![0u8; len as usize];
+        let written = unsafe {
+            WideCharToMultiByte(
+                CP_ACP,
+                0,
+                wide.as_ptr(),
+                wide.len() as i32,
+                buffer.as_mut_ptr(),
+                len,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
+        };
+        if written <= 0 {
+            return text.as_bytes().to_vec();
+        }
+        buffer.truncate(written as usize);
+        buffer
+    }
+}
+
+/// `CreateProcess` caps the whole command line at 32767 UTF-16 units. A Forge
+/// pack with a few hundred libraries exceeds it, and the spawn then fails with
+/// an opaque error instead of launching.
+///
+/// `ponytail:` one constant, no probing — the limit *is* a constant, and the
+/// 2.7k margin absorbs the quoting overhead of the estimate below.
+#[cfg(windows)]
+const WINDOWS_CMDLINE_LIMIT: usize = 30_000;
+
+/// Approximate UTF-16 length of `program arg arg …`, counting the quotes the
+/// OS adds around arguments that contain whitespace.
+#[cfg(windows)]
+fn estimate_command_line_len(cmd: &Command) -> usize {
+    let mut total = cmd.get_program().to_string_lossy().chars().count() + 1;
+    for arg in cmd.get_args() {
+        let text = arg.to_string_lossy();
+        total += text.chars().count() + 1;
+        if text.is_empty() || text.chars().any(char::is_whitespace) {
+            total += 2;
+        }
+    }
+    total
+}
+
+/// Replace the arguments of `cmd` with `@argfile`.
+#[cfg(windows)]
+fn rewrite_to_argfile(cmd: &mut Command, argfile: &Path) -> std::io::Result<()> {
+    let program = cmd.get_program().to_os_string();
+    let mut contents = String::new();
+    for arg in cmd.get_args() {
+        contents.push_str(&argfile_line(&arg.to_string_lossy()));
+        contents.push('\n');
+    }
+    if let Some(parent) = argfile.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(argfile, argfile_bytes(&contents))?;
+    let mut rewritten = Command::new(program);
+    rewritten.arg(format!("@{}", argfile.display()));
+    *cmd = rewritten;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn argfile_line_quotes_only_what_needs_it() {
+        assert_eq!(argfile_line("-Xmx4G"), "-Xmx4G");
+        assert_eq!(argfile_line("-Dfoo=a,b"), "-Dfoo=a,b");
+        assert_eq!(argfile_line("-Dfoo=a b"), "\"-Dfoo=a b\"");
+        // Windows paths must have their separators escaped — the launcher's
+        // argfile parser treats a bare backslash as an escape character.
+        assert_eq!(
+            argfile_line(r"C:\dir with space\a.jar"),
+            r#""C:\\dir with space\\a.jar""#
+        );
+        assert_eq!(argfile_line(r"C:\launcher\x.jar"), r#""C:\\launcher\\x.jar""#);
+        assert_eq!(argfile_line("a\"b"), "\"a\\\"b\"");
+        assert_eq!(argfile_line("#comment"), "\"#comment\"");
+        assert_eq!(argfile_line(""), "\"\"");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn rewrite_to_argfile_keeps_every_argument_and_swaps_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logs").join("tuffbox-args.txt");
+        let mut cmd = Command::new("java");
+        cmd.arg("-cp").arg("a b.jar");
+        cmd.arg("-Dfile.encoding=UTF-8");
+        rewrite_to_argfile(&mut cmd, &path).unwrap();
+
+        assert_eq!(cmd.get_program().to_string_lossy(), "java");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args.len(), 1, "the whole command line must collapse to @file");
+        assert!(args[0].starts_with('@'));
+
+        // Read back through the same ANSI code page the JVM would use.
+        let bytes = fs::read(&path).unwrap();
+        let decoded = native_encoding::from_ansi_for_test(&bytes);
+        assert_eq!(decoded, "-cp\n\"a b.jar\"\n-Dfile.encoding=UTF-8\n");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn argfile_bytes_use_the_system_code_page_not_utf8() {
+        // ASCII is identical in every code page, so this pins the writer's
+        // newline/quoting layout without depending on the machine's locale.
+        assert_eq!(
+            argfile_bytes("-cp\n\"a b.jar\"\n"),
+            b"-cp\n\"a b.jar\"\n".to_vec()
+        );
+        // Non-ASCII paths survive whenever the ANSI code page can represent
+        // them (CP1251 on a Russian Windows). On a code page that cannot, the
+        // conversion degrades to `?` — the same lossy behaviour `cmd.exe` has,
+        // and still not the UTF-8 bytes a UTF-8 argfile would have written.
+        let decoded = native_encoding::from_ansi_for_test(&native_encoding::to_ansi("Иван"));
+        assert!(
+            decoded == "Иван" || decoded.chars().all(|c| c == '?'),
+            "unexpected round-trip: {decoded}"
+        );
+    }
+
 
     #[test]
     fn finds_java_in_path() {

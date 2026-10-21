@@ -1,4 +1,5 @@
 mod auth;
+mod ai_tools_dispatch;
 mod cosmetics_local;
 mod cpu_affinity;
 mod gpu;
@@ -10246,6 +10247,57 @@ fn quest_plan_system_prompt() -> String {
     tuffbox_core::quest_plan::QUEST_PLAN_SYSTEM_PROMPT.to_string()
 }
 
+/// Answers a question about the open pack, letting the model inspect it with the
+/// read-only tool catalogue first.
+///
+/// Nothing here mutates the project: the tools read, and changes stay behind the
+/// existing ActionPlan + confirmation flow.
+#[tauri::command(rename_all = "camelCase")]
+async fn ai_inspect_project(
+    path: String,
+    question: String,
+    max_rounds: Option<u32>,
+) -> Result<serde_json::Value, String> {
+    let question = question.trim().to_string();
+    if question.is_empty() {
+        return Err("Ask something first.".to_string());
+    }
+    let manifest_path = resolve_manifest_path(&path)?;
+    let settings = integrations::read_settings().ai;
+    let model = ai_tools_dispatch::TransportModel::new(settings);
+    let tools = ai_tools_dispatch::ProjectTools::new(manifest_path);
+    let catalogue = tuffbox_core::ai_tools::tool_catalogue();
+
+    let report = tuffbox_core::ai_agent::run_tool_loop(
+        &model,
+        &tools,
+        tuffbox_core::ai_tools::AGENT_SYSTEM_PROMPT,
+        Vec::new(),
+        &question,
+        &catalogue,
+        max_rounds
+            .unwrap_or(tuffbox_core::ai_agent::MAX_ROUNDS)
+            .clamp(1, 12),
+    )
+    .await?;
+
+    Ok(serde_json::json!({
+        "text": report.text,
+        "rounds": report.rounds,
+        "capped": report.capped,
+        "toolsAvailable": model.tools_available(),
+        "toolRuns": report
+            .tool_runs
+            .iter()
+            .map(|run| serde_json::json!({
+                "name": run.name,
+                "arguments": run.arguments,
+                "result": run.result,
+            }))
+            .collect::<Vec<_>>(),
+    }))
+}
+
 /// Natural-language → QuestPlan → merge preview.
 /// Uses offline heuristic for simple numbered prompts; otherwise configured AI (Ollama / OpenAI-compatible).
 #[tauri::command(rename_all = "camelCase")]
@@ -10871,6 +10923,40 @@ fn read_world_map(
     let world_dir = project_dir.join("saves").join(&world_name);
     let map = tuffbox_core::region::read_world_map(&world_dir, dimension.as_deref())?;
     Ok(serde_json::to_value(&map).map_err(|e| e.to_string())?)
+}
+
+/// Returns one chunk's block palette + packed indices for the 3D world preview.
+///
+/// `Ok(None)` means the world has no chunk at those coordinates (nothing
+/// generated there) — not an error worth showing the user.
+#[tauri::command(rename_all = "camelCase")]
+async fn read_world_column(
+    path: String,
+    world_name: String,
+    dimension: Option<String>,
+    chunk_x: i32,
+    chunk_z: i32,
+) -> Result<Option<serde_json::Value>, String> {
+    // Blocking file I/O and inflate — off the main thread, or every other IPC
+    // response queues behind it (see "Tauri-команды с тяжёлым I/O" in AGENTS.md).
+    tokio::task::spawn_blocking(move || {
+        let project_dir = manifest_parent(&path)?;
+        let world_dir = project_dir.join("saves").join(&world_name);
+        let column = tuffbox_core::world_preview::load_column(
+            &world_dir,
+            dimension.as_deref(),
+            chunk_x,
+            chunk_z,
+        )?;
+        match column {
+            Some(column) => Ok(Some(
+                serde_json::to_value(&column).map_err(|e| e.to_string())?,
+            )),
+            None => Ok(None),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Lists dimensions that have a region folder for the given world.
@@ -11988,7 +12074,7 @@ async fn get_health_report(path: String) -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())?
 }
 
-fn get_health_report_impl(path: String) -> Result<serde_json::Value, String> {
+pub(crate) fn get_health_report_impl(path: String) -> Result<serde_json::Value, String> {
     let manifest_path = resolve_manifest_path(&path).map_err(|e| e.to_string())?;
     let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     let graph = DependencyGraph::from_manifest(&manifest);
@@ -17213,10 +17299,11 @@ fn extract_mrpack_overrides(pack_path: &Path, instance_dir: &Path) -> Result<usi
             continue;
         }
         let rel = &name[prefix.len()..];
-        if rel.is_empty() || rel.contains("..") {
+        // Shared validator: rejects `..`, absolute paths, drive letters and
+        // Windows device names before the entry is joined under the instance.
+        let Ok(dest) = tuffbox_core::safepath::safe_join(instance_dir, rel) else {
             continue;
-        }
-        let dest = instance_dir.join(rel);
+        };
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -17315,34 +17402,12 @@ fn drop_stage_root() -> PathBuf {
 
 /// Validate a dropped relative path (webview-supplied). Rejects absolute
 /// paths, traversal and drive letters; normalizes backslashes.
+///
+/// Delegates to [`tuffbox_core::safepath`], the same validator the archive
+/// extractors use — one implementation, one set of rules.
 fn sanitize_drop_rel(rel: &str) -> Result<String, String> {
-    let norm = rel.replace('\\', "/");
-    // Reject absolute paths and drive letters before stripping leading slashes.
-    if norm.starts_with('/') || norm.starts_with("//") {
-        return Err(format!("absolute path not allowed: {rel}"));
-    }
-    let bytes = norm.as_bytes();
-    if bytes.len() >= 2 && bytes[1] == b':' {
-        return Err(format!("absolute path not allowed: {rel}"));
-    }
-    let trimmed = norm.trim_start_matches('/');
-    if trimmed.is_empty() {
-        return Err("empty dropped file name".into());
-    }
-    if tuffbox_core::importer::is_unsafe_zip_rel_path(trimmed) {
-        return Err(format!("unsafe dropped path: {rel}"));
-    }
-    if trimmed.split('/').any(|seg| {
-        seg.is_empty()
-            || seg == "."
-            || seg == ".."
-            || seg.contains(':')
-            || seg == "CON"
-            || seg == "NUL"
-    }) {
-        return Err(format!("unsafe dropped path: {rel}"));
-    }
-    Ok(trimmed.to_string())
+    tuffbox_core::safepath::validate_rel_path(rel)
+        .map_err(|e| format!("unsafe dropped path {rel:?}: {e}"))
 }
 
 static DROP_STAGES: Lazy<std::sync::Mutex<std::collections::HashMap<String, PathBuf>>> =
@@ -18207,7 +18272,10 @@ mod drop_import_tests {
         assert!(sanitize_drop_rel("mods/../../escape.jar").is_err());
         assert!(sanitize_drop_rel("/absolute/path.zip").is_err());
         assert!(sanitize_drop_rel("C:/system32/x.dll").is_err());
-        assert!(sanitize_drop_rel("a//b.zip").is_err());
+        assert!(sanitize_drop_rel("mods/CON").is_err());
+        // Duplicate separators collapse instead of failing — the join is still
+        // confined to the staging root.
+        assert_eq!(sanitize_drop_rel("a//b.zip").unwrap(), "a/b.zip");
         assert_eq!(
             sanitize_drop_rel("mods\\jei-1.0.jar").unwrap(),
             "mods/jei-1.0.jar"
@@ -18323,10 +18391,11 @@ fn extract_prism_zip_content(zip_path: &Path, instance_dir: &Path) -> Result<(),
             .strip_prefix("minecraft/")
             .or_else(|| name.strip_prefix(".minecraft/"))
             .unwrap_or(name.as_str());
-        if rel.is_empty() || rel.contains("..") {
+        // Shared validator: an entry like `//etc/x` or `C:/x` must not escape
+        // the instance dir through `Path::join`.
+        let Ok(dest) = tuffbox_core::safepath::safe_join(instance_dir, rel) else {
             continue;
-        }
-        let dest = instance_dir.join(rel);
+        };
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -21454,13 +21523,17 @@ pub fn run() {
     // runtime context first (it lazily initializes the runtime) — the
     // handler itself only *registers* the router; actual invocations run
     // later inside Tauri's runtime.
-    {
+    // NOT installed here: `Builder::invoke_handler` keeps only the LAST handler,
+    // so the legacy `generate_handler!` further down silently replaced this one
+    // and every `TauRPC__*` command was unreachable at runtime. Both handlers are
+    // composed at the single `invoke_handler` call at the end of this function.
+    let taurpc_handler = {
         // taurpc's macro-expanded router construction touches the tokio
         // reactor, so it must run inside a runtime context. block_on lazily
         // initializes Tauri's global runtime and enters its context.
         let router = tauri::async_runtime::block_on(async { taurpc_api::swarm_api_router() });
-        builder = builder.invoke_handler(router.into_handler());
-    }
+        router.into_handler()
+    };
 
     // Unified structured logging (tauri-plugin-tracing): Rust tracing spans
     // AND JS console output land in one rotating file under the app data dir
@@ -21535,13 +21608,13 @@ pub fn run() {
                 let handle = app.handle().clone();
                 app.deep_link().on_open_url(move |event| {
                     for url in event.urls() {
-                        deep_link::handle_install_url(&handle, url.as_str());
+                        deep_link::handle_deep_link_url(&handle, url.as_str());
                     }
                 });
                 // Cold start: the app was *opened by* the link.
                 if let Ok(Some(urls)) = app.deep_link().get_current() {
                     for url in urls {
-                        deep_link::handle_install_url(app.handle(), url.as_str());
+                        deep_link::handle_deep_link_url(app.handle(), url.as_str());
                     }
                 }
             }
@@ -21567,8 +21640,12 @@ pub fn run() {
                 let phys = monitor.size();
                 let mw = (phys.width as f64 / scale).max(1.0);
                 let mh = (phys.height as f64 / scale).max(1.0);
-                let w = (mw * 0.95).clamp(800.0, mw);
-                let h = (mh * 0.94).clamp(600.0, mh);
+                // Never let the floor exceed the ceiling: a monitor that reports
+                // an implausible logical size (broken DPI query, virtual/RDP
+                // display) made `clamp(800, mw)` panic with `min > max` at
+                // startup, killing the whole app before the webview loaded.
+                let w = (mw * 0.95).clamp(800.0_f64.min(mw), mw);
+                let h = (mh * 0.94).clamp(600.0_f64.min(mh), mh);
                 let _ = win.set_size(tauri::LogicalSize::new(w, h));
                 let _ = win.center();
                 let _ = win.unminimize();
@@ -21586,7 +21663,14 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler({
+            // Both IPC handlers in one place: taurpc owns `TauRPC__*` and
+            // returns `false` for anything else, the legacy handler takes the
+            // rest. `Invoke` is not `Clone`, so decide by command name before
+            // moving it into exactly one of them.
+            // Explicit fn type: a bare `let` loses the `invoke_handler` context
+            // that used to pin the closure's parameter type (E0282).
+            let legacy: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
             get_project_schema_status,
             migrate_project_schema,
             validate_project,
@@ -21791,6 +21875,7 @@ pub fn run() {
             validate_quest_plan,
             quest_plan_system_prompt,
             generate_quest_plan_from_prompt,
+            ai_inspect_project,
             quest_chat_api::list_quest_chat_sessions,
             quest_chat_api::save_quest_chat_session,
             quest_chat_api::load_quest_chat_session,
@@ -21854,6 +21939,7 @@ pub fn run() {
             integrations::publish_release,
             read_world_info,
             read_world_map,
+            read_world_column,
             list_world_dimensions,
             delete_world_chunks,
             copy_world_chunks,
@@ -21988,7 +22074,7 @@ pub fn run() {
             open_project_folder,
             create_project_desktop_shortcut,
             take_pending_launch_project,
-            deep_link::take_pending_install_repo,
+            deep_link::take_pending_deep_link,
             delete_project,
             create_logs_zip,
             clone_project,
@@ -22077,7 +22163,15 @@ pub fn run() {
             launcher_presence::launcher_presence_stop,
             launcher_presence::get_launcher_online,
             launcher_presence::get_launcher_recent_sessions,
-        ])
+        ];
+            move |invoke| {
+                if invoke.message.command().starts_with("TauRPC__") {
+                    taurpc_handler(invoke)
+                } else {
+                    legacy(invoke)
+                }
+            }
+        })
         .manage(ClassFinderCache::default())
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -2980,6 +2980,230 @@ fn finalize_ai_content(
     }
 }
 
+/// One assistant turn straight off the wire, tool calls included.
+#[derive(Debug, Clone)]
+pub struct RawCompletion {
+    pub turn: tuffbox_core::ai_agent::AgentTurn,
+    /// False when the endpoint would not take a `tools` payload and the answer
+    /// came from a retry without it. Callers should tell the user that tools are
+    /// off rather than pretend the model chose not to use them.
+    pub tools_available: bool,
+}
+
+/// Parses an OpenAI-style `message` object, keeping `tool_calls`.
+///
+/// `content` may be null/absent on a tool-calling turn; that is normal, not an
+/// error — the loop decides what to do with a turn that has no prose.
+fn parse_openai_message(message: &Value) -> tuffbox_core::ai_agent::AgentTurn {
+    use tuffbox_core::ai_agent::{AgentTurn, ToolCall};
+
+    let content = message
+        .get("content")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|text| !text.trim().is_empty());
+
+    let tool_calls = message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .map(|calls| {
+            calls
+                .iter()
+                .enumerate()
+                .filter_map(|(index, call)| {
+                    let function = call.get("function")?;
+                    let name = function.get("name").and_then(Value::as_str)?.to_string();
+                    // Ollama answers without ids; the protocol needs one, so
+                    // synthesise a stable placeholder per turn.
+                    let id = call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .filter(|id| !id.is_empty())
+                        .unwrap_or_else(|| format!("call_{index}"));
+                    Some(ToolCall {
+                        id,
+                        name,
+                        arguments: match function.get("arguments") {
+                            Some(Value::String(text)) => text.clone(),
+                            Some(other) => other.to_string(),
+                            None => "{}".to_string(),
+                        },
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    AgentTurn {
+        content,
+        tool_calls,
+    }
+}
+
+/// True when a provider error reads like "this endpoint does not take tools".
+///
+/// Heuristic on purpose: providers answer with wildly different wording, and a
+/// wrong guess only costs one extra request; a missed guess leaves the user
+/// staring at a 400 with no explanation.
+fn looks_like_tool_rejection(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    ["tool", "function", "unknown field", "unsupported", "invalid_request"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+/// Like [`call_ai_messages_with_usage`], but keeps the assistant message intact
+/// (`content` **and** `tool_calls`) and may send a `tools` payload.
+///
+/// When the endpoint rejects tools, the request is retried once without them and
+/// [`RawCompletion::tools_available`] says so — a model that simply cannot call
+/// tools still answers questions, it just cannot inspect the project first.
+pub async fn call_ai_messages_raw(
+    settings: &AiSettings,
+    system: &str,
+    messages: &[Value],
+    tools: Option<&Value>,
+) -> Result<RawCompletion, String> {
+    let has_tools = tools
+        .map(|payload| payload.as_array().map(|a| !a.is_empty()).unwrap_or(false))
+        .unwrap_or(false);
+
+    let attempt = call_ai_messages_raw_once(settings, system, messages, tools);
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(AI_CALL_TOTAL_TIMEOUT_SECS),
+        attempt,
+    )
+    .await
+    .map_err(|_| {
+        format!("AI request timed out after {AI_CALL_TOTAL_TIMEOUT_SECS}s — try a smaller context or a faster model")
+    })?;
+
+    match result {
+        Ok(completion) => Ok(completion),
+        Err(error) if has_tools && looks_like_tool_rejection(&error) => {
+            let mut retry = tokio::time::timeout(
+                std::time::Duration::from_secs(AI_CALL_TOTAL_TIMEOUT_SECS),
+                call_ai_messages_raw_once(settings, system, messages, None),
+            )
+            .await
+            .map_err(|_| format!("AI request timed out after {AI_CALL_TOTAL_TIMEOUT_SECS}s"))??;
+            retry.tools_available = false;
+            Ok(retry)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn call_ai_messages_raw_once(
+    settings: &AiSettings,
+    system: &str,
+    messages: &[Value],
+    tools: Option<&Value>,
+) -> Result<RawCompletion, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let mut api_messages = Vec::with_capacity(messages.len() + 1);
+    api_messages.push(json!({"role": "system", "content": system}));
+    for message in messages {
+        api_messages.push(message.clone());
+    }
+
+    let attach_tools = |payload: &mut Value| {
+        if let Some(tools) = tools.filter(|t| t.as_array().map(|a| !a.is_empty()).unwrap_or(false)) {
+            payload["tools"] = tools.clone();
+            payload["tool_choice"] = json!("auto");
+        }
+    };
+
+    if settings.provider == "ollama" {
+        let model = ensure_ollama_ready(settings).await?;
+        let mut body = json!({
+            "model": model,
+            "stream": false,
+            "messages": api_messages,
+        });
+        attach_tools(&mut body);
+        let response = send_ai_http_with_retry("Ollama", || {
+            client.post(ollama_chat_url(&settings.endpoint)).json(&body)
+        })
+        .await?;
+        let status = response.status();
+        let body_text = response.text().await.map_err(|e| e.to_string())?;
+        let body: Value = serde_json::from_str(&body_text)
+            .unwrap_or_else(|_| json!({ "error": body_text.chars().take(500).collect::<String>() }));
+        if !status.is_success() {
+            return Err(api_error("Ollama", status, &body));
+        }
+        let message = body
+            .get("message")
+            .ok_or_else(|| "Ollama response did not contain message".to_string())?;
+        return Ok(RawCompletion {
+            turn: parse_openai_message(message),
+            tools_available: tools.is_some(),
+        });
+    }
+
+    // Gemini's *native* generateContent API has no chat/completions shape and no
+    // tools here; the OpenAI-compatible Gemini endpoint goes through the branch
+    // below and does support them.
+    if is_gemini_endpoint(&settings.endpoint)
+        || settings.model.to_ascii_lowercase().contains("gemini")
+    {
+        let token = secret("ai").ok().unwrap_or_default();
+        let (content, _usage) =
+            call_gemini_generate_content(&client, &token, &settings.model, system, messages, false)
+                .await?;
+        return Ok(RawCompletion {
+            turn: tuffbox_core::ai_agent::AgentTurn {
+                content: Some(content.to_string()),
+                tool_calls: Vec::new(),
+            },
+            tools_available: false,
+        });
+    }
+
+    let token = secret("ai").ok();
+    let mut payload = json!({
+        "model": settings.model,
+        "temperature": 0.3,
+        "messages": api_messages,
+    });
+    attach_tools(&mut payload);
+    let response = send_ai_http_with_retry("AI provider", || {
+        let mut request = client
+            .post(openai_chat_url(&settings.endpoint))
+            .header(USER_AGENT, APP_USER_AGENT)
+            .json(&payload);
+        if let Some(token) = token.as_ref().filter(|t| !t.trim().is_empty()) {
+            request = request.bearer_auth(token);
+        }
+        request
+    })
+    .await?;
+    let status = response.status();
+    let body_text = response.text().await.map_err(|e| e.to_string())?;
+    let body: Value = serde_json::from_str(&body_text)
+        .unwrap_or_else(|_| json!({ "error": body_text.chars().take(500).collect::<String>() }));
+    if !status.is_success() {
+        return Err(api_error("AI provider", status, &body));
+    }
+    let message = body
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .ok_or_else(|| "AI response did not contain choices[0].message".to_string())?;
+
+    Ok(RawCompletion {
+        turn: parse_openai_message(message),
+        tools_available: tools.is_some(),
+    })
+}
+
 /// Like `call_ai_messages_with_schema`, also returning provider token usage when available.
 pub async fn call_ai_messages_with_usage(
     settings: &AiSettings,
@@ -4039,6 +4263,95 @@ mod tests {
 
     fn ok_body(content: &str) -> String {
         json!({"choices": [{"message": {"content": content}}]}).to_string()
+    }
+
+    fn tool_call_body() -> String {
+        json!({"choices": [{"message": {
+            "content": null,
+            "tool_calls": [{
+                "id": "c1",
+                "type": "function",
+                "function": { "name": "list_mods", "arguments": "{\"only_outdated\":true}" }
+            }]
+        }}]})
+        .to_string()
+    }
+
+    /// One function-tool payload, exactly as the loop would send it.
+    fn tools_payload() -> Value {
+        json!([{
+            "type": "function",
+            "function": {
+                "name": "list_mods",
+                "description": "list the mods",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        }])
+    }
+
+    fn run_raw_call(settings: &AiSettings, tools: Option<Value>) -> Result<RawCompletion, String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(call_ai_messages_raw(
+            settings,
+            "system",
+            &[json!({"role": "user", "content": "hi"})],
+            tools.as_ref(),
+        ))
+    }
+
+    #[test]
+    fn raw_completion_keeps_tool_calls_and_tolerates_null_content() {
+        let endpoint = spawn_mock_llm(vec![(200, tool_call_body())]);
+        let completion =
+            run_raw_call(&mock_llm_settings(endpoint), Some(tools_payload())).expect("call");
+
+        assert!(completion.tools_available);
+        assert!(completion.turn.content.is_none(), "null content is not prose");
+        assert_eq!(completion.turn.tool_calls.len(), 1);
+        let call = &completion.turn.tool_calls[0];
+        assert_eq!(call.id, "c1");
+        assert_eq!(call.name, "list_mods");
+        assert_eq!(call.arguments, "{\"only_outdated\":true}");
+    }
+
+    #[test]
+    fn raw_completion_retries_without_tools_when_they_are_rejected() {
+        // 400 first (the endpoint refuses `tools`), then a plain answer: the
+        // retry must succeed and say that tools are off.
+        let endpoint = spawn_mock_llm(vec![
+            (
+                400,
+                json!({"error": {"message": "tools are not supported by this model"}}).to_string(),
+            ),
+            (200, ok_body("plain answer")),
+        ]);
+        let completion =
+            run_raw_call(&mock_llm_settings(endpoint), Some(tools_payload())).expect("call");
+
+        assert!(!completion.tools_available, "tools were dropped for the retry");
+        assert!(completion.turn.tool_calls.is_empty());
+        assert_eq!(completion.turn.content.as_deref(), Some("plain answer"));
+    }
+
+    #[test]
+    fn raw_completion_reports_tools_unavailable_when_none_were_requested() {
+        let endpoint = spawn_mock_llm(vec![(200, ok_body("hi"))]);
+        let completion = run_raw_call(&mock_llm_settings(endpoint), None).expect("call");
+        assert!(!completion.tools_available);
+        assert_eq!(completion.turn.content.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn a_provider_error_that_is_not_about_tools_is_not_retried() {
+        // One scripted response only: a second request would fail the mock.
+        let endpoint = spawn_mock_llm(vec![(
+            500,
+            json!({"error": {"message": "upstream exploded"}}).to_string(),
+        )]);
+        assert!(run_raw_call(&mock_llm_settings(endpoint), Some(tools_payload())).is_err());
     }
 
     #[test]

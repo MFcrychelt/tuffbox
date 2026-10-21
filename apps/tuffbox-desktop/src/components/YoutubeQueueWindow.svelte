@@ -315,7 +315,7 @@
                   role="listitem"
                   bind:this={queueEls[i]}
                 >
-                  <img class="qw-qi-thumb" src={item.thumbnailUrl} alt="" loading="lazy" />
+                  <img class="qw-qi-thumb" src={item.thumbnailUrl} alt="" loading="lazy" crossorigin="anonymous" />
                   <div class="qw-qi-info">
                     <span class="qw-qi-title">{item.title}</span>
                     {#if i === queueIndex}
@@ -430,7 +430,7 @@
           {:else}
             {#each browseResults as v (v.video_id)}
               <div class="qw-res-item">
-                <img class="qw-res-thumb" src={thumbUrlOf(v)} alt="" loading="lazy" />
+                <img class="qw-res-thumb" src={thumbUrlOf(v)} alt="" loading="lazy" crossorigin="anonymous" />
                 <div class="qw-res-info">
                   <span class="qw-res-title">{v.title}</span>
                   {#if v.channel_name}

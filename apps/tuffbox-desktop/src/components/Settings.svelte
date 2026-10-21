@@ -1302,11 +1302,7 @@
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ uiScaleMode: "auto" as UiScaleMode })}
               >
-                {#if resolveUiScaleMode(launcher) === "auto"}
-                  {$t("settings.auto")} · {normalizeUiScalePercent(launcher.uiScalePercent)}%
-                {:else}
-                  {$t("settings.auto")}
-                {/if}
+                {$t("settings.auto")}
               </button>
               {#each UI_SCALE_STEPS as pct (pct)}
                 <button

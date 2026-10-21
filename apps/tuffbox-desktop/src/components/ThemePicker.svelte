@@ -69,6 +69,22 @@
   function badgeFor(id: ThemeId): string | null {
     return THEMES.find((t) => t.id === id)?.badge ?? null;
   }
+
+  /** Swatch labels sit on the swatch's OWN deep background, so the active
+      theme's text tokens are wrong there (dark grey on every dark swatch).
+      Pick near-white/near-black from the swatch background's WCAG luminance. */
+  function swatchInk(shade: string): string {
+    const n = parseInt(shade.replace("#", ""), 16);
+    const chan = (v: number) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    };
+    const lum =
+      0.2126 * chan((n >> 16) & 0xff) +
+      0.7152 * chan((n >> 8) & 0xff) +
+      0.0722 * chan(n & 0xff);
+    return lum > 0.35 ? "#0b0b0d" : "#f4f7f9";
+  }
 </script>
 
 <div class="theme-grid">
@@ -162,7 +178,7 @@
           <Check size={14} />
         </div>
       {/if}
-      <span class="label-row">
+      <span class="label-row" style={`color: ${swatchInk(theme.shades[0])}`}>
         <span class="label">{theme.label}</span>
         {#if badge}<span class="badge">{badge}</span>{/if}
       </span>
@@ -325,7 +341,7 @@
   .label {
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-secondary);
+    color: currentColor;
   }
 
   .badge {
@@ -333,8 +349,8 @@
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    color: var(--text-muted);
-    border: 1px solid var(--border-color);
+    color: currentColor;
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
     border-radius: 999px;
     padding: 1px 6px;
     white-space: nowrap;
@@ -345,11 +361,10 @@
   }
 
   .theme-swatch.active .label {
-    color: var(--text-primary);
+    font-weight: 700;
   }
 
   .theme-swatch.active .badge {
-    color: var(--accent-primary);
-    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    border-color: color-mix(in srgb, currentColor 75%, transparent);
   }
 </style>

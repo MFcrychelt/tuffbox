@@ -120,8 +120,10 @@
   }
   .health-badge:hover { border-color: var(--accent-primary); color: var(--text-primary); }
   .health-badge.healthy { color: var(--accent-primary); }
-  .health-badge.warnings { color: #fbbf24; border-color: rgba(251, 191, 36, 0.45); }
-  .health-badge.errors { color: #f87171; border-color: rgba(248, 113, 113, 0.5); }
+  /* Theme-aware tokens: the hardcoded amber/red-400 pair measured 2.35:1
+     (errors) on the light theme's `--bg-tertiary`. */
+  .health-badge.warnings { color: var(--accent-warning); border-color: color-mix(in srgb, var(--accent-warning) 45%, transparent); }
+  .health-badge.errors { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 50%, transparent); }
   .health-badge.unknown { cursor: default; }
   :global(.pulse) { opacity: 0.6; }
 </style>

@@ -1200,7 +1200,10 @@ html:not(.glass-os) .app-shell {
   border-top-color: var(--accent-primary);
 }
 
-/* Bare default buttons (Save, etc.) — same outline language, never solid fill. */
+/* Bare default buttons (Save, etc.) — same outline language, never solid fill.
+   Card-shaped buttons are excluded: they already own their own frame/state
+   chrome (`.pack-tile`/`.news-card`/`.carousel-slot` set border:none and got
+   overwritten here, painting a neon box around every tile instead of a CTA). */
 :is(
   [data-theme="solar"],
   [data-theme="fern"],
@@ -1208,7 +1211,7 @@ html:not(.glass-os) .app-shell {
   [data-theme="dusk"],
   [data-theme="glacier"]
 )
-  button:not(.ghost):not(.secondary):not(.rail-btn):not(.icon-btn):not(.mini-btn):not(.quiet-action):not(.view-toggle):not(.size-toggle):not(.linkish):not(.theme-swatch):not(.video-card):not(.quick-action):not(.action-btn):not(.tb-btn):not(.side-btn):not(.account-avatar-btn):not(.change-skin-btn):not(.pip-btn):not(.load-more-btn):not(.tab):not(.chip):not(.section-header):not(.retry-btn):not(.file-strip):not(.toggle-btn):not(.change-plan-toggle):not(:disabled) {
+  button:not(.ghost):not(.secondary):not(.rail-btn):not(.icon-btn):not(.mini-btn):not(.quiet-action):not(.view-toggle):not(.size-toggle):not(.linkish):not(.theme-swatch):not(.video-card):not(.quick-action):not(.action-btn):not(.tb-btn):not(.side-btn):not(.account-avatar-btn):not(.change-skin-btn):not(.pip-btn):not(.load-more-btn):not(.tab):not(.chip):not(.section-header):not(.retry-btn):not(.file-strip):not(.toggle-btn):not(.change-plan-toggle):not(.pack-tile):not(.news-card):not(.carousel-slot):not(:disabled) {
   background-image: none;
   background-color: color-mix(in srgb, var(--bg-elevated) 55%, transparent);
   color: var(--accent-primary);
@@ -1223,7 +1226,7 @@ html:not(.glass-os) .app-shell {
   [data-theme="dusk"],
   [data-theme="glacier"]
 )
-  button:not(.ghost):not(.secondary):not(.rail-btn):not(.icon-btn):not(.mini-btn):not(.quiet-action):not(.view-toggle):not(.size-toggle):not(.linkish):not(.theme-swatch):not(.video-card):not(.quick-action):not(.action-btn):not(.tb-btn):not(.side-btn):not(.account-avatar-btn):not(.change-skin-btn):not(.pip-btn):not(.load-more-btn):not(.tab):not(.chip):not(.section-header):not(.retry-btn):not(.file-strip):not(.toggle-btn):not(.change-plan-toggle):not(:disabled):hover {
+  button:not(.ghost):not(.secondary):not(.rail-btn):not(.icon-btn):not(.mini-btn):not(.quiet-action):not(.view-toggle):not(.size-toggle):not(.linkish):not(.theme-swatch):not(.video-card):not(.quick-action):not(.action-btn):not(.tb-btn):not(.side-btn):not(.account-avatar-btn):not(.change-skin-btn):not(.pip-btn):not(.load-more-btn):not(.tab):not(.chip):not(.section-header):not(.retry-btn):not(.file-strip):not(.toggle-btn):not(.change-plan-toggle):not(.pack-tile):not(.news-card):not(.carousel-slot):not(:disabled):hover {
   background-image: none;
   background-color: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-elevated));
   color: var(--accent-hover);

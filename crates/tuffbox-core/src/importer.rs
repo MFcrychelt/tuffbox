@@ -564,10 +564,8 @@ pub fn extract_curseforge_overrides(
         // the prefix check but would write outside the instance dir. Reject
         // traversal segments, absolute paths and Windows drive letters before
         // they ever reach the filesystem.
-        if is_unsafe_zip_rel_path(rel) {
-            return Err(ImportError::PathTraversal(name.clone()));
-        }
-        let dest = instance_dir.as_ref().join(rel);
+        let dest = crate::safepath::safe_join(instance_dir.as_ref(), rel)
+            .map_err(|_| ImportError::PathTraversal(name.clone()))?;
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -578,27 +576,17 @@ pub fn extract_curseforge_overrides(
     Ok(count)
 }
 
+
 /// True when a zip-relative path must never be joined under the destination
 /// root: `..` segments, absolute paths (POSIX or Windows), drive letters and
 /// UNC prefixes all allow escaping the instance directory (zip-slip).
+///
+/// Thin wrapper over [`crate::safepath`] — kept as a public name because the
+/// desktop crate's drop/import extractors call it directly; all of them now
+/// share one validator.
 pub fn is_unsafe_zip_rel_path(rel: &str) -> bool {
-    let normalized = rel.replace('\\', "/");
-    if normalized.starts_with('/') {
-        return true;
-    }
-    // Windows drive letter ("C:/...") and UNC ("//server/...").
-    let bytes = normalized.as_bytes();
-    if bytes.len() >= 2 && bytes[1] == b':' {
-        return true;
-    }
-    if normalized.starts_with("//") {
-        return true;
-    }
-    normalized
-        .split('/')
-        .any(|segment| segment == "..")
+    !crate::safepath::is_safe_rel_path(rel)
 }
-
 
 /// Read the overrides folder name from a CurseForge pack (`"overrides"` by default).
 pub fn curseforge_overrides_folder(pack_zip: impl AsRef<Path>) -> Result<String, ImportError> {
@@ -1393,16 +1381,19 @@ mod zip_slip_tests {
         );
     }
 
+    /// The archive-entry guard is the shared [`crate::safepath`] validator;
+    /// `extract_curseforge_overrides` is one of its consumers.
     #[test]
     fn curseforge_overrides_absolute_and_drive_paths_rejected() {
-        assert!(is_unsafe_zip_rel_path("/etc/passwd"));
-        assert!(is_unsafe_zip_rel_path("C:/Windows/system32/evil.dll"));
-        assert!(is_unsafe_zip_rel_path(r"..\..\evil.txt"));
-        assert!(is_unsafe_zip_rel_path("a/b/../../../evil.txt"));
-        assert!(is_unsafe_zip_rel_path("//server/share/evil"));
-        assert!(!is_unsafe_zip_rel_path("config/opts.toml"));
-        assert!(!is_unsafe_zip_rel_path("mods/some..name.jar"));
-        assert!(!is_unsafe_zip_rel_path("kubejs/..data/file.txt"));
+        use crate::safepath::is_safe_rel_path as safe;
+        assert!(!safe("/etc/passwd"));
+        assert!(!safe("C:/Windows/system32/evil.dll"));
+        assert!(!safe(r"..\..\evil.txt"));
+        assert!(!safe("a/b/../../../evil.txt"));
+        assert!(!safe("//server/share/evil"));
+        assert!(safe("config/opts.toml"));
+        assert!(safe("mods/some..name.jar"));
+        assert!(safe("kubejs/..data/file.txt"));
     }
 
     #[test]

@@ -4,6 +4,7 @@
   import { Rocket, RefreshCw, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen, FolderTree, UploadCloud } from "@lucide/svelte";
   import { api } from "../lib/api";
   import { projectPath, projectInfo, recentProjects } from "../lib/store";
+  import { t } from "../lib/i18n";
   import EmptyState from "./EmptyState.svelte";
   import ReleaseMetrics from "./ReleaseMetrics.svelte";
   import ChangelogEditor from "./ChangelogEditor.svelte";
@@ -370,7 +371,7 @@
   });
 </script>
 
-<div class="release-room bg-black/30 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] p-6">
+<div class="release-room bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-color)] shadow-[var(--shadow-md)] p-6">
   <div class="toolbar">
     <div class="title"><Rocket size={18} /> Release room</div>
     <button class="ghost" onclick={refresh} disabled={!$projectPath || loading}>
@@ -542,7 +543,7 @@
         {/if}
 
         <div class="release-actions">
-                  <button class="primary-emerald" onclick={createReleaseDraft} disabled={loading || !changelog.trim()}>
+                  <button class="cta-accent" onclick={createReleaseDraft} disabled={loading || !changelog.trim()}>
                     <Rocket size={16} /> Create release draft
                   </button>
                   <button onclick={createReleaseSnapshot} disabled={loading || errorCount > 0}>
@@ -553,13 +554,13 @@
 
       <ChangelogEditor bind:value={changelog} onRegenerate={refresh} onAi={generateGithubRelease} disabled={loading || githubLoading} />
     </div>
-    <div class="sticky bottom-3 z-20 mt-4 flex flex-col gap-4 rounded-2xl border border-emerald-500/20 bg-neutral-950/90 p-4 shadow-[0_0_25px_rgba(16,185,129,0.12)] backdrop-blur-2xl lg:flex-row lg:items-center lg:justify-between">
+    <div class="sticky bottom-3 z-20 mt-4 flex flex-col gap-4 rounded-2xl border border-[color-mix(in_srgb,var(--accent-primary)_20%,transparent)] bg-[var(--bg-secondary)] p-4 shadow-[var(--shadow-md)] lg:flex-row lg:items-center lg:justify-between">
       <div class="flex flex-wrap gap-3 text-xs text-[var(--text-secondary)]">
         {#each ["github", "modrinth", "curseforge"] as target}
           <label class="flex items-center gap-2"><input type="checkbox" checked={selectedTargets[target]} onchange={(event) => selectedTargets = { ...selectedTargets, [target]: event.currentTarget.checked }} /> {target === "github" ? "GitHub" : target === "modrinth" ? "Modrinth" : "CurseForge"}</label>
         {/each}
       </div>
-      <div class="flex flex-wrap items-center gap-2"><button type="button" class="rounded-xl border border-white/10 px-4 py-3 text-sm text-neutral-200 hover:bg-white/10" onclick={showPublishSummary}>Предпросмотр перед отправкой</button><button type="button" class="rounded-xl bg-emerald-600 px-8 py-3 font-bold text-white shadow-[0_0_20px_rgba(16,185,129,0.35)] hover:bg-emerald-500" onclick={publishAllSelected} disabled={!!publishingTarget || errorCount > 0}>Опубликовать релиз во всех каналах</button></div>
+      <div class="flex flex-wrap items-center gap-2"><button type="button" class="rounded-xl border border-[var(--border-color)] px-4 py-3 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-hover)]" onclick={showPublishSummary}>{$t("release.previewBeforeSend")}</button><button type="button" class="cta-accent px-8 py-3" onclick={publishAllSelected} disabled={!!publishingTarget || errorCount > 0}>{$t("release.publishAllChannels")}</button></div>
     </div>
   {/if}
 </div>
@@ -570,10 +571,10 @@
   .toolbar { justify-content: space-between; margin-bottom: 16px; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .notice { gap: 10px; padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
+  .notice.error { color: var(--accent-danger); background: color-mix(in srgb, var(--accent-danger) 8%, transparent); border-color: color-mix(in srgb, var(--accent-danger) 28%, transparent); }
   .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .layout { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 16px; }
-    .panel { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--border-radius-lg); backdrop-filter: blur(20px); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35); }
+    .panel { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); box-shadow: var(--shadow-md); }
     .panel { padding: 18px; }
     .release-panel { display: grid; gap: 18px; align-content: start; }
     label { display: grid; gap: 8px; color: var(--text-secondary); font-weight: 700; }
@@ -581,36 +582,39 @@
     .scorecards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .scorecards strong { font-size: 24px; }
     .scorecards span{ color: var(--text-muted); font-size: 12px; }
-    .error-card { border-color: rgba(239, 68, 68, 0.35) !important; color: #fecaca; }
-    .warning-card { border-color: rgba(245, 158, 11, 0.35) !important; color: #fde68a; }
+    .error-card { border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent) !important; color: var(--accent-danger); }
+    .warning-card { border-color: color-mix(in srgb, var(--accent-warning) 35%, transparent) !important; color: var(--accent-warning); }
     .release-checklist, .artifact-list, .publish-targets, .publish-config { display: grid; gap: 8px; }
-    .release-checklist-details { border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--border-radius-md); background: rgba(255, 255, 255, 0.03); }
+    .release-checklist-details { border: 1px solid var(--border-color); border-radius: var(--border-radius-md); background: var(--bg-tertiary); }
     .release-checklist-details summary { padding: 10px 12px; cursor: pointer; color: var(--text-secondary); font-size: 14px; font-weight: 700; list-style: none; }
     .release-checklist-details summary::-webkit-details-marker { display: none; }
     .release-checklist-details .release-checklist { padding: 0 12px 12px; }
     .artifact-list h3,
  .publish-targets h3{ margin: 0; color: var(--text-secondary); font-size: 14px; }
     .config-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
-    .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--border-radius-md); text-transform: none; letter-spacing: 0; }
+    .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); text-transform: none; letter-spacing: 0; }
     .release-checklist label.done { border-color: rgba(16, 185, 129, 0.35); }
     .release-checklist input { width: auto; }
-    .ready { padding: 9px 10px; border-radius: var(--border-radius-md); color: var(--text-muted); background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
-    .ready.ok { color: #34d399; border-color: rgba(16, 185, 129, 0.4); }
-    .publish-target { display: grid; gap: 8px; padding: 10px; border-radius: var(--border-radius-md); background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .ready { padding: 9px 10px; border-radius: var(--border-radius-md); color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+    .ready.ok { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
+    .publish-target { display: grid; gap: 8px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .publish-target > div:first-child { display: grid; gap: 8px; }
   .target-actions, .export-btns { display: flex; gap: 8px; flex-wrap: wrap; }
   .quick-exports { display: grid; gap: 8px; }
   .quick-exports h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
   .publish-target strong { color: var(--text-primary); }
   .publish-target span { color: var(--text-muted); font-size: 12px; }
-  .pub-err { color: #fecaca; font-size: 12px; word-break: break-word; }
+  .pub-err { color: var(--accent-danger); font-size: 12px; word-break: break-word; }
   .pub-ok { color: var(--accent-primary); font-size: 12px; word-break: break-all; }
   .linkish { background: none; border: none; color: var(--accent-secondary); padding: 0; font-size: 12px; cursor: pointer; text-decoration: underline; }
   .artifact-row, .muted-box { display: grid; gap: 8px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .artifact-row strong { color: var(--text-primary); text-transform: uppercase; font-size: 12px; }
   .artifact-row span, .artifact-row small, .muted-box { color: var(--text-muted); font-size: 12px; word-break: break-all; }
   .mini { padding: 5px 8px; font-size: 12px; justify-self: start; }
-  .primary-emerald {
+  /* Publish CTA: theme accent + its ink token. Hardcoded emerald measured
+     3.65:1 for white text (docs/problems.md §16) and ignored the 16 themes
+     that need dark ink on a bright accent. */
+  .cta-accent {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -618,15 +622,15 @@
     padding: 9px 18px;
     border: none;
     border-radius: 999px;
-    background: #059669;
-    color: #fff;
+    background: var(--accent-primary);
+    color: var(--on-accent);
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;
     transition: background var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
   }
-  .primary-emerald:hover:not(:disabled) { background: #10b981; box-shadow: 0 0 20px rgba(16, 185, 129, 0.3); }
-  .primary-emerald:disabled { opacity: 0.5; cursor: default; }
+  .cta-accent:hover:not(:disabled) { background: var(--accent-hover, var(--accent-primary)); box-shadow: 0 0 20px color-mix(in srgb, var(--accent-primary) 30%, transparent); }
+  .cta-accent:disabled { opacity: 0.5; cursor: default; }
   .release-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .issues { display: grid; gap: 8px; }
   .issue { display: grid; gap: 8px; padding: 12px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
@@ -642,7 +646,7 @@
   .issue span { color: var(--text-muted); }
   code { color: var(--text-secondary); font-family: var(--font-mono, ui-monospace, monospace); }
   .changelog-panel { overflow: hidden; display: flex; flex-direction: column; min-height: 680px; }
-    .changelog-header { justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 0; }
+    .changelog-header { justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color); margin-bottom: 0; }
   /* (removed dead .empty rule — no element uses it) */
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }

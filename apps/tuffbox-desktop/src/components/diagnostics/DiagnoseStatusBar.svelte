@@ -18,6 +18,7 @@
     cascadeDetail = null,
     sourceLabel = "Game log",
     fixAllCount = 0,
+    fixAllActionCount = 0,
     fixAllBusy = false,
     onScrollToWarnings,
     onFixAll,
@@ -33,6 +34,7 @@
     cascadeDetail?: string | null;
     sourceLabel?: string;
     fixAllCount?: number;
+    fixAllActionCount?: number;
     fixAllBusy?: boolean;
     onScrollToWarnings?: () => void;
     onFixAll?: () => void;
@@ -131,7 +133,7 @@
       class="fix-all-btn"
       disabled={fixAllBusy}
       onclick={() => onFixAll?.()}
-      title="Review and apply all automatic fixes at once"
+      title={`Review and apply automatic fixes: ${fixAllCount} ${fixAllCount === 1 ? "problem" : "problems"} · ${fixAllActionCount} automatic ${fixAllActionCount === 1 ? "fix" : "fixes"}`}
     >
       <Wrench size={14} />
       {fixAllBusy ? "Applying…" : `Fix all (${fixAllCount})`}
@@ -208,7 +210,7 @@
     border-radius: var(--border-radius-sm);
     border: none;
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent);
     font-size: 12px;
     font-weight: 700;
     cursor: pointer;

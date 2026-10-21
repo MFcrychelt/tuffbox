@@ -1,0 +1,269 @@
+//! JVM launch-argument hardening: the pieces of the `java` command line that a
+//! *profile* (and therefore an imported manifest or a `tuffbox://install`
+//! deep link) could otherwise use to escape the launcher's own setup.
+//!
+//! Two concerns live here:
+//! - [`sanitize_jvm_args`] — a user/profile supplied JVM flag may not load
+//!   agents, replace the classpath/bootclasspath, redirect log4j, or pull in an
+//!   `@argfile`. See `docs/18-millida-launcher-reference.md` §3.2.
+//! - [`log4shell_args`] — the Log4Shell (CVE-2021-44228) mitigation that has to
+//!   be on *every* launch: the `formatMsgNoLookups` property, plus a hardened
+//!   log4j2 config for the Minecraft versions whose bundled log4j2 predates
+//!   that property.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// A profile-supplied JVM argument that was dropped, with the reason, so the
+/// launcher can say *why* instead of silently ignoring the user's flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RejectedJvmArg {
+    pub arg: String,
+    pub reason: &'static str,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SanitizedJvmArgs {
+    pub accepted: Vec<String>,
+    pub rejected: Vec<RejectedJvmArg>,
+}
+
+/// Flags that let an argument influence code loading, the classpath, or the
+/// logging backend — i.e. everything a malicious modpack manifest would want.
+/// Matched as case-sensitive prefixes (the JVM itself is case-sensitive).
+const BLOCKED_PREFIXES: &[(&str, &str)] = &[
+    ("-javaagent", "loads a java agent from an arbitrary jar"),
+    ("-agentpath", "loads a native agent"),
+    ("-agentlib", "loads a native agent (e.g. a JDWP debug port)"),
+    ("-Xrunjdwp", "opens a JDWP debug port"),
+    ("-Xdebug", "enables the JDWP debug interface"),
+    ("-Xbootclasspath", "replaces the core JDK classes"),
+    ("-classpath", "overrides the launcher-built classpath"),
+    ("-cp", "overrides the launcher-built classpath"),
+    ("--class-path", "overrides the launcher-built classpath"),
+    ("-jar", "runs a jar instead of the game main class"),
+    ("-Djava.class.path", "overrides the launcher-built classpath"),
+    ("-Dsun.boot.class.path", "replaces the boot classpath"),
+    ("-Djava.system.class.loader", "installs an arbitrary system class loader"),
+    ("-Dlog4j.configuration", "redirects log4j to an attacker-controlled config"),
+    ("-Dlog4j2.configuration", "redirects log4j2 to an attacker-controlled config"),
+    ("-Dlog4j2.formatMsgNoLookups", "would disable the Log4Shell mitigation"),
+];
+
+/// Split a profile's JVM flags into the ones that are safe to append and the
+/// ones that are dropped.
+///
+/// This is deliberately a *filter*, not a whitelist: the launcher's own
+/// generated flags (GC profile, `--add-opens`, `-Djava.library.path`) are added
+/// elsewhere and never pass through here, so an unrecognised-but-harmless user
+/// flag (`-XX:+UseG1GC`, `-Dfile.encoding=UTF-8`) keeps working.
+pub fn sanitize_jvm_args(args: &[String]) -> SanitizedJvmArgs {
+    let mut out = SanitizedJvmArgs::default();
+    for raw in args {
+        let arg = raw.trim();
+        if arg.is_empty() {
+            continue;
+        }
+        if arg.chars().any(char::is_control) {
+            out.rejected.push(RejectedJvmArg {
+                arg: raw.clone(),
+                reason: "contains a control character",
+            });
+            continue;
+        }
+        // A JVM argument is an option. A bare token would land in front of the
+        // `-cp`/main-class pair as a stray operand, so refuse it outright.
+        if !arg.starts_with('-') {
+            out.rejected.push(RejectedJvmArg {
+                arg: raw.clone(),
+                reason: "not a JVM option",
+            });
+            continue;
+        }
+        match BLOCKED_PREFIXES
+            .iter()
+            .find(|(prefix, _)| arg.starts_with(prefix))
+        {
+            Some((_, reason)) => out.rejected.push(RejectedJvmArg {
+                arg: raw.clone(),
+                reason,
+            }),
+            None => out.accepted.push(arg.to_string()),
+        }
+    }
+    out
+}
+
+/// Property that neutralises `${jndi:...}` lookups inside log messages.
+/// Honoured by log4j2 ≥ 2.10 (shipped with Minecraft 1.17+).
+pub const NO_LOOKUPS_PROP: &str = "-Dlog4j2.formatMsgNoLookups=true";
+
+/// File name of the hardened log4j2 config written into the launcher dir.
+pub const HARDENED_LOG4J2_FILE: &str = "log4j2-hardened.xml";
+
+/// Hardened log4j2 configuration for Minecraft versions whose bundled log4j2 is
+/// older than 2.10 and therefore ignores [`NO_LOOKUPS_PROP`].
+///
+/// `strict="true"` disables `${...}` substitution inside the config itself, and
+/// `%msg{nolookups}` stops log4j from resolving `${jndi:...}` inside the *game*
+/// messages — the Log4Shell sink. On a log4j2 too old to know the option this
+/// degrades to a warning in the log, never a failed launch.
+const HARDENED_LOG4J2_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!-- Generated by TuffBox. Hardened against Log4Shell (CVE-2021-44228) for
+     Minecraft versions shipping log4j2 < 2.10, where the
+     log4j2.formatMsgNoLookups property does not exist yet. -->
+<Configuration status="WARN" strict="true">
+  <Appenders>
+    <Console name="SysOut" target="SYSTEM_OUT">
+      <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level]: %msg{nolookups}%n"/>
+    </Console>
+    <File name="File" fileName="logs/latest.log" append="false">
+      <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level]: %msg{nolookups}%n"/>
+    </File>
+  </Appenders>
+  <Loggers>
+    <Root level="info">
+      <AppenderRef ref="SysOut"/>
+      <AppenderRef ref="File"/>
+    </Root>
+  </Loggers>
+</Configuration>
+"#;
+
+/// True when the version's bundled log4j2 predates the `formatMsgNoLookups`
+/// property, so the hardened config is the only mitigation available.
+///
+/// Minecraft 1.17 upgraded to log4j2 2.14.1 (vulnerable but flag-aware); every
+/// earlier release ships 2.8.1 or older.
+///
+/// `ponytail:` the complete fix for those versions is a classpath override to
+/// log4j 2.17.1 (what Prism/MultiMC ended up shipping); this config is the
+/// zero-download mitigation. Upgrade path: swap the log4j-core/log4j-api
+/// library entries in `mc_install` when the version predates 1.17.
+pub fn needs_log4j_config(mc_version: &str) -> bool {
+    !version_at_least(mc_version, 1, 17)
+}
+
+/// The Log4Shell mitigation arguments for a launch. `log4j_config` is the
+/// already-materialised hardened config path (see [`ensure_log4j_config`]) and
+/// is only used for versions that need it.
+pub fn log4shell_args(mc_version: &str, log4j_config: Option<&Path>) -> Vec<String> {
+    let mut args = vec![NO_LOOKUPS_PROP.to_string()];
+    if needs_log4j_config(mc_version) {
+        if let Some(path) = log4j_config {
+            args.push(format!("-Dlog4j.configurationFile={}", path.display()));
+        }
+    }
+    args
+}
+
+/// Write the hardened log4j2 config into `launcher_dir` (idempotent) and return
+/// its path.
+pub fn ensure_log4j_config(launcher_dir: &Path) -> std::io::Result<PathBuf> {
+    let path = launcher_dir.join(HARDENED_LOG4J2_FILE);
+    let up_to_date = fs::read_to_string(&path)
+        .map(|existing| existing == HARDENED_LOG4J2_XML)
+        .unwrap_or(false);
+    if !up_to_date {
+        fs::create_dir_all(launcher_dir)?;
+        crate::fs_util::atomic_write(&path, HARDENED_LOG4J2_XML)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    }
+    Ok(path)
+}
+
+/// `version >= major.minor`, tolerant of snapshot/pre-release suffixes
+/// (`1.16.5-forge-36.2.0` → `1.16.5`).
+fn version_at_least(version: &str, major: u32, minor: u32) -> bool {
+    let parts: Vec<u32> = version
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    match parts.as_slice() {
+        [maj, min, ..] => *maj > major || (*maj == major && *min >= minor),
+        [maj] => *maj > major,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owned(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn keeps_ordinary_flags() {
+        let out = sanitize_jvm_args(&owned(&[
+            "-XX:+UseG1GC",
+            "-XX:MaxGCPauseMillis=37",
+            "-Dfile.encoding=UTF-8",
+            "-Dfabric.gameJarPath=foo.jar",
+        ]));
+        assert_eq!(out.accepted.len(), 4);
+        assert!(out.rejected.is_empty());
+    }
+
+    #[test]
+    fn drops_code_loading_flags() {
+        let out = sanitize_jvm_args(&owned(&[
+            "-javaagent:evil.jar",
+            "-agentlib:jdwp=transport=dt_socket,server=y",
+            "-Xbootclasspath/a:evil.jar",
+            "-cp",
+            "evil.jar",
+            "-Dlog4j.configurationFile=/tmp/evil.xml",
+            "-Djava.system.class.loader=Evil",
+            "@args.txt",
+            "-Dlog4j2.formatMsgNoLookups=false",
+        ]));
+        assert!(out.accepted.is_empty(), "accepted: {:?}", out.accepted);
+        assert_eq!(out.rejected.len(), 9);
+    }
+
+    #[test]
+    fn drops_blank_and_control_chars() {
+        let out = sanitize_jvm_args(&owned(&["", "   ", "-Dfoo=bar\u{7}"]));
+        assert!(out.accepted.is_empty());
+        assert_eq!(out.rejected.len(), 1);
+    }
+
+    #[test]
+    fn log4shell_flag_is_always_first() {
+        let modern = log4shell_args("1.21.1", None);
+        assert_eq!(modern, vec![NO_LOOKUPS_PROP.to_string()]);
+
+        let legacy = log4shell_args("1.12.2", Some(Path::new("/launcher/log4j2-hardened.xml")));
+        assert_eq!(legacy[0], NO_LOOKUPS_PROP);
+        assert!(legacy[1].starts_with("-Dlog4j.configurationFile="));
+
+        // Legacy version but no config materialised → still flag-only, no
+        // dangling `-Dlog4j.configurationFile=` with an empty value.
+        assert_eq!(log4shell_args("1.7.10", None).len(), 1);
+    }
+
+    #[test]
+    fn version_gate_matches_release_boundary() {
+        assert!(needs_log4j_config("1.16.5"));
+        assert!(needs_log4j_config("1.12.2-forge-14.23.5.2860"));
+        assert!(needs_log4j_config("1.7.10"));
+        assert!(!needs_log4j_config("1.17"));
+        assert!(!needs_log4j_config("1.20.1"));
+    }
+
+    #[test]
+    fn hardened_config_is_written_once_and_is_stable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ensure_log4j_config(dir.path()).unwrap();
+        assert!(path.is_file());
+        let first = fs::read_to_string(&path).unwrap();
+        assert!(first.contains("%msg{nolookups}"));
+        // Second call must not rewrite (or corrupt) an existing file.
+        let again = ensure_log4j_config(dir.path()).unwrap();
+        assert_eq!(again, path);
+        assert_eq!(fs::read_to_string(&again).unwrap(), first);
+    }
+}

@@ -758,7 +758,10 @@
     flex-direction: column;
     gap: 10px;
     padding: 0 2px 32px;
+    /* max-width alone left the column glued to the pane's left edge
+       (measured L=104 vs 928px of empty space on the right). */
     max-width: 1400px;
+    margin-inline: auto;
   }
 
   .page-head {

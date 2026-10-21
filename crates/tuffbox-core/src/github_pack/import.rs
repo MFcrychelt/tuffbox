@@ -127,19 +127,13 @@ fn find_sidecar_manifest(root: &Path) -> Option<std::path::PathBuf> {
         })
 }
 
-/// Reject absolute paths, `..`, and Windows prefixes. Returns a safe relative path.
+/// Reject absolute paths, `..`, and Windows prefixes. Returns a safe relative
+/// path. Thin wrapper over [`crate::safepath`], the single validator shared with
+/// the CurseForge/packwiz importers — the pack transport must not accept a path
+/// the archive extractors would reject.
 pub fn safe_relative_path(name: &str) -> Result<String, ImportError> {
-    let normalized = name.replace('\\', "/");
-    if normalized.starts_with('/')
-        || normalized.contains(':')
-        || normalized.split('/').any(|seg| seg == ".." || seg == ".")
-    {
-        return Err(ImportError::UnsafePath(name.to_string()));
-    }
-    if normalized.is_empty() {
-        return Err(ImportError::UnsafePath(name.to_string()));
-    }
-    Ok(normalized)
+    crate::safepath::validate_rel_path(name)
+        .map_err(|_| ImportError::UnsafePath(name.to_string()))
 }
 
 const MAX_EXTRACTED_BYTES: u64 = 512 * 1024 * 1024;

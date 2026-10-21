@@ -117,20 +117,21 @@ export function formatBytes(bytes?: number | null): string {
   return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[i]}`;
 }
 
-/** Locale day stamp ("Mar 4, 2026") for worlds/screenshots; "never" when absent. */
-export function formatDayStamp(ms?: number | null): string {
+/** Locale day stamp ("Mar 4, 2026") for worlds/screenshots; "never" when absent.
+ *  Pass the app's `localeTag` — `undefined` falls back to the system locale. */
+export function formatDayStamp(ms?: number | null, locale?: string): string {
   if (ms == null || !Number.isFinite(ms) || ms <= 0) return "never";
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return "never";
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return d.toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
 }
 
 /** Locale timestamp for backup entries; "—" when missing/unparseable. */
-export function formatStamp(iso?: string | null): string {
+export function formatStamp(iso?: string | null, locale?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString(undefined, {
+  return d.toLocaleString(locale, {
     year: "numeric",
     month: "short",
     day: "numeric",

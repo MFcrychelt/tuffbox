@@ -21,6 +21,8 @@
     type PruneResult,
   } from "../lib/api";
   import { historyFocusSnapshotId, ideStageRequest, projectPath } from "../lib/store";
+  import { get } from "svelte/store";
+  import { localeTag, t } from "../lib/i18n";
 
   let snapshots = $state<Snapshot[]>([]);
   let loading = $state(false);
@@ -178,7 +180,7 @@
 
   function formatDate(iso: string) {
     try {
-      return new Date(iso).toLocaleString();
+      return new Date(iso).toLocaleString(get(localeTag));
     } catch {
       return iso;
     }
@@ -193,7 +195,7 @@
       if (diffMs < 60 * min) return `${Math.floor(diffMs / min)}m ago`;
       if (diffMs < 24 * 60 * min) return `${Math.floor(diffMs / (60 * min))}h ago`;
       if (diffMs < 7 * 24 * 60 * min) return `${Math.floor(diffMs / (24 * 60 * min))}d ago`;
-      return new Date(iso).toLocaleDateString();
+      return new Date(iso).toLocaleDateString(get(localeTag));
     } catch {
       return iso;
     }
@@ -310,7 +312,7 @@
     const diffDays = Math.round((today.getTime() - start.getTime()) / 86_400_000);
     if (diffDays === 0) return "Today";
     if (diffDays === 1) return "Yesterday";
-    return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    return d.toLocaleDateString(get(localeTag), { weekday: "short", month: "short", day: "numeric" });
   }
   // Group filtered snapshots by local calendar day, newest day first.
   const timeline = $derived((() => {
@@ -698,7 +700,7 @@
 
 <svelte:window onkeydown={focusSearch} />
 
-<div class="snapshots flex flex-col gap-3.5 h-full min-h-0 w-full max-w-[1440px] mx-auto box-border bg-black/30 backdrop-blur-2xl rounded-2xl border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] p-6">
+<div class="snapshots flex flex-col gap-3.5 h-full min-h-0 w-full max-w-[1440px] mx-auto box-border bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-color)] shadow-[var(--shadow-md)] p-6">
   <!-- ── Toolbar ─────────────────────────────────────────────── -->
   <div class="flex justify-between items-center gap-4 flex-wrap shrink-0">
     <div class="grid gap-2">
@@ -713,7 +715,7 @@
         <History size={17} class="quick-save-icon" />
         <input
           bind:value={newName}
-          placeholder="Название точки сохранения..."
+          placeholder={$t("snapshots.namePlaceholder")}
           onkeydown={(e) => e.key === "Enter" && !loading && ($projectPath ? create() : null)}
         />
         <button class="quick-save-action" onclick={create} disabled={!$projectPath || loading} title="Create a safety snapshot of the current state">
@@ -741,28 +743,28 @@
       <button type="button" class="filter-card {filterKind === "all" ? "active" : ""}" onclick={() => (filterKind = "all")}>
         <Database size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.all }</span>
-        <span>Все</span>
+        <span>{$t("snapshots.filterAll")}</span>
       </button>
       <button type="button" class="filter-card {filterKind === "auto" ? "active" : ""}" onclick={() => (filterKind = "auto")}>
         <Zap size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.auto }</span>
-        <span>Автоматические</span>
+        <span>{$t("snapshots.filterAuto")}</span>
       </button>
       <button type="button" class="filter-card {filterKind === "manual" ? "active" : ""}" onclick={() => (filterKind = "manual")}>
         <Hand size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.manual }</span>
-        <span>Ручные</span>
+        <span>{$t("snapshots.filterManual")}</span>
       </button>
       <button type="button" class="filter-card {filterKind === "crash" ? "active" : ""}" onclick={() => (filterKind = "crash")}>
         <ShieldAlert size={16} />
         <span class="text-[19px] font-extrabold leading-none">{ stats.crash }</span>
-        <span>Сбои</span>
+        <span>{$t("snapshots.filterCrash")}</span>
       </button>
     </div>
 
     <!-- ── Search ──────────────────────────────────────────────── -->
     <div class="flex gap-3 items-center shrink-0">
-      <div class="flex-1 min-w-[240px] flex items-center gap-2 bg-black/40 border border-white/10 rounded-[var(--border-radius-md)] px-2.5 text-[var(--text-muted)] focus-within:border-emerald-500/50 focus-within:ring-1 focus-within:ring-emerald-500/30">
+      <div class="flex-1 min-w-[240px] flex items-center gap-2 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-md)] px-2.5 text-[var(--text-muted)] focus-within:border-[color-mix(in_srgb,var(--accent-primary)_50%,transparent)] focus-within:ring-1 focus-within:ring-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)]">
         <Search size={15} />
         <input bind:this={searchInput} class="flex-1 border-0 bg-transparent text-[var(--text-primary)] py-2.5 outline-none min-w-0 text-[13px]" bind:value={search} placeholder="Search snapshots, actions, tags…" aria-label="Search snapshots" />
         <kbd>Ctrl F</kbd>
@@ -859,7 +861,7 @@
         {/each}
       </aside>
 
-      <section class="p-[18px] overflow-auto min-h-0 flex flex-col gap-3.5 bg-white/[0.02] border border-white/[0.08] backdrop-blur-2xl rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable] shadow-xl">
+      <section class="p-[18px] overflow-auto min-h-0 flex flex-col gap-3.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-[var(--border-radius-lg)] [scrollbar-gutter:stable] shadow-[var(--shadow-md)]">
         {#if detailLoading}
           <div class="flex flex-col gap-3">
             <span class="skeleton" style="width: 44%; height: 26px"></span>
@@ -918,7 +920,7 @@
           <p class="text-[14px] text-[var(--text-secondary)] m-0 leading-relaxed">{ s.reason }</p>
 
           {#if detail.manifestOnly}
-            <div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] border text-[13px] leading-snug inline-flex items-center gap-2 text-[#fcd34d] bg-[rgba(245,158,11,0.08)] border-[rgba(245,158,11,0.28)]">
+            <div class="px-3.5 py-3 rounded-[var(--border-radius-lg)] border text-[13px] leading-snug inline-flex items-center gap-2 text-[var(--accent-warning)] bg-[color-mix(in_srgb,var(--accent-warning)_8%,transparent)] border-[color-mix(in_srgb,var(--accent-warning)_28%,transparent)]">
               <AlertTriangle size={15} />
               <span><strong>Manifest-only checkpoint.</strong> File copies were skipped because the project uses deduplication and hardlinks. Rollback restores the manifest, but not mod jars from this snapshot.</span>
             </div>
@@ -1304,11 +1306,11 @@
     background: linear-gradient(135deg, rgba(16,185,129,.14), rgba(16,185,129,.035));
     box-shadow: 0 0 22px rgba(16,185,129,.08), inset 0 1px 0 rgba(255,255,255,.08);
   }
-  .quick-save-icon { color: #34d399; flex: 0 0 auto; }
+  .quick-save-icon { color: var(--accent-primary); flex: 0 0 auto; }
   .quick-save input { min-width: 190px; width: 220px; padding: 8px 4px; border: 0; outline: 0; background: transparent; color: var(--text-primary); }
   .quick-save input::placeholder { color: color-mix(in srgb, var(--text-muted) 85%, transparent); }
-  :global(.snapshots) .quick-save-action { min-height: 34px; padding: 7px 12px; border: 0; border-radius: var(--border-radius-sm); background: #10b981; color: #04130e; font-weight: 800; }
-  :global(.snapshots) .quick-save-action:hover:not(:disabled) { background: #34d399; box-shadow: 0 0 14px rgba(52,211,153,.3); }
+  :global(.snapshots) .quick-save-action { min-height: 34px; padding: 7px 12px; border: 0; border-radius: var(--border-radius-sm); background: var(--accent-primary); color: var(--on-accent, #fff); font-weight: 800; }
+  :global(.snapshots) .quick-save-action:hover:not(:disabled) { background: var(--accent-hover); }
   .quick-save-action:disabled { opacity: .5; }
   .search-kbd, kbd { padding: 2px 6px; border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-secondary); font: 12px ui-monospace, SFMono-Regular, monospace; white-space: nowrap; }
 
@@ -1437,10 +1439,9 @@
     align-items: center;
     gap: 10px;
     padding: 10px 14px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
-    background: rgba(255, 255, 255, 0.03);
-    backdrop-filter: blur(12px);
+    background: var(--bg-tertiary);
     color: var(--text-secondary);
     font-size: 13px;
     font-weight: 600;
@@ -1448,12 +1449,12 @@
     transition: all var(--motion-fast) ease;
   }
   .filter-card:hover:not(.active) {
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--bg-hover);
     color: var(--text-primary);
-    border-color: rgba(16, 185, 129, 0.35);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .filter-card.active {
-    color: #34d399;
+    color: var(--accent-primary);
     background: rgba(16, 185, 129, 0.12);
     border-color: rgba(16, 185, 129, 0.45);
     box-shadow: 0 0 12px rgba(16, 185, 129, 0.3);
@@ -1468,12 +1469,12 @@
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   }
   .ghost.danger {
-    color: #fca5a5;
-    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: var(--accent-danger);
+    border: 1px solid color-mix(in srgb, var(--accent-danger) 35%, transparent);
   }
   .ghost.danger:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.12);
-    color: #fecaca;
+    background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+    color: var(--accent-danger);
   }
 
   .kind-tag {
@@ -1486,9 +1487,9 @@
     border: 1px solid var(--border-color);
     color: var(--text-muted);
   }
-  .kind-tag.auto { color: #93c5fd; border-color: rgba(147, 197, 253, 0.4); }
+  .kind-tag.auto { color: var(--accent-secondary); border-color: color-mix(in srgb, var(--accent-secondary) 40%, transparent); }
   .kind-tag.manual { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
-  .kind-tag.crash { color: #fbbf24; border-color: rgba(251, 191, 36, 0.4); }
+  .kind-tag.crash { color: var(--accent-warning); border-color: color-mix(in srgb, var(--accent-warning) 40%, transparent); }
 
   .actor-pill {
     display: inline-block;
@@ -1504,11 +1505,11 @@
     letter-spacing: 0.04em;
     padding: 2px 9px;
     border-radius: 999px;
-    border: 1px solid rgba(147, 197, 253, 0.4);
-    color: #93c5fd;
-    background: rgba(147, 197, 253, 0.07);
+    border: 1px solid color-mix(in srgb, var(--accent-secondary) 40%, transparent);
+    color: var(--accent-secondary);
+    background: color-mix(in srgb, var(--accent-secondary) 7%, transparent);
   }
-  .actor-pill.plan { color: #c4b5fd; border-color: rgba(196, 181, 253, 0.35); background: rgba(196, 181, 253, 0.07); }
+  .actor-pill.plan { color: var(--accent-secondary); border-color: color-mix(in srgb, var(--accent-secondary) 35%, transparent); background: color-mix(in srgb, var(--accent-secondary) 7%, transparent); }
 
   .tag {
     display: inline-block;
@@ -1528,8 +1529,8 @@
 
   .diff-label { color: var(--text-muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 6px; border-radius: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
   .diff-label.added { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
-  .diff-label.removed { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
-  .diff-label.modified { color: #93c5fd; border-color: rgba(147, 197, 253, 0.35); }
+  .diff-label.removed { color: var(--accent-danger); border-color: color-mix(in srgb, var(--accent-danger) 35%, transparent); }
+  .diff-label.modified { color: var(--accent-secondary); border-color: color-mix(in srgb, var(--accent-secondary) 35%, transparent); }
 
   .collapsible { overflow: hidden; }
   .collapse-toggle { width: 100%; justify-content: flex-start; background: transparent; border: 0; color: var(--text-secondary); font-weight: 600; padding: 12px 14px; transform: none; }

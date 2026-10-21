@@ -341,7 +341,7 @@
           {/if}
                 {#if title}
           {#key title}
-            <h1 class="poster-title" in:fade={{ duration: artFadeMs }}>{title}</h1>
+            <h2 class="poster-title" in:fade={{ duration: artFadeMs }}>{title}</h2>
           {/key}
         {/if}
         <div class="poster-title-actions">

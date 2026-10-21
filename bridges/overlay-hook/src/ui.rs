@@ -215,7 +215,6 @@ impl UiState {
 
         match self.tab {
             Tab::Youtube => {
-            Tab::Youtube => {
                 self.draw_youtube(content_x, content_y, content_w, content_h, mouse, click, scroll_delta)
             }
             Tab::Friends => {
@@ -442,10 +441,10 @@ impl UiState {
 
     // ── YouTube ───────────────────────────────────────────────────────
 
-    fn filtered_feed(&self) -> Vec<&ipc::FeedItem> {
+    fn filtered_feed(&self) -> Vec<ipc::FeedItem> {
         let q = self.yt_query.trim().to_lowercase();
         if q.is_empty() {
-            return self.feed.iter().collect();
+            return self.feed.clone();
         }
         self.feed
             .iter()
@@ -454,6 +453,7 @@ impl UiState {
                     || it.channel.to_lowercase().contains(&q)
                     || it.id.to_lowercase().contains(&q)
             })
+            .cloned()
             .collect()
     }
 
@@ -1225,12 +1225,11 @@ impl UiState {
             }
             if click && stop {
                 mpv::stop();
-                self.selected = None;
+                self.selected_video = None;
             }
         }
         if let Some(act) = action {
             self.apply_friend_action(act);
-        }
         }
     }
 

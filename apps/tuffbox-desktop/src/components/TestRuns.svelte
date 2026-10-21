@@ -8,6 +8,8 @@
     Terminal, Shield, Crosshair,
   } from "@lucide/svelte";
   import { onDestroy, onMount, tick } from "svelte";
+  import { get } from "svelte/store";
+  import { localeTag } from "../lib/i18n";
   import {
     ideStageRequest,
     isProjectLaunching,
@@ -325,7 +327,7 @@
   function formatRunTime(value: string) {
     const seconds = Number(value);
     if (!Number.isFinite(seconds)) return value;
-    return new Date(seconds * 1000).toLocaleString();
+    return new Date(seconds * 1000).toLocaleString(get(localeTag));
   }
 
   function verdictClass(status: string) {

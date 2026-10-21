@@ -47,7 +47,7 @@
     topSuspect?: any;
     topFinding?: any;
     heroCulpritLabel?: string;
-    strongestEvidence?: any;
+    strongestEvidence?: string | null;
     analysisBusy?: boolean;
     primaryRec?: MergedRec | null;
     mergedRecommendations?: MergedRec[];

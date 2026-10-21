@@ -503,60 +503,62 @@
         {/if}
       </span>
     </button>
-    <HomeYoutubePlacementToggle compact={variant === "rail"} />
-    <button
-      type="button"
-      class="full-view-btn"
-      class:is-on={fullView && expanded}
-      onclick={toggleFullView}
-      title={fullView && expanded ? "Show compact strip" : "Expand feed to full height"}
-      aria-label={fullView && expanded ? "Show compact strip" : "Expand feed to full height"}
-      aria-pressed={fullView && expanded}
-    >
-      {#if fullView && expanded}
-        <ChevronsUp size={16} />
-        <span>Strip</span>
-      {:else}
-        <ChevronsDown size={16} />
-        <span>Full height</span>
-      {/if}
-    </button>
-    <div class="yt-more-wrap">
+    <div class="section-header-actions">
+      <HomeYoutubePlacementToggle compact={variant === "rail"} />
       <button
         type="button"
-        class="yt-more-btn"
-        aria-haspopup="menu"
-        aria-expanded={moreOpen}
-        title="Player, queue and feed settings"
-        onclick={() => (moreOpen = !moreOpen)}
+        class="full-view-btn"
+        class:is-on={fullView && expanded}
+        onclick={toggleFullView}
+        title={fullView && expanded ? "Show compact strip" : "Expand feed to full height"}
+        aria-label={fullView && expanded ? "Show compact strip" : "Expand feed to full height"}
+        aria-pressed={fullView && expanded}
       >
-        <MoreHorizontal size={16} />
-        <span>More</span>
+        {#if fullView && expanded}
+          <ChevronsUp size={16} />
+          <span>Strip</span>
+        {:else}
+          <ChevronsDown size={16} />
+          <span>Full height</span>
+        {/if}
       </button>
-      {#if moreOpen}
-        <div class="yt-more-menu" role="menu" aria-label="YouTube feed menu">
-          <button
-            type="button"
-            role="menuitem"
-            onclick={() => {
-              moreOpen = false;
-              openYoutubeQueue();
-            }}
-          >
-            Player &amp; queue
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onclick={() => {
-              moreOpen = false;
-              feedSettingsOpen = !feedSettingsOpen;
-            }}
-          >
-            Feed settings…
-          </button>
-        </div>
-      {/if}
+      <div class="yt-more-wrap">
+        <button
+          type="button"
+          class="yt-more-btn"
+          aria-haspopup="menu"
+          aria-expanded={moreOpen}
+          title="Player, queue and feed settings"
+          onclick={() => (moreOpen = !moreOpen)}
+        >
+          <MoreHorizontal size={16} />
+          <span>More</span>
+        </button>
+        {#if moreOpen}
+          <div class="yt-more-menu" role="menu" aria-label="YouTube feed menu">
+            <button
+              type="button"
+              role="menuitem"
+              onclick={() => {
+                moreOpen = false;
+                openYoutubeQueue();
+              }}
+            >
+              Player &amp; queue
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onclick={() => {
+                moreOpen = false;
+                feedSettingsOpen = !feedSettingsOpen;
+              }}
+            >
+              Feed settings…
+            </button>
+          </div>
+        {/if}
+      </div>
     </div>
   </div>
 
@@ -667,7 +669,10 @@
             >
               <div class="thumb">
                 {#if video.thumbnail_url}
-                  <img src={video.thumbnail_url} alt="" loading="lazy" />
+                  <!-- crossorigin: every thumbnail is i.ytimg.com; the CORS request
+                       avoids WebView2 Tracking Prevention warnings in the console
+                       (docs/problems.md §21) without changing the render. -->
+                  <img src={video.thumbnail_url} alt="" loading="lazy" crossorigin="anonymous" />
                 {/if}
                 <span class="thumb-play" aria-hidden="true">
                   <Play size={16} fill="currentColor" />
@@ -718,8 +723,11 @@
   .section-header-row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: space-between;
     gap: 8px;
     width: 100%;
+    min-width: 0;
     margin: 0 0 16px;
   }
 
@@ -731,8 +739,11 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    flex: 1;
-    min-width: 0;
+    /* Big enough that the title keeps its words, small enough that the
+       control group wraps to the next line instead of being pushed out of
+       the panel (the feed clips with overflow: hidden when full height). */
+    flex: 1 1 auto;
+    min-width: min(100%, 220px);
     margin: 0;
     padding: 0;
     background: transparent;
@@ -740,6 +751,19 @@
     cursor: pointer;
     color: var(--text-primary);
     text-align: left;
+  }
+
+  /* Controls sit on the title line when there is room and wrap below it
+     when there is not — never outside the container. */
+  .section-header-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+    margin-left: auto;
   }
 
   .section-header :global(svg) {
@@ -750,6 +774,7 @@
   .section-header h2 {
     margin: 0;
     flex: 1;
+    min-width: 0;
     font-size: 18px;
     font-weight: 700;
     color: var(--text-primary);
@@ -1037,6 +1062,10 @@
       overscroll-behavior-x: contain;
       -webkit-overflow-scrolling: touch;
       touch-action: pan-x;
+      /* Fade only the edge the row starts cut at: the rail begins at scroll 0,
+         so a matching left fade would permanently dim the first card. */
+      -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 88%, transparent 100%);
+      mask-image: linear-gradient(90deg, #000 0%, #000 88%, transparent 100%);
     }
 
     .feed-row::-webkit-scrollbar {
@@ -1051,6 +1080,8 @@
     overflow: visible;
     padding-bottom: 4px;
     touch-action: pan-y;
+    -webkit-mask-image: none;
+    mask-image: none;
   }
 
   /* Grid: card mosaic — the home feed now owns the freed instances space,
@@ -1062,6 +1093,8 @@
     overflow: visible;
     padding-bottom: 0;
     touch-action: auto;
+    -webkit-mask-image: none;
+    mask-image: none;
   }
 
   .grid .video-card-wrap {
@@ -1090,6 +1123,8 @@
     flex: 1 1 auto;
     min-height: 16rem;
     align-content: start;
+    -webkit-mask-image: none;
+    mask-image: none;
   }
 
   .is-full .video-card-wrap {

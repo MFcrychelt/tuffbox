@@ -1551,12 +1551,15 @@
   .cat-chip:hover {
     background: color-mix(in srgb, var(--text-primary) 12%, transparent);
     border-color: rgba(255, 255, 255, 0.22);
-    color: #fff;
+    color: var(--text-primary);
   }
+  /* Selected state is carried by the emerald tint/border/checkbox — the label
+     keeps the readable text token. `#34d399` measured 1.06:1 on the light
+     theme's tinted chip (and `#fff` 1.4:1 on the light hover fill). */
   .cat-chip.on {
     background: rgba(16, 185, 129, 0.22);
     border-color: rgba(16, 185, 129, 0.6);
-    color: #34d399;
+    color: var(--text-primary);
     box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
   }
 

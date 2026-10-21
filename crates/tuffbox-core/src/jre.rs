@@ -69,8 +69,19 @@ pub fn required_java_major(mc_version: &str) -> u32 {
         .split('.')
         .filter_map(|p| p.split('-').next().and_then(|p| p.parse().ok()))
         .collect();
+    let major = parts.first().copied().unwrap_or(1);
     let minor = parts.get(1).copied().unwrap_or(0);
     let patch = parts.get(2).copied().unwrap_or(0);
+
+    // Year-based scheme (`26.1`, `26.2`, …): Mojang left the `1.x` numbering and
+    // the game moved to Java 25. The legacy table below cannot express it —
+    // `26.2` parsed to minor=2 and fell all the way through to **Java 8**, which
+    // is exactly how a 26.2 Fabric pack ended up launching on Java 8 and
+    // crashing with "requires version 25 or later of 'Java HotSpot(TM) …'" on
+    // every mod (2026-09-27 crash log).
+    if major >= 25 {
+        return 25;
+    }
 
     if minor >= 21 || (minor == 20 && patch >= 5) {
         21
@@ -964,6 +975,18 @@ mod tests {
         assert_eq!(required_java_major("1.20.4"), 17);
         assert_eq!(required_java_major("1.20.5"), 21);
         assert_eq!(required_java_major("1.21.1"), 21);
+    }
+
+    #[test]
+    fn required_java_major_year_based_scheme_needs_java_25() {
+        // Mojang's post-1.x numbering: `26.2` must NOT fall through to Java 8.
+        // Regression for the 2026-09-27 crash log, where a 26.2 Fabric pack
+        // launched on Java 8 and every mod failed with
+        // "requires version 25 or later of 'Java HotSpot(TM) 64-Bit Server VM'".
+        assert_eq!(required_java_major("26.2"), 25);
+        assert_eq!(required_java_major("26.1"), 25);
+        assert_eq!(required_java_major("26.1.1"), 25);
+        assert_eq!(required_java_major("25.4"), 25);
     }
 
     fn runtime(major: u32) -> JavaRuntime {

@@ -850,7 +850,7 @@ mod tests {
                 side: crate::manifest::Side::Both,
                 dependencies: Vec::new(),
                 status: vec!["ok".to_string()],
-                content_type: crate::mod_files::ContentType::Mod,
+                content_type: crate::manifest::ContentType::Mod,
                 authors: Vec::new(),
                 option: None,
             };

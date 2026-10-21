@@ -13,9 +13,9 @@ export type P2pStatus = { enabled: boolean; healthy: boolean; authorized: boolea
  */
 degraded: boolean }
 
-const ARGS_MAP: Record<string, Record<string, string[]>> = { "": { "get_p2p_status": [] } }
+const ARGS_MAP = { '':'{"get_p2p_status":[]}' }
 export type Router = { "": {get_p2p_status: () => Promise<P2pStatus>} };
 
 
-export const createTauRPCProxy = () => createProxy<Router>({ argsMap: ARGS_MAP })
+export const createTauRPCProxy = () => createProxy<Router>(ARGS_MAP)
 export type { InferCommandOutput }

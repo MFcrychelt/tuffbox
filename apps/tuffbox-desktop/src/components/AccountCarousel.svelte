@@ -28,12 +28,12 @@
 
   const HEAD_W = 64; // rendered head size (canvas) — CSS scale handles the rest
   const SLOT_GAP = 18; // px between slots — wide enough for the rail to breathe
-  const SLOT_W = HEAD_W + SLOT_GAP; // one step of the rail
   const WHEEL_STEP = 22; // accumulated deltaY per selection step
   const WHEEL_COOLDOWN_MS = 90; // min gap between wheel-driven steps
 
   let root = $state<HTMLDivElement | undefined>();
   let viewport = $state<HTMLDivElement | undefined>();
+  let track = $state<HTMLDivElement | undefined>();
   let viewportW = $state(288);
   let index = $state(
     (() => {
@@ -67,7 +67,23 @@
     return () => ro.disconnect();
   });
 
-  const trackOffset = $derived(viewportW / 2 - HEAD_W / 2 - index * SLOT_W);
+  // Nicks render in full (Press Start 2P, ~148px for a 12-char name), so the
+  // slot — and therefore the rail pitch — is not a constant. Center the selected
+  // slot from the measured layout instead of a fixed `HEAD_W + SLOT_GAP` step.
+  let trackOffset = $state(0);
+  $effect(() => {
+    track;
+    index;
+    accounts;
+    viewportW;
+    const slot = track?.children[index] as HTMLElement | undefined;
+    if (!track || !slot) {
+      trackOffset = 0;
+      return;
+    }
+    // offsetLeft/offsetWidth are layout values, unaffected by the scale transform.
+    trackOffset = viewportW / 2 - (slot.offsetLeft + slot.offsetWidth / 2);
+  });
 
   function visual(i: number) {
     const d = Math.abs(i - index);
@@ -184,7 +200,11 @@
   {/if}
 
   <div class="carousel-viewport" bind:this={viewport}>
-    <div class="carousel-track" style="gap: {SLOT_GAP}px; transform: translateX({trackOffset}px);">
+    <div
+      class="carousel-track"
+      bind:this={track}
+      style="--vp-w: {viewportW}px; gap: {SLOT_GAP}px; transform: translateX({trackOffset}px);"
+    >
       {#each accounts as account, i (account.uuid)}
         {@const v = visual(i)}
         <button
@@ -220,6 +240,9 @@
 
   .carousel-viewport {
     overflow: hidden;
+    /* The glow and the outline shadow paint outside the line box — keep the
+       clip edge of `overflow: hidden` clear of them. */
+    padding-bottom: 6px;
     /* Dim the rail edges so heads melt into the panel sides. */
     -webkit-mask-image: linear-gradient(
       90deg,
@@ -252,7 +275,10 @@
     flex-direction: column;
     align-items: center;
     gap: 8px;
-    width: 64px;
+    /* Slot = widest child (the nick), never narrower than the head. The rail
+       pitch therefore follows long names instead of overlapping them. */
+    width: max-content;
+    min-width: 64px;
     padding: 0;
     border: none;
     background: none;
@@ -405,15 +431,17 @@
     font-family: var(--font-minecraft);
     font-size: 12px;
     letter-spacing: 0.3px;
-    /* Fit the full nick: no clipping, overflow allowed to spill over the
-       narrow 76px slot, centered so it stays balanced. */
-    max-width: none;
+    /* Cap the nick to the measured viewport and ellipsize: a `max-content`
+       label wider than the rail was hard-cut at both edges (and, with
+       overflow visible, spilled over the neighbouring slots). */
+    max-width: max(96px, calc(var(--vp-w, 288px) - 16px));
     width: max-content;
     white-space: nowrap;
     text-align: center;
-    line-height: 1.4;
+    line-height: 1.6;
     display: inline-block;
-    overflow: visible;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--text-secondary);
     transition: color var(--motion-fast) var(--ease-out);
   }

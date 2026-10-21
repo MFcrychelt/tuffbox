@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
+  import { localeTag } from "../lib/i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { api } from "../lib/api";
@@ -2879,7 +2881,7 @@ import { trapFocus } from "../lib/focusTrap";
     if (!iso) return "";
     try {
       const d = new Date(iso);
-      return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+      return d.toLocaleDateString(get(localeTag), { year: "numeric", month: "short", day: "numeric" });
     } catch {
       return iso.slice(0, 10);
     }
@@ -3042,6 +3044,7 @@ import { trapFocus } from "../lib/focusTrap";
       <div class="content-kicker"><Package size={14} /> Content</div>
       <h1>{heroTitle}</h1>
     </div>
+    {#if counts.all > 0}
     <div class="content-hero-stats">
       <div class="stat-pill">
         <strong>{filtered.length}</strong>
@@ -3068,6 +3071,7 @@ import { trapFocus } from "../lib/focusTrap";
         </div>
       {/if}
     </div>
+    {/if}
   </header>
 
   {#if duplicateJarGroups.length > 0}
@@ -3748,7 +3752,11 @@ import { trapFocus } from "../lib/focusTrap";
           </div>
           <div class="installed-tags" aria-label="Mod labels">
             <span class="tag side-{mod.side}" title={mod.side}>{mod.side}</span>
-            <span class="tag source" title={mod.source}>{mod.source}</span>
+            <!-- Modrinth is the default source; a badge on all 52 rows is noise.
+                 Show it only when it actually differs. -->
+            {#if (mod.source || "").toLowerCase() !== "modrinth"}
+              <span class="tag source" title={mod.source}>{mod.source}</span>
+            {/if}
             <span
               class="tag update-slot"
               class:on={!!mod.updateAvailable}
@@ -5517,7 +5525,11 @@ import { trapFocus } from "../lib/focusTrap";
   .content-tabs .content-tab-btn.primary .tab-count,
   .content-tabs button.active .tab-count,
   .content-tabs button.primary .tab-count {
-    background: color-mix(in srgb, var(--on-accent, #ffffff) 24%, transparent) !important;
+    /* Outline instead of a tinted fill: a translucent ink fill lightens the
+       accent under white text and measured 3.33:1. With no fill the pair is
+       exactly --on-accent on --accent-primary (>=4.5 in every theme). */
+    background: transparent !important;
+    border: 1px solid color-mix(in srgb, var(--on-accent, #ffffff) 55%, transparent) !important;
     color: var(--on-accent, #ffffff) !important;
   }
 
@@ -6745,8 +6757,10 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .tag.side-server {
-    background: rgba(59, 130, 246, 0.12);
-    color: #60a5fa;
+    background: color-mix(in srgb, #3b82f6 12%, transparent);
+    /* Blue has no theme token; mixing the hue toward the theme's own ink keeps
+       it readable on light (5:1) and dark surfaces alike. */
+    color: color-mix(in srgb, #60a5fa 55%, var(--text-primary));
   }
 
   .icon-btn {
@@ -8002,7 +8016,10 @@ import { trapFocus } from "../lib/focusTrap";
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    max-width: 100%;
+    /* `max-width: 100%` resolved against the inline-flex parent's own
+       content-derived width, so nearly every version ellipsized mid-string
+       ("1.8.7+fabric-…"). The row column is ~1036px wide — cap generously. */
+    max-width: 340px;
     padding: 3px 8px;
     margin: -3px -8px;
     border-radius: var(--border-radius-sm);

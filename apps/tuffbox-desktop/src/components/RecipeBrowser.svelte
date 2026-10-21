@@ -2475,6 +2475,19 @@
 />
 
 <style>
+  /* Letter fallback for items without an icon. The slots are light while the
+     item-catalog panel is dark, so the letter needs its own dark chip instead
+     of `text-white` directly on the slot (measured 1.25:1 on light slots). */
+  .letter {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.6);
+    color: #f4f7f9;
+  }
+
   .recipe-workspace {
     font-family: var(--font-sans, inherit);
     /* Centered cap on 1440p+ — the recipe grid keeps card-sized columns

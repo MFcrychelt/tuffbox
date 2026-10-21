@@ -43,7 +43,7 @@
   import { openModsBrowserWindow } from "../lib/modsBrowserWindow";
   import { refreshUpdateCount, setUpdateCount } from "../lib/instanceUpdates";
   import { get } from "svelte/store";
-  import { t } from "../lib/i18n";
+  import { t, localeTag } from "../lib/i18n";
   import {
     isProjectLaunching,
     isProjectRunning,
@@ -1185,7 +1185,7 @@
                     {world.displayName || world.name}
                   </span>
                   <span class="im-row-sub">
-                    {world.sizeFormatted} · last played {formatDayStamp(world.lastPlayed ?? null)}
+                    {world.sizeFormatted} · last played {formatDayStamp(world.lastPlayed ?? null, $localeTag)}
                   </span>
                   <span class="im-world-chips">
                     {#if world.gameType}{world.gameType}{/if}
@@ -1272,7 +1272,7 @@
                 </button>
                 <figcaption class="im-shot-cap">
                   <span class="im-shot-name" title={shot.fileName}>{shot.fileName}</span>
-                  <span class="im-shot-meta">{formatDayStamp(shot.modifiedMs)} · {shot.sizeFormatted}</span>
+                  <span class="im-shot-meta">{formatDayStamp(shot.modifiedMs, $localeTag)} · {shot.sizeFormatted}</span>
                   <button
                     type="button"
                     class="im-tool-btn small"
@@ -1329,7 +1329,7 @@
                 <div class="im-row-main">
                   <span class="im-row-name" title={entry.name}>{entry.name}</span>
                   <span class="im-row-sub">
-                    {formatStamp(entry.createdAt)} · {formatBytes(entry.sizeBytes)} · {entry.fileCount} files
+                    {formatStamp(entry.createdAt, $localeTag)} · {formatBytes(entry.sizeBytes)} · {entry.fileCount} files
                   </span>
                 </div>
                 <div class="im-row-actions">
@@ -1411,7 +1411,7 @@
                 <strong>{health.questIssues}</strong>
                 <span>{$t("manager.questIssuesWord")}</span>
               </div>
-              <div class="im-tile" class:bad={!!health.lastCrash} title={health.lastCrash ? `Last crash ${formatStamp(health.lastCrash.at)} (exit ${health.lastCrash.exitCode ?? "?"})` : "No crashes recorded"}>
+              <div class="im-tile" class:bad={!!health.lastCrash} title={health.lastCrash ? `Last crash ${formatStamp(health.lastCrash.at, $localeTag)} (exit ${health.lastCrash.exitCode ?? "?"})` : "No crashes recorded"}>
                 <strong>{health.lastCrash ? "yes" : "no"}</strong>
                 <span>{$t("manager.recentCrash")}</span>
               </div>
@@ -1541,7 +1541,7 @@
     <img class="im-lightbox-img" src={shotUrl(lightbox.path)} alt={lightbox.fileName} />
     <div class="im-lightbox-bar">
       <span class="im-lightbox-name" title={lightbox.fileName}>{lightbox.fileName}</span>
-      <span class="im-lightbox-meta">{formatDayStamp(lightbox.modifiedMs)} · {lightbox.sizeFormatted}</span>
+      <span class="im-lightbox-meta">{formatDayStamp(lightbox.modifiedMs, $localeTag)} · {lightbox.sizeFormatted}</span>
       <span class="im-spacer"></span>
       <button type="button" class="im-mini" onclick={openFromLightbox}>
         <FolderOpen size={12} /> {$t("manager.openInViewer")}
@@ -1570,7 +1570,7 @@
     title={$t("manager.restoreBackup")}
     message={$t("manager.restoreBackupMsg", {
       name: confirmRestore.name,
-      stamp: formatStamp(confirmRestore.createdAt),
+      stamp: formatStamp(confirmRestore.createdAt, $localeTag),
     })}
     confirmLabel={$t("manager.restore")}
     danger

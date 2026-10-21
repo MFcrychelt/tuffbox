@@ -367,7 +367,7 @@ pub fn fetch_chat(since_id: i64) -> ChatBatch {
             let messages = v
                 .get("messages")
                 .and_then(|a| a.as_array())
-                .map(|arr| arr.iter().filter_map(parse_message).collect())
+                .map(|arr| arr.iter().filter_map(parse_message).collect::<Vec<_>>())
                 .unwrap_or_default();
             let cursor = v
                 .get("cursor")

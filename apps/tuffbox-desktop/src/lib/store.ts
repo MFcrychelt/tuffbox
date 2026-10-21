@@ -137,6 +137,17 @@ export const recentProjects = createRecentProjects();
 export const projectPath = writable<string | null>(null);
 export const projectInfo = writable<ProjectInfo | null>(null);
 
+/**
+ * The Library's focused pack — deliberately separate from `projectPath`, which
+ * is the IDE's slot. Browsing the Library must not close the pack being edited
+ * in another surface; `openInIde` is the explicit hand-off that moves a pack
+ * into the IDE.
+ */
+export const libraryFocusPath = writable<string | null>(null);
+export function focusLibraryPack(path: string | null) {
+  libraryFocusPath.set(path);
+}
+
 // ─── Minecraft Auth ──────────────────────────────────────────────
 
 export type SkinSource = "mojang" | "elyby" | "tlauncher" | "offline";

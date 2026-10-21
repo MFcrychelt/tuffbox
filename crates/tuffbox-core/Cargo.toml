@@ -39,3 +39,7 @@ same-file = "1.0"
 
 [dev-dependencies]
 filetime = "0.2"
+# The AI agent loop is async; its tests drive it with a real executor rather
+# than a hand-rolled one. Test-only — the production build of this crate stays
+# runtime-free.
+tokio = { workspace = true }

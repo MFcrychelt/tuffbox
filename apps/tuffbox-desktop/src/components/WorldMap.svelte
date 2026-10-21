@@ -19,6 +19,7 @@
     WorldListItem,
   } from "../lib/api";
   import { biomeCss, heightShade } from "../lib/biomePalette";
+  import { localeTag } from "../lib/i18n";
   import {
     worldMapClipboard,
     setWorldMapClipboard,
@@ -2514,7 +2515,7 @@
         {#if hover && layout === "top"}
           <div class="hover-tip" style="left: {tipX}px; top: {tipY}px">
             chunk <code>{hover.cx}, {hover.cz}</code> · region {hover.rx},{hover.rz}<br />
-            {hover.status}{#if hover.modified} · {new Date(hover.modified * 1000).toLocaleDateString()}{/if}<br />
+            {hover.status}{#if hover.modified} · {new Date(hover.modified * 1000).toLocaleDateString($localeTag)}{/if}<br />
             inhabited {hover.inhabitedTime} · dataVersion {hover.dataVersion}
             {#if hover.biomeId != null}<br />biome {hover.biomeId}{/if}
             {#if hover.surfaceY != null}<br />surfaceY {hover.surfaceY}{/if}

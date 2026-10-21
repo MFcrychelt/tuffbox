@@ -27,6 +27,22 @@ if (isTauri()) {
   installConsoleBridge(invoke);
 }
 
+// Self-hosted UI fonts come from @fontsource-variable/* via styles/fonts.css.
+// A missing package or an unresolvable url() silently drops the whole app to
+// the system stack (different metrics everywhere) — say so instead of shipping
+// blind. `load()` forces the request, so an empty result means a real failure.
+document.fonts
+  .load('16px "Inter Variable"')
+  .then((faces) => {
+    if (faces.length === 0) {
+      console.warn(
+        '[tuffbox] UI font "Inter Variable" did not load — falling back to the system stack. ' +
+          "Check that @fontsource-variable/inter is installed and the urls in styles/fonts.css resolve.",
+      );
+    }
+  })
+  .catch((e) => console.warn("[tuffbox] font probe failed:", e));
+
 window.addEventListener("error", (event) => {
   console.error("[tuffbox] uncaught error:", event.error ?? event.message);
 });

@@ -10,7 +10,9 @@
     Map,
     Eye,
     Layers,
+    Box,
   } from "@lucide/svelte";
+  import type { Component } from "svelte";
   import { projectPath } from "../lib/store";
   import { api } from "../lib/api";
   import type { WorldListItem, WorldDetail } from "../lib/api";
@@ -18,7 +20,17 @@
   import EmptyState from "./EmptyState.svelte";
   import { worldMapClipboard, clearWorldMapClipboard } from "../lib/worldMapClipboard";
 
-  type MapMode = null | "builtin" | "mca";
+  type MapMode = null | "builtin" | "mca" | "3d";
+
+  type Preview3DProps = { worldName: string; dimension?: string; onclose?: () => void };
+
+  /**
+   * The 3D preview pulls in `three`, so it is imported on first use rather than
+   * at the top of this file — otherwise opening the World screen would load the
+   * whole renderer for users who never touch it.
+   */
+  let Preview3D = $state<Component<Preview3DProps> | null>(null);
+  let preview3dLoading = $state(false);
 
   let worlds = $state<WorldListItem[]>([]);
   let loading = $state(false);
@@ -46,7 +58,13 @@
   );
 
   const modeLabel = $derived(
-    mapMode === "builtin" ? "Built-in viewer" : mapMode === "mca" ? "MCA Selector" : "Choose mode",
+    mapMode === "builtin"
+      ? "Built-in viewer"
+      : mapMode === "mca"
+        ? "MCA Selector"
+        : mapMode === "3d"
+          ? "3D preview"
+          : "Choose mode",
   );
 
   function setMapMode(mode: MapMode) {
@@ -121,6 +139,16 @@
 
   function chooseBuiltin() {
     setMapMode("builtin");
+  }
+
+  async function choose3d() {
+    preview3dLoading = true;
+    try {
+      Preview3D ??= (await import("./WorldPreview3D.svelte")).default;
+      setMapMode("3d");
+    } finally {
+      preview3dLoading = false;
+    }
   }
 
   async function chooseMca() {
@@ -323,11 +351,30 @@
                     </span>
                   {/if}
                 </button>
+                <button
+                  type="button"
+                  class="mode-card"
+                  disabled={preview3dLoading}
+                  onclick={choose3d}
+                >
+                  <span class="mode-card-icon"><Box size={22} /></span>
+                  <span class="mode-card-title">3D preview</span>
+                  <span class="mode-card-sub">Fly over the generated chunks</span>
+                  {#if preview3dLoading}
+                    <span class="mode-card-busy">
+                      <RefreshCw size={12} class="spin" /> Loading…
+                    </span>
+                  {/if}
+                </button>
               </div>
             </div>
           </div>
         {:else if mapMode === "builtin"}
           <WorldMap worldName={selectedWorld} layout="dock" readOnly={true} />
+        {:else if mapMode === "3d"}
+          {#if Preview3D}
+            <Preview3D worldName={selectedWorld} onclose={changeMode} />
+          {/if}
         {:else}
           <div class="mca-status-panel">
             <div class="mca-status-card">
@@ -365,11 +412,21 @@
         {/if}
       </div>
     {:else}
-      <EmptyState
-        icon={Globe}
-        title="Select a world"
-        description="Choose a world from the rail to open the MCA map."
-      />
+      {#if !loading && error && worlds.length === 0}
+        <EmptyState icon={Globe} title="Couldn’t list worlds" description={error} />
+      {:else if !loading && worlds.length === 0}
+        <EmptyState
+          icon={Globe}
+          title="No worlds found"
+          description="Generate a world by launching the game, then refresh."
+        />
+      {:else}
+        <EmptyState
+          icon={Globe}
+          title="Select a world"
+          description="Choose a world from the rail to open the MCA map."
+        />
+      {/if}
     {/if}
     {#if error}
       <div class="err-banner">{error}</div>

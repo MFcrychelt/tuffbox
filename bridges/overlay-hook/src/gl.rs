@@ -248,8 +248,8 @@ pub fn begin_overlay_frame(hdc: HDC) {
         let h = if vp[3] > 0 { vp[3] } else { 720 };
 
         use windows::Win32::Foundation::{POINT, RECT};
-        use windows::Win32::Graphics::Gdi::WindowFromDC;
-        use windows::Win32::UI::WindowsAndMessaging::{ClientToScreen, GetClientRect};
+        use windows::Win32::Graphics::Gdi::{ClientToScreen, WindowFromDC};
+        use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
         let hwnd = WindowFromDC(hdc);
         // Windowed / borderless / exclusive fullscreen:
         // ClientToScreen = top-left of client on the virtual desktop.

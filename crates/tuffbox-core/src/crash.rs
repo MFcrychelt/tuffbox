@@ -69,6 +69,17 @@ pub enum CrashSignalKind {
     Entrypoint,
     LoaderMismatch,
     MissingDependency,
+    /// One side of a mod pair is at or below the oldest version its partner
+    /// still accepts ("… is incompatible with version 1.1.12 or earlier of mod
+    /// 'Iris' (iris)"). Updating that side is the fix; disabling the partner
+    /// removes a feature the user wants.
+    DependencyTooOld,
+    /// Fabric's own resolution proposal: "Replace mod 'Sodium' (sodium) … with
+    /// any version between 0.9.1+mc26.2 (inclusive) and 0.10- (exclusive) that
+    /// is compatible with: Iris 1.1.12+mc26.2". The loader already solved the
+    /// conflict, so the launcher can offer the concrete combination instead of
+    /// guessing at culprits.
+    ReplaceSuggestion,
     ModVersionMismatch,
     MinecraftVersionMismatch,
     LoaderVersionMismatch,
@@ -1260,7 +1271,8 @@ pub fn analyze_text_for_suspects(
     let mut in_caused_by = false;
     let mut primary_frames = 0usize;
 
-    for (index, line) in text.lines().enumerate() {
+    let all_lines: Vec<&str> = text.lines().collect();
+    for (index, line) in all_lines.iter().copied().enumerate() {
         section = detect_log_section(line, section);
         if section == LogSection::ModList {
             if let Some(id) = extract_mod_list_id(line) {
@@ -1291,7 +1303,28 @@ pub fn analyze_text_for_suspects(
         primary_frames = next_primary_frames;
 
         let line_number = index + 1;
-        let Some(kind) = classify_signal_line(line) else {
+        // Fabric hard-wraps its "Replace mod …" proposal across the log's
+        // fixed-width columns, so the version range and the partner can land on
+        // following lines. Join them (bounded) before classifying.
+        let logical = if strip_log_bullet(line).starts_with("Replace mod '") {
+            // Complete only once the partner after "compatible with:" is present —
+            // the marker itself can end the line (the partner sits on the next one).
+            let complete = |s: &str| match s.find("compatible with:") {
+                Some(i) => !s[i + "compatible with:".len()..].trim().is_empty(),
+                None => false,
+            };
+            let mut joined = line.trim_end().to_string();
+            let mut k = index + 1;
+            while k < all_lines.len() && !complete(&joined) && k <= index + 3 {
+                joined.push(' ');
+                joined.push_str(all_lines[k].trim());
+                k += 1;
+            }
+            joined
+        } else {
+            line.to_string()
+        };
+        let Some(kind) = classify_signal_line(&logical) else {
             continue;
         };
 
@@ -1299,7 +1332,7 @@ pub fn analyze_text_for_suspects(
             source: source.to_string(),
             line_number,
             kind,
-            text: line.trim().to_string(),
+            text: logical.trim().to_string(),
         };
         signals.push(signal);
 
@@ -1335,10 +1368,16 @@ pub fn analyze_text_for_suspects(
             }
         }
 
+        // JavaVersion lines name every mod that *declares* a Java requirement —
+        // blaming them sent the user to disable unrelated mods (2026-09-27 log:
+        // 22 mods flagged at 90-94% for one wrong JVM). The fix is the runtime.
         if !skip_tokens
             && !matches!(
                 kind,
-                CrashSignalKind::Performance | CrashSignalKind::ResourceWarning
+                CrashSignalKind::Performance
+                    | CrashSignalKind::ResourceWarning
+                    | CrashSignalKind::JavaVersion
+                    | CrashSignalKind::ReplaceSuggestion
             )
         {
             for candidate in &candidates {
@@ -1429,6 +1468,7 @@ pub fn analyze_text_for_suspects(
                 | CrashSignalKind::ModVersionMismatch
                 | CrashSignalKind::MinecraftVersionMismatch
                 | CrashSignalKind::LoaderVersionMismatch
+                | CrashSignalKind::DependencyTooOld
                 | CrashSignalKind::WrongLoader
         ) {
             for mod_id in extract_named_mods(line) {
@@ -1451,6 +1491,31 @@ pub fn analyze_text_for_suspects(
                         evidence_weighted(source, line_number, kind, line, weight),
                         scaled_confidence(confidence_for_kind(kind).saturating_sub(8), weight),
                     );
+                }
+            }
+        }
+
+        // Fabric's proposal names both sides of a real version conflict. They are
+        // genuinely involved — but this is a pair to *update*, not a culprit to
+        // disable, so they land well below the "primary" confidence band.
+        if kind == CrashSignalKind::ReplaceSuggestion {
+            if let Some(sug) = parse_replace_suggestion(&logical) {
+                for want_raw in [&sug.mod_id, &sug.partner_name] {
+                    let want = compact_token(&normalize_token(want_raw));
+                    if want.is_empty() {
+                        continue;
+                    }
+                    if let Some(candidate) = candidates.iter().find(|c| {
+                        c.tokens.iter().any(|t| compact_token(t) == want)
+                            || compact_token(&normalize_token(&c.module.id)) == want
+                    }) {
+                        add_manifest_suspect(
+                            &mut suspects,
+                            candidate.module,
+                            evidence_weighted(source, line_number, kind, &logical, weight.max(70)),
+                            scaled_confidence(72, weight.max(70)),
+                        );
+                    }
                 }
             }
         }
@@ -1714,22 +1779,41 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
     }
 
     if kinds.contains(&CrashSignalKind::JavaVersion) {
+        // Quote the numbers the loader actually printed when it did.
+        let (need, have) = signals
+            .iter()
+            .filter(|s| s.kind == CrashSignalKind::JavaVersion)
+            .find_map(|s| {
+                let (n, h) = parse_java_requirement(&s.text);
+                (n.is_some() || h.is_some()).then_some((n, h))
+            })
+            .unwrap_or((None, None));
+        let need_txt = need
+            .map(|n| format!("Java {n}"))
+            .unwrap_or_else(|| "a newer Java".into());
+        let have_txt = have
+            .map(|h| format!("Java {h}"))
+            .unwrap_or_else(|| "an older Java".into());
         push(DiagnosisHint {
             id: "java-version".into(),
             title: "Wrong Java version".into(),
             severity: "critical".into(),
-            detail: "UnsupportedClassVersionError means the mod/loader was built for a newer Java \
-                than the one running. Modern Minecraft needs Java 17 (1.18+) or Java 21 (1.20.5+ / NeoForge)."
-                .into(),
+            detail: format!(
+                "The loader/mods are built for {need_txt} but the game is running on {have_txt}. \
+                 This is a runtime problem — the mods that *list* the requirement are not the \
+                 cause, so disabling them cannot help. Modern Minecraft needs Java 17 (1.18+), \
+                 Java 21 (1.20.5+) or Java 25 (year-based releases such as 26.x)."
+            ),
             steps: vec![
-                "Install the Java version required by your Minecraft version and point the project at it.".into(),
-                "1.17–1.20.4 → Java 17; 1.20.5+ and recent NeoForge → Java 21.".into(),
+                format!("Point the instance at {need_txt} — Auto-select downloads it when missing."),
+                "1.17–1.20.4 → Java 17; 1.20.5+ and recent NeoForge → Java 21; 25.x/26.x → Java 25."
+                    .into(),
                 "Update the loader if it also requires a newer Java.".into(),
             ],
             related_mods: Vec::new(),
             fix: Some(FixAction {
                 kind: "autoJava".into(),
-                label: "Auto-select a compatible Java runtime".into(),
+                label: format!("Install and select {need_txt}"),
                 mod_id: None,
             }),
             fixes: vec![],
@@ -1868,7 +1952,12 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
         }
     }
 
-    if kinds.contains(&CrashSignalKind::ModVersionMismatch) {
+    // `DependencyTooOld` is the precise form of the same situation and names the
+    // side to update, so it replaces the generic conflict advice instead of
+    // stacking a contradictory "Disable Iris Shaders" next to "Update Iris".
+    if kinds.contains(&CrashSignalKind::ModVersionMismatch)
+        && !kinds.contains(&CrashSignalKind::DependencyTooOld)
+    {
         let names: Vec<String> = suspects.iter().map(|s| s.id.clone()).collect();
         let mut mix_fixes = Vec::new();
         for s in suspects.iter().filter(|s| s.known_in_manifest).take(3) {
@@ -1900,6 +1989,117 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
             fix: mix_fixes.first().cloned(),
             fixes: mix_fixes,
         });
+    }
+
+    // The loader's own "Replace mod …" proposal names both sides and the exact
+    // version range, so it supersedes the "one side is too old" heuristic.
+    if kinds.contains(&CrashSignalKind::DependencyTooOld)
+        && !kinds.contains(&CrashSignalKind::ReplaceSuggestion)
+    {
+        // The loader named the side that is at or below the oldest version its
+        // partner accepts; updating it keeps both features.
+        let outdated = signals
+            .iter()
+            .filter(|s| s.kind == CrashSignalKind::DependencyTooOld)
+            .find_map(|s| extract_outdated_dependency_id(&s.text));
+        let target = outdated.as_ref().and_then(|id| {
+            let want = compact_token(&normalize_token(id));
+            suspects
+                .iter()
+                .find(|s| compact_token(&normalize_token(&s.id)) == want)
+        });
+        let fixes: Vec<FixAction> = target
+            .filter(|s| s.known_in_manifest)
+            .map(|s| {
+                vec![FixAction {
+                    kind: "updateMod".into(),
+                    label: format!("Update {}", s.name),
+                    mod_id: Some(s.id.clone()),
+                }]
+            })
+            .unwrap_or_default();
+        push(DiagnosisHint {
+            id: "outdated-dependency".into(),
+            title: "A mod is older than its partner accepts".into(),
+            severity: "high".into(),
+            detail: "The loader rejected this pair because one mod sits at or below the oldest \
+                version the other still accepts. Updating the older mod is the fix — disabling \
+                its partner removes a feature you installed on purpose."
+                .into(),
+            steps: vec![
+                "Update the mod the loader named as \"version X or earlier\".".into(),
+                "If no newer build exists for this Minecraft version, move the other side to a \
+                    matching release instead."
+                    .into(),
+            ],
+            related_mods: outdated.into_iter().collect(),
+            fix: fixes.first().cloned(),
+            fixes,
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::ReplaceSuggestion) {
+        let suggestion = signals
+            .iter()
+            .filter(|s| s.kind == CrashSignalKind::ReplaceSuggestion)
+            .find_map(|s| parse_replace_suggestion(&s.text));
+        if let Some(sug) = suggestion {
+            let partner = suspects.iter().find(|s| {
+                let want = compact_token(&normalize_token(&sug.partner_name));
+                compact_token(&normalize_token(&s.name)) == want
+                    || compact_token(&normalize_token(&s.id)) == want
+            });
+            let target = suspects.iter().find(|s| {
+                compact_token(&normalize_token(&s.id))
+                    == compact_token(&normalize_token(&sug.mod_id))
+            });
+            let mut fixes = Vec::new();
+            // Preferred: lift the partner to its newest release. Fabric states
+            // the other mod already works with that version, so both stay put.
+            if let Some(p) = partner.filter(|p| p.known_in_manifest) {
+                fixes.push(FixAction {
+                    kind: "updateMod".into(),
+                    label: format!("Update {} to the newest version", p.name),
+                    mod_id: Some(p.id.clone()),
+                });
+            }
+            if let Some(t) = target.filter(|t| t.known_in_manifest) {
+                fixes.push(FixAction {
+                    kind: "updateMod".into(),
+                    label: format!("Update {} to the newest version", t.name),
+                    mod_id: Some(t.id.clone()),
+                });
+            }
+            push(DiagnosisHint {
+                id: "replace-suggestion".into(),
+                title: "Fabric already worked out a working combination".into(),
+                severity: "high".into(),
+                detail: format!(
+                    "The loader resolved this conflict itself: keep '{}' between {} (inclusive) and \
+                     {} (exclusive), compatible with {} {}. Updating {} to its newest release \
+                     satisfies that constraint — no mod has to be disabled.",
+                    sug.mod_name,
+                    sug.min_version,
+                    sug.max_version,
+                    sug.partner_name,
+                    sug.partner_version,
+                    sug.partner_name
+                ),
+                steps: vec![
+                    format!(
+                        "Update {} — Fabric states {} works with {} {} or newer.",
+                        sug.partner_name, sug.mod_name, sug.partner_name, sug.partner_version
+                    ),
+                    format!(
+                        "If {} cannot be updated, install {} within {} … {} instead.",
+                        sug.partner_name, sug.mod_name, sug.min_version, sug.max_version
+                    ),
+                ],
+                related_mods: vec![sug.mod_id.clone()],
+                fix: fixes.first().cloned(),
+                fixes,
+            });
+        }
     }
 
     if kinds.contains(&CrashSignalKind::MinecraftVersionMismatch) {
@@ -2408,6 +2608,12 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
         || lower.contains("mods are missing")
         || lower.contains("which is missing")
         || lower.contains("is missing!");
+    // Fabric's "Replace mod …" proposal is advice, not a fault — classify it so
+    // the hint layer can turn it into a concrete, working combination.
+    if parse_replace_suggestion(line).is_some() {
+        return Some(CrashSignalKind::ReplaceSuggestion);
+    }
+
     let is_resolution_error = mentions_missing_mod
         || lower.contains("missing dependency")
         || lower.contains("could not be loaded")
@@ -2418,6 +2624,17 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
         || lower.contains("incompatible")
         || lower.contains("modresolutionexception");
     if is_resolution_error {
+        // The dependency is the *runtime*, not a mod:
+        //   Mod 'More Chat History' (morechathistory) 2.0.0 requires version 25
+        //   or later of 'Java HotSpot(TM) 64-Bit Server VM' (java), but only
+        //   the wrong version is present: 8!
+        // Read as a mod conflict this blamed every mod that merely *declares*
+        // the requirement (22 mods at 90-94% "secondary" in the 2026-09-27
+        // log) and offered "Disable More Chat History" for a Java problem.
+        if mentions_java_runtime(&lower) {
+            return Some(CrashSignalKind::JavaVersion);
+        }
+
         // Narrow down to a more specific kind when the text is explicit.
         let mentions_minecraft = lower.contains("minecraft");
         // A loader *name* (fabric/forge/...) in the text only counts when it is
@@ -2465,6 +2682,12 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
         }
         if mentions_loader_version {
             return Some(CrashSignalKind::LoaderVersionMismatch);
+        }
+        // "… is incompatible with version 1.1.12 or earlier of mod 'Iris'" —
+        // the loader names which side is too old, so the fix is to update it
+        // rather than disable its partner.
+        if lower.contains(" or earlier of mod ") {
+            return Some(CrashSignalKind::DependencyTooOld);
         }
         if mentions_version_mismatch {
             return Some(CrashSignalKind::ModVersionMismatch);
@@ -3058,6 +3281,8 @@ fn confidence_for_kind(kind: CrashSignalKind) -> u8 {
         CrashSignalKind::Entrypoint => 96,
         CrashSignalKind::MissingDependency => 92,
         CrashSignalKind::LoaderMismatch => 86,
+        CrashSignalKind::DependencyTooOld => 90,
+        CrashSignalKind::ReplaceSuggestion => 90,
         CrashSignalKind::ModVersionMismatch => 90,
         CrashSignalKind::MinecraftVersionMismatch => 90,
         CrashSignalKind::WrongLoader => 90,
@@ -3079,6 +3304,94 @@ fn confidence_for_kind(kind: CrashSignalKind) -> u8 {
         CrashSignalKind::ResourceWarning => 35,
         CrashSignalKind::Performance => 25,
     }
+}
+
+/// Fabric's "one side is too old" line names the side to update:
+/// `Mod 'Sodium' (sodium) 0.9.2… is incompatible with version 1.1.12 or earlier
+/// of mod 'Iris' (iris), yet a conflicting version is present: 1.1.2+mc26.2!`
+/// → `iris`.
+fn extract_outdated_dependency_id(line: &str) -> Option<String> {
+    const NEEDLE: &str = " or earlier of mod ";
+    let idx = line.to_lowercase().find(NEEDLE)? + NEEDLE.len();
+    let rest = &line[idx..];
+    let open = rest.find('(')?;
+    let close = rest[open..].find(')')? + open;
+    let id = rest[open + 1..close].trim();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+/// Fabric's own resolution proposal, printed above the error list:
+/// `Replace mod 'Sodium' (sodium) 0.9.2-alpha.4+mc26.2 with any version between
+/// 0.9.1+mc26.2 (inclusive) and 0.10- (exclusive) that is compatible with:
+/// Iris 1.1.12+mc26.2`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplaceSuggestion {
+    pub mod_id: String,
+    pub mod_name: String,
+    pub min_version: String,
+    pub max_version: String,
+    pub partner_name: String,
+    pub partner_version: String,
+}
+
+/// Strips the loader's own bullet/dash decoration ("\t - Replace mod …").
+fn strip_log_bullet(line: &str) -> &str {
+    line.trim_start_matches(|c: char| {
+        c.is_whitespace() || c == '-' || c == '*' || c == '•' || c == '>'
+    })
+}
+
+/// Parses the proposal above. Returns `None` for anything that is not the
+/// Fabric "Replace mod …" line.
+pub fn parse_replace_suggestion(line: &str) -> Option<ReplaceSuggestion> {
+    const HEAD: &str = "Replace mod '";
+    let trimmed = strip_log_bullet(line);
+    if !trimmed.starts_with(HEAD) || !trimmed.contains("with any version between") {
+        return None;
+    }
+    let rest = &trimmed[HEAD.len()..];
+    let name_end = rest.find('\'')?;
+    let mod_name = rest[..name_end].trim().to_string();
+    let after_name = &rest[name_end + 1..];
+
+    let open = after_name.find('(')?;
+    let close = after_name[open..].find(')')? + open;
+    let mod_id = after_name[open + 1..close].trim().to_string();
+
+    let between = after_name.find("between ")? + "between ".len();
+    let tail = &after_name[between..];
+    let min_end = tail.find(" (inclusive)")?;
+    let min_version = tail[..min_end].trim().to_string();
+    let after_min = &tail[min_end + " (inclusive)".len()..];
+
+    let and_idx = after_min.find(" and ")? + " and ".len();
+    let max_part = &after_min[and_idx..];
+    let max_end = max_part.find(" (exclusive)")?;
+    let max_version = max_part[..max_end].trim().to_string();
+
+    // The partner is the trailing "compatible with: <Name> <version>".
+    let after_max = &max_part[max_end + " (exclusive)".len()..];
+    let partner_part = after_max
+        .find("compatible with:")
+        .map(|i| strip_log_bullet(&after_max[i + "compatible with:".len()..]))?;
+    let (partner_name, partner_version) = match partner_part.rfind(' ') {
+        Some(i) => (
+            partner_part[..i].trim().to_string(),
+            partner_part[i + 1..].trim().to_string(),
+        ),
+        None => (partner_part.to_string(), String::new()),
+    };
+    if mod_id.is_empty() || mod_name.is_empty() {
+        return None;
+    }
+    Some(ReplaceSuggestion {
+        mod_id,
+        mod_name,
+        min_version,
+        max_version,
+        partner_name,
+        partner_version,
+    })
 }
 
 /// Extract mod ids that the loader says are missing, e.g.
@@ -3315,6 +3628,35 @@ fn is_noise_token(token: &str) -> bool {
             | "unknown"
             | "null"
     )
+}
+
+/// True when the loader text names the Java runtime as the unsatisfied
+/// dependency. Fabric writes `requires version 25 or later of 'Java
+/// HotSpot(TM) 64-Bit Server VM' (java)`, so the `(java)` id or the VM name is
+/// the tell — the mod named earlier in the line is only the one *declaring* the
+/// requirement, not the cause.
+fn mentions_java_runtime(lower: &str) -> bool {
+    let names_runtime = lower.contains("(java)")
+        || lower.contains("'java'")
+        || lower.contains("java hotspot")
+        || lower.contains("java runtime");
+    names_runtime && (lower.contains("requires") || lower.contains("needs"))
+}
+
+/// Reads the required / present Java majors out of a Fabric loader dependency
+/// line ("requires version 25 or later … present: 8"), so the hint can quote
+/// the real numbers instead of generic guidance.
+fn parse_java_requirement(text: &str) -> (Option<u32>, Option<u32>) {
+    let lower = text.to_lowercase();
+    let read_after = |needle: &str| -> Option<u32> {
+        let start = lower.find(needle)? + needle.len();
+        let digits: String = lower[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        digits.parse().ok()
+    };
+    (read_after("requires version "), read_after("present: "))
 }
 
 /// True for loader phrases like `missing mod` / `missing mods`, but not
@@ -3773,6 +4115,218 @@ mod tests {
             }],
             overrides: None,
         }
+    }
+
+    #[test]
+    fn java_runtime_requirement_is_not_a_mod_culprit() {
+        // Verbatim Fabric loader lines from the 2026-09-27 crash log: an MC 26.2
+        // pack launched on Java 8. Every mod that merely *declares* the Java
+        // requirement used to land in the suspect pool at 90-94% "secondary"
+        // and the verdict offered "Disable More Chat History" for what is a JVM
+        // problem.
+        let text = "\
+Incompatible mod set!
+A potential solution has been determined, this may resolve your problem:
+Replace mod 'Sodium' (sodium) 0.9.2-alpha.4+mc26.2 with any version between 0.9.1+mc26.2 (inclusive) and 0.10- (exclusive) that is compatible with: Iris 1.1.12+mc26.2
+Replace 'Java HotSpot(TM) 64-Bit Server VM' (java) 8 with version 25 or later.
+Mod 'More Chat History' (morechathistory) 2.0.0 requires version 25 or later of 'Java HotSpot(TM) 64-Bit Server VM' (java), but only the wrong version is present: 8!
+Mod 'Fabric API' (fabric-api) 0.159.0+26.2 requires version 25 or later of 'Java HotSpot(TM) 64-Bit Server VM' (java), but only the wrong version is present: 8!
+Mod 'Sodium' (sodium) 0.9.2-alpha.4+mc26.2 is incompatible with version 1.1.12 or earlier of mod 'Iris' (iris), yet a conflicting version is present: 1.1.2+mc26.2!";
+        let (signals, suspects) = analyze_text_for_suspects(text, "logs/latest.log", &manifest());
+
+        assert!(
+            signals.iter().any(|s| s.kind == CrashSignalKind::JavaVersion),
+            "a Java runtime requirement must classify as JavaVersion, got {:?}",
+            signals.iter().map(|s| &s.kind).collect::<Vec<_>>()
+        );
+        assert!(
+            !suspects.iter().any(|s| s.id == "morechathistory"),
+            "the mod that merely declares the Java requirement must not be a suspect: {:?}",
+            suspects.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+        assert!(
+            !suspects
+                .iter()
+                .any(|s| s.id == "fabric-api" || s.id == "fabricapi"),
+            "same for every other mod naming the Java requirement: {:?}",
+            suspects.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+        // The genuine Sodium/Iris conflict still has to surface.
+        assert!(
+            suspects.iter().any(|s| s.id == "sodium" || s.id == "iris"),
+            "the real conflict must survive: {:?}",
+            suspects.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+
+        let hints = build_hints(&signals, &suspects);
+        let java = hints
+            .iter()
+            .find(|h| h.id == "java-version")
+            .expect("java-version hint");
+        assert!(java.detail.contains("Java 25"), "detail: {}", java.detail);
+        assert!(java.detail.contains("Java 8"), "detail: {}", java.detail);
+        assert_eq!(
+            java.fix.as_ref().map(|f| f.kind.as_str()),
+            Some("autoJava"),
+            "the fix must target the runtime, not a mod"
+        );
+    }
+
+    #[test]
+    fn outdated_dependency_points_at_the_side_to_update() {
+        // Second half of the same crash log: Sodium 0.9.2-alpha.4 refuses Iris
+        // 1.1.12 or earlier and 1.1.2 is installed. The fix is updating Iris —
+        // the launcher used to offer "Disable Iris Shaders", which throws away
+        // shaders instead of resolving the conflict.
+        let text = "Mod 'Sodium' (sodium) 0.9.2-alpha.4+mc26.2 is incompatible with version 1.1.12 or earlier of mod 'Iris' (iris), yet a conflicting version is present: 1.1.2+mc26.2!";
+        let mut m = manifest();
+        m.mods.push(ModSpec {
+            id: "iris".to_string(),
+            name: "Iris Shaders".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("YL57xq9U".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+                categories: Vec::new(),
+            },
+            version: "1.1.2+mc26.2".to_string(),
+            file_name: Some("iris-1.1.2+mc26.2.jar".to_string()),
+            hashes: None,
+            side: Side::Client,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
+            option: None,
+        });
+
+        let (signals, suspects) = analyze_text_for_suspects(text, "logs/latest.log", &m);
+        assert_eq!(signals[0].kind, CrashSignalKind::DependencyTooOld);
+        assert!(
+            suspects.iter().any(|s| s.id == "iris"),
+            "the outdated side must stay visible: {:?}",
+            suspects.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+
+        let hints = build_hints(&signals, &suspects);
+        assert!(
+            !hints.iter().any(|h| h.id == "version-mismatch"),
+            "the generic conflict hint must not stack a contradictory disable"
+        );
+        let hint = hints
+            .iter()
+            .find(|h| h.id == "outdated-dependency")
+            .expect("outdated-dependency hint");
+        assert_eq!(hint.related_mods, vec!["iris".to_string()]);
+        let fix = hint.fix.as_ref().expect("fix");
+        assert_eq!(fix.kind, "updateMod");
+        assert_eq!(fix.mod_id.as_deref(), Some("iris"));
+    }
+
+    fn spec(id: &str, name: &str) -> ModSpec {
+        ModSpec {
+            id: id.to_string(),
+            name: name.to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: None,
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+                categories: Vec::new(),
+            },
+            version: "1.0.0".to_string(),
+            file_name: None,
+            hashes: None,
+            side: Side::Client,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
+            option: None,
+        }
+    }
+
+    #[test]
+    fn parse_replace_suggestion_handles_the_log_wording() {
+        let one_line = "Replace mod 'Sodium' (sodium) 0.9.2-alpha.4+mc26.2 with any version between 0.9.1+mc26.2 (inclusive) and 0.10- (exclusive) that is compatible with: Iris 1.1.12+mc26.2";
+        let s = parse_replace_suggestion(one_line).expect("parsed");
+        assert_eq!(s.mod_id, "sodium");
+        assert_eq!(s.mod_name, "Sodium");
+        assert_eq!(s.min_version, "0.9.1+mc26.2");
+        assert_eq!(s.max_version, "0.10-");
+        assert_eq!(s.partner_name, "Iris");
+        assert_eq!(s.partner_version, "1.1.12+mc26.2");
+        // The loader's real formatting: a tab-dash bullet, the partner on the
+        // next line, and the partner named by id.
+        let bulleted = "\t - Replace mod 'Sodium' (sodium) 0.9.2-alpha.4+mc26.2 with any version between 0.9.1+mc26.2 (inclusive) and 0.10- (exclusive) that is compatible with: - iris 1.11.2+mc26.2";
+        let s2 = parse_replace_suggestion(bulleted).expect("parsed with bullet");
+        assert_eq!(s2.mod_id, "sodium");
+        assert_eq!(s2.partner_name, "iris");
+        assert_eq!(s2.partner_version, "1.11.2+mc26.2");
+        // Not a proposal → no suggestion.
+        assert!(parse_replace_suggestion("Mod 'Sodium' (sodium) 0.9.2 is incompatible").is_none());
+    }
+
+    #[test]
+    fn fabric_replace_proposal_becomes_a_concrete_update() {
+        // Verbatim from the 2026-09-27 crash log, hard-wrapped exactly the way
+        // the log prints it: the range and the partner land on continuation
+        // lines, and the old code saw neither the proposal nor the conflict.
+        // Verbatim from the launcher's captured logs/latest.log: the loader
+        // prefixes the proposal with a tab-dash bullet and puts the partner on
+        // the NEXT line, named by id — the first shape that broke detection.
+        let text = "[17:24:46] [main/WARN]: Mod resolution failed\n[17:24:46] [main/INFO]: Immediate reason: [HARD_DEP betterblockentities 1.3.8-beta.1+mc26.2 {depends sodium @ [>=0.9.0]}, NEG_HARD_DEP sodium 0.9.2-alpha.4+mc26.2 {breaks iris @ [<=1.11.2]}, ROOT_FORCELOAD_SINGLE iris 1.11.2+mc26.2]\n[17:24:46] [main/ERROR]: Incompatible mods found!\nA potential solution has been determined, this may resolve your problem:\n\t - Replace mod 'Sodium' (sodium) 0.9.2-alpha.4+mc26.2 with any version between 0.9.1+mc26.2 (inclusive) and 0.10- (exclusive) that is compatible with:\n\t\t - iris 1.11.2+mc26.2\nMore details:\n\t - Mod 'Sodium' (sodium) 0.9.2-alpha.4+mc26.2 is incompatible with version 1.11.2 or earlier of mod 'Iris' (iris), yet a conflicting version is present: 1.11.2+mc26.2!";
+        let mut m = manifest();
+        m.mods.push(spec("iris", "Iris Shaders"));
+        let (signals, suspects) = analyze_text_for_suspects(text, "logs/latest.log", &m);
+
+        assert!(
+            signals
+                .iter()
+                .any(|s| s.kind == CrashSignalKind::ReplaceSuggestion),
+            "the wrapped proposal must still be detected: {:?}",
+            signals.iter().map(|s| &s.kind).collect::<Vec<_>>()
+        );
+        // Both sides are involved, but as a pair to update — never as a
+        // high-confidence culprit to disable.
+        assert!(
+            suspects.iter().any(|s| s.id == "sodium") && suspects.iter().any(|s| s.id == "iris"),
+            "both sides of the pair must be visible: {:?}",
+            suspects.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+        assert!(
+            suspects.iter().all(|s| s.confidence <= 92),
+            "a version pair must stay in the secondary band: {:?}",
+            suspects
+                .iter()
+                .map(|s| (s.id.clone(), s.confidence))
+                .collect::<Vec<_>>()
+        );
+
+        let hints = build_hints(&signals, &suspects);
+        let hint = hints
+            .iter()
+            .find(|h| h.id == "replace-suggestion")
+            .expect("replace-suggestion hint");
+        assert!(hint.detail.contains("0.9.1+mc26.2"), "detail: {}", hint.detail);
+        assert!(hint.detail.contains("0.10-"), "detail: {}", hint.detail);
+        assert!(
+            hint.detail.contains("iris 1.11.2+mc26.2"),
+            "the partner named by id must survive parsing: {}",
+            hint.detail
+        );
+        let fix = hint.fix.as_ref().expect("fix");
+        assert_eq!(fix.kind, "updateMod");
+        assert_eq!(
+            fix.mod_id.as_deref(),
+            Some("iris"),
+            "the partner update keeps both mods installed"
+        );
     }
 
     #[test]

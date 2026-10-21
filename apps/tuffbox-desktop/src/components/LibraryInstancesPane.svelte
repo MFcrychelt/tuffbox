@@ -41,6 +41,8 @@
     recentProjects,
     projectPath,
     projectInfo,
+    focusLibraryPack,
+    libraryFocusPath,
     ideStageRequest,
     openAddInstance,
     runningInstances,
@@ -76,7 +78,7 @@
   import { getNote, loadNotes, setNote } from "../lib/libraryNotes";
 import { refreshUpdateCount, updateCounts } from "../lib/instanceUpdates";
 import { get } from "svelte/store";
-import { t } from "../lib/i18n";
+import { localeTag, t } from "../lib/i18n";
   import {
     isValidSortMode,
     matchesInstanceFilter,
@@ -103,7 +105,7 @@ import { t } from "../lib/i18n";
   const LONG_PRESS_MS = 420;
   const MOVE_CANCEL_PX = 10;
 
-  let selectedPath = $state<string | null>($projectPath);
+  let selectedPath = $state<string | null>($libraryFocusPath ?? $projectPath);
   /** Per-instance content (mods/packs/shaders/servers) — collapsed by default
       so the Library side rail stays quiet until needed. */
   const CONTENT_COLLAPSE_KEY = "tuffbox-library-content-collapsed";
@@ -156,14 +158,16 @@ import { t } from "../lib/i18n";
   let projectStats = $state<Record<string, { playtime: number; lastLaunch: string | null }>>({});
   let refreshing = $state(false);
 
-  /** Grid (cover tiles) vs list (dense rows); persisted. */
+  /** Rows by default: players scan packs by name, and a cover grid of four
+      packs used to eat half the window and leave a hole on wrap. Grid stays
+      one click away and is remembered per user. */
   const VIEW_KEY = "tuffbox.library.view";
   let viewMode = $state<"grid" | "list">(
     ((): "grid" | "list" => {
       try {
-        return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "grid";
+        return localStorage.getItem(VIEW_KEY) === "grid" ? "grid" : "list";
       } catch {
-        return "grid";
+        return "list";
       }
     })(),
   );
@@ -189,7 +193,7 @@ import { t } from "../lib/i18n";
     if (h < 24) return L("library.hourAgo", { n: h });
     const d = Math.floor(h / 24);
     if (d < 7) return L("library.dayAgo", { n: d });
-    return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    return new Date(iso).toLocaleDateString(get(localeTag), { day: "numeric", month: "short" });
   }
 
   let showClonePrompt = $state(false);
@@ -324,7 +328,7 @@ import { t } from "../lib/i18n";
   let selectingPath = false;
   $effect(() => {
     const recent = $recentProjects;
-    const current = $projectPath;
+    const current = $libraryFocusPath ?? $projectPath;
     if (selectingPath) return;
     if (selectedPath && !recent.some((p) => p.path === selectedPath)) {
       selectedPath = recent[0]?.path ?? null;
@@ -440,7 +444,7 @@ import { t } from "../lib/i18n";
     if (!iso) return get(t)("library.never");
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return get(t)("library.never");
-    return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+    return d.toLocaleDateString(get(localeTag), { day: "numeric", month: "short", year: "numeric" });
   }
 
   /** Expose the configured JRE for the selected pack (path or "Auto"). */
@@ -479,21 +483,36 @@ import { t } from "../lib/i18n";
         },
       );
       selectedPath = manifestPath;
-      projectPath.set(manifestPath);
-      projectInfo.set(info);
+      focusLibraryPack(manifestPath);
       return manifestPath;
     } catch {
       selectedPath = project.path;
-      projectPath.set(project.path);
-      projectInfo.set(project.info);
+      focusLibraryPack(project.path);
       return project.path;
     } finally {
       selectingPath = false;
     }
   }
 
+  /// After the focused pack leaves the list, the IDE keeps its own pack — it
+  /// only follows when that pack is what actually vanished.
+  function afterFocusRemoved(removedPath: string) {
+    const next = $recentProjects[0] ?? null;
+    selectedPath = next?.path ?? null;
+    focusLibraryPack(selectedPath);
+    if ($projectPath === removedPath || $projectPath === null) {
+      projectPath.set(selectedPath);
+      projectInfo.set(next?.info ?? null);
+    }
+  }
+
   function openInIde(project: RecentProject) {
     void selectInstance(project);
+    // The ONE path that hands a pack to the IDE — browsing must not do this.
+    projectPath.set(selectedPath ?? project.path);
+    projectInfo.set(
+      $recentProjects.find((p) => p.path === (selectedPath ?? project.path))?.info ?? project.info,
+    );
     ideStageRequest.set("content");
     currentView = "ide";
   }
@@ -1161,11 +1180,7 @@ import { t } from "../lib/i18n";
         break;
       case "remove":
         recentProjects.remove(project.path);
-        if (selectedPath === project.path) {
-          selectedPath = $recentProjects[0]?.path ?? null;
-          projectPath.set(selectedPath);
-          projectInfo.set($recentProjects[0]?.info ?? null);
-        }
+        if (selectedPath === project.path) afterFocusRemoved(project.path);
         toasts.info(get(t)("library.toastRemoved", { name: project.info.name }));
         break;
       case "delete": {
@@ -1177,11 +1192,7 @@ import { t } from "../lib/i18n";
         try {
           await invoke("delete_project", { path: project.path });
           recentProjects.remove(project.path);
-          if (selectedPath === project.path) {
-            selectedPath = $recentProjects[0]?.path ?? null;
-            projectPath.set(selectedPath);
-            projectInfo.set($recentProjects[0]?.info ?? null);
-          }
+          if (selectedPath === project.path) afterFocusRemoved(project.path);
           toasts.success(get(t)("library.toastDeleted", { name: project.info.name }));
         } catch (e) {
           toasts.error(String(e));
@@ -1285,7 +1296,7 @@ import { t } from "../lib/i18n";
 
   onMount(() => {
     if ($recentProjects.length && !selectedPath) {
-      selectedPath = $projectPath ?? $recentProjects[0].path;
+      selectedPath = $libraryFocusPath ?? $projectPath ?? $recentProjects[0].path;
     }
   });
 
@@ -1366,6 +1377,67 @@ import { t } from "../lib/i18n";
       </div>
     </div>
 
+    <div class="lib-filterbar" role="search">
+      <div class="tb-search">
+        <Search size={15} class="tb-search-icon" />
+        <input
+          type="text"
+          placeholder={$t("library.filterPlaceholder")}
+          aria-label={$t("library.filterAria")}
+          spellcheck="false"
+          bind:value={instanceFilter}
+        />
+        {#if instanceFilter}
+          <button
+            type="button"
+            class="tb-search-clear"
+            aria-label={$t("library.clearFilter")}
+            onclick={() => (instanceFilter = "")}
+          >
+            <X size={13} />
+          </button>
+        {/if}
+      </div>
+      <select
+        class="tb-sort"
+        aria-label={$t("library.sort")}
+        title="Sort instances"
+        value={sortMode}
+        onchange={(e) => setSortMode((e.currentTarget as HTMLSelectElement).value as SortMode)}
+      >
+        <option value="recent">{$t("library.sortRecent")}</option>
+        <option value="name">{$t("library.sortName")}</option>
+        <option value="playtime">{$t("library.sortPlaytime")}</option>
+      </select>
+      <div class="view-toggle" role="group" aria-label={$t("library.layout")}>
+        <button
+          type="button"
+          class="view-btn"
+          class:active={viewMode === "grid"}
+          title="Grid view"
+          aria-label={$t("library.gridView")}
+          aria-pressed={viewMode === "grid"}
+          onclick={() => setViewMode("grid")}
+        >
+          <LayoutGrid size={15} />
+        </button>
+        <button
+          type="button"
+          class="view-btn"
+          class:active={viewMode === "list"}
+          title="List view"
+          aria-label={$t("library.listView")}
+          aria-pressed={viewMode === "list"}
+          onclick={() => setViewMode("list")}
+        >
+          <List size={15} />
+        </button>
+      </div>
+      {#if $recentProjects.length > 0}
+        <span class="lib-title-count">{visibleCount} of {$recentProjects.length}</span>
+      {/if}
+    </div>
+
     <div class="tb-right">
       <button
         type="button"
@@ -1377,110 +1449,14 @@ import { t } from "../lib/i18n";
         <span class:spinning={refreshing}><RefreshCw size={16} /></span>
         <span>{$t("library.update")}</span>
       </button>
-      <button
-        type="button"
-        class="tb-btn"
-        title={$t("common.help")}
-        onclick={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
-      >
-        <HelpCircle size={16} />
-        <span>{$t("common.help")}</span>
-      </button>
-      <button type="button" class="tb-btn" title={$t("common.settings")} onclick={() => (currentView = "settings")}>
-        <Settings size={16} />
-        <span>{$t("common.settings")}</span>
-      </button>
-      {#if $authState.loggedIn && $authState.profile}
-        <button
-          type="button"
-          class="tb-account"
-          title={$t("library.account")}
-          onclick={() => (currentView = "me")}
-        >
-          <HeadAvatar skinSrc={$skinPath} size={28} alt={$authState.profile.name} />
-          <span class="tb-account-name">{$authState.profile.name}</span>
-          <span class="tb-account-badge">
-            {loginTypeLabel(
-              $authState.loginType,
-              $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority,
-            )}
-          </span>
-        </button>
-      {:else}
-        <button type="button" class="tb-btn" onclick={() => loginModalOpen.set(true)}>
-          Sign in
-        </button>
-      {/if}
+      <!-- Help / Settings / account were duplicates of the command palette, the
+           rail gear and the header "Switch" — three controls removed so the
+           toolbar keeps only what is unique to the Library. -->
     </div>
   </div>
 
   <div class="prism-body" class:is-dragging={dragging} style={`--side-scale: ${sideScale}`}>
     <div class="prism-grid-pane">
-      <div class="lib-page-head">
-        <div class="lib-page-title">
-          <h2 class="lib-title">{$t("library.title")}</h2>
-          {#if $recentProjects.length > 0}
-            <span class="lib-title-count">{visibleCount} of {$recentProjects.length}</span>
-          {/if}
-        </div>
-        <div class="lib-filterbar" role="search">
-          <div class="tb-search">
-            <Search size={15} class="tb-search-icon" />
-            <input
-              type="text"
-              placeholder={$t("library.filterPlaceholder")}
-              aria-label={$t("library.filterAria")}
-              spellcheck="false"
-              bind:value={instanceFilter}
-            />
-            {#if instanceFilter}
-              <button
-                type="button"
-                class="tb-search-clear"
-                aria-label={$t("library.clearFilter")}
-                onclick={() => (instanceFilter = "")}
-              >
-                <X size={13} />
-              </button>
-            {/if}
-          </div>
-          <select
-            class="tb-sort"
-            aria-label={$t("library.sort")}
-            title="Sort instances"
-            value={sortMode}
-            onchange={(e) => setSortMode((e.currentTarget as HTMLSelectElement).value as SortMode)}
-          >
-            <option value="recent">{$t("library.sortRecent")}</option>
-            <option value="name">{$t("library.sortName")}</option>
-            <option value="playtime">{$t("library.sortPlaytime")}</option>
-          </select>
-          <div class="view-toggle" role="group" aria-label={$t("library.layout")}>
-            <button
-              type="button"
-              class="view-btn"
-              class:active={viewMode === "grid"}
-              title="Grid view"
-              aria-label={$t("library.gridView")}
-              aria-pressed={viewMode === "grid"}
-              onclick={() => setViewMode("grid")}
-            >
-              <LayoutGrid size={15} />
-            </button>
-            <button
-              type="button"
-              class="view-btn"
-              class:active={viewMode === "list"}
-              title="List view"
-              aria-label={$t("library.listView")}
-              aria-pressed={viewMode === "list"}
-              onclick={() => setViewMode("list")}
-            >
-              <List size={15} />
-            </button>
-          </div>
-        </div>
-      </div>
       {#if $recentProjects.length === 0}
         <div class="empty-state">
           <h3>{$t("library.emptyTitle")}</h3>
@@ -1772,6 +1748,28 @@ onkeydown={(e) => e.stopPropagation()}
           </section>
         {/each}
       {/if}
+      <!-- Signature element: the product genuinely runs two jobs at once, so the
+           Library always shows which pack the IDE holds and hops back in one
+           click. Browsing here never touches that slot. -->
+      <div class="ide-dock" class:same={$projectPath !== null && $projectPath === selectedPath}>
+        {#if $projectPath}
+          {@const idePack = $recentProjects.find((p) => p.path === $projectPath) ?? null}
+          <span class="ide-dock-dot" aria-hidden="true"></span>
+          <span class="ide-dock-text">
+            IDE is editing <strong>{idePack?.info.name ?? $projectInfo?.name ?? "a pack"}</strong>
+            {#if $projectPath === selectedPath}<span class="ide-dock-here">· this pack</span>{/if}
+          </span>
+          <button type="button" class="ide-dock-return" onclick={() => (currentView = "ide")}>
+            Return to IDE
+          </button>
+        {:else}
+          <span class="ide-dock-dot idle" aria-hidden="true"></span>
+          <span class="ide-dock-text muted">
+            Nothing open in the IDE — pick a pack and choose Open in IDE.
+          </span>
+        {/if}
+      </div>
+
       <div class="lib-footer" aria-live="polite">
         <span>
           {#if selected}
@@ -2428,24 +2426,6 @@ onkeydown={(e) => e.stopPropagation()}
     background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
-  .tb-account {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 10px 4px 4px;
-    border-radius: 999px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    cursor: pointer;
-  }
-  .tb-account-name { font-size: 12px; font-weight: 700; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tb-account-badge {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-muted);
-    text-transform: uppercase;
-  }
 
   .prism-body {
     display: grid;
@@ -2474,28 +2454,6 @@ onkeydown={(e) => e.stopPropagation()}
     display: flex;
     flex-direction: column;
   }
-  .lib-page-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin: 4px 2px 14px;
-  }
-  .lib-page-title {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    min-width: 0;
-  }
-  .lib-title {
-    margin: 0;
-    font-size: 26px;
-    line-height: 1.1;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: var(--text-primary);
-  }
   .lib-title-count {
     font-size: 12px;
     font-weight: 600;
@@ -2507,6 +2465,67 @@ onkeydown={(e) => e.stopPropagation()}
     gap: 8px;
     flex-shrink: 0;
   }
+  /* Signature element: the strip that says which pack the IDE holds. Quiet by
+     design — it is orientation, not a call to action. */
+  .ide-dock {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-tertiary);
+    font-size: 12px;
+    min-width: 0;
+  }
+  .ide-dock.same {
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 7%, var(--bg-tertiary));
+  }
+  .ide-dock-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+  }
+  .ide-dock-dot.idle {
+    background: var(--text-muted);
+  }
+  .ide-dock-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+  }
+  .ide-dock-text strong {
+    color: var(--text-primary);
+    font-weight: 700;
+  }
+  .ide-dock-text.muted {
+    color: var(--text-muted);
+  }
+  .ide-dock-here {
+    color: var(--text-muted);
+  }
+  .ide-dock-return {
+    margin-left: auto;
+    flex: 0 0 auto;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    background: transparent;
+    color: var(--accent-primary);
+    cursor: pointer;
+  }
+  .ide-dock-return:hover {
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  }
+
   .lib-footer {
     margin-top: auto;
     padding-top: 12px;

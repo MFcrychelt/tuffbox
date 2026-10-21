@@ -733,7 +733,7 @@
           />
           {/if}
           <div
-            class="skin-player-name text-center overflow-hidden whitespace-nowrap text-ellipsis box-border max-w-full -mt-1 pb-3 px-2.5"
+            class="skin-player-name text-center overflow-hidden whitespace-nowrap text-ellipsis box-border max-w-full pb-3 px-2.5"
             title={$authState.profile.name}
             style={`font-size: ${skinNameFontPx}px`}
           >
@@ -951,20 +951,25 @@
     font-family: var(--font-minecraft);
     font-weight: 400;
     font-size: 12px;
-    line-height: 1.4;
+    /* Press Start 2P reports ascent 1em / descent 0, so at line-height 1.4
+       only 0.2em sat under the baseline — not enough headroom for the 1px
+       outline shadow (and the glow in the account carousel), which ran into
+       the ellipsis clip. */
+    line-height: 1.6;
     letter-spacing: 0.5px;
-    color: var(--mc-nick-color, var(--text-primary));
-    text-shadow: var(
-      --mc-nick-shadow,
-      2px 2px 0 color-mix(in srgb, var(--text-primary) 18%, #3f3f3f),
-      -1px 0 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
-      1px 0 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
-      0 -1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
-      0 1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000)
-    );
+    /* The skin panel is dark glass in every theme, so the theme's nick ink
+       (dark in light themes → 2.4:1 here) is wrong on this surface. Light ink
+       with a dark outline, matching the panel instead of the canvas. */
+    color: #f4f7f9;
+    text-shadow:
+      0 1px 0 rgba(0, 0, 0, 0.6),
+      1px 1px 0 rgba(0, 0, 0, 0.42),
+      -1px 1px 0 rgba(0, 0, 0, 0.42);
     text-align: center;
     padding: 0 10px 12px;
-    margin-top: -4px;
+    /* No negative pull: it dropped the label 4px over the canvas bottom edge,
+       so the cap-height row overlapped the preview frame. */
+    margin-top: 2px;
     max-width: 100%;
     box-sizing: border-box;
     overflow: hidden;
@@ -977,6 +982,7 @@
   .skin-static-name {
     font-family: var(--font-minecraft);
     font-size: 12px;
+    line-height: 1.6;
     letter-spacing: 0.5px;
     color: var(--text-primary);
   }

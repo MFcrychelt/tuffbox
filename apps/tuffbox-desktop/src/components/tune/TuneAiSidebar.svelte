@@ -10,9 +10,13 @@
     Trash2,
     ExternalLink,
     Plus,
+    Search,
+    Undo2,
   } from "@lucide/svelte";
-  import { api, type TuneChatSession } from "../../lib/api";
+  import { get } from "svelte/store";
+  import { api, type AiToolRun, type TuneChatSession } from "../../lib/api";
   import { projectPath, tuneChatFocusId } from "../../lib/store";
+  import { aiUndoFor, aiUndoStack, dropAiUndo, peekAiUndo, pushAiUndo } from "../../lib/aiUndo";
   import TunePlanReview from "./TunePlanReview.svelte";
 
   type GoalId =
@@ -23,7 +27,12 @@
     | "fill_unknowns"
     | "free_text";
 
-  type ChatMsg = { role: "user" | "assistant" | "system"; text: string };
+  type ChatMsg = {
+    role: "user" | "assistant" | "system";
+    text: string;
+    /** Tool calls behind an inspection answer; transient, not persisted. */
+    tools?: AiToolRun[];
+  };
 
   type ResearchEntry = { step: string; detail: string; ok: boolean; url?: string | null };
 
@@ -90,10 +99,15 @@
   let reviewRows = $state<ReviewRow[]>([]);
   let acknowledged = $state(false);
   let applyBusy = $state(false);
+  let undoBusy = $state(false);
+  let inspectBusy = $state(false);
   let showResearch = $state(false);
   let unlisten: UnlistenFn | undefined;
   let unsubPath: (() => void) | undefined;
   let unsubFocus: (() => void) | undefined;
+
+  /** Newest applied action set that can still be rolled back, for this pack. */
+  const undoEntry = aiUndoFor(projectPath);
 
   const canApply = $derived(
     reviewRows.some((r) => r.selected) &&
@@ -302,40 +316,130 @@
         actions: selected,
         needsUserReview: false,
       };
-      const result = await api.diagnostics.applyActionPlan(plan, $projectPath);
+      const project = $projectPath;
+      const result = await api.diagnostics.applyActionPlan(plan, project);
       const paths = selected
         .map((a) => a.path as string | undefined)
         .filter((p): p is string => !!p);
+      const snapshotId = (result as { snapshotId?: string } | null)?.snapshotId;
+      if (snapshotId) {
+        // Remembered here so the user can undo straight from the chat instead of
+        // hunting for the snapshot in the Snapshots screen.
+        pushAiUndo({
+          snapshotId,
+          title: `${selected.length} patch${selected.length === 1 ? "" : "es"}`,
+          detail: paths.length > 0 ? paths.join(", ") : "config edits",
+          actor: "Tune AI",
+          projectPath: project,
+        });
+      }
       messages = [
         ...messages,
         {
           role: "system",
-          text: `Applied ${selected.length} patch(es). Snapshot: ${(result as any)?.snapshotId ?? "ok"}`,
+          text: `Applied ${selected.length} patch(es). Snapshot: ${snapshotId ?? "ok"}`,
         },
       ];
       reviewOpen = false;
       pending = null;
-      if (activeId) {
-        try {
-          const s = await api.config.loadChat(activeId, $projectPath);
-          s.pendingAdvise = null;
-          s.messages = messages.map((m) => ({
-            role: m.role,
-            content: m.text,
-            createdAt: new Date().toISOString(),
-          }));
-          s.updatedAt = new Date().toISOString();
-          await api.config.saveChat(s, $projectPath);
-          await refreshList();
-        } catch {
-          /* ignore */
-        }
-      }
+      await persistChat();
       onapplied?.(paths);
     } catch (e: any) {
       error = String(e?.message ?? e);
     } finally {
       applyBusy = false;
+    }
+  }
+
+  /**
+   * Rolls back the newest applied action set.
+   *
+   * `rollback_snapshot` restores the files the snapshot captured — it is the same
+   * path the Snapshots screen uses, so an AI edit is undone exactly like a manual
+   * one, and the entry leaves the journal so the button cannot be pressed twice
+   * for the same snapshot.
+   */
+  async function undoLastAiAction() {
+    const project = $projectPath;
+    const target = peekAiUndo(project, get(aiUndoStack));
+    if (!project || !target || undoBusy) return;
+    undoBusy = true;
+    error = "";
+    try {
+      await api.snapshots.rollback(target.snapshotId, project);
+      dropAiUndo(target.snapshotId);
+      messages = [
+        ...messages,
+        { role: "system", text: `Undid ${target.title} — restored ${target.actor}’s snapshot.` },
+      ];
+      onapplied?.([]);
+    } catch (e: any) {
+      error = String(e?.message ?? e);
+    } finally {
+      undoBusy = false;
+    }
+  }
+
+  /** Saves the current transcript into the active chat session, if any. */
+  async function persistChat() {
+    const project = $projectPath;
+    if (!activeId || !project) return;
+    try {
+      const session = await api.config.loadChat(activeId, project);
+      session.pendingAdvise = null;
+      session.messages = messages.map((m) => ({
+        role: m.role,
+        content: m.text,
+        createdAt: new Date().toISOString(),
+      }));
+      session.updatedAt = new Date().toISOString();
+      await api.config.saveChat(session, project);
+      await refreshList();
+    } catch {
+      /* a failed save must not throw away the in-memory transcript */
+    }
+  }
+
+  /**
+   * Asks the model to inspect the pack with the read-only tool catalogue.
+   *
+   * Separate from the plan flow on purpose: the tools only read, so there is
+   * nothing to review or apply — but anything the model *suggests* still goes
+   * through the usual plan + confirmation.
+   */
+  async function inspect() {
+    const question = input.trim();
+    const project = $projectPath;
+    if (!question || !project || busy || inspectBusy) return;
+    input = "";
+    error = "";
+    inspectBusy = true;
+    messages = [...messages, { role: "user", text: question }];
+    try {
+      const result = await api.config.inspectProject(question, project);
+      const notes: string[] = [];
+      if (!result.toolsAvailable) {
+        notes.push(
+          "This model/endpoint refused the tool payload, so the answer used no project data.",
+        );
+      } else if (result.toolRuns.length === 0) {
+        notes.push("No tools were needed for this question.");
+      }
+      if (result.capped) {
+        notes.push(`Stopped after ${result.rounds} inspection round(s) before answering.`);
+      }
+      const text = [result.text.trim(), ...notes.map((n) => `(${n})`)]
+        .filter(Boolean)
+        .join("\n\n");
+      messages = [
+        ...messages,
+        { role: "assistant", text, tools: result.toolRuns },
+      ];
+      await persistChat();
+    } catch (e: any) {
+      error = String(e?.message ?? e);
+    } finally {
+      inspectBusy = false;
     }
   }
 
@@ -418,6 +522,24 @@
       {#each messages as m, i (i + m.role + m.text.slice(0, 24))}
         <div class="bubble" class:user={m.role === "user"} class:assistant={m.role === "assistant"} class:system={m.role === "system"}>
           {m.text}
+          {#if m.tools?.length}
+            <details class="tool-trace">
+              <summary>
+                {m.tools.length} tool call{m.tools.length === 1 ? "" : "s"} · read-only
+              </summary>
+              {#each m.tools as run, t (t + run.name)}
+                <div class="tool-run">
+                  <div class="tool-name">
+                    {run.name}
+                    {#if run.arguments && run.arguments !== "{}"}
+                      <span class="tool-args">{run.arguments.slice(0, 120)}</span>
+                    {/if}
+                  </div>
+                  <pre class="tool-result">{run.result.length > 2000 ? run.result.slice(0, 2000) + "…" : run.result}</pre>
+                </div>
+              {/each}
+            </details>
+          {/if}
         </div>
       {/each}
       {#if progressLog.length > 0}
@@ -454,6 +576,34 @@
       </details>
     {/if}
 
+    {#if $undoEntry}
+      {@const undo = $undoEntry}
+      <div class="undo-bar">
+        <Undo2 size={14} />
+        <span class="undo-text" title={undo.detail}>
+          {undo.actor} applied {undo.title}
+        </span>
+        <button
+          type="button"
+          class="ghost mini"
+          disabled={undoBusy}
+          onclick={undoLastAiAction}
+          title="Restore the snapshot taken before this change"
+        >
+          {#if undoBusy}<Loader2 size={12} class="spin" />{:else}Undo{/if}
+        </button>
+        <button
+          type="button"
+          class="ghost mini"
+          disabled={undoBusy}
+          onclick={() => dropAiUndo(undo.snapshotId)}
+          title="Keep the change and hide this"
+        >
+          Keep
+        </button>
+      </div>
+    {/if}
+
     {#if pending}
       <div class="pending">
         <MessageSquareText size={14} />
@@ -477,6 +627,19 @@
           }
         }}
       ></textarea>
+      <button
+        type="button"
+        class="ghost inspect"
+        disabled={busy || inspectBusy || !input.trim()}
+        onclick={inspect}
+        title="Inspect the pack with read-only tools — nothing is changed"
+      >
+        {#if inspectBusy}
+          <Loader2 size={16} class="spin" />
+        {:else}
+          <Search size={16} />
+        {/if}
+      </button>
       <button type="button" class="primary send" disabled={busy || !input.trim()} onclick={send}>
         {#if busy}
           <Loader2 size={16} class="spin" />
@@ -639,6 +802,107 @@
     word-break: break-all;
   }
   .research a:hover { text-decoration: underline; }
+  .tool-trace {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .tool-trace summary {
+    cursor: pointer;
+    color: var(--text-muted);
+  }
+  .tool-run {
+    margin-top: 6px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-tertiary);
+  }
+  .tool-name {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .tool-args {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .tool-result {
+    margin: 4px 0 0;
+    max-height: 180px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .composer .inspect {
+    width: 38px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .composer .inspect:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+  .composer .inspect:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .undo-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  .undo-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .undo-bar button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    font-size: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .undo-bar button:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+  .undo-bar button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
   .pending {
     display: flex;
     align-items: center;

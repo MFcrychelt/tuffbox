@@ -57,7 +57,7 @@ struct Atlas {
 static ATLASES: OnceCell<Mutex<HashMap<&'static str, Atlas>>> = OnceCell::new();
 
 fn atlases() -> &'static Mutex<HashMap<&'static str, Atlas>> {
-    ALTASES.get_or_init(|| Mutex::new(HashMap::new()))
+    ATLASES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn style_key(weight: Weight, size: Size) -> &'static str {

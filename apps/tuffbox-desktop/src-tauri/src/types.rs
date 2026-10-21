@@ -540,6 +540,11 @@ pub struct RecentProjectInfo {
     pub memory_mb: u32,
     #[serde(default)]
     pub jvm_args: Vec<String>,
+    /// Optional in practice: cache entries written before the field existed
+    /// (or from partial `validate` results) have no `playerName`. Without
+    /// `default` ONE such entry fails the whole `save_recent_projects` batch.
+    /// Empty means "unnamed" — the launch path already falls back to "Player".
+    #[serde(default)]
     pub player_name: String,
 }
 

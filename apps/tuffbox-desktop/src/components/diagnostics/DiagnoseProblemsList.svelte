@@ -305,7 +305,7 @@
     border-radius: var(--border-radius-sm);
     border: none;
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent);
     font-size: 12px;
     font-weight: 700;
     cursor: pointer;

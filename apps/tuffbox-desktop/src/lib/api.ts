@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { projectPath, type AuthState, type McProfile, type DeviceCodeInfo, type SkinSource, type AccountEntry, type McCapeEntry, type CapeProvider, type CapeCatalog, type YggdrasilPreset, type PresenceSettings, type LauncherSettings } from "./store";
 import { get } from "svelte/store";
+import { toasts } from "./toast";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -359,6 +360,24 @@ export interface TuneChatMessage {
   role: string;
   content: string;
   createdAt?: string | null;
+}
+
+/** One tool call the agent made while inspecting the project. */
+export interface AiToolRun {
+  name: string;
+  arguments: string;
+  result: string;
+}
+
+/** Result of one tool-using inspection (`ai_inspect_project`). */
+export interface AiInspectResult {
+  text: string;
+  rounds: number;
+  /** True when the loop stopped at the round cap before the model answered. */
+  capped: boolean;
+  /** False when the provider refused the tool payload — the answer is prose only. */
+  toolsAvailable: boolean;
+  toolRuns: AiToolRun[];
 }
 
 export interface TunePendingAdvise {
@@ -1277,6 +1296,33 @@ export interface ChunkData {
   lastModified: number;
 }
 
+/**
+ * Section-level chunk data for the 3D preview (`read_world_column`).
+ *
+ * Indices arrive unpacked from Rust: `blockStates` is base64 of 4096
+ * little-endian `u16` in vanilla order `(y << 8) | (z << 4) | x`.
+ */
+export interface WorldPaletteEntry {
+  name: string;
+  properties: Record<string, string>;
+}
+
+export interface WorldSectionColumn {
+  y: number;
+  blockPalette: WorldPaletteEntry[];
+  blockStates: string;
+  biomePalette: string[];
+  biomeStates: string;
+}
+
+export interface WorldColumn {
+  x: number;
+  z: number;
+  dataVersion: number;
+  status: string | null;
+  sections: WorldSectionColumn[];
+}
+
 export interface ChunkClipboard {
   sourceWorld: string;
   chunks: ChunkData[];
@@ -1897,6 +1943,17 @@ export const api = {
     search(query: string, p?: string) { return cmd<ConfigSearchMatch[]>("search_in_configs", { ...pathArg(p), query }); },
     lint(relativePath: string, p?: string) { return cmd<LintResult[]>("lint_config", { ...pathArg(p), relativePath }); },
     formatToml(content: string) { return cmd<string>("format_toml", { content }); },
+    /**
+     * Answers a question about the open pack, letting the model inspect it with
+     * the read-only tool catalogue first. Nothing is changed by this call.
+     */
+    inspectProject(question: string, p?: string, maxRounds?: number) {
+      return cmd<AiInspectResult>("ai_inspect_project", {
+        ...pathArg(p),
+        question,
+        maxRounds: maxRounds ?? null,
+      });
+    },
     advise(opts: {
       goal?: string;
       userMessage?: string;
@@ -2276,6 +2333,21 @@ export const api = {
         scale: opts?.scale ?? 4,
         selections: opts?.selections ?? [],
         dimension: opts?.dimension ?? "overworld",
+      });
+    },
+    readColumn(
+      worldName: string,
+      chunkX: number,
+      chunkZ: number,
+      dimension?: string,
+      p?: string,
+    ) {
+      return cmd<WorldColumn | null>("read_world_column", {
+        ...pathArg(p),
+        worldName,
+        chunkX,
+        chunkZ,
+        dimension: dimension ?? "overworld",
       });
     },
     warmCache(worldName: string, dimension?: string, p?: string) {
@@ -3097,9 +3169,9 @@ export const api = {
     takePendingLaunch() {
       return cmd<string | null>("take_pending_launch_project");
     },
-    /** One-shot verdict from a `tuffbox://install?repo=…` deep link. */
-    takePendingInstall() {
-      return cmd<InstallLinkPayload | null>("take_pending_install_repo");
+    /** One-shot verdict from a `tuffbox://` deep link (install or launch). */
+    takePendingDeepLink() {
+      return cmd<DeepLinkPayload | null>("take_pending_deep_link");
     },
   },
 
@@ -3320,11 +3392,21 @@ export function githubInspectMeta(info: {
   return parts.join(" · ");
 }
 
-// ── tuffbox://install deep link ──────────────────────────────────────
+// ── tuffbox:// deep links ────────────────────────────────────────────
 
 export type InstallLinkPayload =
   | { status: "valid"; repo: string }
   | { status: "invalid"; raw: string };
+
+export type LaunchLinkPayload =
+  | { status: "valid"; project: string; name: string }
+  | { status: "invalid"; raw: string; reason: string };
+
+/** One parked link, tagged by verb — mirrors `PendingDeepLink` in `deep_link.rs`. */
+export type DeepLinkPayload =
+  | { kind: "install"; verdict: InstallLinkPayload }
+  | { kind: "launch"; verdict: LaunchLinkPayload }
+  | { kind: "unknown"; raw: string };
 
 type InstallLinkHandler = (link: InstallLinkPayload) => void;
 
@@ -3344,6 +3426,30 @@ function deliverInstallLink(link: InstallLinkPayload): void {
   for (const handler of [...installLinkHandlers]) handler(link);
 }
 
+/**
+ * Routes one parked link.
+ *
+ * A launch link only *asks*: the App view shows which pack it points at and the
+ * user confirms — the URL comes from outside the app, so nothing may start on
+ * its own.
+ */
+function deliverDeepLink(link: DeepLinkPayload): void {
+  switch (link.kind) {
+    case "install":
+      deliverInstallLink(link.verdict);
+      return;
+    case "launch":
+      if (link.verdict.status === "invalid") {
+        toasts.error(`Launch link rejected: ${link.verdict.reason || "bad link"}`);
+        return;
+      }
+      window.dispatchEvent(new CustomEvent("tuffbox:launch-link", { detail: link.verdict }));
+      return;
+    case "unknown":
+      toasts.warning(`Unknown TuffBox link: ${link.raw}`);
+  }
+}
+
 /** Subscribe to `tuffbox://install?repo=…` links. A subscriber that mounts
  * late still receives a link that arrived before it existed. Returns an
  * unlisten function. */
@@ -3360,17 +3466,17 @@ export function onInstallLink(handler: InstallLinkHandler): () => void {
 if (isTauri()) {
   // Cold start: drain what the backend parked before any UI existed.
   void api.files
-    .takePendingInstall()
+    .takePendingDeepLink()
     .then((pending) => {
-      if (pending) deliverInstallLink(pending);
+      if (pending) deliverDeepLink(pending);
     })
     .catch(() => {});
   // Warm start: a second instance forwarded the URL to this process.
-  void listen<InstallLinkPayload | null>("tuffbox:install-link", (event) => {
+  void listen<DeepLinkPayload | null>("tuffbox:deep-link", (event) => {
     if (!event.payload) return;
     // The backend parks the same link for the next cold start; drop it so a
     // later launch doesn't replay a link the user already handled.
-    void api.files.takePendingInstall().catch(() => {});
-    deliverInstallLink(event.payload);
+    void api.files.takePendingDeepLink().catch(() => {});
+    deliverDeepLink(event.payload);
   });
 }

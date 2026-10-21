@@ -820,6 +820,7 @@
   .mc-nick {
     font-family: var(--font-minecraft);
     font-size: 12px;
+    line-height: 1.6;
     letter-spacing: 0.4px;
     color: var(--mc-nick-color, var(--text-primary));
     text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);

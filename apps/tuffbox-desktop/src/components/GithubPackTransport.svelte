@@ -400,7 +400,7 @@
       disabled={busy || !$projectPath}
     >Preview tree</button>
     <button
-      class="inline-flex items-center gap-2 h-7 px-2.5 rounded-lg border-0 bg-[var(--accent-primary)] text-xs font-bold text-[#06251a] cursor-pointer transition-colors duration-[160ms] hover:bg-[var(--accent-hover)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
+      class="inline-flex items-center gap-2 h-7 px-2.5 rounded-lg border-0 bg-[var(--accent-primary)] text-xs font-bold text-[var(--on-accent)] cursor-pointer transition-colors duration-[160ms] hover:bg-[var(--accent-hover)] disabled:opacity-45 disabled:cursor-not-allowed disabled:pointer-events-none"
       onclick={publishPack}
       disabled={busy || !authed || !repository.trim() || repoInvalid}
     >

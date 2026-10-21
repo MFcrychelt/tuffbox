@@ -8,6 +8,8 @@
   import { trapFocus } from "../lib/focusTrap";
   import * as d3 from "d3-force";
   import { onDestroy, onMount, untrack } from "svelte";
+  import { get } from "svelte/store";
+  import { localeTag } from "../lib/i18n";
 
 
   type GraphNode = {
@@ -2463,7 +2465,7 @@
         Local graph shown; network metadata has not been cached yet.
       {:else}
         {graphSource === "cache" ? "Cached dependency graph" : "Current dependency graph"}
-        {graphGeneratedAt ? ` · ${new Date(graphGeneratedAt).toLocaleString()}` : ""}
+        {graphGeneratedAt ? ` · ${new Date(graphGeneratedAt).toLocaleString(get(localeTag))}` : ""}
       {/if}
     </div>
   {/if}
@@ -3937,8 +3939,11 @@
     pointer-events: none;
   }
   .graph-group .group-label {
-    fill: currentColor;
-    fill-opacity: 0.85;
+    /* Cluster palette colors ship with ~0.5 alpha for the halo wash; used
+       verbatim as text they measured 1.2-1.4:1 on the dark canvas. Lighten
+       toward white and drop the extra alpha so every cluster name reads. */
+    fill: color-mix(in srgb, currentColor 60%, #ffffff);
+    fill-opacity: 1;
     stroke: none;
     font-size: 13px;
     font-weight: 800;

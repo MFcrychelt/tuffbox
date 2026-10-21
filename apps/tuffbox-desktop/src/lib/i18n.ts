@@ -41,6 +41,14 @@ locale.subscribe((l) => {
   }
 });
 
+/** BCP-47 tag for the active UI language.
+ *
+ * ALWAYS pass this to `toLocaleDateString` / `toLocaleString`. Passing
+ * `undefined` follows the OS locale, so a Russian Windows painted Russian
+ * dates ("5 сент.", "ср, 2 сент.") inside the English UI.
+ */
+export const localeTag = derived(locale, (l) => (l === "ru" ? "ru-RU" : "en-US"));
+
 type Entry = { en: string; ru: string };
 
 /** Dictionary — dotted keys, `{token}` placeholders filled by `t()`. */
@@ -712,6 +720,22 @@ const dict: Record<string, Entry> = {
   "library.never": { en: "Never", ru: "Никогда" },
   "library.autoWord": { en: "Auto", ru: "Авто" },
   "library.launching": { en: "Launching…", ru: "Запуск…" },
+
+  // ── Snapshots (IDE · Snapshots) ──
+  "snapshots.filterAll": { en: "All", ru: "Все" },
+  "snapshots.filterAuto": { en: "Automatic", ru: "Автоматические" },
+  "snapshots.filterManual": { en: "Manual", ru: "Ручные" },
+  "snapshots.filterCrash": { en: "Crash fixes", ru: "Сбои" },
+  "snapshots.namePlaceholder": { en: "Checkpoint name…", ru: "Название точки сохранения…" },
+
+  // ── Release room (IDE · Release) ──
+  "release.previewBeforeSend": { en: "Preview before publishing", ru: "Предпросмотр перед отправкой" },
+  "release.publishAllChannels": { en: "Publish release to all channels", ru: "Опубликовать релиз во всех каналах" },
+  "release.changelogAdded": { en: "## Added mods", ru: "## Новые моды" },
+  "release.changelogUpdated": { en: "## Updated mods", ru: "## Обновленные моды" },
+  "release.changelogRemoved": { en: "## Removed mods", ru: "## Удаленные моды" },
+  "release.changelogCollapse": { en: "Collapse", ru: "Свернуть" },
+  "release.changelogMore": { en: "{n} unchanged dependencies…", ru: "Еще {n} зависимостей без изменений…" },
   "library.toastUpdatePartial": {
     en: "Updated {ok}, failed {failed}: {first}",
     ru: "Обновлено {ok}, ошибок {failed}: {first}",

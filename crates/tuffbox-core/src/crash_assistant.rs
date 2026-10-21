@@ -2400,23 +2400,42 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
             ],
         )
         .map(truncate_evidence);
+        // Fabric's own "Replace mod … with any version between … that is
+        // compatible with: …" proposal means the conflict IS resolvable by
+        // updating, so destructive options are not the answer — they used to
+        // make "Disable iris" the top one-click fix on a pack that only needed
+        // a newer Iris.
+        let has_proposal =
+            lower.contains("replace mod '") && lower.contains("with any version between");
         let fixes: Vec<_> = mods
             .iter()
             .take(4)
             .flat_map(|m| {
-                vec![
-                    fix_action("disableMod", &format!("Disable `{m}`"), Some(m)),
-                    fix_action("updateMod", &format!("Update `{m}`"), Some(m)),
-                    fix_action("removeMod", &format!("Remove `{m}`"), Some(m)),
-                ]
+                if has_proposal {
+                    vec![fix_action("updateMod", &format!("Update `{m}`"), Some(m))]
+                } else {
+                    vec![
+                        fix_action("disableMod", &format!("Disable `{m}`"), Some(m)),
+                        fix_action("updateMod", &format!("Update `{m}`"), Some(m)),
+                        fix_action("removeMod", &format!("Remove `{m}`"), Some(m)),
+                    ]
+                }
             })
             .collect();
         out.push(fx(
             "critical",
             "HARD_MOD_CONFLICT",
             "Two mods refuse to load together",
-            "Fabric already figured out the fight — one mod `depends`/`breaks`/`conflicts` with another. Pick a side or update.",
-            Some("Read the red error screen / log line, then disable or update one of the named mods."),
+            if has_proposal {
+                "Fabric printed the version range that resolves this conflict, so both mods can stay: update them to the newest builds for this Minecraft/loader instead of disabling either."
+            } else {
+                "Fabric already figured out the fight — one mod `depends`/`breaks`/`conflicts` with another. Pick a side or update."
+            },
+            Some(if has_proposal {
+                "Update the named mods to the newest versions — the loader already verified that combination works."
+            } else {
+                "Read the red error screen / log line, then disable or update one of the named mods."
+            }),
             &["https://guide.astroworldmc.com/fabric-incompatible-mods-fix"],
             fixes,
             evidence,
@@ -2530,7 +2549,9 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         // Detect a Fabric-style Java requirement line.
         let req = java_major_required(combined);
         if let Some(req_major) = req {
-            let have = parse_java_major(&ctx.java_version);
+            // The launcher may not have fingerprinted the assigned JRE; the
+            // loader line still states it ("… present: 8!"), so use that.
+            let have = parse_java_major(&ctx.java_version).or_else(|| java_major_present(combined));
             let need_newer = match have {
                 Some(h) => req_major > h,
                 None => true, // unknown runtime → still want the prompt
@@ -2538,10 +2559,9 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
             if need_newer {
                 let demand = format!(
                     "This project needs Java {req_major}+, but the assigned runtime is Java {}.",
-                    if have.is_some() {
-                        ctx.java_version.clone()
-                    } else {
-                        "unknown (looks old)".into()
+                    match have {
+                        Some(h) => h.to_string(),
+                        None => "unknown (looks old)".to_string(),
                     }
                 );
                 out.push(fx(
@@ -2558,8 +2578,13 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                         ),
                     ),
                     &["https://minefixtools.com/fixes/how-to-read-fabric-crash-reports"],
+                    // `autoJava` is the implemented kind: it provisions/selects
+                    // the runtime the Minecraft version requires (Java 25 for the
+                    // year-based 26.x releases). `selectJava` had no handler in
+                    // `apply_fix_actions`, so this button used to fail with
+                    // "unknown fix action kind".
                     vec![fix_action(
-                        "selectJava",
+                        "autoJava",
                         &format!("Use Java {req_major}+ ({demand})"),
                         None,
                     )],
@@ -2609,6 +2634,19 @@ fn java_major_required(combined: &str) -> Option<u32> {
         }
     }
     None
+}
+
+/// The runtime major the loader reported as present
+/// ("… but only the wrong version is present: 8!"). Used when the launcher
+/// could not fingerprint the assigned JRE itself.
+fn java_major_present(combined: &str) -> Option<u32> {
+    let lower = combined.to_lowercase();
+    let idx = lower.find("present: ")? + "present: ".len();
+    let num: String = lower[idx..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    num.parse().ok()
 }
 
 fn parse_java_major(v: &str) -> Option<u32> {

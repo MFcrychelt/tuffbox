@@ -293,7 +293,7 @@
   .mr-title-line h3.is-placeholder,
   h2.is-placeholder,
   .cf-body h3.is-placeholder {
-    color: #64748b;
+    color: #94a3b8;
     font-style: italic;
     font-weight: 600;
   }
@@ -315,9 +315,9 @@
   .mr-summary.is-placeholder,
   .cf-summary.is-placeholder,
   .muted.is-placeholder {
-    color: #64748b;
+    /* slate-500 + 0.85 opacity measured 3.73:1 on the dark card. */
+    color: #94a3b8;
     font-style: italic;
-    opacity: 0.85;
   }
 
   .card-summary {

@@ -2165,9 +2165,10 @@
   }
   .btn.quest-cta,
   .btn.accent.quest-cta {
-    background: rgba(61, 184, 168, 0.2);
-    border-color: var(--ftbq-accent-teal, #3db8a8);
-    color: var(--ftbq-title-gold, #f2c94c);
+    /* Same teal-tint/gold-ink mismatch as the badge above (4.04:1). */
+    background: color-mix(in srgb, var(--accent-warning) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent-warning) 45%, transparent);
+    color: var(--accent-warning);
   }
   .draft-head.quest {
     color: var(--ftbq-title-gold, #f2c94c);
@@ -2225,9 +2226,10 @@
     border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
   .kind-badge.quest {
-    color: var(--ftbq-title-gold, #f2c94c);
-    background: rgba(61, 184, 168, 0.15);
-    border: 1px solid var(--ftbq-accent-teal, #3db8a8);
+    /* Gold ink on a teal tint measured 3.88:1; keep the badge on its own hue. */
+    color: var(--accent-warning);
+    background: color-mix(in srgb, var(--accent-warning) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 35%, transparent);
   }
   .kind-badge.tune {
     color: var(--accent-primary);
@@ -2252,6 +2254,13 @@
   }
   .session-main {
     flex: 1;
+    /* Buttons default to a row flex box; the session item is a two-line stack
+       (title + preview/time). Without `min-width: 0` the button's automatic
+       minimum is the unwrapped text width, so the title ran past the 200px
+       column and got hard-clipped instead of ellipsised. */
+    min-width: 0;
+    flex-direction: column;
+    align-items: stretch;
     text-align: left;
     background: none;
     border: none;

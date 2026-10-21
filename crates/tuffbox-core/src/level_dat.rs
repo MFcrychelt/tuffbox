@@ -71,8 +71,11 @@ fn read_nbt(path: &std::path::Path) -> Result<NbtTag, String> {
     read_nbt_auto(path)
 }
 
-/// Minimal NBT binary parser — only handles the tag types used in level.dat.
-fn parse_nbt_binary(data: &[u8]) -> Result<NbtTag, String> {
+/// Minimal NBT binary parser.
+///
+/// Public because the Anvil chunk reader decompresses regions itself and then
+/// needs the same parser on the raw chunk bytes.
+pub fn parse_nbt_binary(data: &[u8]) -> Result<NbtTag, String> {
     if data.is_empty() || data[0] != 10 {
         return Err("not a compound".into());
     }
@@ -94,22 +97,42 @@ fn parse_compound(data: &[u8], pos: &mut usize) -> Result<(NbtTag, usize), Strin
         if tag_type == 0 {
             break;
         } // TAG_End
-        let name_len = read_u16(data, pos)?;
-        let name = String::from_utf8_lossy(&data[*pos..*pos + name_len as usize]).to_string();
-        *pos += name_len as usize;
+        let name_len = read_u16(data, pos)? as usize;
+        let name = String::from_utf8_lossy(take(data, pos, name_len)?).to_string();
         let value = parse_payload(data, pos, tag_type)?;
         entries.push((name, value));
     }
     Ok((NbtTag::Compound(entries), *pos))
 }
 
+/// Bounds-checked slice out of the NBT stream.
+///
+/// World files are untrusted input: a corrupt or hostile chunk can declare any
+/// length, so every length read from the stream is validated before use — a
+/// panic inside a Tauri command is a bug, an `Err` is a diagnosis.
+fn take<'a>(data: &'a [u8], pos: &mut usize, len: usize) -> Result<&'a [u8], String> {
+    let end = pos.checked_add(len).ok_or("length overflow")?;
+    if end > data.len() {
+        return Err("EOF".into());
+    }
+    let slice = &data[*pos..end];
+    *pos = end;
+    Ok(slice)
+}
+
+/// A negative or implausible element count must fail before it is used to size
+/// a loop or a slice (NBT lengths are signed 32-bit on the wire).
+fn read_len(data: &[u8], pos: &mut usize) -> Result<usize, String> {
+    let len = read_i32(data, pos)?;
+    if len < 0 || len as usize > data.len() {
+        return Err(format!("implausible NBT length: {len}"));
+    }
+    Ok(len as usize)
+}
+
 fn parse_payload(data: &[u8], pos: &mut usize, tag_type: u8) -> Result<NbtTag, String> {
     Ok(match tag_type {
-        1 => {
-            let v = data[*pos] as i8;
-            *pos += 1;
-            NbtTag::Byte(v)
-        }
+        1 => NbtTag::Byte(take(data, pos, 1)?[0] as i8),
         2 => {
             let v = read_i16(data, pos)?;
             NbtTag::Short(v)
@@ -123,44 +146,32 @@ fn parse_payload(data: &[u8], pos: &mut usize, tag_type: u8) -> Result<NbtTag, S
             NbtTag::Long(v)
         }
         5 => {
-            let v =
-                f32::from_be_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
-            *pos += 4;
-            NbtTag::Float(v)
+            let b = take(data, pos, 4)?;
+            NbtTag::Float(f32::from_be_bytes([b[0], b[1], b[2], b[3]]))
         }
         6 => {
-            let v = f64::from_be_bytes([
-                data[*pos],
-                data[*pos + 1],
-                data[*pos + 2],
-                data[*pos + 3],
-                data[*pos + 4],
-                data[*pos + 5],
-                data[*pos + 6],
-                data[*pos + 7],
-            ]);
-            *pos += 8;
-            NbtTag::Double(v)
+            let b = take(data, pos, 8)?;
+            NbtTag::Double(f64::from_be_bytes([
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+            ]))
         }
         7 => {
-            let len = read_i32(data, pos)? as usize;
-            let bytes = data[*pos..*pos + len].to_vec();
-            *pos += len;
-            NbtTag::ByteArray(bytes)
+            let len = read_len(data, pos)?;
+            NbtTag::ByteArray(take(data, pos, len)?.to_vec())
         }
         8 => {
             let len = read_u16(data, pos)? as usize;
-            let s = String::from_utf8_lossy(&data[*pos..*pos + len]).to_string();
-            *pos += len;
-            NbtTag::String(s)
+            NbtTag::String(String::from_utf8_lossy(take(data, pos, len)?).to_string())
         }
         9 => {
-            let list_type = data[*pos];
-            *pos += 1;
-            let len = read_i32(data, pos)? as usize;
+            let list_type = take(data, pos, 1)?[0];
+            let len = read_len(data, pos)?;
             let mut items = Vec::new();
-            for _ in 0..len {
-                items.push(parse_payload(data, pos, list_type)?);
+            // TAG_End as the element type is how vanilla spells an empty list.
+            if list_type != 0 {
+                for _ in 0..len {
+                    items.push(parse_payload(data, pos, list_type)?);
+                }
             }
             NbtTag::List(items)
         }
@@ -169,16 +180,16 @@ fn parse_payload(data: &[u8], pos: &mut usize, tag_type: u8) -> Result<NbtTag, S
             c
         }
         11 => {
-            let len = read_i32(data, pos)? as usize;
-            let mut arr = Vec::new();
+            let len = read_len(data, pos)?;
+            let mut arr = Vec::with_capacity(len);
             for _ in 0..len {
                 arr.push(read_i32(data, pos)?);
             }
             NbtTag::IntArray(arr)
         }
         12 => {
-            let len = read_i32(data, pos)? as usize;
-            let mut arr = Vec::new();
+            let len = read_len(data, pos)?;
+            let mut arr = Vec::with_capacity(len);
             for _ in 0..len {
                 arr.push(read_i64(data, pos)?);
             }

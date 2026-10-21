@@ -19,6 +19,7 @@
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import YoutubeQueueWindow from "./components/YoutubeQueueWindow.svelte";
   import { api } from "./lib/api";
+  import type { LaunchLinkPayload } from "./lib/api";
   import { needsTokenRefresh } from "./lib/launchState";
   import { installAppHiddenSync } from "./lib/idlePerf";
   import { applyHomeSnapshot, ensureHomeEnrichListener } from "./lib/homeBootstrap";
@@ -270,6 +271,22 @@
     })();
   });
 
+  /**
+   * Validates a path that came from *outside* the app — a desktop shortcut's
+   * `--launch`, or a `tuffbox://launch` link — and makes it the open project.
+   * Returns the resolved manifest path.
+   */
+  async function openProjectFromPath(path: string): Promise<string> {
+    const info = await api.project.validate(path);
+    const manifestPath = info.manifestPath || path;
+    recentProjects.add({ path: manifestPath, info: info as any });
+    projectPath.set(manifestPath);
+    projectInfo.set(info as any);
+    void api.session.setLastOpened(manifestPath).catch(() => {});
+    currentView = "library";
+    return manifestPath;
+  }
+
   onMount(() => {
     // Orphan portals / error overlays can survive HMR and eat all clicks.
     try {
@@ -455,6 +472,29 @@
     };
     window.addEventListener("tuffbox:share-capsule", onShareCapsule);
 
+    const onLaunchLink = (ev: Event) => {
+      const detail = (ev as CustomEvent<LaunchLinkPayload>).detail;
+      if (!detail || detail.status !== "valid") return;
+      // The link came from outside the app, so it never starts anything by
+      // itself: one toast naming the pack, and the user presses the button.
+      toasts.info(`A link asks to open “${detail.name}”.`, 20000, [
+        {
+          label: "Open & launch",
+          run: () => {
+            void (async () => {
+              try {
+                const manifestPath = await openProjectFromPath(detail.project);
+                void launchWithFeedback({ path: manifestPath, profile: "client" });
+              } catch (error) {
+                toasts.error(`Could not open the linked pack: ${error}`);
+              }
+            })();
+          },
+        },
+      ]);
+    };
+    window.addEventListener("tuffbox:launch-link", onLaunchLink);
+
     let unlistenDistill: UnlistenFn | null = null;
     void listen<{
       path?: string;
@@ -498,13 +538,7 @@
         const pendingLaunch = await api.files.takePendingLaunch();
         if (pendingLaunch) {
           try {
-            const info = await api.project.validate(pendingLaunch);
-            const manifestPath = info.manifestPath || pendingLaunch;
-            recentProjects.add({ path: manifestPath, info: info as any });
-            projectPath.set(manifestPath);
-            projectInfo.set(info as any);
-            void api.session.setLastOpened(manifestPath).catch(() => {});
-            currentView = "library";
+            const manifestPath = await openProjectFromPath(pendingLaunch);
             void launchWithFeedback({ path: manifestPath, profile: "client" });
           } catch (e) {
             toasts.error(`Could not launch from shortcut: ${e}`);
@@ -544,6 +578,7 @@
       window.removeEventListener("tuffbox:show-shortcuts", onShowShortcuts);
       window.removeEventListener("tuffbox:select-instance", onSelectInstance);
       window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
+      window.removeEventListener("tuffbox:launch-link", onLaunchLink);
       window.removeEventListener("tuffbox:launcher-settings", onLauncherSettings);
       window.removeEventListener("resize", onUiScaleResize);
       clearTimeout(scaleResizeTimer);

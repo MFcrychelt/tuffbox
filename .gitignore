@@ -92,3 +92,9 @@ packwiz/
 .omp/
 graphify-out/
 *.stackdump
+
+# Local logs and stray artifacts
+debug.log
+b64.txt
+.trae-tmp/
+*.lnk

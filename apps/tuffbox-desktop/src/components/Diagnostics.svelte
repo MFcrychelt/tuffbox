@@ -3,6 +3,8 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { killWithFeedback, launchWithFeedback, launchingPath } from "../lib/launch";
   import { onMount, tick } from "svelte";
+  import { get } from "svelte/store";
+  import { localeTag } from "../lib/i18n";
   import {
     Stethoscope,
     Play,
@@ -62,6 +64,7 @@
   import {
     buildUnifiedProblems,
     collectFixAllActions,
+    humanizeDiagnosticCode,
     hasBlockingProblems,
     type FixAction as ProblemFixAction,
     type Problem,
@@ -1410,7 +1413,6 @@
   };
 
   const mergedRecommendations = $derived(buildMergedRecommendations(crashFindings, aiAnalysis));
-  const primaryRec = $derived(mergedRecommendations[0] ?? null);
   const sessionOk = $derived(!!(diagnosis?.sessionHealthy && preferLatestLog));
 
   function buildMergedRecommendations(findings: any[], analysis: any): MergedRec[] {
@@ -1610,7 +1612,7 @@
   }
 
   function openFixAllReview() {
-    const rows = collectFixAllActions(unifiedProblems);
+    const rows = fixAllActionRows;
     if (!rows.length) {
       message = "No automatic fixes available — use per-problem buttons or Resolve.";
       return;
@@ -2107,7 +2109,7 @@
 
   function formatDate(seconds?: number | null) {
     if (!seconds) return "unknown time";
-    return new Date(seconds * 1000).toLocaleString();
+    return new Date(seconds * 1000).toLocaleString(get(localeTag));
   }
 
   function actionLabel(action: any) {
@@ -2123,14 +2125,6 @@
     if (title === "Performance") return "Likely overload, not a crash cause. Lower view distance, profile heavy entities, rerun.";
     return "Review this signal group and compare it with recent snapshots.";
   }
-
-  const topFinding = $derived(
-    [...(crashFindings ?? [])].sort((a, b) => {
-      const rank = (s: string) =>
-        s === "critical" ? 4 : s === "error" ? 3 : s === "warning" ? 2 : 1;
-      return rank(String(b.severity ?? "")) - rank(String(a.severity ?? ""));
-    })[0] ?? null,
-  );
 
   function severityChip(sev: string): string {
     if (sev === "critical") return "Fix this first";
@@ -2148,7 +2142,7 @@
       ? primarySuspects.map((m) => m.name).join(" + ")
       : topSuspect?.name ?? "",
   );
-  const strongestEvidence = $derived(topSuspect?.evidence?.[0] ?? null);
+  const strongestEvidence = $derived(topSuspect?.evidence?.[0]?.text ?? null);
   const providedByEvidence = $derived(
     topSuspect?.evidence?.find((item) => item.text.toLowerCase().includes("provided by")) ?? null,
   );
@@ -2449,7 +2443,7 @@
     }
     try {
       await navigator.clipboard.writeText(text);
-      message = `Copied ${text.length.toLocaleString()} characters.`;
+      message = `Copied ${text.length.toLocaleString(get(localeTag))} characters.`;
     } catch {
       error = "Clipboard copy failed.";
     }
@@ -2491,8 +2485,52 @@
       aiAnalysis,
     }),
   );
+  // The verdict hero must agree with the Problems list right below it: both read
+  // the same unified model. Deriving it from `crashFindings` alone missed
+  // problems that arrive as hints (the Java-version finding among them), so the
+  // hero announced a mod culprit while the list said "Fix this first: wrong
+  // Java".
+  const SEVERITY_RANK: Record<string, number> = { critical: 4, error: 3, warning: 2, info: 1 };
+  const topProblem = $derived(
+    [...unifiedProblems]
+      .filter((p) => p.severity === "critical" || p.severity === "error")
+      .sort((a, b) => (SEVERITY_RANK[b.severity] ?? 0) - (SEVERITY_RANK[a.severity] ?? 0))[0] ?? null,
+  );
+  const topFinding = $derived(
+    topProblem
+      ? {
+          severity: topProblem.severity,
+          title: topProblem.title,
+          description: topProblem.summary,
+          autoFix: topProblem.actions?.[0]?.label ?? null,
+          code: topProblem.code ?? null,
+        }
+      : null,
+  );
+
+  // The hero CTA must match the verdict text above it: use the "Fix this
+  // first" problem's own action instead of the first crash-finding fix, which
+  // used to offer "Disable Iris Shaders" under a "wrong Java" headline.
+  const NAV_ONLY_FIX_KINDS = new Set(["openResolve", "openSetup", "openEvidence", "reviewAiPlan"]);
+  function topProblemRecommendation(): MergedRec | null {
+    const problem = topProblem;
+    const action = problem?.actions?.find((a) => !NAV_ONLY_FIX_KINDS.has(a.kind));
+    if (!problem || !action) return null;
+    return {
+      id: `problem:${problem.id}`,
+      source: "rules",
+      label: action.label,
+      detail: problem.summary,
+      risk: problem.severity === "critical" || problem.severity === "error" ? "high" : "medium",
+      modId: action.modId ?? null,
+      apply: () => void applyProblemAction(problem, action),
+    };
+  }
+  const primaryRec = $derived(topProblemRecommendation() ?? mergedRecommendations[0] ?? null);
+
   const problemsBlocking = $derived(hasBlockingProblems(unifiedProblems));
-  const fixAllCount = $derived(collectFixAllActions(unifiedProblems).length);
+  const fixAllActionRows = $derived(collectFixAllActions(unifiedProblems));
+  const fixAllCount = $derived(new Set(fixAllActionRows.map((r) => r.problemId)).size);
 
   const graphDiagnostics = $derived(diagnosis?.graphDiagnostics ?? []);
   const sourceLabel = $derived((() => {
@@ -3036,9 +3074,9 @@
       </div>
       <div class="recent-list">
         {#each recentPackEvents as ev (ev.id)}
-          <button type="button" class="recent-row" onclick={() => openHistoryEvent(ev.id, ev.meta?.fingerprintKey ?? null)} title={ev.summary}>
-            <span class="recent-actor">{ev.actor}</span>
-            <span class="recent-op">{ev.op}</span>
+          <button type="button" class="recent-row" onclick={() => openHistoryEvent(ev.id, ev.meta?.fingerprintKey ?? null)} title={`${ev.summary} (${ev.actor} · ${ev.op})`}>
+            <span class="recent-actor" title={ev.actor}>{humanizeDiagnosticCode(ev.actor)}</span>
+            <span class="recent-op" title={ev.op}>{humanizeDiagnosticCode(ev.op)}</span>
             <span class="recent-sum">{ev.summary}</span>
             <small>{relTime(ev.ts)}</small>
           </button>
@@ -3070,6 +3108,7 @@
       cascadeDetail={aiAnalysis ? cascadeFormatted.detail : null}
       sourceLabel={sourceLabel}
       fixAllCount={fixAllCount}
+      fixAllActionCount={fixAllActionRows.length}
       fixAllBusy={fixAllBusy}
       onScrollToWarnings={scrollToPackWarnings}
       onFixAll={openFixAllReview}
@@ -3549,10 +3588,11 @@
     background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
     border: 1px solid var(--border-color);
   }
+  /* `#fca5a5` measured 1.71:1 on the light theme's pale-red fill. */
   .health-chip.bad {
-    color: #fca5a5;
-    border-color: rgba(239, 68, 68, 0.5);
-    background: rgba(239, 68, 68, 0.08);
+    color: var(--accent-danger);
+    border-color: color-mix(in srgb, var(--accent-danger) 50%, transparent);
+    background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
   }
   .health-blockers {
     display: flex;
@@ -3604,7 +3644,7 @@
   }
   .recent-row {
     display: grid;
-    grid-template-columns: 64px 68px 1fr auto;
+    grid-template-columns: 64px max-content 1fr auto;
     gap: 8px;
     align-items: center;
     width: 100%;
@@ -3620,11 +3660,8 @@
   .recent-op {
     font-size: 12px;
     font-weight: 700;
-    text-transform: uppercase;
     letter-spacing: 0.3px;
     color: var(--text-secondary);
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .recent-row:hover {

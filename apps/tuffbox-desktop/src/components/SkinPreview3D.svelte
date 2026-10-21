@@ -778,7 +778,8 @@
   .mc-nick {
     font-family: var(--font-minecraft);
     font-size: 12px;
-    line-height: 1.4;
+    /* Room below the baseline for the outline shadow / glow (font descent = 0). */
+    line-height: 1.6;
     color: var(--mc-nick-color, #fff);
     text-shadow: var(
       --mc-nick-shadow,
